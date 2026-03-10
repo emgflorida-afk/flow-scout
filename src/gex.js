@@ -1,4 +1,4 @@
-// ─── GEX ENGINE ────────────────────────────────────────────────────
+// GEX ENGINE
 const axios = require('axios');
 
 const POLYGON_KEY = process.env.POLYGON_API_KEY;
@@ -15,14 +15,14 @@ async function getSpotPrice(ticker) {
     const res = await axios.get(`${BASE}/v2/last/trade/${ticker}`, {
       params: { apiKey: POLYGON_KEY }
     });
-    return res.data?.results?.p || null;
-  } catch {
+    return res.data && res.data.results ? res.data.results.p : null;
+  } catch (e) {
     try {
       const res = await axios.get(`${BASE}/v2/aggs/ticker/${ticker}/prev`, {
         params: { apiKey: POLYGON_KEY }
       });
-      return res.data?.results?.[0]?.c || null;
-    } catch { return null; }
+      return res.data && res.data.results ? res.data.results[0].c : null;
+    } catch (e2) { return null; }
   }
 }
 
@@ -41,9 +41,9 @@ async function getOptionsChain(ticker, spotPrice) {
         strike_price_lte: spotPrice * 1.15,
       }
     });
-    return res.data?.results || [];
+    return res.data && res.data.results ? res.data.results : [];
   } catch (err) {
-    console.error(`[GEX] Failed to fetch options chain for ${ticker}:`, err.message);
+    console.error('[GEX] Failed to fetch options chain for ' + ticker + ': ' + err.message);
     return [];
   }
 }
@@ -52,10 +52,10 @@ function calculateGEX(options, spotPrice) {
   const strikeMap = new Map();
 
   for (const opt of options) {
-    const strike = opt.details?.strike_price;
-    const gamma  = opt.greeks?.gamma;
+    const strike = opt.details && opt.details.strike_price;
+    const gamma  = opt.greeks && opt.greeks.gamma;
     const oi     = opt.open_interest;
-    const type   = opt.details?.contract_type;
+    const type   = opt.details && opt.details.contract_type;
 
     if (!strike || !gamma || !oi) continue;
 
@@ -85,55 +85,60 @@ function calculateGEX(options, spotPrice) {
     }
   }
 
-  const pinStrike = strikes.reduce((max, s) => s.gex > (max?.gex ?? -Infinity) ? s : max, null);
-  const volZoneStrike = strikes.reduce((min, s) => s.gex < (min?.gex ?? Infinity) ? s : min, null);
+  const pinStrike = strikes.reduce((max, s) => s.gex > (max ? max.gex : -Infinity) ? s : max, null);
+  const volZoneStrike = strikes.reduce((min, s) => s.gex < (min ? min.gex : Infinity) ? s : min, null);
   const sortedPositive = strikes.filter(s => s.gex > 0).sort((a, b) => b.gex - a.gex);
 
   return {
     totalNetGex, gammaFlip,
-    pin: pinStrike?.strike || null,
-    pinGex: pinStrike?.gex || 0,
-    volZone: volZoneStrike?.strike || null,
-    volZoneGex: volZoneStrike?.gex || 0,
-    secondaryPin: sortedPositive[1]?.strike || null,
+    pin: pinStrike ? pinStrike.strike : null,
+    pinGex: pinStrike ? pinStrike.gex : 0,
+    volZone: volZoneStrike ? volZoneStrike.strike : null,
+    volZoneGex: volZoneStrike ? volZoneStrike.gex : 0,
+    secondaryPin: sortedPositive[1] ? sortedPositive[1].strike : null,
     strikes, spotPrice,
   };
 }
 
 function scoreGEX(gexData, contract) {
-  if (!gexData) return { score: 0, reasons: [] };
+  if (!gexData) return { score: 0, stars: 0, reasons: [], gexData: null };
 
-  const { totalNetGex, gammaFlip, pin, volZone, spotPrice } = gexData;
-  const { strike, type } = contract;
+  const totalNetGex = gexData.totalNetGex;
+  const gammaFlip = gexData.gammaFlip;
+  const pin = gexData.pin;
+  const volZone = gexData.volZone;
+  const spotPrice = gexData.spotPrice;
+  const strike = contract.strike;
+  const type = contract.type;
 
   let score = 0;
   const reasons = [];
 
   const absGex = Math.abs(totalNetGex);
-  if (absGex > 500_000_000)      { score += 2;   reasons.push('Massive GEX (500M+)'); }
-  else if (absGex > 200_000_000) { score += 1.5; reasons.push('Large GEX (200M+)'); }
-  else if (absGex > 50_000_000)  { score += 1;   reasons.push('Moderate GEX (50M+)'); }
-  else if (absGex > 10_000_000)  { score += 0.5; reasons.push('Low GEX (10M+)'); }
+  if (absGex > 500000000)      { score += 2;   reasons.push('Massive GEX 500M+'); }
+  else if (absGex > 200000000) { score += 1.5; reasons.push('Large GEX 200M+'); }
+  else if (absGex > 50000000)  { score += 1;   reasons.push('Moderate GEX 50M+'); }
+  else if (absGex > 10000000)  { score += 0.5; reasons.push('Low GEX 10M+'); }
 
   if (gammaFlip) {
     const aboveFlip = spotPrice > gammaFlip;
     if ((type === 'CALL' && aboveFlip) || (type === 'PUT' && !aboveFlip)) {
-      score += 2; reasons.push(`Flow aligns with gamma regime (flip @ $${gammaFlip})`);
+      score += 2; reasons.push('Flow aligns with gamma regime flip at ' + gammaFlip);
     } else {
-      score -= 1; reasons.push(`⚠️ Flow AGAINST gamma regime — counter-trend`);
+      score -= 1; reasons.push('Flow AGAINST gamma regime - counter-trend');
     }
   }
 
   if (pin) {
     const distToPin = Math.abs(strike - pin) / spotPrice;
-    if (distToPin < 0.02)      { score += 1;   reasons.push(`Within 2% of pin ($${pin})`); }
-    else if (distToPin < 0.05) { score += 0.5; reasons.push(`Within 5% of pin ($${pin})`); }
+    if (distToPin < 0.02)      { score += 1;   reasons.push('Within 2pct of pin ' + pin); }
+    else if (distToPin < 0.05) { score += 0.5; reasons.push('Within 5pct of pin ' + pin); }
   }
 
   if (volZone) {
     const distToVol = Math.abs(spotPrice - volZone) / spotPrice;
     if (distToVol > 0.05) { score += 1; reasons.push('Vol zone clear'); }
-    else { reasons.push(`⚠️ Near vol zone ($${volZone})`); }
+    else { reasons.push('Near vol zone ' + volZone); }
   }
 
   const finalScore = Math.min(6, Math.max(0, score));
@@ -157,10 +162,9 @@ async function getGEXScore(ticker, contract) {
 
   const gexData = calculateGEX(options, spotPrice);
   gexCache.set(cacheKey, gexData);
-  setTimeout(() => gexCache.delete(cacheKey), 30 * 60 * 1000);
+  setTimeout(function() { gexCache.delete(cacheKey); }, 30 * 60 * 1000);
 
   return scoreGEX(gexData, contract);
 }
 
 module.exports = { getGEXScore, getSpotPrice };
-​​​​​​​​​​​​​​​​
