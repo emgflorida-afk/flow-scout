@@ -417,24 +417,67 @@ app.post('/webhook/tradingview', async (req, res) => {
       finalExpiry  = liveContract.expiry;
       console.log(`[TV] Using LIVE Bullflow contract: ${ticker} $${finalStrike} @ $${finalPremium} exp ${finalExpiry}`);
     } else {
-      // Estimate fallback — use trigger price directly
-      const safeSpot  = parseFloat(spotPrice) || parseFloat(trigger) || 100;
-      const safeTrig  = parseFloat(trigger)   || safeSpot;
-      const strikeStep = safeSpot > 200 ? 2.5 : safeSpot > 100 ? 1 : 0.5;
-      finalStrike  = action === 'BULL'
+      // Calculate nearest ATM strike
+      const safeSpot   = parseFloat(spotPrice) || parseFloat(trigger) || 100;
+      const safeTrig   = parseFloat(trigger)   || safeSpot;
+      const strikeStep = safeSpot > 500 ? 5 : safeSpot > 200 ? 2.5 : safeSpot > 100 ? 1 : 0.5;
+      finalStrike = action === 'BULL'
         ? Math.ceil(safeTrig / strikeStep) * strikeStep
         : Math.floor(safeTrig / strikeStep) * strikeStep;
-      finalStrike  = parseFloat(finalStrike.toFixed(2));
-      const distFromSpot = Math.abs(finalStrike - safeSpot);
-      finalPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / safeSpot * 8)));
-      finalPremium = parseFloat(finalPremium.toFixed(2));
-      // Calendar estimate for expiry
+      finalStrike = parseFloat(finalStrike.toFixed(2));
+
+      // Next Friday expiry
       const today2  = new Date();
       const dow2    = today2.getDay();
       const daysOut = dow2 === 5 ? 7 : (5 - dow2) || 7;
       const expDate = new Date(today2.getTime() + daysOut * 86400000);
-      finalExpiry   = (expDate.getMonth()+1) + '/' + expDate.getDate() + ' (~est)';
-      console.log(`[TV] Estimated contract: ${ticker} $${finalStrike} @ $${finalPremium}`);
+      const expYear  = expDate.getFullYear();
+      const expMonth = String(expDate.getMonth()+1).padStart(2,'0');
+      const expDay   = String(expDate.getDate()).padStart(2,'0');
+      const expiryApiStr = `${expYear}-${expMonth}-${expDay}`;
+      finalExpiry = `${expDate.getMonth()+1}/${expDate.getDate()}`;
+
+      // Query Massive for REAL contracts — find nearest valid strike
+      try {
+        const contractType = action === 'BULL' ? 'call' : 'put';
+        // Fetch a range of real strikes around our target
+        const lo = (finalStrike * 0.95).toFixed(2);
+        const hi = (finalStrike * 1.05).toFixed(2);
+        const massiveUrl = `https://api.polygon.io/v3/snapshot/options/${ticker}?expiration_date=${expiryApiStr}&contract_type=${contractType}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=20&apiKey=${process.env.POLYGON_API_KEY}`;
+        const massiveRes = await require('axios').get(massiveUrl);
+        const contracts  = massiveRes.data?.results || [];
+
+        if (contracts.length > 0) {
+          // Find the contract with strike closest to our target
+          const best = contracts.reduce((prev, curr) => {
+            const pd = Math.abs((prev.details?.strike_price || 0) - finalStrike);
+            const cd = Math.abs((curr.details?.strike_price || 0) - finalStrike);
+            return cd < pd ? curr : prev;
+          });
+
+          const realStrike = best.details?.strike_price;
+          const ask = best.day?.close || best.last_quote?.ask || best.last_trade?.price || null;
+
+          if (realStrike) finalStrike = realStrike;
+
+          if (ask && ask > 0) {
+            finalPremium = parseFloat(ask.toFixed(2));
+            finalExpiry  = finalExpiry + ' [LIVE]';
+            console.log(`[TV] LIVE Massive: ${ticker} $${finalStrike}${contractType[0].toUpperCase()} @ $${finalPremium}`);
+          } else {
+            throw new Error('no ask price');
+          }
+        } else {
+          throw new Error('no contracts found');
+        }
+      } catch(massiveErr) {
+        // Fallback to formula estimate
+        const distFromSpot = Math.abs(finalStrike - safeSpot);
+        finalPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / safeSpot * 8)));
+        finalPremium = parseFloat(finalPremium.toFixed(2));
+        finalExpiry  = finalExpiry + ' (~est)';
+        console.log(`[TV] Massive lookup failed (${massiveErr.message}) — using estimate: $${finalPremium}`);
+      }
     }
 
     const sizing = calculatePositionSize(finalPremium);
