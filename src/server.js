@@ -268,6 +268,111 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ─── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
+const tvSignals = [];
+
+app.post('/webhook/tradingview', async (req, res) => {
+  try {
+    let data = req.body;
+
+    // Handle string body
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch(e) { data = {}; }
+    }
+
+    if (!data || !data.ticker) {
+      return res.status(400).json({ error: 'Invalid payload — need ticker' });
+    }
+
+    const ticker    = data.ticker.replace('$','').toUpperCase();
+    const action    = (data.action || 'BULL').toUpperCase();
+    const pattern   = data.pattern || 'Signal';
+    const tf        = data.tf || data.timeframe || '?';
+    const price     = parseFloat(data.price || 0);
+    const trigger   = parseFloat(data.trigger || data.high1 || data.low1 || price);
+    const tfAlign   = parseInt(data.align || data.tfAlign || 2);
+    const weeklyBias = data.weeklyBias || '?';
+    const dailyBias  = data.dailyBias  || '?';
+    const h4Bias     = data.h4Bias     || '?';
+
+    console.log(`[TV] ${ticker} ${action} — ${pattern} | ${tf} | Align: ${tfAlign}/4 | W:${weeklyBias} D:${dailyBias} 4H:${h4Bias}`);
+
+    // Store signal
+    tvSignals.unshift({ ticker, action, pattern, tf, price, trigger, tfAlign, weeklyBias, dailyBias, h4Bias, receivedAt: new Date().toISOString() });
+    if (tvSignals.length > 100) tvSignals.pop();
+
+    // Only fire SMS for high conviction (3+ TF aligned) on watchlist tickers
+    if (!WATCHLIST[ticker]) {
+      console.log(`[TV] ${ticker} not on watchlist — stored only`);
+      return res.json({ status: 'stored_not_watchlist', ticker });
+    }
+
+    if (tfAlign < 3) {
+      console.log(`[TV] ${ticker} only ${tfAlign}/4 TF aligned — stored, no SMS`);
+      return res.json({ status: 'stored_low_align', tfAlign });
+    }
+
+    // Get GEX data for this ticker
+    const gexResult  = await getGEXScore(ticker, { ticker, type: action === 'BULL' ? 'CALL' : 'PUT', strike: trigger });
+    const gexData    = gexResult.gexData;
+    const gexStars   = gexResult.stars;
+
+    // Get flow bias
+    const { getFlowBias, calculatePositionSize } = require('./scorer');
+    const flowBias = getFlowBias(ticker);
+
+    // Check flow alignment — does day flow agree with TV signal?
+    const flowAligns = (action === 'BULL' && flowBias.label === 'BULLISH') ||
+                       (action === 'BEAR' && flowBias.label === 'BEARISH') ||
+                       flowBias.label === 'NEUTRAL';
+
+    // Get spot price for sizing estimate
+    const spotPrice = await getSpotPrice(ticker);
+
+    // Estimate premium — use trigger distance from spot as rough guide
+    const distFromSpot = spotPrice ? Math.abs(trigger - spotPrice) : 0;
+    const estimatedPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / spotPrice * 10)));
+    const sizing = calculatePositionSize(parseFloat(estimatedPremium.toFixed(2)));
+
+    // Build the full SMS
+    const starsStr = '★'.repeat(gexStars) + '☆'.repeat(5 - gexStars);
+    const lines = [
+      'STRATUM SIGNAL ' + tfAlign + '/4',
+      ticker + ' ' + action + ' — ' + pattern,
+      'TF: ' + tf + ' | W:' + weeklyBias + ' D:' + dailyBias + ' 4H:' + h4Bias,
+      '---',
+      'Price:   $' + price.toFixed(2),
+      'Trigger: $' + trigger.toFixed(2),
+      gexData && gexData.pin ? 'GEX Pin: $' + gexData.pin : '',
+      gexData && gexData.gammaFlip ? 'Flip:    $' + gexData.gammaFlip : '',
+      'GEX: ' + starsStr,
+      flowBias.label !== 'NEUTRAL' ? 'Flow:  ' + flowBias.label : '',
+      '---',
+      sizing.viable ? 'Est Entry: ~$' + sizing.optionPremium + ' x' + sizing.contracts : 'Check premium',
+      sizing.viable ? 'Stop:  $' + sizing.stopPrice + ' (loss $' + sizing.stopLoss + ')' : '',
+      sizing.viable ? 'T1:    $' + sizing.t1Price + ' (profit $' + sizing.t1Profit + ')' : '',
+      sizing.viable ? 'Risk:  ' + sizing.riskPct + '% of account' : '',
+      '---',
+      flowAligns ? '> FLOW + TECHNICALS ALIGNED' : '> Technicals only — await flow confirm',
+    ].filter(Boolean);
+
+    const { sendSystemMessage } = require('./alerter');
+    await sendSystemMessage(lines.join('\n'));
+
+    console.log(`[TV] SMS sent: ${ticker} ${action} ${pattern} | ${tfAlign}/4 | GEX ${gexStars}★`);
+    res.json({ status: 'alert_sent', ticker, action, tfAlign, gexStars });
+
+  } catch (err) {
+    console.error('[TV] Webhook error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// TV signals endpoint for dashboard
+app.get('/tv-signals', (req, res) => {
+  res.json(tvSignals.slice(0, 20));
+});
+
 // ─── START ─────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
