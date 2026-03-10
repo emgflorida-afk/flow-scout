@@ -388,33 +388,12 @@ app.post('/webhook/tradingview', async (req, res) => {
       return res.json({ status: 'stored_low_align', tfAlign });
     }
 
-    // Get spot price
-    const spotPrice = await getSpotPrice(ticker);
-    if (!spotPrice) {
-      console.log(`[TV] ${ticker} no spot price — skipping`);
-      return res.json({ status: 'no_spot_price' });
-    }
+    // Use trigger price from TradingView as spot price (Polygon free tier has no live data)
+    const spotPrice = price || trigger;
+    console.log(`[TV] ${ticker} using TV price $${spotPrice}`);
 
-    // VALIDATION 1 — Is price within 1% of trigger (still valid entry)?
-    const distFromTrigger = Math.abs(spotPrice - trigger) / trigger;
-    if (distFromTrigger > 0.015) {
-      console.log(`[TV] ${ticker} price $${spotPrice} too far from trigger $${trigger} (${(distFromTrigger*100).toFixed(1)}%) — stale signal`);
-      return res.json({ status: 'stale_trigger', distPct: (distFromTrigger*100).toFixed(1) });
-    }
-
-    // VALIDATION 2 — EMA check. Calls need price above EMA9, Puts below
+    // Get flow bias and sizing
     const { getFlowBias, calculatePositionSize } = require('./scorer');
-    const ema9val  = parseFloat(data.ema9  || 0);
-    const ema21val = parseFloat(data.ema21 || 0);
-    let emaValid = true;
-    if (ema9val > 0 && ema21val > 0) {
-      if (action === 'BULL' && spotPrice < ema9val)  emaValid = false;
-      if (action === 'BEAR' && spotPrice > ema9val)  emaValid = false;
-    }
-    if (!emaValid) {
-      console.log(`[TV] ${ticker} EMA check failed — price $${spotPrice} vs EMA9 $${ema9val} for ${action}`);
-      return res.json({ status: 'ema_invalid', spotPrice, ema9: ema9val });
-    }
 
     // Get GEX
     const gexResult = await getGEXScore(ticker, { ticker, type: action === 'BULL' ? 'CALL' : 'PUT', strike: trigger });
