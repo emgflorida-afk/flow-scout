@@ -1,36 +1,50 @@
-// SMS ALERTER v2
-// Includes position sizing, stop $, T1, T2, account risk, flow bias
-
-const twilio = require('twilio');
-const { formatStrike, formatPremium } = require('./parser');
+// ALERTER v3 — Discord + Email (replaces Twilio)
+const fetch = require('node-fetch');
 const { calculatePositionSize, getFlowBias } = require('./scorer');
-
-function getTwilioClient() {
-  return twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
-}
+const { formatStrike, formatPremium } = require('./parser');
 
 function stars(n) { return '★'.repeat(n) + '☆'.repeat(5 - n); }
 
-// TRADE ALERT
+// ─── DISCORD ───────────────────────────────────────────────────────
+async function sendDiscord(message) {
+  const webhookUrl = process.env.DISCORD_WEBHOOK_URL;
+  if (!webhookUrl) { console.log('[DISCORD] No webhook URL'); return false; }
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '```\n' + message + '\n```',
+        username: 'Stratum Flow Scout',
+      }),
+    });
+    if (res.ok) { console.log('[DISCORD] Sent'); return true; }
+    console.error('[DISCORD] Failed:', res.status);
+    return false;
+  } catch (err) {
+    console.error('[DISCORD] Error:', err.message);
+    return false;
+  }
+}
+
+// ─── SEND ALERT ────────────────────────────────────────────────────
+async function sendAlert(subject, message) {
+  await sendDiscord(message);
+}
+
+// ─── TRADE ALERT ───────────────────────────────────────────────────
 async function sendTradeAlert(alert, contract, scoreResult, optionPremium) {
   const { gexScore, confidencePct, stars: starCount, direction, entryWindow, timeWindow, flowBias } = scoreResult;
   const gexData = gexScore.gexData;
 
-  // Position sizing
   const sizing = calculatePositionSize(optionPremium || 1.00);
+  if (!sizing.viable) { console.log('[ALERT] Skipping — ' + sizing.reason); return false; }
 
-  if (!sizing.viable) {
-    console.log('[SMS] Skipping alert — ' + sizing.reason);
-    return false;
-  }
-
-  const ticker  = contract.ticker;
-  const strike  = formatStrike(contract.strike);
-  const type    = contract.type[0];
-  const dte     = contract.is0DTE ? '0DTE' : contract.dte + 'DTE';
-  const expiry  = contract.expiryLabel;
-  const premium = formatPremium(alert.alertPremium);
-  const dir     = direction === 'LONG' ? 'CALL' : 'PUT';
+  const ticker = contract.ticker;
+  const strike = formatStrike(contract.strike);
+  const type   = contract.type[0];
+  const dte    = contract.is0DTE ? '0DTE' : contract.dte + 'DTE';
+  const expiry = contract.expiryLabel;
 
   const lines = [
     'STRATUM ALERT ' + confidencePct + '%',
@@ -49,34 +63,19 @@ async function sendTradeAlert(alert, contract, scoreResult, optionPremium) {
     '> ' + entryWindow,
   ].filter(Boolean);
 
-  const body = lines.join('\n');
-
-  try {
-    const client = getTwilioClient();
-    await client.messages.create({
-      body,
-      from: process.env.TWILIO_FROM_NUMBER,
-      to: process.env.TRADER_PHONE_NUMBER,
-    });
-    console.log('[SMS] Alert sent: ' + ticker + ' ' + strike + type + ' ' + dte + ' — ' + confidencePct + '% | Entry $' + sizing.optionPremium + ' x' + sizing.contracts + ' | Stop $' + sizing.stopPrice);
-    return true;
-  } catch (err) {
-    console.error('[SMS] Failed:', err.message);
-    return false;
-  }
+  await sendAlert('STRATUM ' + ticker + ' ' + strike + type, lines.join('\n'));
+  return true;
 }
 
-// MORNING BRIEF
+// ─── MORNING BRIEF ─────────────────────────────────────────────────
 async function sendMorningBrief(watchlistScores) {
-  const top5 = watchlistScores
-    .sort((a, b) => b.stars - a.stars)
-    .slice(0, 5);
+  if (!watchlistScores || watchlistScores.length === 0) return false;
 
+  const top5    = watchlistScores.sort((a, b) => b.stars - a.stars).slice(0, 5);
   const dateStr = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
 
   const lines = [
-    'STRATUM MORNING BRIEF',
-    dateStr,
+    'STRATUM MORNING BRIEF — ' + dateStr,
     '',
     'TOP GEX SETUPS:',
     ...top5.map((t, i) => {
@@ -88,39 +87,17 @@ async function sendMorningBrief(watchlistScores) {
     }),
     '',
     'Max premium: $2.40 | Max loss: $120',
-    'Trade window: 10AM-11:30AM',
-    'Flow Scout watching ' + watchlistScores.length + ' tickers.',
+    'Trade window: 10AM-11:30AM & 3PM-3:45PM',
+    'Watching ' + watchlistScores.length + ' tickers.',
   ];
 
-  const body = lines.join('\n');
-
-  try {
-    const client = getTwilioClient();
-    await client.messages.create({
-      body,
-      from: process.env.TWILIO_FROM_NUMBER,
-      to: process.env.TRADER_PHONE_NUMBER,
-    });
-    console.log('[SMS] Morning brief sent');
-    return true;
-  } catch (err) {
-    console.error('[SMS] Morning brief failed:', err.message);
-    return false;
-  }
+  await sendAlert('STRATUM Morning Brief', lines.join('\n'));
+  return true;
 }
 
-// SYSTEM MESSAGE
+// ─── SYSTEM MESSAGE ────────────────────────────────────────────────
 async function sendSystemMessage(message) {
-  try {
-    const client = getTwilioClient();
-    await client.messages.create({
-      body: 'STRATUM: ' + message,
-      from: process.env.TWILIO_FROM_NUMBER,
-      to: process.env.TRADER_PHONE_NUMBER,
-    });
-  } catch (err) {
-    console.error('[SMS] System message failed:', err.message);
-  }
+  await sendAlert('STRATUM Alert', message);
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage };
