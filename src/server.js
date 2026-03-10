@@ -417,21 +417,24 @@ app.post('/webhook/tradingview', async (req, res) => {
       finalExpiry  = liveContract.expiry;
       console.log(`[TV] Using LIVE Bullflow contract: ${ticker} $${finalStrike} @ $${finalPremium} exp ${finalExpiry}`);
     } else {
-      // Estimate fallback
-      const strikeStep = spotPrice > 200 ? 2.5 : spotPrice > 100 ? 1 : 0.5;
+      // Estimate fallback — use trigger price directly
+      const safeSpot  = parseFloat(spotPrice) || parseFloat(trigger) || 100;
+      const safeTrig  = parseFloat(trigger)   || safeSpot;
+      const strikeStep = safeSpot > 200 ? 2.5 : safeSpot > 100 ? 1 : 0.5;
       finalStrike  = action === 'BULL'
-        ? Math.ceil(trigger / strikeStep) * strikeStep
-        : Math.floor(trigger / strikeStep) * strikeStep;
-      const distFromSpot = Math.abs(finalStrike - spotPrice);
-      finalPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / spotPrice * 8)));
+        ? Math.ceil(safeTrig / strikeStep) * strikeStep
+        : Math.floor(safeTrig / strikeStep) * strikeStep;
+      finalStrike  = parseFloat(finalStrike.toFixed(2));
+      const distFromSpot = Math.abs(finalStrike - safeSpot);
+      finalPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / safeSpot * 8)));
       finalPremium = parseFloat(finalPremium.toFixed(2));
       // Calendar estimate for expiry
-      const today = new Date();
-      const dow   = today.getDay();
-      const daysOut = dow === 5 ? 7 : (5 - dow) || 7;
-      const expDate = new Date(today.getTime() + daysOut * 86400000);
-      finalExpiry = (expDate.getMonth()+1) + '/' + expDate.getDate() + ' (~est)';
-      console.log(`[TV] Bullflow lookup failed — using estimated contract: ${ticker} $${finalStrike} @ $${finalPremium}`);
+      const today2  = new Date();
+      const dow2    = today2.getDay();
+      const daysOut = dow2 === 5 ? 7 : (5 - dow2) || 7;
+      const expDate = new Date(today2.getTime() + daysOut * 86400000);
+      finalExpiry   = (expDate.getMonth()+1) + '/' + expDate.getDate() + ' (~est)';
+      console.log(`[TV] Estimated contract: ${ticker} $${finalStrike} @ $${finalPremium}`);
     }
 
     const sizing = calculatePositionSize(finalPremium);
