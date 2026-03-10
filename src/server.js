@@ -487,7 +487,7 @@ app.post('/webhook/tradingview', async (req, res) => {
       return res.json({ status: 'premium_too_high', premium: finalPremium });
     }
 
-    // Build clean SMS
+    // Build Discord alert
     const starsStr  = '★'.repeat(gexStars) + '☆'.repeat(5 - gexStars);
     const direction = action === 'BULL' ? 'C' : 'P';
     const verdict   = (flowAligns && gexStars >= 3) ? 'EXECUTE'
@@ -495,19 +495,49 @@ app.post('/webhook/tradingview', async (req, res) => {
                     : 'WAIT — flow unconfirmed';
     const dataSource = liveContract ? 'LIVE' : 'EST';
 
+    // T1 = 50% gain, T2 = 100% gain
+    const t1Price  = parseFloat((finalPremium * 1.5).toFixed(2));
+    const t2Price  = parseFloat((finalPremium * 2.0).toFixed(2));
+    const t1Profit = parseFloat((t1Price - finalPremium).toFixed(2) * sizing.contracts * 100).toFixed(0);
+    const t2Profit = parseFloat((t2Price - finalPremium).toFixed(2) * sizing.contracts * 100).toFixed(0);
+    const stopPrice = parseFloat((finalPremium * 0.5).toFixed(2));
+    const stopLoss  = parseFloat(((finalPremium - stopPrice) * sizing.contracts * 100).toFixed(0));
+    const riskPct   = (stopLoss / 6000 * 100).toFixed(1);
+
+    // GEX context lines
+    const pinLevel  = gexData?.pin      ? '$' + gexData.pin      : null;
+    const flipLevel = gexData?.gammaFlip ? '$' + gexData.gammaFlip : null;
+    const volLevel  = gexData?.volZone  ? '$' + gexData.volZone  : null;
+
+    // Realistic move context
+    const spotNow = parseFloat(spotPrice) || parseFloat(trigger);
+    const distToPin = gexData?.pin ? Math.abs(gexData.pin - spotNow).toFixed(2) : null;
+    const pinContext = distToPin ? (action === 'BULL'
+      ? `Price $${spotNow} → Pin ${pinLevel} (+$${distToPin} needed)`
+      : `Price $${spotNow} → Pin ${pinLevel} (-$${distToPin} needed)`) : null;
+
+    // Sizing note
+    const sizingNote = sizing.contracts === 2
+      ? 'Sell 1 @ T1 → trail stop → T2 runner'
+      : 'Single contract → exit at T1, or hold to T2 if pin not hit';
+
     const lines = [
-      'STRATUM ' + verdict,
+      '**STRATUM ' + verdict + '**',
       ticker + ' $' + finalStrike + direction + ' ' + finalExpiry + ' [' + dataSource + ']',
-      '---',
-      'Entry: $' + finalPremium + ' x' + sizing.contracts,
-      'Stop:  $' + sizing.stopPrice + ' (-$' + sizing.stopLoss + ')',
-      'T1:    $' + sizing.t1Price   + ' (+$' + sizing.t1Profit + ')',
-      'Risk:  ' + sizing.riskPct + '% of $6K',
-      '---',
-      'Pattern: ' + pattern + ' ' + tfAlign + '/4',
-      'GEX: ' + starsStr + (gexData && gexData.pin ? ' Pin:$' + gexData.pin : ''),
-      'Flow: ' + flowBias.label,
-      'W:' + weeklyBias + ' D:' + dailyBias + ' 4H:' + h4Bias,
+      '─────────────────────',
+      'Entry:  $' + finalPremium + ' x' + sizing.contracts,
+      'Stop:   $' + stopPrice + ' (-$' + stopLoss + ')  ← 50% loss',
+      'T1:     $' + t1Price + ' (+$' + t1Profit + ')  ← 50% gain',
+      'T2:     $' + t2Price + ' (+$' + t2Profit + ')  ← 100% gain',
+      'Risk:   ' + riskPct + '% of $6K',
+      '─────────────────────',
+      pinContext ? '📍 ' + pinContext : null,
+      flipLevel  ? '⚡ Flip: ' + flipLevel + (action === 'BULL' ? ' — stay above' : ' — stay below') : null,
+      volLevel   ? '🔴 Vol Zone: ' + volLevel : null,
+      '─────────────────────',
+      'Pattern: ' + pattern + ' ' + tfAlign + '/4  |  GEX: ' + starsStr,
+      'Flow: ' + flowBias.label + '  |  W:' + weeklyBias + ' D:' + dailyBias + ' 4H:' + h4Bias,
+      sizingNote,
     ].filter(Boolean);
 
     const { sendSystemMessage } = require('./alerter');
