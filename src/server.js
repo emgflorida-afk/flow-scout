@@ -132,6 +132,10 @@ async function connectStream() {
           } else if (event === 'alert') {
             const alertData = message.data;
             if (alertData) {
+              // Store contract for TV webhook lookups
+              if (alertData.symbol) {
+                storeFlowContract(alertData.symbol, alertData.alertName || '', alertData.alertPremium || 0);
+              }
               await processAlert(alertData);
             }
           } else if (event === 'cancelled' || event === 'error') {
@@ -268,6 +272,78 @@ app.get('/health', (req, res) => {
   });
 });
 
+// ─── BULLFLOW LIVE CONTRACT STORE ─────────────────────────────────
+// Bullflow API is streaming-only (SSE) — no REST query endpoint.
+// We store contracts from the live stream as they arrive,
+// keyed by ticker. TV webhook looks them up here in real time.
+const flowStore = {};
+
+function storeFlowContract(symbol, alertName, alertPremium) {
+  try {
+    const { parseOPRA } = require('./parser');
+    const contract = parseOPRA(symbol);
+    if (!contract || !contract.ticker) return;
+    const ticker = contract.ticker;
+
+    // Parse expiry from OPRA e.g. O:AMD251205P00205000
+    const raw     = symbol.replace('O:', '');
+    const dateStr = raw.slice(ticker.length, ticker.length + 6);
+    const year    = 2000 + parseInt(dateStr.slice(0, 2));
+    const month   = parseInt(dateStr.slice(2, 4));
+    const day     = parseInt(dateStr.slice(4, 6));
+    const expDate = new Date(year, month - 1, day);
+    const dte     = Math.ceil((expDate - new Date()) / (1000 * 60 * 60 * 24));
+    const expiryStr = month + '/' + day + ' (' + dte + 'DTE)';
+
+    if (!flowStore[ticker]) flowStore[ticker] = [];
+    flowStore[ticker].unshift({
+      strike:    contract.strike,
+      expiry:    expiryStr,
+      expTs:     expDate.getTime(),
+      premium:   contract.premium || 0,
+      totalPrem: alertPremium,
+      pc:        contract.type,
+      alertName,
+      ts:        Date.now(),
+    });
+    if (flowStore[ticker].length > 20) flowStore[ticker].pop();
+    console.log('[STORE] ' + ticker + ' ' + contract.type + ' $' + contract.strike + ' ' + expiryStr + ' — ' + alertName);
+  } catch (err) {
+    console.log('[STORE] Could not parse ' + symbol + ': ' + err.message);
+  }
+}
+
+function getBullflowContract(ticker, direction) {
+  const maxPremium = parseFloat(process.env.MAX_PREMIUM || 2.40);
+  const pcFilter   = direction === 'BULL' ? 'CALL' : 'PUT';
+  const cutoff     = Date.now() - 30 * 60 * 1000;
+  const now        = Date.now();
+
+  const stored = (flowStore[ticker] || []).filter(c =>
+    c.pc === pcFilter &&
+    c.premium >= 0.30 &&
+    c.premium <= maxPremium &&
+    c.ts >= cutoff &&
+    c.expTs > now
+  );
+
+  if (stored.length === 0) {
+    console.log('[STORE] No recent ' + pcFilter + ' flow for ' + ticker + ' in budget');
+    return null;
+  }
+
+  // Prefer urgent alerts, then most recent
+  stored.sort((a, b) => {
+    const au = (a.alertName || '').toLowerCase().includes('urgent') ? 1 : 0;
+    const bu = (b.alertName || '').toLowerCase().includes('urgent') ? 1 : 0;
+    return bu - au || b.ts - a.ts;
+  });
+
+  const best = stored[0];
+  console.log('[STORE] Best ' + ticker + ' ' + pcFilter + ': $' + best.strike + ' ' + best.expiry + ' @ $' + best.premium + ' — ' + best.alertName);
+  return best;
+}
+
 // ─── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
 const tvSignals = [];
 
@@ -312,55 +388,108 @@ app.post('/webhook/tradingview', async (req, res) => {
       return res.json({ status: 'stored_low_align', tfAlign });
     }
 
-    // Get GEX data for this ticker
-    const gexResult  = await getGEXScore(ticker, { ticker, type: action === 'BULL' ? 'CALL' : 'PUT', strike: trigger });
-    const gexData    = gexResult.gexData;
-    const gexStars   = gexResult.stars;
+    // Get spot price
+    const spotPrice = await getSpotPrice(ticker);
+    if (!spotPrice) {
+      console.log(`[TV] ${ticker} no spot price — skipping`);
+      return res.json({ status: 'no_spot_price' });
+    }
+
+    // VALIDATION 1 — Is price within 1% of trigger (still valid entry)?
+    const distFromTrigger = Math.abs(spotPrice - trigger) / trigger;
+    if (distFromTrigger > 0.015) {
+      console.log(`[TV] ${ticker} price $${spotPrice} too far from trigger $${trigger} (${(distFromTrigger*100).toFixed(1)}%) — stale signal`);
+      return res.json({ status: 'stale_trigger', distPct: (distFromTrigger*100).toFixed(1) });
+    }
+
+    // VALIDATION 2 — EMA check. Calls need price above EMA9, Puts below
+    const { getFlowBias, calculatePositionSize } = require('./scorer');
+    const ema9val  = parseFloat(data.ema9  || 0);
+    const ema21val = parseFloat(data.ema21 || 0);
+    let emaValid = true;
+    if (ema9val > 0 && ema21val > 0) {
+      if (action === 'BULL' && spotPrice < ema9val)  emaValid = false;
+      if (action === 'BEAR' && spotPrice > ema9val)  emaValid = false;
+    }
+    if (!emaValid) {
+      console.log(`[TV] ${ticker} EMA check failed — price $${spotPrice} vs EMA9 $${ema9val} for ${action}`);
+      return res.json({ status: 'ema_invalid', spotPrice, ema9: ema9val });
+    }
+
+    // Get GEX
+    const gexResult = await getGEXScore(ticker, { ticker, type: action === 'BULL' ? 'CALL' : 'PUT', strike: trigger });
+    const gexData   = gexResult.gexData;
+    const gexStars  = gexResult.stars;
 
     // Get flow bias
-    const { getFlowBias, calculatePositionSize } = require('./scorer');
     const flowBias = getFlowBias(ticker);
-
-    // Check flow alignment — does day flow agree with TV signal?
     const flowAligns = (action === 'BULL' && flowBias.label === 'BULLISH') ||
                        (action === 'BEAR' && flowBias.label === 'BEARISH') ||
-                       flowBias.label === 'NEUTRAL';
+                        flowBias.label === 'NEUTRAL';
 
-    // Get spot price for sizing estimate
-    const spotPrice = await getSpotPrice(ticker);
+    // Try to get live contract from Bullflow first
+    const liveContract = await getBullflowContract(ticker, action);
 
-    // Estimate premium — use trigger distance from spot as rough guide
-    const distFromSpot = spotPrice ? Math.abs(trigger - spotPrice) : 0;
-    const estimatedPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / spotPrice * 10)));
-    const sizing = calculatePositionSize(parseFloat(estimatedPremium.toFixed(2)));
+    // Fall back to estimate if Bullflow lookup fails
+    let finalPremium, finalStrike, finalExpiry;
+    if (liveContract) {
+      finalPremium = liveContract.premium;
+      finalStrike  = liveContract.strike;
+      finalExpiry  = liveContract.expiry;
+      console.log(`[TV] Using LIVE Bullflow contract: ${ticker} $${finalStrike} @ $${finalPremium} exp ${finalExpiry}`);
+    } else {
+      // Estimate fallback
+      const strikeStep = spotPrice > 200 ? 2.5 : spotPrice > 100 ? 1 : 0.5;
+      finalStrike  = action === 'BULL'
+        ? Math.ceil(trigger / strikeStep) * strikeStep
+        : Math.floor(trigger / strikeStep) * strikeStep;
+      const distFromSpot = Math.abs(finalStrike - spotPrice);
+      finalPremium = Math.max(0.30, Math.min(2.40, 2.40 - (distFromSpot / spotPrice * 8)));
+      finalPremium = parseFloat(finalPremium.toFixed(2));
+      // Calendar estimate for expiry
+      const today = new Date();
+      const dow   = today.getDay();
+      const daysOut = dow === 5 ? 7 : (5 - dow) || 7;
+      const expDate = new Date(today.getTime() + daysOut * 86400000);
+      finalExpiry = (expDate.getMonth()+1) + '/' + expDate.getDate() + ' (~est)';
+      console.log(`[TV] Bullflow lookup failed — using estimated contract: ${ticker} $${finalStrike} @ $${finalPremium}`);
+    }
 
-    // Build the full SMS
-    const starsStr = '★'.repeat(gexStars) + '☆'.repeat(5 - gexStars);
+    const sizing = calculatePositionSize(finalPremium);
+
+    if (!sizing.viable) {
+      console.log(`[TV] ${ticker} premium $${finalPremium} exceeds $2.40 max — skip`);
+      return res.json({ status: 'premium_too_high', premium: finalPremium });
+    }
+
+    // Build clean SMS
+    const starsStr  = '★'.repeat(gexStars) + '☆'.repeat(5 - gexStars);
+    const direction = action === 'BULL' ? 'C' : 'P';
+    const verdict   = (flowAligns && gexStars >= 3) ? 'EXECUTE'
+                    : flowAligns ? 'EXECUTE — weak GEX'
+                    : 'WAIT — flow unconfirmed';
+    const dataSource = liveContract ? 'LIVE' : 'EST';
+
     const lines = [
-      'STRATUM SIGNAL ' + tfAlign + '/4',
-      ticker + ' ' + action + ' — ' + pattern,
-      'TF: ' + tf + ' | W:' + weeklyBias + ' D:' + dailyBias + ' 4H:' + h4Bias,
+      'STRATUM ' + verdict,
+      ticker + ' $' + finalStrike + direction + ' ' + finalExpiry + ' [' + dataSource + ']',
       '---',
-      'Price:   $' + price.toFixed(2),
-      'Trigger: $' + trigger.toFixed(2),
-      gexData && gexData.pin ? 'GEX Pin: $' + gexData.pin : '',
-      gexData && gexData.gammaFlip ? 'Flip:    $' + gexData.gammaFlip : '',
-      'GEX: ' + starsStr,
-      flowBias.label !== 'NEUTRAL' ? 'Flow:  ' + flowBias.label : '',
+      'Entry: $' + finalPremium + ' x' + sizing.contracts,
+      'Stop:  $' + sizing.stopPrice + ' (-$' + sizing.stopLoss + ')',
+      'T1:    $' + sizing.t1Price   + ' (+$' + sizing.t1Profit + ')',
+      'Risk:  ' + sizing.riskPct + '% of $6K',
       '---',
-      sizing.viable ? 'Est Entry: ~$' + sizing.optionPremium + ' x' + sizing.contracts : 'Check premium',
-      sizing.viable ? 'Stop:  $' + sizing.stopPrice + ' (loss $' + sizing.stopLoss + ')' : '',
-      sizing.viable ? 'T1:    $' + sizing.t1Price + ' (profit $' + sizing.t1Profit + ')' : '',
-      sizing.viable ? 'Risk:  ' + sizing.riskPct + '% of account' : '',
-      '---',
-      flowAligns ? '> FLOW + TECHNICALS ALIGNED' : '> Technicals only — await flow confirm',
+      'Pattern: ' + pattern + ' ' + tfAlign + '/4',
+      'GEX: ' + starsStr + (gexData && gexData.pin ? ' Pin:$' + gexData.pin : ''),
+      'Flow: ' + flowBias.label,
+      'W:' + weeklyBias + ' D:' + dailyBias + ' 4H:' + h4Bias,
     ].filter(Boolean);
 
     const { sendSystemMessage } = require('./alerter');
     await sendSystemMessage(lines.join('\n'));
 
-    console.log(`[TV] SMS sent: ${ticker} ${action} ${pattern} | ${tfAlign}/4 | GEX ${gexStars}★`);
-    res.json({ status: 'alert_sent', ticker, action, tfAlign, gexStars });
+    console.log(`[TV] SMS FIRED: ${ticker} $${finalStrike}${direction} ${finalExpiry} [${dataSource}] | ${tfAlign}/4 | GEX ${gexStars}★ | ${verdict}`);
+    res.json({ status: 'alert_sent', ticker, action, strike: finalStrike, expiry: finalExpiry, premium: finalPremium, tfAlign, gexStars, verdict, dataSource });
 
   } catch (err) {
     console.error('[TV] Webhook error:', err.message);
