@@ -1,15 +1,18 @@
 // contractResolver.js — Stratum Flow Scout
 // PURPOSE: Get REAL contracts from Massive (Polygon) API
-// No more estimates. No more wrong strikes. No more fake expiries.
+// FIXED: API key now read at call time (not startup) — fixes undefined key bug
 // ─────────────────────────────────────────────────────────────────
 
 const fetch = require('node-fetch');
 
 const BASE_URL = 'https://api.polygon.io';
-const API_KEY  = process.env.POLYGON_API_KEY;
+
+// ── HELPER — always fresh API key ────────────────────────────────
+function apiKey() {
+  return process.env.POLYGON_API_KEY;
+}
 
 // ── WATCHLIST FILTER ─────────────────────────────────────────────
-// Only these tickers are allowed through. Everything else is blocked.
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
   'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
@@ -21,28 +24,18 @@ const MIN_PREMIUM = 0.30;
 const MAX_PREMIUM = 2.40;
 
 // ── PARSE BULLFLOW OPRA SYMBOL ───────────────────────────────────
-// Bullflow sends something like: O:SPY260313P00665000
-// We extract: ticker=SPY, expiry=2026-03-13, type=P, strike=665
 function parseOPRA(opraSymbol) {
   try {
-    // Remove "O:" prefix if present
-    const raw = opraSymbol.replace(/^O:/, '');
-
-    // Format: TICKER + YYMMDD + C/P + 8-digit strike (x1000)
-    // Example: SPY260313P00665000
+    const raw   = opraSymbol.replace(/^O:/, '');
     const match = raw.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
     if (!match) return null;
 
     const [, ticker, dateStr, type, strikeRaw] = match;
-
-    // Parse date: YYMMDD → YYYY-MM-DD
-    const yy   = dateStr.slice(0, 2);
-    const mm   = dateStr.slice(2, 4);
-    const dd   = dateStr.slice(4, 6);
-    const year = parseInt(yy) >= 50 ? '19' + yy : '20' + yy;
+    const yy     = dateStr.slice(0, 2);
+    const mm     = dateStr.slice(2, 4);
+    const dd     = dateStr.slice(4, 6);
+    const year   = parseInt(yy) >= 50 ? '19' + yy : '20' + yy;
     const expiry = `${year}-${mm}-${dd}`;
-
-    // Parse strike: 8 digits divided by 1000
     const strike = parseInt(strikeRaw) / 1000;
 
     return { ticker, expiry, type: type === 'C' ? 'call' : 'put', strike };
@@ -52,8 +45,6 @@ function parseOPRA(opraSymbol) {
 }
 
 // ── GET REAL OPTIONS CHAIN ───────────────────────────────────────
-// Queries Massive API for the real options chain for a ticker
-// Returns contracts sorted by proximity to current price
 async function getRealChain(ticker, contractType, expiryDate) {
   try {
     const params = new URLSearchParams({
@@ -63,10 +54,10 @@ async function getRealChain(ticker, contractType, expiryDate) {
       limit:             '250',
       order:             'asc',
       sort:              'strike_price',
-      apiKey:            API_KEY,
+      apiKey:            apiKey(),   // ← fresh every call
     });
 
-    const url = `${BASE_URL}/v3/reference/options/contracts?${params}`;
+    const url  = `${BASE_URL}/v3/reference/options/contracts?${params}`;
     const res  = await fetch(url);
     const data = await res.json();
 
@@ -78,41 +69,40 @@ async function getRealChain(ticker, contractType, expiryDate) {
   }
 }
 
-// ── GET OPTION SNAPSHOT (LIVE PRICING + GREEKS) ──────────────────
-// Gets real-time bid/ask/Greeks for a specific option contract
+// ── GET OPTION SNAPSHOT ──────────────────────────────────────────
 async function getOptionSnapshot(optionTicker) {
   try {
-    const url = `${BASE_URL}/v3/snapshot/options/${optionTicker}?apiKey=${API_KEY}`;
+    const url  = `${BASE_URL}/v3/snapshot/options/${optionTicker}?apiKey=${apiKey()}`;
     const res  = await fetch(url);
     const data = await res.json();
 
     const result = data?.results;
     if (!result) return null;
 
-    const details = result.details || {};
-    const greeks  = result.greeks  || {};
-    const day     = result.day     || {};
+    const details = result.details    || {};
+    const greeks  = result.greeks     || {};
+    const day     = result.day        || {};
     const quote   = result.last_quote || {};
 
-    const bid = quote.bid || day.close || 0;
-    const ask = quote.ask || day.close || 0;
+    const bid = quote.bid  || day.close || 0;
+    const ask = quote.ask  || day.close || 0;
     const mid = bid && ask ? parseFloat(((bid + ask) / 2).toFixed(2)) : 0;
 
     return {
-      ticker:      optionTicker,
-      bid:         parseFloat(bid.toFixed(2)),
-      ask:         parseFloat(ask.toFixed(2)),
+      ticker:       optionTicker,
+      bid:          parseFloat(bid.toFixed(2)),
+      ask:          parseFloat(ask.toFixed(2)),
       mid,
-      volume:      day.volume      || 0,
+      volume:       day.volume           || 0,
       openInterest: result.open_interest || 0,
-      delta:       parseFloat((greeks.delta  || 0).toFixed(4)),
-      gamma:       parseFloat((greeks.gamma  || 0).toFixed(4)),
-      theta:       parseFloat((greeks.theta  || 0).toFixed(4)),
-      vega:        parseFloat((greeks.vega   || 0).toFixed(4)),
-      iv:          parseFloat(((result.implied_volatility || 0) * 100).toFixed(1)),
-      strike:      details.strike_price || 0,
-      expiry:      details.expiration_date || '',
-      contractType: details.contract_type || '',
+      delta:        parseFloat((greeks.delta || 0).toFixed(4)),
+      gamma:        parseFloat((greeks.gamma || 0).toFixed(4)),
+      theta:        parseFloat((greeks.theta || 0).toFixed(4)),
+      vega:         parseFloat((greeks.vega  || 0).toFixed(4)),
+      iv:           parseFloat(((result.implied_volatility || 0) * 100).toFixed(1)),
+      strike:       details.strike_price     || 0,
+      expiry:       details.expiration_date  || '',
+      contractType: details.contract_type    || '',
     };
   } catch (err) {
     console.error('[SNAPSHOT] Failed:', err.message);
@@ -123,232 +113,146 @@ async function getOptionSnapshot(optionTicker) {
 // ── GET UNDERLYING PRICE ─────────────────────────────────────────
 async function getUnderlyingPrice(ticker) {
   try {
-    const url = `${BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${API_KEY}`;
+    // Try snapshot first
+    const url  = `${BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey()}`;
     const res  = await fetch(url);
     const data = await res.json();
-    return data?.ticker?.lastTrade?.p
-        || data?.ticker?.day?.c
-        || data?.ticker?.prevDay?.c
-        || null;
+
+    const price = data?.ticker?.lastTrade?.p
+               || data?.ticker?.day?.c
+               || data?.ticker?.day?.open
+               || data?.ticker?.prevDay?.c
+               || null;
+
+    if (price) return price;
+
+    // Fallback — previous close
+    const prevUrl  = `${BASE_URL}/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey()}`;
+    const prevRes  = await fetch(prevUrl);
+    const prevData = await prevRes.json();
+    return prevData?.results?.[0]?.c || null;
   } catch {
     return null;
   }
 }
 
 // ── FIND BEST CONTRACT ───────────────────────────────────────────
-// Given a Bullflow alert, finds the real best contract from the chain
-// Validates: strike within 3% of price, premium $0.30–$2.40
 async function findBestContract(opraSymbol) {
-  // Step 1 — Parse OPRA
   const parsed = parseOPRA(opraSymbol);
-  if (!parsed) {
-    return { error: 'Could not parse OPRA symbol: ' + opraSymbol };
-  }
+  if (!parsed) return { error: 'Could not parse OPRA: ' + opraSymbol };
 
   const { ticker, expiry, type, strike: hintStrike } = parsed;
 
-  // Step 2 — Watchlist check
-  if (!WATCHLIST.has(ticker)) {
-    return { error: `Ticker ${ticker} not on watchlist — skipping` };
-  }
+  if (!WATCHLIST.has(ticker)) return { error: `${ticker} not on watchlist` };
 
-  // Step 3 — Get current price
   const price = await getUnderlyingPrice(ticker);
-  if (!price) {
-    return { error: `Could not get price for ${ticker}` };
-  }
+  if (!price) return { error: `Could not get price for ${ticker}` };
 
-  // Step 4 — Get real options chain
   const chain = await getRealChain(ticker, type, expiry);
-  if (chain.length === 0) {
-    return { error: `No contracts found for ${ticker} ${type} ${expiry}` };
-  }
+  if (chain.length === 0) return { error: `No contracts for ${ticker} ${type} ${expiry}` };
 
-  // Step 5 — Find strike within 3% of current price
-  const maxDist = price * 0.03;
+  const maxDist    = price * 0.03;
   const candidates = chain.filter(c => Math.abs(c.strike_price - price) <= maxDist);
+  if (candidates.length === 0) return { error: `No strikes within 3% of $${price}` };
 
-  if (candidates.length === 0) {
-    return { error: `No strikes within 3% of $${price} for ${ticker}` };
-  }
-
-  // Step 6 — Get snapshots and find one in premium range
   let bestContract = null;
 
   for (const candidate of candidates) {
-    const optionTicker = candidate.ticker;
-    const snap = await getOptionSnapshot(optionTicker);
+    const snap = await getOptionSnapshot(candidate.ticker);
     if (!snap) continue;
 
     const premium = snap.mid || snap.ask;
     if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
 
-    // Step 7 — Score it
     const score = scoreContract(snap, price);
 
     if (!bestContract || score.total > bestContract.score.total) {
       bestContract = {
-        ticker,
-        optionTicker,
-        strike:      snap.strike,
-        expiry:      snap.expiry,
-        type,
-        premium,
-        bid:         snap.bid,
-        ask:         snap.ask,
-        mid:         snap.mid,
-        volume:      snap.volume,
-        openInterest: snap.openInterest,
-        delta:       snap.delta,
-        gamma:       snap.gamma,
-        theta:       snap.theta,
-        vega:        snap.vega,
-        iv:          snap.iv,
-        price,
-        score,
-        isLive:      true,
+        ticker, optionTicker: candidate.ticker,
+        strike: snap.strike, expiry: snap.expiry,
+        type, premium,
+        bid: snap.bid, ask: snap.ask, mid: snap.mid,
+        volume: snap.volume, openInterest: snap.openInterest,
+        delta: snap.delta, gamma: snap.gamma,
+        theta: snap.theta, vega: snap.vega,
+        iv: snap.iv, price, score, isLive: true,
       };
     }
   }
 
-  if (!bestContract) {
-    return { error: `No contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range for ${ticker}` };
-  }
-
+  if (!bestContract) return { error: `No contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range` };
   return bestContract;
 }
 
-// ── CONTRACT SCORING CARD (1–11) ─────────────────────────────────
-// Based on your rules — all data from Polygon/Massive API
+// ── CONTRACT SCORING (1–11) ──────────────────────────────────────
 function scoreContract(snap, underlyingPrice) {
   let total = 0;
   const breakdown = {};
   const warnings  = [];
 
-  const premium  = snap.mid || snap.ask;
-  const spread   = snap.ask - snap.bid;
+  const premium   = snap.mid || snap.ask;
+  const spread    = snap.ask - snap.bid;
   const spreadPct = snap.ask > 0 ? (spread / snap.ask) * 100 : 100;
-  const absDelta = Math.abs(snap.delta);
-  const distPct  = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
+  const absDelta  = Math.abs(snap.delta);
+  const distPct   = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
 
-  // +2 Premium under $2.40
-  if (premium <= 2.40) {
-    total += 2; breakdown.premium = '+2 Premium ✅';
-  } else {
-    breakdown.premium = '+0 Premium over $2.40 ❌';
-    warnings.push('Premium over max $2.40');
-  }
+  if (premium <= 2.40)                          { total += 2; breakdown.premium = '+2 ✅'; }
+  else                                          { warnings.push('Premium over $2.40'); }
 
-  // +1 Spread under 10%
-  if (spreadPct < 10) {
-    total += 1; breakdown.spread = '+1 Spread tight ✅';
-  } else {
-    breakdown.spread = '+0 Wide spread ❌';
-    warnings.push(`Wide spread ${spreadPct.toFixed(1)}%`);
-  }
+  if (spreadPct < 10)                           { total += 1; breakdown.spread = '+1 ✅'; }
+  else                                          { warnings.push(`Wide spread ${spreadPct.toFixed(1)}%`); }
 
-  // +2 Volume over 500
-  if (snap.volume >= 500) {
-    total += 2; breakdown.volume = '+2 Volume ✅';
-  } else {
-    breakdown.volume = '+0 Thin volume ❌';
-    warnings.push(`Low volume ${snap.volume}`);
-  }
+  if (snap.volume >= 500)                       { total += 2; breakdown.volume = '+2 ✅'; }
+  else                                          { warnings.push(`Low volume ${snap.volume}`); }
 
-  // +2 Delta 0.30–0.50
-  if (absDelta >= 0.30 && absDelta <= 0.50) {
-    total += 2; breakdown.delta = '+2 Delta ideal ✅';
-  } else if (absDelta > 0.50) {
-    breakdown.delta = '+0 Deep ITM ⚠️';
-    warnings.push('Delta too high — deep ITM');
-  } else {
-    breakdown.delta = '+0 Delta too low ❌';
-    warnings.push('Delta under 0.30 — far OTM');
-  }
+  if (absDelta >= 0.30 && absDelta <= 0.50)    { total += 2; breakdown.delta = '+2 ✅'; }
+  else if (absDelta > 0.50)                     { warnings.push('Delta too high — deep ITM'); }
+  else                                          { warnings.push('Delta under 0.30 — far OTM'); }
 
-  // +1 Theta under -0.05
-  if (snap.theta < -0.05) {
-    // Theta is negative — higher absolute = faster decay
-    breakdown.theta = '+0 High theta decay ⚠️';
-    warnings.push(`High theta decay ${snap.theta}`);
-  } else {
-    total += 1; breakdown.theta = '+1 Theta manageable ✅';
-  }
+  if (snap.theta >= -0.05)                      { total += 1; breakdown.theta = '+1 ✅'; }
+  else                                          { warnings.push(`High theta ${snap.theta}`); }
 
-  // +2 Strike within 3% of price
-  if (distPct <= 3) {
-    total += 2; breakdown.strike = '+2 Strike near price ✅';
-  } else {
-    breakdown.strike = '+0 Strike far from price ❌';
-    warnings.push(`Strike ${distPct.toFixed(1)}% from price`);
-  }
+  if (distPct <= 3)                             { total += 2; breakdown.strike = '+2 ✅'; }
+  else                                          { warnings.push(`Strike ${distPct.toFixed(1)}% from price`); }
 
-  // +1 OI over 1000
-  if (snap.openInterest >= 1000) {
-    total += 1; breakdown.oi = '+1 OI healthy ✅';
-  } else {
-    breakdown.oi = '+0 Low open interest ❌';
-    warnings.push(`Low OI ${snap.openInterest}`);
-  }
+  if (snap.openInterest >= 1000)                { total += 1; breakdown.oi = '+1 ✅'; }
+  else                                          { warnings.push(`Low OI ${snap.openInterest}`); }
 
-  // Profit probability ≈ delta
-  const profitProb = Math.round(Math.abs(snap.delta) * 100);
-
+  const profitProb = Math.round(absDelta * 100);
   return { total, max: 11, breakdown, warnings, profitProb };
 }
 
 // ── POSITION SIZING ──────────────────────────────────────────────
 function calculatePositionSize(premium, accountSize = 6000) {
-  const maxLoss     = accountSize * 0.02;         // 2% rule = $120
-  const stopPct     = 0.50;                         // 50% loss = stop
-  const costPerContract = premium * 100;
-  const maxLossPerContract = costPerContract * stopPct;
+  const maxLoss            = accountSize * 0.02;
+  const costPerContract    = premium * 100;
+  const maxLossPerContract = costPerContract * 0.50;
 
-  if (premium > MAX_PREMIUM) {
-    return { viable: false, reason: `Premium $${premium} over max $${MAX_PREMIUM}` };
-  }
-  if (premium < MIN_PREMIUM) {
-    return { viable: false, reason: `Premium $${premium} under min $${MIN_PREMIUM}` };
-  }
+  if (premium > MAX_PREMIUM) return { viable: false, reason: `Premium $${premium} over max` };
+  if (premium < MIN_PREMIUM) return { viable: false, reason: `Premium $${premium} under min` };
 
-  const contracts = premium <= 1.20 ? 2 : 1;
-  const totalCost = costPerContract * contracts;
-  const totalStop = maxLossPerContract * contracts;
+  const contracts  = premium <= 1.20 ? 2 : 1;
+  const totalStop  = maxLossPerContract * contracts;
+  if (totalStop > maxLoss) return { viable: false, reason: `Stop $${totalStop} exceeds max $${maxLoss}` };
 
-  if (totalStop > maxLoss) {
-    return { viable: false, reason: `Stop loss $${totalStop} exceeds max $${maxLoss}` };
-  }
-
-  const stopPrice  = parseFloat((premium * 0.50).toFixed(2));
-  const t1Price    = parseFloat((premium * 1.50).toFixed(2));
-  const t2Price    = parseFloat((premium * 2.00).toFixed(2));
-  const stopLoss   = parseFloat((totalStop).toFixed(0));
-  const t1Profit   = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
-  const riskPct    = parseFloat((totalStop / accountSize * 100).toFixed(1));
+  const stopPrice = parseFloat((premium * 0.50).toFixed(2));
+  const t1Price   = parseFloat((premium * 1.50).toFixed(2));
+  const t2Price   = parseFloat((premium * 2.00).toFixed(2));
+  const stopLoss  = parseFloat(totalStop.toFixed(0));
+  const t1Profit  = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
+  const riskPct   = parseFloat((totalStop / accountSize * 100).toFixed(1));
 
   return {
-    viable:      true,
-    contracts,
-    premium,
-    totalCost,
-    stopPrice,
-    t1Price,
-    t2Price,
-    stopLoss,
-    t1Profit,
-    riskPct,
-    hasRunner:   contracts > 1,
+    viable: true, contracts, premium,
+    totalCost: costPerContract * contracts,
+    stopPrice, t1Price, t2Price,
+    stopLoss, t1Profit, riskPct,
+    hasRunner: contracts > 1,
   };
 }
 
 module.exports = {
-  parseOPRA,
-  findBestContract,
-  getOptionSnapshot,
-  getUnderlyingPrice,
-  scoreContract,
-  calculatePositionSize,
-  WATCHLIST,
-  MIN_PREMIUM,
-  MAX_PREMIUM,
+  parseOPRA, findBestContract, getOptionSnapshot,
+  getUnderlyingPrice, scoreContract, calculatePositionSize,
+  WATCHLIST, MIN_PREMIUM, MAX_PREMIUM,
 };
