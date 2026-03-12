@@ -1,5 +1,6 @@
 // server.js — Stratum Flow Scout
 // Fixed: Real contracts, watchlist filter, premium filter, calendar
+// Updated: Morning brief now self-contained in alerter.js
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -18,7 +19,7 @@ app.use(express.json());
 app.get('/', (req, res) => {
   res.json({
     status:  'Stratum Flow Scout ✅',
-    version: '5.0',
+    version: '5.1',
     time:    new Date().toISOString(),
   });
 });
@@ -31,30 +32,24 @@ app.post('/webhook/tradingview', async (req, res) => {
     const body = req.body;
     console.log('[WEBHOOK] Received:', JSON.stringify(body));
 
-    // Extract fields from Pine Script alert
     const ticker  = (body.ticker  || '').toUpperCase().trim();
-    const action  = (body.action  || '').toUpperCase().trim(); // BUY or SELL
+    const action  = (body.action  || '').toUpperCase().trim();
     const weekly  = body.weekly  || null;
     const daily   = body.daily   || null;
     const h4      = body.h4      || null;
-    const opra    = body.opra    || null;  // Full OPRA symbol from Bullflow
+    const opra    = body.opra    || null;
 
-    // Require either opra or ticker+action
     if (!opra && !ticker) {
       return res.status(400).json({ error: 'Missing opra or ticker' });
     }
 
-    // Build OPRA if not provided (fallback — will be less accurate)
-    // Best practice: Pine Script should send the OPRA from Bullflow
     const opraSymbol = opra || buildFallbackOPRA(ticker, action);
 
-    // Watchlist check before doing anything
     if (!resolver.WATCHLIST.has(ticker) && ticker) {
       console.log(`[WEBHOOK] ${ticker} not on watchlist — skipping`);
       return res.json({ status: 'skipped', reason: 'Not on watchlist' });
     }
 
-    // Fire the alert (async — don't wait for it)
     const tvBias = { weekly, daily, h4 };
     alerter.sendTradeAlert(opraSymbol, tvBias).catch(console.error);
 
@@ -66,13 +61,11 @@ app.post('/webhook/tradingview', async (req, res) => {
 });
 
 // ── BULLFLOW WEBHOOK ──────────────────────────────────────────────
-// Bullflow sends alerts here with OPRA symbols
 app.post('/webhook/bullflow', async (req, res) => {
   try {
     const body = req.body;
     console.log('[BULLFLOW] Received:', JSON.stringify(body));
 
-    // Bullflow format: { symbol, opra, ticker, ... }
     const opra   = body.opra   || body.symbol || null;
     const ticker = body.ticker || (opra ? resolver.parseOPRA(opra)?.ticker : null);
 
@@ -94,12 +87,9 @@ app.post('/webhook/bullflow', async (req, res) => {
 });
 
 // ── FALLBACK OPRA BUILDER ─────────────────────────────────────────
-// Used only when Bullflow OPRA is not available
-// Gets nearest weekly expiry and ATM strike
 function buildFallbackOPRA(ticker, action) {
-  const type = action === 'BUY' ? 'C' : 'P'; // simplistic
+  const type = action === 'BUY' ? 'C' : 'P';
 
-  // Next Friday
   const now    = new Date();
   const day    = now.getDay();
   const daysTo = day <= 5 ? 5 - day : 6;
@@ -111,25 +101,35 @@ function buildFallbackOPRA(ticker, action) {
   const dd = String(expiry.getDate()).padStart(2, '0');
   const dateStr = `${yy}${mm}${dd}`;
 
-  // We don't know price here, use 0 strike — resolver will find real one
   return `O:${ticker}${dateStr}${type}00000000`;
 }
 
 // ── MORNING BRIEF CRON ────────────────────────────────────────────
-// Fires at 9:15AM ET every weekday
-// '15 9 * * 1-5' = 9:15AM — but Railway uses UTC, so +4 hours = 13:15 UTC
+// 9:15AM ET = 13:15 UTC (Railway runs UTC)
 cron.schedule('15 13 * * 1-5', async () => {
   console.log('[CRON] Firing morning brief...');
   try {
-    await alerter.sendMorningBrief([]);
+    await alerter.sendMorningBrief();
   } catch (err) {
     console.error('[CRON] Morning brief failed:', err.message);
   }
 });
 
+// ── MANUAL TRIGGER (for testing) ─────────────────────────────────
+// Hit this endpoint to fire the morning brief on demand
+// DELETE after testing if you want
+app.get('/test/brief', async (req, res) => {
+  try {
+    await alerter.sendMorningBrief();
+    res.json({ status: 'Morning brief sent ✅' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5 running on port ${PORT}`);
+  console.log(`✅ Flow Scout v5.1 running on port ${PORT}`);
   console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
 });
