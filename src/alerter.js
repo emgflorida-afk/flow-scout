@@ -49,34 +49,33 @@ async function getTickerSnapshot(ticker) {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
 
-    // Try snapshot first
-    const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`;
-    const res  = await fetch(url);
-    const data = await res.json();
-    const snap = data?.ticker;
+    // Fetch snapshot AND prev close in parallel
+    const [snapRes, prevRes] = await Promise.all([
+      fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`),
+      fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`),
+    ]);
 
-    // Price priority: premarket → last trade → day open → prev close
-    let price = snap?.min?.o
-             || snap?.lastTrade?.p
-             || snap?.day?.open
-             || snap?.day?.close
-             || snap?.prevDay?.c
-             || null;
+    const snapData = await snapRes.json();
+    const prevData = await prevRes.json();
+    const snap     = snapData?.ticker;
 
-    // If still null, fall back to previous close endpoint
-    if (!price) {
-      const prevUrl  = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`;
-      const prevRes  = await fetch(prevUrl);
-      const prevData = await prevRes.json();
-      price = prevData?.results?.[0]?.c || null;
-    }
+    // Current price
+    const price = snap?.lastTrade?.p
+               || snap?.day?.close
+               || snap?.day?.open
+               || null;
 
-    if (!price) return null;
+    // Previous close from /prev endpoint (reliable)
+    const prevClose = prevData?.results?.[0]?.c
+                   || snap?.prevDay?.c
+                   || price;
 
-    const prevClose = snap?.prevDay?.c || price;
+    if (!price || !prevClose) return null;
+
     const change    = (price - prevClose).toFixed(2);
     const changePct = ((price - prevClose) / prevClose * 100).toFixed(2);
     const arrow     = parseFloat(change) >= 0 ? '▲' : '▼';
+
     return {
       ticker,
       price:     parseFloat(price).toFixed(2),
@@ -98,21 +97,28 @@ async function getVIX() {
   try {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
-    // Use UVXY as VIX proxy (Polygon doesn't serve $VIX directly on Starter)
-    const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/UVXY?apiKey=${apiKey}`;
-    const res  = await fetch(url);
-    const data = await res.json();
-    const snap = data?.ticker;
-    if (!snap) return null;
-    const price  = snap.day?.close || snap.lastTrade?.p || null;
-    const prev   = snap.prevDay?.c || price;
+
+    const [snapRes, prevRes] = await Promise.all([
+      fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/UVXY?apiKey=${apiKey}`),
+      fetch(`https://api.polygon.io/v2/aggs/ticker/UVXY/prev?adjusted=true&apiKey=${apiKey}`),
+    ]);
+
+    const snapData = await snapRes.json();
+    const prevData = await prevRes.json();
+    const snap     = snapData?.ticker;
+
+    const price = snap?.lastTrade?.p || snap?.day?.close || null;
+    const prev  = prevData?.results?.[0]?.c || snap?.prevDay?.c || price;
+
     if (!price) return null;
+
     const change = (price - prev).toFixed(2);
     const arrow  = parseFloat(change) >= 0 ? '▲' : '▼';
     const level  = price >= 30 ? 'EXTREME — reduce size 🚨'
                  : price >= 20 ? 'ELEVATED — be careful ⚠️'
                  : price >= 15 ? 'NORMAL ✅'
                  : 'LOW — watch for spike';
+
     return { price: parseFloat(price).toFixed(2), change, arrow, level };
   } catch { return null; }
 }
