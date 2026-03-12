@@ -48,16 +48,32 @@ async function getTickerSnapshot(ticker) {
   try {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
+
+    // Try snapshot first
     const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`;
     const res  = await fetch(url);
     const data = await res.json();
     const snap = data?.ticker;
-    if (!snap) return null;
 
-    // Pre-market price if available, fall back to day open, then prev close
-    const price     = snap.min?.o || snap.day?.open || snap.lastTrade?.p || snap.prevDay?.c || null;
+    // Price priority: premarket → last trade → day open → prev close
+    let price = snap?.min?.o
+             || snap?.lastTrade?.p
+             || snap?.day?.open
+             || snap?.day?.close
+             || snap?.prevDay?.c
+             || null;
+
+    // If still null, fall back to previous close endpoint
+    if (!price) {
+      const prevUrl  = `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`;
+      const prevRes  = await fetch(prevUrl);
+      const prevData = await prevRes.json();
+      price = prevData?.results?.[0]?.c || null;
+    }
+
     if (!price) return null;
-    const prevClose = snap.prevDay?.c || price;
+
+    const prevClose = snap?.prevDay?.c || price;
     const change    = (price - prevClose).toFixed(2);
     const changePct = ((price - prevClose) / prevClose * 100).toFixed(2);
     const arrow     = parseFloat(change) >= 0 ? '▲' : '▼';
