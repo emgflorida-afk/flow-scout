@@ -32,8 +32,9 @@ async function fetchEconomicEvents(date) {
     const data = await res.json();
     const rows = data?.data?.rows || [];
 
-    // DEDUP — keep unique names only
-    const seen = new Set();
+    // DEDUP — collapse events sharing the same root keyword
+    const seen    = new Set();
+    const keysSeen = new Set();
     return rows
       .map(row => ({
         time:     row.time        || '',
@@ -44,9 +45,16 @@ async function fetchEconomicEvents(date) {
       }))
       .filter(e => {
         if (!e.name) return false;
-        const key = e.name.trim().toUpperCase();
-        if (seen.has(key)) return false;
-        seen.add(key);
+        // Exact dedup first
+        const exact = e.name.trim().toUpperCase();
+        if (seen.has(exact)) return false;
+        seen.add(exact);
+        // Keyword dedup — collapse "German CPI", "Core CPI", "CPI Index" → one CPI entry
+        const rootKey = HIGH_IMPACT_KEYWORDS.find(kw => exact.includes(kw.toUpperCase()));
+        if (rootKey) {
+          if (keysSeen.has(rootKey.toUpperCase())) return false;
+          keysSeen.add(rootKey.toUpperCase());
+        }
         return true;
       });
   } catch (err) {
