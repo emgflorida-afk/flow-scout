@@ -1,6 +1,7 @@
 // alerter.js — Stratum Flow Scout v6
 // NEW: Trade classification (DAY/SWING/LOTTO), combo detection,
 //      confluence scoring, strategy detection (322, 4HR, Failed9)
+// UPDATED: Full morning brief — SPY pre-market, VIX, movers, calendar
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -42,24 +43,79 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-async function getSpyPremarket() {
+// ── PRE-MARKET DATA ───────────────────────────────────────────────
+async function getTickerSnapshot(ticker) {
   try {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
-    const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/SPY?apiKey=${apiKey}`;
+    const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`;
     const res  = await fetch(url);
     const data = await res.json();
     const snap = data?.ticker;
     if (!snap) return null;
-    const price     = snap.day?.open || snap.lastTrade?.p || snap.prevDay?.c || null;
+
+    // Pre-market price if available, fall back to day open, then prev close
+    const price     = snap.min?.o || snap.day?.open || snap.lastTrade?.p || snap.prevDay?.c || null;
     if (!price) return null;
     const prevClose = snap.prevDay?.c || price;
     const change    = (price - prevClose).toFixed(2);
     const changePct = ((price - prevClose) / prevClose * 100).toFixed(2);
-    const arrow     = change >= 0 ? '▲' : '▼';
-    return { price: parseFloat(price).toFixed(2), change, changePct, arrow,
-             label: `SPY $${parseFloat(price).toFixed(2)} ${arrow} ${changePct}%` };
+    const arrow     = parseFloat(change) >= 0 ? '▲' : '▼';
+    return {
+      ticker,
+      price:     parseFloat(price).toFixed(2),
+      change,
+      changePct,
+      arrow,
+      prevClose: parseFloat(prevClose).toFixed(2),
+    };
   } catch { return null; }
+}
+
+async function getSpyPremarket() {
+  const snap = await getTickerSnapshot('SPY');
+  if (!snap) return null;
+  return { ...snap, label: `SPY $${snap.price} ${snap.arrow} ${snap.changePct}%` };
+}
+
+async function getVIX() {
+  try {
+    const apiKey = process.env.POLYGON_API_KEY;
+    if (!apiKey) return null;
+    // Use UVXY as VIX proxy (Polygon doesn't serve $VIX directly on Starter)
+    const url  = `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/UVXY?apiKey=${apiKey}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+    const snap = data?.ticker;
+    if (!snap) return null;
+    const price  = snap.day?.close || snap.lastTrade?.p || null;
+    const prev   = snap.prevDay?.c || price;
+    if (!price) return null;
+    const change = (price - prev).toFixed(2);
+    const arrow  = parseFloat(change) >= 0 ? '▲' : '▼';
+    const level  = price >= 30 ? 'EXTREME — reduce size 🚨'
+                 : price >= 20 ? 'ELEVATED — be careful ⚠️'
+                 : price >= 15 ? 'NORMAL ✅'
+                 : 'LOW — watch for spike';
+    return { price: parseFloat(price).toFixed(2), change, arrow, level };
+  } catch { return null; }
+}
+
+// ── WATCHLIST SNAPSHOTS ───────────────────────────────────────────
+async function getWatchlistSnapshots() {
+  const tickers = [...resolver.WATCHLIST];
+  const results = [];
+
+  // Batch 5 at a time — avoid rate limits
+  for (let i = 0; i < tickers.length; i += 5) {
+    const batch = tickers.slice(i, i + 5);
+    const snaps = await Promise.all(batch.map(t => getTickerSnapshot(t)));
+    snaps.forEach((snap, idx) => {
+      if (snap) results.push(snap);
+    });
+    if (i + 5 < tickers.length) await new Promise(r => setTimeout(r, 300));
+  }
+  return results;
 }
 
 // ── MAIN TRADE ALERT ──────────────────────────────────────────────
@@ -163,52 +219,75 @@ async function sendTradeAlert(opraSymbol, tvData = {}) {
 }
 
 // ── MORNING BRIEF ─────────────────────────────────────────────────
-async function sendMorningBrief(watchlistData = []) {
-  const dateStr   = new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  const spy       = await getSpyPremarket();
-  const calBrief  = await calendar.getCalendarBriefLine();
+// Fires at 9:15AM ET every weekday
+async function sendMorningBrief() {
+  console.log('[BRIEF] Building morning brief...');
 
-  const spyLine  = spy
-    ? `SPY $${spy.price} ${spy.arrow} ${spy.changePct}% — ${parseFloat(spy.changePct) < 0 ? 'BEAR 🔴' : 'BULL 🟢'}`
-    : 'SPY — unavailable';
+  const dateStr = new Date().toLocaleDateString('en-US', {
+    weekday: 'long', month: 'short', day: 'numeric',
+  });
 
-  const biasLine = spy && parseFloat(spy.changePct) < -0.5 ? '🔴 Favor PUTS today'
-                 : spy && parseFloat(spy.changePct) > 0.5  ? '🟢 Favor CALLS today'
-                 : '➡️  Wait for 10AM direction';
+  // Fetch everything in parallel
+  const [spy, vix, calBrief, watchlistSnaps] = await Promise.all([
+    getSpyPremarket(),
+    getVIX(),
+    calendar.getCalendarBriefLine(),
+    getWatchlistSnapshots(),
+  ]);
 
-  const top5       = watchlistData.sort((a, b) => (b.score || 0) - (a.score || 0)).slice(0, 5);
-  const setupLines = top5.length > 0
-    ? top5.map((t, i) =>
-        `${i + 1}. ${t.ticker.padEnd(5)} ${t.tradeType || ''} Score:${t.score}/11`
-      )
-    : ['  No setups scored yet — awaiting signals'];
+  // SPY
+  const spyLine = spy
+    ? `SPY  $${spy.price} ${spy.arrow} ${spy.changePct}%  (prev $${spy.prevClose})`
+    : 'SPY  — unavailable';
+  const spyBias = spy && parseFloat(spy.changePct) <= -0.5
+    ? '🔴 Pre-mkt BEARISH — lean PUTS'
+    : spy && parseFloat(spy.changePct) >= 0.5
+    ? '🟢 Pre-mkt BULLISH — lean CALLS'
+    : '➡️  Flat — wait for 10AM candle direction';
+
+  // VIX / UVXY
+  const vixLine = vix
+    ? `UVXY $${vix.price} ${vix.arrow} ${vix.change}  ${vix.level}`
+    : 'VIX  — unavailable';
+
+  // Top movers from watchlist
+  const sorted  = [...watchlistSnaps].sort((a, b) => parseFloat(b.changePct) - parseFloat(a.changePct));
+  const gainers = sorted.slice(0, 3);
+  const losers  = sorted.slice(-3).reverse();
 
   const lines = [
-    `📊 STRATUM MORNING BRIEF — ${dateStr}`,
+    `📊 STRATUM MORNING BRIEF`,
+    `${dateStr}`,
     `═══════════════════════════════`,
     `📈 ${spyLine}`,
-    `   ${biasLine}`,
+    `   ${spyBias}`,
+    `───────────────────────────────`,
+    `😨 ${vixLine}`,
     `───────────────────────────────`,
     calBrief.line,
     calBrief.hasHighImpact ? `🕐 ${calBrief.entryRule}` : null,
     `───────────────────────────────`,
-    `TOP SETUPS:`,
-    ...setupLines,
+    `📈 TOP MOVERS:`,
+    ...gainers.map(t => `   ${t.ticker.padEnd(5)} $${t.price}  ${t.arrow} ${t.changePct}%`),
+    `📉 WEAKEST:`,
+    ...losers.map(t =>  `   ${t.ticker.padEnd(5)} $${t.price}  ${t.arrow} ${t.changePct}%`),
     `───────────────────────────────`,
-    `💰 Max premium: $2.40 | Max loss: $120`,
-    `📏 ≤$1.20 = 2 contracts | $1.21–$2.40 = 1`,
+    `💰 Max premium $2.40  |  Max loss $120`,
+    `📏 ≤$1.20 = 2 contracts  |  $1.21–2.40 = 1`,
     `⏰ 10AM–11:30AM  |  3PM–3:45PM ET`,
     `👁️  Watching ${resolver.WATCHLIST.size} tickers`,
+    `───────────────────────────────`,
+    `🎯 4AM candle = daily bias`,
+    `   Real direction confirms at 10AM open`,
   ].filter(l => l !== null);
 
   await sendDiscord(lines.join('\n'));
+  console.log('[BRIEF] Sent ✅');
   return true;
 }
 
 async function sendSystemMessage(msg) {
   await sendDiscord(`ℹ️ STRATUM SYSTEM\n${msg}`);
 }
-
-module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage };
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage };
