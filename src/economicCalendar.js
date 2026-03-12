@@ -1,18 +1,11 @@
 // economicCalendar.js — Stratum Flow Scout
-// PURPOSE: Detect high-impact economic events
-// On CPI/NFP/FOMC days → delay entries, reduce size, add warnings
+// UPDATED: Deduplication, earnings calendar, better event formatting
+// PURPOSE: Detect high-impact economic events + earnings on watchlist
 // ─────────────────────────────────────────────────────────────────
 
 const fetch = require('node-fetch');
 
-// ── IMPACT LEVELS ────────────────────────────────────────────────
-const IMPACT = {
-  HIGH:   'HIGH',   // CPI, NFP, FOMC — delay entries to 11AM
-  MEDIUM: 'MEDIUM', // PPI, retail sales — caution, normal window
-  LOW:    'LOW',    // minor data — no change
-};
-
-// ── KEYWORDS THAT SIGNAL HIGH IMPACT ─────────────────────────────
+// ── HIGH IMPACT KEYWORDS ──────────────────────────────────────────
 const HIGH_IMPACT_KEYWORDS = [
   'CPI', 'Consumer Price Index',
   'NFP', 'Non-Farm Payroll', 'Nonfarm',
@@ -23,28 +16,80 @@ const HIGH_IMPACT_KEYWORDS = [
   'PPI', 'Producer Price Index',
 ];
 
-// ── FETCH TODAY'S EVENTS FROM NASDAQ ─────────────────────────────
-async function fetchEconomicEvents() {
+// ── WATCHLIST FOR EARNINGS CHECK ─────────────────────────────────
+const EARNINGS_WATCHLIST = [
+  'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL','AMZN',
+  'MSFT','AMD','JPM','GS','BAC','WFC','MRNA','MRVL',
+  'GUSH','UVXY','KO','PEP'
+];
+
+// ── FETCH TODAY'S ECONOMIC EVENTS ────────────────────────────────
+async function fetchEconomicEvents(date) {
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const url   = `https://api.nasdaq.com/api/calendar/economicevents?date=${today}`;
-
-    const res  = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0' }
-    });
+    const dateStr = date || new Date().toISOString().slice(0, 10);
+    const url = `https://api.nasdaq.com/api/calendar/economicevents?date=${dateStr}`;
+    const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
     const data = await res.json();
-
     const rows = data?.data?.rows || [];
-    return rows.map(row => ({
-      time:   row.time   || '',
-      name:   row.name   || row.eventName || '',
-      impact: row.importance || '',
-      actual: row.actual || '',
-      forecast: row.consensus || '',
-    }));
+
+    // DEDUP — keep unique names only
+    const seen = new Set();
+    return rows
+      .map(row => ({
+        time:     row.time        || '',
+        name:     row.name        || row.eventName || '',
+        impact:   row.importance  || '',
+        actual:   row.actual      || '',
+        forecast: row.consensus   || '',
+      }))
+      .filter(e => {
+        if (!e.name) return false;
+        const key = e.name.trim().toUpperCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
   } catch (err) {
     console.error('[CALENDAR] Fetch failed:', err.message);
     return [];
+  }
+}
+
+// ── FETCH EARNINGS (TODAY + TOMORROW) ────────────────────────────
+async function fetchEarnings() {
+  try {
+    const results = { today: [], tomorrow: [] };
+
+    for (const offset of [0, 1]) {
+      const d = new Date();
+      d.setDate(d.getDate() + offset);
+      const dateStr = d.toISOString().slice(0, 10);
+      const label   = offset === 0 ? 'today' : 'tomorrow';
+
+      const url  = `https://api.nasdaq.com/api/calendar/earnings?date=${dateStr}`;
+      const res  = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+      const data = await res.json();
+      const rows = data?.data?.rows || [];
+
+      // Filter to only watchlist tickers
+      const hits = rows
+        .filter(r => {
+          const sym = (r.symbol || r.ticker || '').toUpperCase().trim();
+          return EARNINGS_WATCHLIST.includes(sym);
+        })
+        .map(r => ({
+          ticker: (r.symbol || r.ticker || '').toUpperCase(),
+          time:   r.time || r.marketTime || '',   // BMO = before market, AMC = after
+          eps:    r.epsForecast || r.estimate || '',
+        }));
+
+      results[label] = hits;
+    }
+
+    return results;
+  } catch (err) {
+    console.error('[EARNINGS] Fetch failed:', err.message);
+    return { today: [], tomorrow: [] };
   }
 }
 
@@ -56,9 +101,7 @@ async function getTodayImpact() {
   for (const event of events) {
     const nameUpper = event.name.toUpperCase();
     const isHigh = HIGH_IMPACT_KEYWORDS.some(kw => nameUpper.includes(kw.toUpperCase()));
-    if (isHigh) {
-      highEvents.push(event);
-    }
+    if (isHigh) highEvents.push(event);
   }
 
   if (highEvents.length === 0) {
@@ -72,54 +115,75 @@ async function getTodayImpact() {
   }
 
   const names = highEvents.map(e => e.name).join(', ');
-
   return {
     hasHighImpact: true,
     events:        highEvents,
-    warning:       `⚠️ HIGH IMPACT EVENT TODAY: ${names}`,
+    warning:       `⚠️ HIGH IMPACT TODAY: ${names}`,
     entryRule:     '🔴 DELAY entries until 11AM — let whipsaw settle first',
     alertPrefix:   `🗓️ ${names} DAY — `,
   };
 }
 
-// ── FORMAT FOR MORNING BRIEF ─────────────────────────────────────
+// ── FORMAT FOR MORNING BRIEF ──────────────────────────────────────
 async function getCalendarBriefLine() {
-  const impact = await getTodayImpact();
+  const [impact, earnings] = await Promise.all([
+    getTodayImpact(),
+    fetchEarnings(),
+  ]);
 
+  const lines = [];
+
+  // Economic events
   if (!impact.hasHighImpact) {
-    return {
-      line:          '📅 No major economic events today',
-      hasHighImpact: false,
-      entryRule:     impact.entryRule,
-    };
+    lines.push('📅 No major economic events today');
+  } else {
+    // Clean list — deduplicated, one per line if multiple
+    const eventNames = impact.events.map(e => e.name).join(' + ');
+    lines.push(`🔴 HIGH IMPACT: ${eventNames}`);
+    lines.push(`   Wait until 11AM for entries`);
   }
 
-  const eventNames = impact.events.map(e => e.name).join(' + ');
+  // Earnings — today
+  if (earnings.today.length > 0) {
+    const list = earnings.today.map(e => {
+      const timing = e.time.toLowerCase().includes('before') ? '(BMO)'
+                   : e.time.toLowerCase().includes('after')  ? '(AMC)'
+                   : '';
+      return `${e.ticker}${timing ? ' ' + timing : ''}`;
+    }).join(', ');
+    lines.push(`💰 Earnings TODAY: ${list} — avoid holding through print`);
+  }
+
+  // Earnings — tomorrow (heads up)
+  if (earnings.tomorrow.length > 0) {
+    const list = earnings.tomorrow.map(e => e.ticker).join(', ');
+    lines.push(`📆 Earnings TOMORROW: ${list} — heads up`);
+  }
+
   return {
-    line:          `🔴 HIGH IMPACT: ${eventNames} — Wait until 11AM for entries`,
-    hasHighImpact: true,
+    line:          lines.join('\n'),
+    hasHighImpact: impact.hasHighImpact,
     entryRule:     impact.entryRule,
     events:        impact.events,
+    earnings,
   };
 }
 
 // ── SHOULD BLOCK ALERT ────────────────────────────────────────────
-// Returns true if we should block/delay an alert due to calendar
 async function shouldBlockAlert() {
   const impact = await getTodayImpact();
   if (!impact.hasHighImpact) return { block: false };
 
-  // Check current time — block alerts before 11AM on high impact days
-  const now = new Date();
-  const etHour = now.getUTCHours() - 4; // UTC-4 for ET (adjust for DST)
+  const now    = new Date();
+  const etHour = now.getUTCHours() - 4;
   const etMin  = now.getUTCMinutes();
   const etTime = etHour + etMin / 60;
 
   if (etTime < 11.0) {
     return {
-      block:   true,
-      reason:  `High impact event day — waiting until 11AM ET (now ${etHour}:${String(etMin).padStart(2,'0')} ET)`,
-      events:  impact.events,
+      block:  true,
+      reason: `High impact event — waiting until 11AM ET (now ${etHour}:${String(etMin).padStart(2,'0')} ET)`,
+      events: impact.events,
     };
   }
 
@@ -130,4 +194,5 @@ module.exports = {
   getTodayImpact,
   getCalendarBriefLine,
   shouldBlockAlert,
+  fetchEarnings,
 };
