@@ -2083,8 +2083,8 @@ function generate() {
             <tr>
               <td class="red">SHORT</td>
               <td class="red">${isNaN(flip) || flip === price ? fmt(price - 0.25) + '−' : 'Reject ' + fmt(flip)}</td>
-              <td class="red">${!isNaN(bearT1) ? fmt(bearT1) : fmt(price - (price - (vol || price * 0.97)) * 0.5)}</td>
-              <td class="red">${!isNaN(vol) ? fmt(vol) : '—'}</td>
+              <td class="red">${!isNaN(vol) ? fmt(vol) : fmt(price - (price - (vol || price * 0.97)) * 0.5)}</td>
+              <td class="red">${!isNaN(bearT1) ? fmt(bearT1) : '—'}</td>
               <td class="yellow">${fmt(shortStop)}</td>
               <td class="red">${optStop ? '$' + optStop : '50% prem'}</td>
             </tr>
@@ -3154,8 +3154,10 @@ function generateDayTrade() {
   }
 
   // Target logic
+  // Bull: T1=Pin. Bear: T1=VolZone (closer), T2=Air Pocket/Bear Target (further)
   const t1 = dtBias === 'bull' ? pin : (volZone || (flip - (pin - flip)));
-  const t1Label = dtBias === 'bull' ? 'Pin Level (Max +GEX)' : 'Vol Zone / Lower GEX';
+  const t1Label = dtBias === 'bull' ? 'Pin Level (Max +GEX)' : 'Vol Zone — first target (closest)';
+  const t2bear  = bearT1 || (volZone ? volZone - Math.abs(pin - flip) : null);
   const stopLevel = dtBias === 'bull'
     ? (orl ? orl.toFixed(2) : (flip - 0.5).toFixed(2))
     : (orh ? orh.toFixed(2) : (flip + 0.5).toFixed(2));
@@ -3252,8 +3254,8 @@ function generateDayTrade() {
           </tr>
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:9px 10px;color:var(--text-dim);font-size:12px">Target 2</td>
-            <td style="padding:9px 10px;color:var(--green);font-size:13px;font-weight:700">${support ? '$'+support.toFixed(2) : 'Trail'}</td>
-            <td style="padding:9px 10px;color:var(--text-dim);font-size:11px">${support ? 'Secondary GEX level. Only hold if T1 prints and structure holds.' : 'No secondary level set. Trail stop and let the remaining position work.'}</td>
+            <td style="padding:9px 10px;color:var(--green);font-size:13px;font-weight:700">${dtBias === 'bear' ? (t2bear ? '$'+t2bear.toFixed(2) : 'Trail') : (support ? '$'+support.toFixed(2) : 'Trail')}</td>
+            <td style="padding:9px 10px;color:var(--text-dim);font-size:11px">${dtBias === 'bear' ? (t2bear ? 'Air Pocket / Bear target. Hold runner only if Vol Zone breaks.' : 'Trail stop below Vol Zone.') : (support ? 'Secondary GEX level. Only hold if T1 prints and structure holds.' : 'No secondary level set. Trail stop and let the remaining position work.')}</td>
           </tr>
           <tr style="border-bottom:1px solid var(--border)">
             <td style="padding:9px 10px;color:var(--text-dim);font-size:12px">Hard Stop</td>
