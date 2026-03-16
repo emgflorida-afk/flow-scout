@@ -160,4 +160,15 @@ app.get('/test/brief', async (req, res) => {
 app.get('/test/bullflow', async (req, res) => {
   res.json({
     status:  'Bullflow stream running ✅',
-    ve
+    version: '5.3',
+    time:    new Date().toISOString(),
+  });
+});
+
+// ── START ─────────────────────────────────────────────────────────
+app.listen(PORT, () => {
+  console.log(`✅ Flow Scout v5.3 running on port ${PORT}`);
+  console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
+  console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
+  bullflow.startBullflowStream();
+});
