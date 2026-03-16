@@ -1,5 +1,6 @@
 // economicCalendar.js — Stratum Flow Scout
 // UPDATED: Deduplication, earnings calendar, better event formatting
+// UPDATED: High impact block window changed to 9:30AM ET (was 11AM)
 // PURPOSE: Detect high-impact economic events + earnings on watchlist
 // ─────────────────────────────────────────────────────────────────
 
@@ -32,8 +33,7 @@ async function fetchEconomicEvents(date) {
     const data = await res.json();
     const rows = data?.data?.rows || [];
 
-    // DEDUP — collapse events sharing the same root keyword
-    const seen    = new Set();
+    const seen     = new Set();
     const keysSeen = new Set();
     return rows
       .map(row => ({
@@ -45,11 +45,9 @@ async function fetchEconomicEvents(date) {
       }))
       .filter(e => {
         if (!e.name) return false;
-        // Exact dedup first
         const exact = e.name.trim().toUpperCase();
         if (seen.has(exact)) return false;
         seen.add(exact);
-        // Keyword dedup — collapse "German CPI", "Core CPI", "CPI Index" → one CPI entry
         const rootKey = HIGH_IMPACT_KEYWORDS.find(kw => exact.includes(kw.toUpperCase()));
         if (rootKey) {
           if (keysSeen.has(rootKey.toUpperCase())) return false;
@@ -79,7 +77,6 @@ async function fetchEarnings() {
       const data = await res.json();
       const rows = data?.data?.rows || [];
 
-      // Filter to only watchlist tickers
       const hits = rows
         .filter(r => {
           const sym = (r.symbol || r.ticker || '').toUpperCase().trim();
@@ -87,7 +84,7 @@ async function fetchEarnings() {
         })
         .map(r => ({
           ticker: (r.symbol || r.ticker || '').toUpperCase(),
-          time:   r.time || r.marketTime || '',   // BMO = before market, AMC = after
+          time:   r.time || r.marketTime || '',
           eps:    r.epsForecast || r.estimate || '',
         }));
 
@@ -117,7 +114,7 @@ async function getTodayImpact() {
       hasHighImpact: false,
       events:        [],
       warning:       null,
-      entryRule:     'Normal — trade 10AM–11:30AM and 3PM–3:45PM',
+      entryRule:     'Normal — trade 9:30AM–4PM ET',
       alertPrefix:   '',
     };
   }
@@ -127,7 +124,7 @@ async function getTodayImpact() {
     hasHighImpact: true,
     events:        highEvents,
     warning:       `⚠️ HIGH IMPACT TODAY: ${names}`,
-    entryRule:     '🔴 DELAY entries until 11AM — let whipsaw settle first',
+    entryRule:     '⚠️ HIGH IMPACT DAY — trade with caution from 9:30AM',
     alertPrefix:   `🗓️ ${names} DAY — `,
   };
 }
@@ -141,17 +138,14 @@ async function getCalendarBriefLine() {
 
   const lines = [];
 
-  // Economic events
   if (!impact.hasHighImpact) {
     lines.push('📅 No major economic events today');
   } else {
-    // Clean list — deduplicated, one per line if multiple
     const eventNames = impact.events.map(e => e.name).join(' + ');
     lines.push(`🔴 HIGH IMPACT: ${eventNames}`);
-    lines.push(`   Wait until 11AM for entries`);
+    lines.push(`   Trade with caution from 9:30AM`);
   }
 
-  // Earnings — today
   if (earnings.today.length > 0) {
     const list = earnings.today.map(e => {
       const timing = e.time.toLowerCase().includes('before') ? '(BMO)'
@@ -162,7 +156,6 @@ async function getCalendarBriefLine() {
     lines.push(`💰 Earnings TODAY: ${list} — avoid holding through print`);
   }
 
-  // Earnings — tomorrow (heads up)
   if (earnings.tomorrow.length > 0) {
     const list = earnings.tomorrow.map(e => e.ticker).join(', ');
     lines.push(`📆 Earnings TOMORROW: ${list} — heads up`);
@@ -178,6 +171,7 @@ async function getCalendarBriefLine() {
 }
 
 // ── SHOULD BLOCK ALERT ────────────────────────────────────────────
+// Block only before 9:30AM ET on high impact days
 async function shouldBlockAlert() {
   const impact = await getTodayImpact();
   if (!impact.hasHighImpact) return { block: false };
@@ -187,10 +181,11 @@ async function shouldBlockAlert() {
   const etMin  = now.getUTCMinutes();
   const etTime = etHour + etMin / 60;
 
-  if (etTime < 11.0) {
+  // Block before 9:30AM ET only
+  if (etTime < 9.5) {
     return {
       block:  true,
-      reason: `High impact event — waiting until 11AM ET (now ${etHour}:${String(etMin).padStart(2,'0')} ET)`,
+      reason: `High impact event — waiting until 9:30AM ET (now ${etHour}:${String(etMin).padStart(2,'0')} ET)`,
       events: impact.events,
     };
   }
