@@ -1,6 +1,7 @@
-// contractResolver.js — Stratum Flow Scout
+javascript// contractResolver.js — Stratum Flow Scout
 // PURPOSE: Get REAL contracts from Massive (Polygon) API
 // FIXED: API key now read at call time (not startup) — fixes undefined key bug
+// UPDATED: King Node / Volume Profile detection via Polygon aggregates
 // ─────────────────────────────────────────────────────────────────
 
 const fetch = require('node-fetch');
@@ -44,6 +45,102 @@ function parseOPRA(opraSymbol) {
   }
 }
 
+// ── KING NODE / VOLUME PROFILE ───────────────────────────────────
+// Pulls 30 days of daily bars from Polygon
+// Buckets volume by price level ($0.50 increments)
+// Returns: kingNode (POC), purpleNodes (low vol), currentLevel
+async function getVolumeProfile(ticker) {
+  try {
+    const to   = new Date();
+    const from = new Date();
+    from.setDate(from.getDate() - 30);
+
+    const toStr   = to.toISOString().slice(0, 10);
+    const fromStr = from.toISOString().slice(0, 10);
+
+    const url  = `${BASE_URL}/v2/aggs/ticker/${ticker}/range/1/day/${fromStr}/${toStr}?adjusted=true&sort=asc&limit=50&apiKey=${apiKey()}`;
+    const res  = await fetch(url);
+    const data = await res.json();
+
+    const bars = data?.results || [];
+    if (bars.length === 0) return null;
+
+    // Bucket volume by $0.50 price increments
+    const buckets = {};
+    for (const bar of bars) {
+      const avgPrice  = (bar.h + bar.l) / 2;
+      const bucket    = (Math.round(avgPrice / 0.50) * 0.50).toFixed(2);
+      buckets[bucket] = (buckets[bucket] || 0) + bar.v;
+    }
+
+    // Find total volume for percentile calc
+    const entries    = Object.entries(buckets).map(([price, vol]) => ({
+      price: parseFloat(price),
+      vol,
+    }));
+    const totalVol   = entries.reduce((sum, e) => sum + e.vol, 0);
+    const avgVol     = totalVol / entries.length;
+
+    // King Node = highest volume bucket (Point of Control)
+    const kingNode   = entries.reduce((a, b) => b.vol > a.vol ? b : a);
+
+    // Purple Nodes = buckets with less than 30% of average volume (fast drop zones)
+    const purpleNodes = entries
+      .filter(e => e.vol < avgVol * 0.30)
+      .map(e => e.price)
+      .sort((a, b) => a - b);
+
+    // Current price level
+    const lastBar     = bars[bars.length - 1];
+    const currentPrice = lastBar.c;
+
+    // Is current price near King Node? (within 1%)
+    const nearKing = Math.abs(currentPrice - kingNode.price) / currentPrice <= 0.01;
+
+    // Purple nodes below current price (fast drop zones)
+    const purpleBelow = purpleNodes.filter(p => p < currentPrice).slice(-3);
+
+    // Purple nodes above current price
+    const purpleAbove = purpleNodes.filter(p => p > currentPrice).slice(0, 3);
+
+    return {
+      kingNode:     kingNode.price,
+      kingVolume:   kingNode.vol,
+      purpleBelow,
+      purpleAbove,
+      currentPrice,
+      nearKing,
+      totalBars:    bars.length,
+    };
+  } catch (err) {
+    console.error('[VOLUME PROFILE] Failed:', err.message);
+    return null;
+  }
+}
+
+// ── FORMAT KING NODE ALERT LINE ──────────────────────────────────
+function formatKingNodeLine(profile) {
+  if (!profile) return null;
+
+  const lines = [];
+
+  if (profile.nearKing) {
+    lines.push(`👑 AT KING NODE $${profile.kingNode} — HIGHEST CONVICTION 🔥`);
+  } else {
+    lines.push(`👑 King Node: $${profile.kingNode}`);
+  }
+
+  if (profile.purpleBelow.length > 0) {
+    lines.push(`⚡ Fast drop zones below: $${profile.purpleBelow.join(', $')}`);
+  }
+
+  if (profile.purpleAbove.length > 0) {
+    lines.push(`⚡ Fast move zones above: $${profile.purpleAbove.join(', $')}`);
+  }
+
+  return lines.join('\n');
+}
+
 // ── GET REAL OPTIONS CHAIN ───────────────────────────────────────
 async function getRealChain(ticker, contractType, expiryDate) {
   try {
@@ -54,7 +151,7 @@ async function getRealChain(ticker, contractType, expiryDate) {
       limit:             '250',
       order:             'asc',
       sort:              'strike_price',
-      apiKey:            apiKey(),   // ← fresh every call
+      apiKey:            apiKey(),
     });
 
     const url  = `${BASE_URL}/v3/reference/options/contracts?${params}`;
@@ -113,7 +210,6 @@ async function getOptionSnapshot(optionTicker) {
 // ── GET UNDERLYING PRICE ─────────────────────────────────────────
 async function getUnderlyingPrice(ticker) {
   try {
-    // Try snapshot first
     const url  = `${BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey()}`;
     const res  = await fetch(url);
     const data = await res.json();
@@ -126,7 +222,6 @@ async function getUnderlyingPrice(ticker) {
 
     if (price) return price;
 
-    // Fallback — previous close
     const prevUrl  = `${BASE_URL}/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey()}`;
     const prevRes  = await fetch(prevUrl);
     const prevData = await prevRes.json();
@@ -181,6 +276,12 @@ async function findBestContract(opraSymbol) {
   }
 
   if (!bestContract) return { error: `No contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range` };
+
+  // ── ATTACH VOLUME PROFILE ──────────────────────────────────────
+  const profile = await getVolumeProfile(bestContract.ticker);
+  bestContract.volumeProfile    = profile;
+  bestContract.kingNodeLine     = formatKingNodeLine(profile);
+
   return bestContract;
 }
 
@@ -196,27 +297,27 @@ function scoreContract(snap, underlyingPrice) {
   const absDelta  = Math.abs(snap.delta);
   const distPct   = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
 
-  if (premium <= 2.40)                          { total += 2; breakdown.premium = '+2 ✅'; }
-  else                                          { warnings.push('Premium over $2.40'); }
+  if (premium <= 2.40)                         { total += 2; breakdown.premium = '+2 ✅'; }
+  else                                         { warnings.push('Premium over $2.40'); }
 
-  if (spreadPct < 10)                           { total += 1; breakdown.spread = '+1 ✅'; }
-  else                                          { warnings.push(`Wide spread ${spreadPct.toFixed(1)}%`); }
+  if (spreadPct < 10)                          { total += 1; breakdown.spread = '+1 ✅'; }
+  else                                         { warnings.push(`Wide spread ${spreadPct.toFixed(1)}%`); }
 
-  if (snap.volume >= 500)                       { total += 2; breakdown.volume = '+2 ✅'; }
-  else                                          { warnings.push(`Low volume ${snap.volume}`); }
+  if (snap.volume >= 500)                      { total += 2; breakdown.volume = '+2 ✅'; }
+  else                                         { warnings.push(`Low volume ${snap.volume}`); }
 
-  if (absDelta >= 0.30 && absDelta <= 0.50)    { total += 2; breakdown.delta = '+2 ✅'; }
-  else if (absDelta > 0.50)                     { warnings.push('Delta too high — deep ITM'); }
-  else                                          { warnings.push('Delta under 0.30 — far OTM'); }
+  if (absDelta >= 0.30 && absDelta <= 0.50)   { total += 2; breakdown.delta = '+2 ✅'; }
+  else if (absDelta > 0.50)                    { warnings.push('Delta too high — deep ITM'); }
+  else                                         { warnings.push('Delta under 0.30 — far OTM'); }
 
-  if (snap.theta >= -0.05)                      { total += 1; breakdown.theta = '+1 ✅'; }
-  else                                          { warnings.push(`High theta ${snap.theta}`); }
+  if (snap.theta >= -0.05)                     { total += 1; breakdown.theta = '+1 ✅'; }
+  else                                         { warnings.push(`High theta ${snap.theta}`); }
 
-  if (distPct <= 3)                             { total += 2; breakdown.strike = '+2 ✅'; }
-  else                                          { warnings.push(`Strike ${distPct.toFixed(1)}% from price`); }
+  if (distPct <= 3)                            { total += 2; breakdown.strike = '+2 ✅'; }
+  else                                         { warnings.push(`Strike ${distPct.toFixed(1)}% from price`); }
 
-  if (snap.openInterest >= 1000)                { total += 1; breakdown.oi = '+1 ✅'; }
-  else                                          { warnings.push(`Low OI ${snap.openInterest}`); }
+  if (snap.openInterest >= 1000)               { total += 1; breakdown.oi = '+1 ✅'; }
+  else                                         { warnings.push(`Low OI ${snap.openInterest}`); }
 
   const profitProb = Math.round(absDelta * 100);
   return { total, max: 11, breakdown, warnings, profitProb };
@@ -254,5 +355,6 @@ function calculatePositionSize(premium, accountSize = 6000) {
 module.exports = {
   parseOPRA, findBestContract, getOptionSnapshot,
   getUnderlyingPrice, scoreContract, calculatePositionSize,
+  getVolumeProfile, formatKingNodeLine,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM,
 };
