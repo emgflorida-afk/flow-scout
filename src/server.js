@@ -1,7 +1,7 @@
 // server.js — Stratum Flow Scout
 // Fixed: Real contracts, watchlist filter, premium filter, calendar
 // Updated: Morning brief now self-contained in alerter.js
-// Updated: buildFallbackOPRA now uses Polygon ATM contract lookup
+// Updated: buildFallbackOPRA now uses Polygon prev close for price
 // Updated: Bullflow SSE stream connected on startup
 // ─────────────────────────────────────────────────────────────────
 
@@ -22,7 +22,7 @@ app.use(express.json());
 app.get('/', (req, res) => {
   res.json({
     status:  'Stratum Flow Scout ✅',
-    version: '5.3',
+    version: '5.4',
     time:    new Date().toISOString(),
   });
 });
@@ -92,7 +92,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   }
 });
 
-// ── FALLBACK OPRA BUILDER (Polygon ATM Lookup) ────────────────────
+// ── FALLBACK OPRA BUILDER (Polygon prev close + ATM Lookup) ───────
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY') ? 'call' : 'put';
 
@@ -104,14 +104,14 @@ async function buildFallbackOPRA(ticker, action) {
   const expDate = expiry.toISOString().slice(0, 10);
 
   try {
-    // Step 1 — get current stock price
+    // Step 1 — get price via prev close (works for all tickers)
     const priceRes  = await fetch(
-      `https://api.polygon.io/v2/last/trade/${ticker}?apiKey=${process.env.POLYGON_API_KEY}`
+      `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`
     );
     const priceData = await priceRes.json();
-    const price     = priceData?.results?.p;
+    const price     = priceData?.results?.[0]?.c;
     if (!price) throw new Error(`No price for ${ticker}`);
-    console.log(`[OPRA] ${ticker} current price: $${price}`);
+    console.log(`[OPRA] ${ticker} prev close: $${price}`);
 
     // Step 2 — fetch ATM contracts from Polygon
     const chainRes  = await fetch(
@@ -122,7 +122,7 @@ async function buildFallbackOPRA(ticker, action) {
 
     if (!contracts.length) throw new Error(`No ${type} contracts found for ${ticker} exp ${expDate}`);
 
-    // Step 3 — pick closest strike to current price
+    // Step 3 — pick closest strike to prev close
     const best = contracts.reduce((a, b) =>
       Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
     );
@@ -160,14 +160,14 @@ app.get('/test/brief', async (req, res) => {
 app.get('/test/bullflow', async (req, res) => {
   res.json({
     status:  'Bullflow stream running ✅',
-    version: '5.3',
+    version: '5.4',
     time:    new Date().toISOString(),
   });
 });
 
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5.3 running on port ${PORT}`);
+  console.log(`✅ Flow Scout v5.4 running on port ${PORT}`);
   console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
   bullflow.startBullflowStream();
