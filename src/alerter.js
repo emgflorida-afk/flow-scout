@@ -6,6 +6,7 @@
 // UPDATED: King Node / Volume Profile lines in Discord alert
 // UPDATED: Trading window changed to 9:30AM–4PM ET
 // UPDATED: getTickerSnapshot — aggressive pre-market fallback
+// UPDATED: sendDiscordRaw added for Flow Aggregator cluster alerts
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -33,6 +34,10 @@ async function sendDiscord(message) {
     console.error('[DISCORD] Error:', err.message);
     return false;
   }
+}
+
+async function sendDiscordRaw(message) {
+  await sendDiscord(message);
 }
 
 function scoreBar(score, max) {
@@ -114,14 +119,12 @@ async function getTickerSnapshot(ticker) {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
 
-    // Try prev close first — most reliable pre-market
     const prevRes   = await fetch(
       `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`
     );
     const prevData  = await prevRes.json();
     const prevClose = prevData?.results?.[0]?.c || null;
 
-    // Try snapshot for current price
     const snapRes  = await fetch(
       `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`
     );
@@ -165,10 +168,10 @@ async function getVIX() {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
 
-    const prevRes  = await fetch(
+    const prevRes   = await fetch(
       `https://api.polygon.io/v2/aggs/ticker/UVXY/prev?adjusted=true&apiKey=${apiKey}`
     );
-    const prevData = await prevRes.json();
+    const prevData  = await prevRes.json();
     const prevClose = prevData?.results?.[0]?.c || null;
 
     const snapRes  = await fetch(
@@ -390,6 +393,9 @@ async function sendMorningBrief() {
     `───────────────────────────────`,
     `👑 KING NODE DETECTION ACTIVE`,
     `   Sweep at King Node = Maximum Conviction`,
+    `───────────────────────────────`,
+    `🌊 FLOW AGGREGATOR ACTIVE`,
+    `   Cluster alerts at $500K, $1M, $2M`,
   ].filter(l => l !== null);
 
   await sendDiscord(lines.join('\n'));
@@ -401,4 +407,10 @@ async function sendSystemMessage(msg) {
   await sendDiscord(`ℹ️ STRATUM SYSTEM\n${msg}`);
 }
 
-module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, checkHighConviction };
+module.exports = {
+  sendTradeAlert,
+  sendMorningBrief,
+  sendSystemMessage,
+  checkHighConviction,
+  sendDiscordRaw,
+};
