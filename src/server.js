@@ -2,14 +2,16 @@
 // Fixed: Real contracts, watchlist filter, premium filter, calendar
 // Updated: Morning brief now self-contained in alerter.js
 // Updated: buildFallbackOPRA now uses Polygon ATM contract lookup
+// Updated: Bullflow SSE stream connected on startup
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
-const express  = require('express');
-const cron     = require('node-cron');
-const fetch    = require('node-fetch');
-const alerter  = require('./alerter');
-const resolver = require('./contractResolver');
+const express   = require('express');
+const cron      = require('node-cron');
+const fetch     = require('node-fetch');
+const alerter   = require('./alerter');
+const resolver  = require('./contractResolver');
+const bullflow  = require('./bullflowStream');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +22,7 @@ app.use(express.json());
 app.get('/', (req, res) => {
   res.json({
     status:  'Stratum Flow Scout ✅',
-    version: '5.2',
+    version: '5.3',
     time:    new Date().toISOString(),
   });
 });
@@ -94,7 +96,6 @@ app.post('/webhook/bullflow', async (req, res) => {
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY') ? 'call' : 'put';
 
-  // Find next Friday expiration
   const now    = new Date();
   const day    = now.getDay();
   const daysTo = day <= 5 ? 5 - day : 6;
@@ -146,7 +147,7 @@ cron.schedule('15 13 * * 1-5', async () => {
   }
 });
 
-// ── MANUAL TEST ENDPOINT ──────────────────────────────────────────
+// ── MANUAL TEST ENDPOINTS ─────────────────────────────────────────
 app.get('/test/brief', async (req, res) => {
   try {
     await alerter.sendMorningBrief();
@@ -156,9 +157,7 @@ app.get('/test/brief', async (req, res) => {
   }
 });
 
-// ── START ─────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5.2 running on port ${PORT}`);
-  console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
-  console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
-});
+app.get('/test/bullflow', async (req, res) => {
+  res.json({
+    status:  'Bullflow stream running ✅',
+    ve
