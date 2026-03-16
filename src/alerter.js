@@ -5,6 +5,7 @@
 // UPDATED: High conviction filter — SigScore 0.7+, Sweeps, Vol vs OI
 // UPDATED: King Node / Volume Profile lines in Discord alert
 // UPDATED: Trading window changed to 9:30AM–4PM ET
+// UPDATED: getTickerSnapshot — aggressive pre-market fallback
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -113,28 +114,33 @@ async function getTickerSnapshot(ticker) {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
 
-    const [snapRes, prevRes] = await Promise.all([
-      fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`),
-      fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`),
-    ]);
+    // Try prev close first — most reliable pre-market
+    const prevRes   = await fetch(
+      `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey}`
+    );
+    const prevData  = await prevRes.json();
+    const prevClose = prevData?.results?.[0]?.c || null;
 
+    // Try snapshot for current price
+    const snapRes  = await fetch(
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey}`
+    );
     const snapData = await snapRes.json();
-    const prevData = await prevRes.json();
     const snap     = snapData?.ticker;
 
     const price = snap?.lastTrade?.p
+               || snap?.min?.c
                || snap?.day?.close
                || snap?.day?.open
+               || snap?.prevDay?.c
+               || prevClose
                || null;
 
-    const prevClose = prevData?.results?.[0]?.c
-                   || snap?.prevDay?.c
-                   || price;
+    const base = prevClose || price;
+    if (!price || !base) return null;
 
-    if (!price || !prevClose) return null;
-
-    const change    = (price - prevClose).toFixed(2);
-    const changePct = ((price - prevClose) / prevClose * 100).toFixed(2);
+    const change    = (price - base).toFixed(2);
+    const changePct = ((price - base) / base * 100).toFixed(2);
     const arrow     = parseFloat(change) >= 0 ? '▲' : '▼';
 
     return {
@@ -143,7 +149,7 @@ async function getTickerSnapshot(ticker) {
       change,
       changePct,
       arrow,
-      prevClose: parseFloat(prevClose).toFixed(2),
+      prevClose: parseFloat(base).toFixed(2),
     };
   } catch { return null; }
 }
@@ -159,20 +165,28 @@ async function getVIX() {
     const apiKey = process.env.POLYGON_API_KEY;
     if (!apiKey) return null;
 
-    const [snapRes, prevRes] = await Promise.all([
-      fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/UVXY?apiKey=${apiKey}`),
-      fetch(`https://api.polygon.io/v2/aggs/ticker/UVXY/prev?adjusted=true&apiKey=${apiKey}`),
-    ]);
-
-    const snapData = await snapRes.json();
+    const prevRes  = await fetch(
+      `https://api.polygon.io/v2/aggs/ticker/UVXY/prev?adjusted=true&apiKey=${apiKey}`
+    );
     const prevData = await prevRes.json();
+    const prevClose = prevData?.results?.[0]?.c || null;
+
+    const snapRes  = await fetch(
+      `https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/UVXY?apiKey=${apiKey}`
+    );
+    const snapData = await snapRes.json();
     const snap     = snapData?.ticker;
 
-    const price = snap?.lastTrade?.p || snap?.day?.close || null;
-    const prev  = prevData?.results?.[0]?.c || snap?.prevDay?.c || price;
+    const price = snap?.lastTrade?.p
+               || snap?.min?.c
+               || snap?.day?.close
+               || snap?.prevDay?.c
+               || prevClose
+               || null;
 
     if (!price) return null;
 
+    const prev   = prevClose || price;
     const change = (price - prev).toFixed(2);
     const arrow  = parseFloat(change) >= 0 ? '▲' : '▼';
     const level  = price >= 30 ? 'EXTREME — reduce size 🚨'
