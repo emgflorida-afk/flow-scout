@@ -1,8 +1,6 @@
-// server.js — Stratum Flow Scout
-// Fixed: Real contracts, watchlist filter, premium filter, calendar
-// Updated: Morning brief now self-contained in alerter.js
-// Updated: buildFallbackOPRA now uses Polygon prev close for price
-// Updated: Bullflow SSE stream connected on startup
+// server.js — Stratum Flow Scout v5.5
+// UPDATED: /flow/summary endpoint for live dashboard
+// UPDATED: CORS headers for GitHub Pages
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -18,13 +16,27 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
+// ── CORS — allow GitHub Pages and any browser ─────────────────────
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') return res.sendStatus(200);
+  next();
+});
+
 // ── HEALTH CHECK ──────────────────────────────────────────────────
 app.get('/', (req, res) => {
   res.json({
     status:  'Stratum Flow Scout ✅',
-    version: '5.4',
+    version: '5.5',
     time:    new Date().toISOString(),
   });
+});
+
+// ── FLOW SUMMARY — Live dashboard endpoint ────────────────────────
+app.get('/flow/summary', (req, res) => {
+  res.json(bullflow.liveAggregator.getSummary());
 });
 
 // ── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
@@ -92,7 +104,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   }
 });
 
-// ── FALLBACK OPRA BUILDER (Polygon prev close + ATM Lookup) ───────
+// ── FALLBACK OPRA BUILDER ─────────────────────────────────────────
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY') ? 'call' : 'put';
 
@@ -104,7 +116,6 @@ async function buildFallbackOPRA(ticker, action) {
   const expDate = expiry.toISOString().slice(0, 10);
 
   try {
-    // Step 1 — get price via prev close (works for all tickers)
     const priceRes  = await fetch(
       `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`
     );
@@ -113,7 +124,6 @@ async function buildFallbackOPRA(ticker, action) {
     if (!price) throw new Error(`No price for ${ticker}`);
     console.log(`[OPRA] ${ticker} prev close: $${price}`);
 
-    // Step 2 — fetch ATM contracts from Polygon
     const chainRes  = await fetch(
       `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expDate}&limit=10&apiKey=${process.env.POLYGON_API_KEY}`
     );
@@ -122,7 +132,6 @@ async function buildFallbackOPRA(ticker, action) {
 
     if (!contracts.length) throw new Error(`No ${type} contracts found for ${ticker} exp ${expDate}`);
 
-    // Step 3 — pick closest strike to prev close
     const best = contracts.reduce((a, b) =>
       Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
     );
@@ -137,7 +146,6 @@ async function buildFallbackOPRA(ticker, action) {
 }
 
 // ── MORNING BRIEF CRON ────────────────────────────────────────────
-// 9:15AM ET = 13:15 UTC
 cron.schedule('15 13 * * 1-5', async () => {
   console.log('[CRON] Firing morning brief...');
   try {
@@ -160,14 +168,14 @@ app.get('/test/brief', async (req, res) => {
 app.get('/test/bullflow', async (req, res) => {
   res.json({
     status:  'Bullflow stream running ✅',
-    version: '5.4',
+    version: '5.5',
     time:    new Date().toISOString(),
   });
 });
 
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5.4 running on port ${PORT}`);
+  console.log(`✅ Flow Scout v5.5 running on port ${PORT}`);
   console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
   bullflow.startBullflowStream();
