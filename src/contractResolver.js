@@ -1,4 +1,4 @@
-javascript// contractResolver.js — Stratum Flow Scout
+// contractResolver.js — Stratum Flow Scout
 // PURPOSE: Get REAL contracts from Massive (Polygon) API
 // FIXED: API key now read at call time (not startup) — fixes undefined key bug
 // UPDATED: King Node / Volume Profile detection via Polygon aggregates
