@@ -1,5 +1,6 @@
 // server.js — Stratum Flow Scout v5.7
 // 3 Discord channels — strat, flow, conviction
+// Added: /prices endpoint — Public.com live, Polygon fallback
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -32,6 +33,47 @@ app.get('/', (req, res) => {
 // ── FLOW SUMMARY ──────────────────────────────────────────────────
 app.get('/flow/summary', (req, res) => {
   res.json(bullflow.liveAggregator.getSummary());
+});
+
+// ── PRICES — Public.com live, Polygon fallback ────────────────────
+app.get('/prices', async (req, res) => {
+  const ticker = (req.query.ticker || '').toUpperCase().trim();
+  if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
+
+  try {
+    const apiKey    = process.env.PUBLIC_API_KEY;
+    const accountId = process.env.PUBLIC_ACCOUNT_ID;
+
+    if (apiKey && accountId) {
+      const pubRes  = await fetch(
+        `https://api.public.com/userapigateway/marketdata/${accountId}/quotes`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
+        }
+      );
+      const pubData = await pubRes.json();
+      const quote   = pubData?.quotes?.[0];
+      if (quote && quote.outcome === 'SUCCESS') {
+        const price = parseFloat(quote.last);
+        const bid   = parseFloat(quote.bid || quote.last);
+        const ask   = parseFloat(quote.ask || quote.last);
+        return res.json({ ticker, price, bid, ask, live: true, source: 'public' });
+      }
+    }
+
+    // Polygon fallback
+    const prevRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
+    const prevData = await prevRes.json();
+    const prev     = prevData?.results?.[0]?.c;
+    if (!prev) return res.status(404).json({ error: 'No price data' });
+
+    return res.json({ ticker, price: prev, prevClose: prev, live: false, source: 'polygon' });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── TRADINGVIEW WEBHOOK → #strat-alerts ──────────────────────────
