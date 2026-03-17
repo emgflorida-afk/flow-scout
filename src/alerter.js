@@ -435,4 +435,3 @@ async function sendSystemMessage(msg) {
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
-```
