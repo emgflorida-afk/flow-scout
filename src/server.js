@@ -204,16 +204,4 @@ app.listen(PORT, () => {
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
   bullflow.startBullflowStream();
 });
-```
 
----
-
-## 📋 3 Steps
-
-**①** GitHub → `src/server.js` → pencil ✏️ → select all → paste → **Commit**
-**②** Watch Railway logs for:
-```
-✅ Flow Scout v5.6 running on port 8080
-[OPRA] GUSH prev close: $37.46
-[OPRA] Resolved: O:GUSH260320C00037000 (strike $37)
-[DISCORD] Sent ✅
