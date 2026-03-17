@@ -1,6 +1,5 @@
-// server.js — Stratum Flow Scout v5.5
-// UPDATED: /flow/summary endpoint for live dashboard
-// UPDATED: CORS headers for GitHub Pages
+// server.js — Stratum Flow Scout v5.6
+// Fixed: OPRA strike price filter — ATM only, no deep OTM strikes
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -16,7 +15,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 
-// ── CORS — allow GitHub Pages and any browser ─────────────────────
+// ── CORS ──────────────────────────────────────────────────────────
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -29,12 +28,12 @@ app.use((req, res, next) => {
 app.get('/', (req, res) => {
   res.json({
     status:  'Stratum Flow Scout ✅',
-    version: '5.5',
+    version: '5.6',
     time:    new Date().toISOString(),
   });
 });
 
-// ── FLOW SUMMARY — Live dashboard endpoint ────────────────────────
+// ── FLOW SUMMARY ──────────────────────────────────────────────────
 app.get('/flow/summary', (req, res) => {
   res.json(bullflow.liveAggregator.getSummary());
 });
@@ -104,7 +103,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   }
 });
 
-// ── FALLBACK OPRA BUILDER ─────────────────────────────────────────
+// ── FALLBACK OPRA BUILDER — ATM ONLY ─────────────────────────────
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY') ? 'call' : 'put';
 
@@ -116,6 +115,7 @@ async function buildFallbackOPRA(ticker, action) {
   const expDate = expiry.toISOString().slice(0, 10);
 
   try {
+    // Step 1 — get price via prev close
     const priceRes  = await fetch(
       `https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`
     );
@@ -124,14 +124,38 @@ async function buildFallbackOPRA(ticker, action) {
     if (!price) throw new Error(`No price for ${ticker}`);
     console.log(`[OPRA] ${ticker} prev close: $${price}`);
 
+    // Step 2 — fetch ATM contracts only (within 10% of price)
+    const lo = (price * 0.90).toFixed(0);
+    const hi = (price * 1.10).toFixed(0);
+
     const chainRes  = await fetch(
-      `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expDate}&limit=10&apiKey=${process.env.POLYGON_API_KEY}`
+      `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expDate}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${process.env.POLYGON_API_KEY}`
     );
     const chainData = await chainRes.json();
     const contracts = chainData?.results || [];
 
-    if (!contracts.length) throw new Error(`No ${type} contracts found for ${ticker} exp ${expDate}`);
+    if (!contracts.length) {
+      // Fallback — try next expiry if this week has nothing
+      const nextExpiry = new Date(expiry);
+      nextExpiry.setDate(nextExpiry.getDate() + 7);
+      const nextExpDate = nextExpiry.toISOString().slice(0, 10);
 
+      const chainRes2  = await fetch(
+        `https://api.polygon.io/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${nextExpDate}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${process.env.POLYGON_API_KEY}`
+      );
+      const chainData2 = await chainRes2.json();
+      const contracts2 = chainData2?.results || [];
+
+      if (!contracts2.length) throw new Error(`No ATM ${type} contracts found for ${ticker}`);
+
+      const best2 = contracts2.reduce((a, b) =>
+        Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
+      );
+      console.log(`[OPRA] Resolved (next expiry): ${best2.ticker} (strike $${best2.strike_price})`);
+      return best2.ticker;
+    }
+
+    // Step 3 — pick closest strike to current price
     const best = contracts.reduce((a, b) =>
       Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
     );
@@ -168,15 +192,28 @@ app.get('/test/brief', async (req, res) => {
 app.get('/test/bullflow', async (req, res) => {
   res.json({
     status:  'Bullflow stream running ✅',
-    version: '5.5',
+    version: '5.6',
     time:    new Date().toISOString(),
   });
 });
 
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5.5 running on port ${PORT}`);
+  console.log(`✅ Flow Scout v5.6 running on port ${PORT}`);
   console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
   bullflow.startBullflowStream();
 });
+```
+
+---
+
+## 📋 3 Steps
+
+**①** GitHub → `src/server.js` → pencil ✏️ → select all → paste → **Commit**
+**②** Watch Railway logs for:
+```
+✅ Flow Scout v5.6 running on port 8080
+[OPRA] GUSH prev close: $37.46
+[OPRA] Resolved: O:GUSH260320C00037000 (strike $37)
+[DISCORD] Sent ✅
