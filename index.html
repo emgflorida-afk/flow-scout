@@ -3307,18 +3307,37 @@ function generateDayTrade() {
 
 const MASSIVE_KEY = 'FQBAp1ps5e6SwkLaSMR0oBJurOWiEmtB';
 const MASSIVE_BASE = 'https://api.polygon.io';
+const RAILWAY_URL  = 'https://flow-scout-production.up.railway.app';
 
 async function fetchMassiveQuote(ticker) {
-  // Previous close — always available on free tier, works 24/7
+  // Try Railway /prices endpoint first — uses Public.com live data
+  try {
+    const railRes  = await fetch(`${RAILWAY_URL}/prices?ticker=${ticker}`);
+    if (railRes.ok) {
+      const railData = await railRes.json();
+      if (railData.price) {
+        console.log(`[LIVE] ${ticker} $${railData.price} via Railway/Public`);
+        return {
+          price:     railData.price,
+          prevClose: railData.prevClose || railData.price,
+          change:    railData.change    || 0,
+          changePct: railData.changePct || 0,
+          isDelayed: false,
+          isLive:    railData.live || false,
+        };
+      }
+    }
+  } catch(e) {}
+
+  // Fallback to Polygon prev close
   const url = `${MASSIVE_BASE}/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${MASSIVE_KEY}`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Massive API ${res.status} for ${ticker}`);
   const data = await res.json();
   const result = data.results?.[0];
   if (!result) throw new Error(`No data for ${ticker}`);
-  // Also try to get latest trade price for current price
   const tradeUrl = `${MASSIVE_BASE}/v2/last/trade/${ticker}?apiKey=${MASSIVE_KEY}`;
-  let currentPrice = result.c; // fallback to prev close
+  let currentPrice = result.c;
   try {
     const tradeRes = await fetch(tradeUrl);
     if (tradeRes.ok) {
@@ -3328,7 +3347,7 @@ async function fetchMassiveQuote(ticker) {
   } catch(e) {}
   const prevClose = result.c;
   const change = currentPrice - prevClose;
-  return { price: currentPrice, prevClose, change, changePct: (change / prevClose * 100), isDelayed: true };
+  return { price: currentPrice, prevClose, change, changePct: (change / prevClose * 100), isDelayed: true, isLive: false };
 }
 
 async function fetchMassiveIndex(ticker) {
@@ -4515,6 +4534,9 @@ function fsRenderCards() {
   }).join('');
 }
 </script>
+
+</body>
+</html>
 
 </body>
 </html>
