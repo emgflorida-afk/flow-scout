@@ -1,5 +1,6 @@
 // alerter.js — Stratum Flow Scout v7
 // 3 Discord channels + Public.com live prices
+// Fixed: Public.com token exchange authentication
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -51,24 +52,36 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-// ── PUBLIC.COM LIVE PRICE ─────────────────────────────────────────
+// ── PUBLIC.COM TOKEN EXCHANGE ─────────────────────────────────────
+async function getPublicAccessToken() {
+  try {
+    const secret = process.env.PUBLIC_API_KEY;
+    if (!secret) return null;
+    const res  = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ validityInMinutes: 30, secret }),
+    });
+    const data = await res.json();
+    return data?.accessToken || null;
+  } catch { return null; }
+}
+
+// ── PUBLIC.COM LIVE QUOTE ─────────────────────────────────────────
 async function getPublicQuote(ticker) {
   try {
-    const apiKey    = process.env.PUBLIC_API_KEY;
     const accountId = process.env.PUBLIC_ACCOUNT_ID;
-    if (!apiKey || !accountId) return null;
+    if (!accountId) return null;
+
+    const token = await getPublicAccessToken();
+    if (!token) return null;
 
     const res  = await fetch(
       `https://api.public.com/userapigateway/marketdata/${accountId}/quotes`,
       {
         method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify({
-          instruments: [{ symbol: ticker, type: 'EQUITY' }],
-        }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
       }
     );
     const data  = await res.json();
@@ -136,13 +149,11 @@ async function getVIX() {
     const snap = await getTickerSnapshot('UVXY');
     if (!snap) return null;
     const price  = parseFloat(snap.price);
-    const change = snap.change;
-    const arrow  = snap.arrow;
     const level  = price >= 30 ? 'EXTREME — reduce size 🚨'
                  : price >= 20 ? 'ELEVATED — be careful ⚠️'
                  : price >= 15 ? 'NORMAL ✅'
                  : 'LOW — watch for spike';
-    return { price: snap.price, change, arrow, level };
+    return { price: snap.price, change: snap.change, arrow: snap.arrow, level };
   } catch { return null; }
 }
 
@@ -189,7 +200,7 @@ function scoreFlow(flowData = {}) {
 }
 
 // ── CONVICTION TRACKING ───────────────────────────────────────────
-const recentFlowTickers = new Map();
+const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
 // ── BUILD ALERT CARD ──────────────────────────────────────────────
@@ -226,7 +237,6 @@ async function buildAlertCard(opraSymbol, tvData = {}, flowConviction = null, is
   const tfLine      = Object.entries(tfData).filter(([, v]) => v).map(([k, v]) => `${k.toUpperCase()}:${v}`).join('  ');
   const sweepAtKing = flowConviction?.flags?.some(f => f.includes('SWEEP')) && contract.volumeProfile?.nearKing;
 
-  // Get live price from Public
   const liveSnap  = await getTickerSnapshot(ticker);
   const priceInfo = liveSnap?.live
     ? `$${liveSnap.price} LIVE (bid $${liveSnap.bid} / ask $${liveSnap.ask})`
@@ -291,12 +301,10 @@ async function sendStratAlert(opraSymbol, tvData = {}) {
 
   await sendToChannel('strat', result.card);
 
-  // Track for conviction matching
   const key = `${result.ticker}:${result.type}`;
   recentStratTickers.set(key, Date.now());
   setTimeout(() => recentStratTickers.delete(key), 30 * 60 * 1000);
 
-  // Both signals aligned → conviction
   if (recentFlowTickers.has(key)) {
     const convCard = result.card.replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE');
     await sendToChannel('conviction', convCard);
@@ -315,12 +323,10 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
 
   const flowConviction = scoreFlow(flowData);
 
-  // Track for conviction matching
   const key = `${parsed.ticker}:${parsed.type}`;
   recentFlowTickers.set(key, Date.now());
   setTimeout(() => recentFlowTickers.delete(key), 30 * 60 * 1000);
 
-  // Get live price
   const liveSnap  = await getTickerSnapshot(parsed.ticker);
   const priceInfo = liveSnap?.live
     ? `$${liveSnap.price} LIVE`
@@ -350,14 +356,12 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
 
   await sendToChannel('flow', lines.join('\n'));
 
-  // High conviction → full card
   if (flowConviction.isHighConviction) {
     const calCheck = await calendar.shouldBlockAlert();
     if (!calCheck.block) {
       const result = await buildAlertCard(opraSymbol, {}, flowConviction, false);
       if (result) {
         await sendToChannel('flow', result.card);
-        // Both signals → conviction
         if (recentStratTickers.has(key)) {
           await sendToChannel('conviction', result.card.replace('🌊 FLOW ALERT', '👑 CONVICTION TRADE'));
           console.log(`[CONVICTION] Both signals on ${parsed.ticker} ✅`);
