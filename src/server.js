@@ -1,6 +1,6 @@
 // server.js — Stratum Flow Scout v5.7
 // 3 Discord channels — strat, flow, conviction
-// Added: /prices endpoint — Public.com live, Polygon fallback
+// Fixed: Public.com token exchange authentication
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -35,21 +35,36 @@ app.get('/flow/summary', (req, res) => {
   res.json(bullflow.liveAggregator.getSummary());
 });
 
+// ── PUBLIC.COM TOKEN EXCHANGE ─────────────────────────────────────
+async function getPublicAccessToken() {
+  try {
+    const secret = process.env.PUBLIC_API_KEY;
+    if (!secret) return null;
+    const res  = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ validityInMinutes: 30, secret }),
+    });
+    const data = await res.json();
+    return data?.accessToken || null;
+  } catch { return null; }
+}
+
 // ── PRICES — Public.com live, Polygon fallback ────────────────────
 app.get('/prices', async (req, res) => {
   const ticker = (req.query.ticker || '').toUpperCase().trim();
   if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
 
   try {
-    const apiKey    = process.env.PUBLIC_API_KEY;
     const accountId = process.env.PUBLIC_ACCOUNT_ID;
+    const token     = await getPublicAccessToken();
 
-    if (apiKey && accountId) {
+    if (token && accountId) {
       const pubRes  = await fetch(
         `https://api.public.com/userapigateway/marketdata/${accountId}/quotes`,
         {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
           body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
         }
       );
@@ -68,7 +83,6 @@ app.get('/prices', async (req, res) => {
     const prevData = await prevRes.json();
     const prev     = prevData?.results?.[0]?.c;
     if (!prev) return res.status(404).json({ error: 'No price data' });
-
     return res.json({ ticker, price: prev, prevClose: prev, live: false, source: 'polygon' });
 
   } catch (err) {
