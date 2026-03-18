@@ -1,7 +1,6 @@
 // server.js — Stratum Flow Scout v5.7
 // All tickers — no watchlist filter
-// Fixed: Polygon snapshot + prev close for price lookup
-// Fixed: Public.com token exchange for live prices
+// Fixed: Public.com User-Agent header added to all calls
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -43,8 +42,11 @@ async function getPublicAccessToken() {
     if (!secret) { console.log('[PUBLIC] No API key'); return null; }
     const res  = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
       method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ validityInMinutes: 30, secret }),
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent':   'stratum-flow-scout',
+      },
+      body: JSON.stringify({ validityInMinutes: 30, secret }),
     });
     const data = await res.json();
     const token = data?.accessToken || null;
@@ -68,8 +70,12 @@ async function getStockPrice(ticker) {
         `https://api.public.com/userapigateway/marketdata/${accountId}/quotes`,
         {
           method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
+          headers: {
+            'Content-Type':  'application/json',
+            'Authorization': `Bearer ${token}`,
+            'User-Agent':    'stratum-flow-scout',
+          },
+          body: JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
         }
       );
       const data  = await res.json();
