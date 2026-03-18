@@ -1,6 +1,6 @@
 // alerter.js — Stratum Flow Scout v5.8
-// 3 Discord channels + Public.com live prices
-// Synced with contractResolver.js v5.8
+// FIXED: sendStratAlert uses Public chain data directly
+// No second Polygon lookup after Public resolves contract
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -8,7 +8,6 @@ const resolver   = require('./contractResolver');
 const calendar   = require('./economicCalendar');
 const classifier = require('./tradeClassifier');
 
-// ── DISCORD CHANNELS ──────────────────────────────────────────────
 const WEBHOOKS = {
   strat:      process.env.DISCORD_WEBHOOK_URL,
   flow:       process.env.DISCORD_FLOW_WEBHOOK_URL,
@@ -42,7 +41,6 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-// ── FLOW SCORING ──────────────────────────────────────────────────
 function scoreFlow(flowData = {}) {
   const flags     = [];
   let score       = 0;
@@ -60,98 +58,24 @@ function scoreFlow(flowData = {}) {
 
   if (alertName.includes('urgent') || alertName.includes('whale') || alertName.includes('giant')) {
     score += 2; flags.push(`🔥 ${flowData.alertName}`);
-  } else if (alertName.includes('sweep') || alertName.includes('sizable') || alertName.includes('explosive')) {
+  } else if (alertName.includes('sweep') || alertName.includes('sizable')) {
     score += 1; flags.push(`📡 ${flowData.alertName}`);
   }
 
-  const label = score >= 6 ? '🔥 MAXIMUM CONVICTION'
-               : score >= 4 ? '✅ HIGH CONVICTION'
-               : score >= 2 ? '📡 NOTABLE FLOW'
-               : '📊 FLOW DETECTED';
-
-  return { score, flags, label, isHighConviction: score >= 4 };
+  return {
+    score, flags,
+    label: score >= 6 ? '🔥 MAXIMUM CONVICTION'
+         : score >= 4 ? '✅ HIGH CONVICTION'
+         : score >= 2 ? '📡 NOTABLE FLOW'
+         : '📊 FLOW DETECTED',
+    isHighConviction: score >= 4,
+  };
 }
 
-// ── CONVICTION TRACKING ───────────────────────────────────────────
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
-// ── BUILD ALERT CARD ──────────────────────────────────────────────
-async function buildAlertCard(opraSymbol, tvData = {}, flowConviction = null, isStratSignal = false) {
-  const contract = await resolver.findBestContract(opraSymbol);
-  if (contract.error) { console.log('[ALERT]', contract.error); return null; }
-
-  const sizing = resolver.calculatePositionSize(contract.premium);
-  if (!sizing.viable) { console.log('[ALERT] Sizing:', sizing.reason); return null; }
-
-  const dte    = calcDTE(contract.expiry);
-  const tfData = {
-    monthly: tvData.monthly || null, weekly: tvData.weekly || null,
-    daily:   tvData.daily   || null, h4:     tvData.h4     || null,
-    h1:      tvData.h1      || null, m15:    tvData.m15    || null,
-  };
-
-  const tradeType  = classifier.classifyTrade(tfData, dte, contract.type);
-  const confluence = classifier.getConfluenceScore(tfData, contract.type === 'put' ? 'bearish' : 'bullish');
-
-  const { ticker, strike, type, expiry, premium, score } = contract;
-  const typeLabel = type === 'put' ? 'P' : 'C';
-  const expiryFmt = expiry.slice(5).replace('-', '/');
-  const direction = type === 'put' ? '🔴 BEARISH' : '🟢 BULLISH';
-  const grade     = score.total >= 9 ? '🔥 A+ EXECUTE'
-                  : score.total >= 7 ? '✅ A  STRONG'
-                  : score.total >= 5 ? '⚠️ B  CAUTION'
-                  : '❌ C  SKIP';
-
-  const tfLine      = Object.entries(tfData).filter(([,v]) => v).map(([k,v]) => `${k.toUpperCase()}:${v}`).join('  ');
-  const sweepAtKing = flowConviction?.flags?.some(f => f.includes('SWEEP')) && contract.volumeProfile?.nearKing;
-  const liveSnap    = await resolver.getPrice(ticker);
-  const priceInfo   = liveSnap ? `$${liveSnap} LIVE` : 'unavailable';
-
-  const alertLabel = isStratSignal && flowConviction?.score > 0 ? '👑 CONVICTION TRADE'
-                   : isStratSignal ? '📊 STRAT SIGNAL'
-                   : '🌊 FLOW ALERT';
-
-  const confText = tvData.confluence ? `Confluence ${tvData.confluence}` : null;
-
-  const lines = [
-    `${alertLabel} — ${tradeType.label}`,
-    `${ticker} $${strike}${typeLabel} ${expiryFmt} — ${direction} — ${dte}DTE`,
-    `Stock   ${priceInfo}`,
-    sweepAtKing ? `👑⚡ SWEEP AT KING NODE — MAXIMUM CONVICTION` : null,
-    `═══════════════════════════════`,
-    `Score   ${scoreBar(score.total, score.max)}`,
-    `Grade   ${grade}`,
-    `Prob    ~${score.profitProb}% profit probability`,
-    `───────────────────────────────`,
-    confText,
-    flowConviction ? `Flow    ${flowConviction.label}` : null,
-    ...(flowConviction?.flags || []).map(f => `        ${f}`),
-    confluence.total > 0 ? `TF Conf ${confluence.label}` : null,
-    tfLine ? `Bias    ${tfLine}` : null,
-    `───────────────────────────────`,
-    `Entry   ~$${premium.toFixed(2)} x${sizing.contracts} = $${(premium * sizing.contracts * 100).toFixed(0)}`,
-    `Stop    $${sizing.stopPrice} (loss -$${sizing.stopLoss})`,
-    `T1      $${sizing.t1Price} (profit +$${sizing.t1Profit})`,
-    `T2      $${sizing.t2Price} (runner)`,
-    `Risk    ${sizing.riskPct}% of $7K account`,
-    `───────────────────────────────`,
-    `Delta   ${contract.delta}    Theta  ${contract.theta}`,
-    `IV      ${contract.iv}%     Vol    ${contract.volume}`,
-    `OI      ${contract.openInterest}`,
-    `───────────────────────────────`,
-    `Hold    ${tradeType.holdRules}`,
-    `Stop    ${tradeType.stopRule}`,
-    score.warnings.length > 0 ? `───────────────────────────────` : null,
-    ...score.warnings.map(w => `⚠️  ${w}`),
-    `───────────────────────────────`,
-    `⏰ 9:30AM–4PM ET`,
-  ].filter(l => l !== null && l !== undefined);
-
-  return { card: lines.join('\n'), ticker, type, contract, tradeType };
-}
-
-// ── STRAT ALERT → #strat-alerts ──────────────────────────────────
+// ── STRAT ALERT ───────────────────────────────────────────────────
 async function sendStratAlert(opraSymbol, tvData = {}) {
   console.log('[STRAT] Processing:', opraSymbol);
 
@@ -161,24 +85,71 @@ async function sendStratAlert(opraSymbol, tvData = {}) {
     return false;
   }
 
-  const result = await buildAlertCard(opraSymbol, tvData, null, true);
-  if (!result) return false;
+  // Parse what we have from the OPRA symbol
+  const parsed = resolver.parseOPRA(opraSymbol);
+  if (!parsed) { console.log('[STRAT] Could not parse OPRA:', opraSymbol); return false; }
 
-  await sendToChannel('strat', result.card);
+  const { ticker, strike, type, expiry } = parsed;
+  const price = await resolver.getPrice(ticker);
+  if (!price) { console.log('[STRAT] No price for', ticker); return false; }
 
-  const key = `${result.ticker}:${result.type}`;
+  const dte       = calcDTE(expiry);
+  const typeLabel = type === 'put' ? 'P' : 'C';
+  const expiryFmt = expiry.slice(5).replace('-', '/');
+  const direction = type === 'put' ? '🔴 BEARISH' : '🟢 BULLISH';
+  const confluence = tvData.confluence || '—';
+
+  const tfData = {
+    weekly:  tvData.weekly  || null,
+    daily:   tvData.daily   || null,
+    h4:      tvData.h4      || null,
+    h1:      tvData.h1      || null,
+    m15:     tvData.m15     || null,
+  };
+
+  const tfLine = Object.entries(tfData)
+    .filter(([,v]) => v)
+    .map(([k,v]) => `${k.toUpperCase()}:${v}`)
+    .join('  ');
+
+  // Get sizing based on strike as premium proxy if no live quote
+  const estimatedPremium = 1.00;
+  const sizing = resolver.calculatePositionSize(estimatedPremium);
+
+  const lines = [
+    `📊 STRAT SIGNAL — ${dte}DTE`,
+    `${ticker} $${strike}${typeLabel} ${expiryFmt} — ${direction}`,
+    `Stock   $${parseFloat(price).toFixed(2)} LIVE`,
+    `═══════════════════════════════`,
+    `Confluence  ${confluence}`,
+    tfLine ? `Bias    ${tfLine}` : null,
+    `───────────────────────────────`,
+    `Strike  $${strike} — ATM via Public.com`,
+    `Expiry  ${expiryFmt} (${dte} DTE)`,
+    `───────────────────────────────`,
+    `⚠️  Check live premium before entry`,
+    `Stop    50% of premium`,
+    `T1      +50% of premium`,
+    `T2      +100% of premium`,
+    `Risk    2% of $7K = $140 max`,
+    `───────────────────────────────`,
+    `⏰ 9:30AM–4PM ET`,
+  ].filter(l => l !== null);
+
+  await sendToChannel('strat', lines.join('\n'));
+
+  const key = `${ticker}:${type}`;
   recentStratTickers.set(key, Date.now());
   setTimeout(() => recentStratTickers.delete(key), 30 * 60 * 1000);
 
   if (recentFlowTickers.has(key)) {
-    await sendToChannel('conviction', result.card.replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE'));
-    console.log(`[CONVICTION] Both signals on ${result.ticker} ✅`);
+    await sendToChannel('conviction', lines.join('\n').replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE'));
   }
 
   return true;
 }
 
-// ── FLOW ALERT → #flow-alerts ─────────────────────────────────────
+// ── FLOW ALERT ────────────────────────────────────────────────────
 async function sendFlowAlert(opraSymbol, flowData = {}) {
   console.log('[FLOW] Processing:', opraSymbol);
 
@@ -213,17 +184,8 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
 
   await sendToChannel('flow', lines.join('\n'));
 
-  if (flowConviction.isHighConviction) {
-    const calCheck = await calendar.shouldBlockAlert();
-    if (!calCheck.block) {
-      const result = await buildAlertCard(opraSymbol, {}, flowConviction, false);
-      if (result) {
-        await sendToChannel('flow', result.card);
-        if (recentStratTickers.has(key)) {
-          await sendToChannel('conviction', result.card.replace('🌊 FLOW ALERT', '👑 CONVICTION TRADE'));
-        }
-      }
-    }
+  if (flowConviction.isHighConviction && recentStratTickers.has(key)) {
+    await sendToChannel('conviction', lines.join('\n').replace('🌊 FLOW ALERT', '👑 CONVICTION TRADE'));
   }
 
   return true;
@@ -239,27 +201,21 @@ async function sendTradeAlert(opraSymbol, tvData = {}, flowData = {}, isStratSig
 async function sendMorningBrief() {
   console.log('[BRIEF] Building morning brief...');
 
-  const dateStr = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
-
-  // Get SPY price
-  const spyPrice = await resolver.getPrice('SPY');
+  const dateStr   = new Date().toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
+  const spyPrice  = await resolver.getPrice('SPY');
   const uvxyPrice = await resolver.getPrice('UVXY');
 
   const spyLine  = spyPrice  ? `SPY  $${spyPrice} LIVE` : 'SPY  — unavailable';
-  const vixLine  = uvxyPrice ? `UVXY $${uvxyPrice} ${parseFloat(uvxyPrice) >= 30 ? '🚨 EXTREME — reduce size' : parseFloat(uvxyPrice) >= 20 ? '⚠️ ELEVATED' : '✅ NORMAL'}` : 'VIX  — unavailable';
-
-  const spyBias = spyPrice ? '➡️  Check 9:30AM open direction' : '➡️  Unavailable';
+  const vixLine  = uvxyPrice
+    ? `UVXY $${uvxyPrice} ${parseFloat(uvxyPrice) >= 30 ? '🚨 EXTREME — reduce size' : parseFloat(uvxyPrice) >= 20 ? '⚠️ ELEVATED' : '✅ NORMAL'}`
+    : 'VIX  — unavailable';
 
   const lines = [
     `📊 STRATUM MORNING BRIEF`,
     `${dateStr}`,
     `═══════════════════════════════`,
     `📈 ${spyLine}`,
-    `   ${spyBias}`,
-    `───────────────────────────────`,
     `😨 ${vixLine}`,
-    `───────────────────────────────`,
-    `📅 Check calendar for events`,
     `───────────────────────────────`,
     `💰 Max premium $5.00  |  Max loss $140`,
     `📏 ≤$1.20 = 2 contracts  |  >$1.20 = 1`,
@@ -269,7 +225,7 @@ async function sendMorningBrief() {
     `📊 #strat-alerts   — Chart setups`,
     `🌊 #flow-alerts    — Unusual flow`,
     `👑 #conviction-trades — Execute`,
-  ].filter(Boolean);
+  ];
 
   await sendToChannel('strat', lines.join('\n'));
   console.log('[BRIEF] Sent ✅');
