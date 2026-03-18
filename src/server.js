@@ -1,8 +1,7 @@
 // server.js — Stratum Flow Scout v5.7
-// 3 Discord channels — strat, flow, conviction
-// Fixed: Public.com token exchange authentication
-// Fixed: Public.com price lookup in buildFallbackOPRA
-// UPDATED: No watchlist filter — all tickers processed
+// All tickers — no watchlist filter
+// Fixed: Polygon snapshot + prev close for price lookup
+// Fixed: Public.com token exchange for live prices
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -41,28 +40,31 @@ app.get('/flow/summary', (req, res) => {
 async function getPublicAccessToken() {
   try {
     const secret = process.env.PUBLIC_API_KEY;
-    if (!secret) return null;
+    if (!secret) { console.log('[PUBLIC] No API key'); return null; }
     const res  = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ validityInMinutes: 30, secret }),
     });
     const data = await res.json();
-    return data?.accessToken || null;
-  } catch { return null; }
+    const token = data?.accessToken || null;
+    if (token) console.log('[PUBLIC] Token obtained ✅');
+    else console.log('[PUBLIC] Token failed:', JSON.stringify(data));
+    return token;
+  } catch (err) {
+    console.error('[PUBLIC] Token error:', err.message);
+    return null;
+  }
 }
 
-// ── PRICES — Public.com live, Polygon fallback ────────────────────
-app.get('/prices', async (req, res) => {
-  const ticker = (req.query.ticker || '').toUpperCase().trim();
-  if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
-
+// ── GET STOCK PRICE — Public first, Polygon fallback ─────────────
+async function getStockPrice(ticker) {
+  // Try Public.com first
   try {
-    const accountId = process.env.PUBLIC_ACCOUNT_ID;
     const token     = await getPublicAccessToken();
-
+    const accountId = process.env.PUBLIC_ACCOUNT_ID;
     if (token && accountId) {
-      const pubRes  = await fetch(
+      const res  = await fetch(
         `https://api.public.com/userapigateway/marketdata/${accountId}/quotes`,
         {
           method:  'POST',
@@ -70,22 +72,60 @@ app.get('/prices', async (req, res) => {
           body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
         }
       );
-      const pubData = await pubRes.json();
-      const quote   = pubData?.quotes?.[0];
-      if (quote && quote.outcome === 'SUCCESS') {
+      const data  = await res.json();
+      const quote = data?.quotes?.[0];
+      if (quote?.outcome === 'SUCCESS' && quote.last) {
         const price = parseFloat(quote.last);
-        const bid   = parseFloat(quote.bid || quote.last);
-        const ask   = parseFloat(quote.ask || quote.last);
-        return res.json({ ticker, price, bid, ask, live: true, source: 'public' });
+        console.log(`[PRICE] ${ticker} $${price} via Public.com ✅`);
+        return price;
       }
+      console.log(`[PUBLIC] Quote failed for ${ticker}:`, JSON.stringify(quote));
     }
+  } catch (err) {
+    console.error(`[PUBLIC] Price error for ${ticker}:`, err.message);
+  }
 
+  // Try Polygon snapshot
+  try {
+    const snapRes  = await fetch(`https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${process.env.POLYGON_API_KEY}`);
+    const snapData = await snapRes.json();
+    const price    = snapData?.ticker?.lastTrade?.p
+                  || snapData?.ticker?.prevDay?.c
+                  || snapData?.ticker?.day?.o
+                  || null;
+    if (price) {
+      console.log(`[PRICE] ${ticker} $${price} via Polygon snapshot ✅`);
+      return price;
+    }
+  } catch (err) {
+    console.error(`[POLYGON SNAP] Error for ${ticker}:`, err.message);
+  }
+
+  // Try Polygon prev close
+  try {
     const prevRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
     const prevData = await prevRes.json();
-    const prev     = prevData?.results?.[0]?.c;
-    if (!prev) return res.status(404).json({ error: 'No price data' });
-    return res.json({ ticker, price: prev, prevClose: prev, live: false, source: 'polygon' });
+    const price    = prevData?.results?.[0]?.c || null;
+    if (price) {
+      console.log(`[PRICE] ${ticker} $${price} via Polygon prev close ✅`);
+      return price;
+    }
+  } catch (err) {
+    console.error(`[POLYGON PREV] Error for ${ticker}:`, err.message);
+  }
 
+  console.error(`[PRICE] No price found for ${ticker}`);
+  return null;
+}
+
+// ── PRICES ENDPOINT ───────────────────────────────────────────────
+app.get('/prices', async (req, res) => {
+  const ticker = (req.query.ticker || '').toUpperCase().trim();
+  if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
+  try {
+    const price = await getStockPrice(ticker);
+    if (!price) return res.status(404).json({ error: 'No price data' });
+    return res.json({ ticker, price, live: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -126,9 +166,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   try {
     const body = req.body;
     const opra = body.opra || body.symbol || null;
-
     if (!opra) return res.status(400).json({ error: 'No OPRA symbol' });
-
     alerter.sendTradeAlert(opra, {}, body, false).catch(console.error);
     res.json({ status: 'processing', opra });
   } catch (err) {
@@ -137,7 +175,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   }
 });
 
-// ── FALLBACK OPRA BUILDER — Public first, Polygon fallback ────────
+// ── FALLBACK OPRA BUILDER ─────────────────────────────────────────
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY' || action === 'CALL') ? 'call'
              : (action === 'SELL' || action === 'PUT') ? 'put'
@@ -151,40 +189,9 @@ async function buildFallbackOPRA(ticker, action) {
   const expDate = expiry.toISOString().slice(0, 10);
 
   try {
-    // ── Step 1: Get price — Public first, Polygon fallback ────────
-    let price = null;
-
-    try {
-      const token = await getPublicAccessToken();
-      if (token && process.env.PUBLIC_ACCOUNT_ID) {
-        const pubRes  = await fetch(
-          `https://api.public.com/userapigateway/marketdata/${process.env.PUBLIC_ACCOUNT_ID}/quotes`,
-          {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-            body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
-          }
-        );
-        const pubData = await pubRes.json();
-        const quote   = pubData?.quotes?.[0];
-        if (quote?.outcome === 'SUCCESS') {
-          price = parseFloat(quote.last);
-          console.log(`[OPRA] ${ticker} live price (Public): $${price}`);
-        }
-      }
-    } catch { }
-
-    // Polygon fallback
-    if (!price) {
-      const priceRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
-      const priceData = await priceRes.json();
-      price = priceData?.results?.[0]?.c || null;
-      if (price) console.log(`[OPRA] ${ticker} prev close (Polygon): $${price}`);
-    }
-
+    const price = await getStockPrice(ticker);
     if (!price) throw new Error(`No price for ${ticker}`);
 
-    // ── Step 2: Find ATM contracts via Polygon ────────────────────
     const lo = (price * 0.90).toFixed(0);
     const hi = (price * 1.10).toFixed(0);
 
