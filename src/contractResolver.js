@@ -1,16 +1,17 @@
 // contractResolver.js — Stratum Flow Scout v5.8
-// UPDATED: Public.com option chain for live contracts
-// Polygon used only as fallback
+// All Public.com request formats verified against API docs
 // ─────────────────────────────────────────────────────────────────
 
 const fetch = require('node-fetch');
 
-const BASE_URL    = 'https://api.polygon.io';
-const PUBLIC_BASE = 'https://api.public.com';
+const POLY_BASE   = 'https://api.polygon.io';
+const PUB_AUTH    = 'https://api.public.com/userapiauthservice/personal/access-tokens';
+const PUB_GATEWAY = 'https://api.public.com/userapigateway';
+
 const MIN_PREMIUM = 0.10;
 const MAX_PREMIUM = 5.00;
 
-function apiKey() { return process.env.POLYGON_API_KEY; }
+function polyKey() { return process.env.POLYGON_API_KEY; }
 
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
@@ -18,57 +19,69 @@ const WATCHLIST = new Set([
   'MRNA','MRVL','GUSH','UVXY','KO','PEP'
 ]);
 
-// ── PUBLIC.COM TOKEN ──────────────────────────────────────────────
+// ── TOKEN ─────────────────────────────────────────────────────────
+// POST https://api.public.com/userapiauthservice/personal/access-tokens
+// Body: { secret, validityInMinutes }
+// Response: { accessToken }
 async function getPublicToken() {
   try {
     const secret = process.env.PUBLIC_API_KEY;
-    if (!secret) return null;
-    const res  = await fetch(`${PUBLIC_BASE}/userapiauthservice/personal/access-tokens`, {
+    if (!secret) { console.log('[PUBLIC] No API key'); return null; }
+    const res  = await fetch(PUB_AUTH, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': 'stratum-flow-scout' },
-      body:    JSON.stringify({ validityInMinutes: 30, secret }),
+      body:    JSON.stringify({ secret, validityInMinutes: 30 }),
     });
-    const data = await res.json();
-    return data?.accessToken || null;
-  } catch { return null; }
+    const data  = await res.json();
+    const token = data?.accessToken || null;
+    if (token) console.log('[PUBLIC] Token obtained ✅');
+    else       console.log('[PUBLIC] Token failed:', JSON.stringify(data));
+    return token;
+  } catch (err) { console.error('[PUBLIC] Token error:', err.message); return null; }
 }
 
-// ── GET STOCK PRICE — Public first, Polygon fallback ─────────────
+// ── QUOTES ────────────────────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/quotes
+// Body: { "instruments": [ { "symbol": "SPY", "type": "EQUITY" } ] }
+// Response: { "quotes": [ { "last": "182.45", "bid": "...", "ask": "..." } ] }
 async function getPrice(ticker) {
   const accountId = process.env.PUBLIC_ACCOUNT_ID;
 
-  // Public.com
   try {
     const token = await getPublicToken();
     if (token && accountId) {
-      const res  = await fetch(
-        `${PUBLIC_BASE}/userapigateway/marketdata/${accountId}/quotes`,
-        {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
-          body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
-        }
-      );
+      const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/quotes`, {
+        method:  'POST',
+        headers: {
+          'Content-Type':  'application/json',
+          'Authorization': `Bearer ${token}`,
+          'User-Agent':    'stratum-flow-scout',
+        },
+        body: JSON.stringify({
+          instruments: [{ symbol: ticker, type: 'EQUITY' }],
+        }),
+      });
       const data  = await res.json();
       const quote = data?.quotes?.[0];
-      if (quote?.outcome === 'SUCCESS' && quote.last) {
+      if (quote?.last) {
         console.log(`[PRICE] ${ticker} $${quote.last} — Public.com ✅`);
         return parseFloat(quote.last);
       }
+      console.log(`[PUBLIC] Quote raw:`, JSON.stringify(data));
     }
-  } catch { }
+  } catch (err) { console.error(`[PUBLIC] Price error:`, err.message); }
 
-  // Polygon snapshot
+  // Polygon snapshot fallback
   try {
-    const res  = await fetch(`${BASE_URL}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${apiKey()}`);
+    const res  = await fetch(`${POLY_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${polyKey()}`);
     const data = await res.json();
     const price = data?.ticker?.lastTrade?.p || data?.ticker?.prevDay?.c || null;
     if (price) { console.log(`[PRICE] ${ticker} $${price} — Polygon ✅`); return price; }
   } catch { }
 
-  // Polygon prev close
+  // Polygon prev close fallback
   try {
-    const res  = await fetch(`${BASE_URL}/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${apiKey()}`);
+    const res  = await fetch(`${POLY_BASE}/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${polyKey()}`);
     const data = await res.json();
     const price = data?.results?.[0]?.c || null;
     if (price) { console.log(`[PRICE] ${ticker} $${price} — Polygon prev ✅`); return price; }
@@ -78,37 +91,58 @@ async function getPrice(ticker) {
   return null;
 }
 
-// ── GET OPTION CHAIN — Public.com live ────────────────────────────
-async function getPublicOptionChain(ticker, expDate, type) {
-  const accountId = process.env.PUBLIC_ACCOUNT_ID;
+// ── OPTION EXPIRATIONS ────────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/option-expirations
+// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" } }   ← singular
+// Response: { "expirations": ["2026-03-20", "2026-03-27"] }
+async function getPublicExpirations(ticker, token, accountId) {
   try {
-    const token = await getPublicToken();
-    if (!token || !accountId) return null;
-
-    const res  = await fetch(
-      `${PUBLIC_BASE}/userapigateway/marketdata/${accountId}/option-chain`,
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
-        body:    JSON.stringify({
-          instrument:     { symbol: ticker, type: 'EQUITY' },
-          expirationDate: expDate,
-        }),
-      }
-    );
-    const data = await res.json();
-    if (!data?.calls && !data?.puts) return null;
-
-    const chain = type === 'call' ? (data.calls || []) : (data.puts || []);
-    console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} — ${chain.length} contracts ✅`);
-    return chain;
-  } catch (err) {
-    console.error(`[PUBLIC CHAIN] Error:`, err.message);
-    return null;
-  }
+    const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-expirations`, {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${token}`,
+        'User-Agent':    'stratum-flow-scout',
+      },
+      body: JSON.stringify({
+        instrument: { symbol: ticker, type: 'EQUITY' },
+      }),
+    });
+    const data        = await res.json();
+    const expirations = data?.expirations || [];
+    if (expirations.length) console.log(`[PUBLIC] ${ticker} expirations: ${expirations.slice(0,3).join(', ')} ✅`);
+    else console.log(`[PUBLIC] No expirations:`, JSON.stringify(data));
+    return expirations;
+  } catch (err) { console.error(`[PUBLIC EXPIRY] Error:`, err.message); return []; }
 }
 
-// ── GET NEXT EXPIRY ───────────────────────────────────────────────
+// ── OPTION CHAIN ──────────────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/option-chain
+// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" }, "expirationDate": "2026-03-20" }
+// Response: { "calls": [...], "puts": [...] }
+// Each contract has: bid, ask, last, volume, openInterest
+async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
+  try {
+    const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-chain`, {
+      method:  'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': `Bearer ${token}`,
+        'User-Agent':    'stratum-flow-scout',
+      },
+      body: JSON.stringify({
+        instrument:     { symbol: ticker, type: 'EQUITY' },
+        expirationDate: expDate,
+      }),
+    });
+    const data  = await res.json();
+    const chain = type === 'call' ? (data?.calls || []) : (data?.puts || []);
+    console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} — ${chain.length} contracts ✅`);
+    return chain;
+  } catch (err) { console.error(`[PUBLIC CHAIN] Error:`, err.message); return []; }
+}
+
+// ── NEXT FRIDAY ───────────────────────────────────────────────────
 function getNextExpiry() {
   const now    = new Date();
   const day    = now.getDay();
@@ -118,64 +152,75 @@ function getNextExpiry() {
   return expiry.toISOString().slice(0, 10);
 }
 
-// ── RESOLVE CONTRACT — main entry point ──────────────────────────
+// ── RESOLVE CONTRACT ──────────────────────────────────────────────
 async function resolveContract(ticker, type = 'call') {
-  const price   = await getPrice(ticker);
+  const price     = await getPrice(ticker);
   if (!price) return null;
 
-  const expDate = getNextExpiry();
+  const accountId = process.env.PUBLIC_ACCOUNT_ID;
+  const token     = await getPublicToken();
+  let   expDate   = getNextExpiry();
 
-  // Try Public.com option chain first
-  const pubChain = await getPublicOptionChain(ticker, expDate, type);
-  if (pubChain && pubChain.length > 0) {
-    // Find ATM contract — closest strike to current price within premium range
-    const candidates = pubChain.filter(c => {
-      const mid = ((parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2);
-      return mid >= MIN_PREMIUM && mid <= MAX_PREMIUM;
-    });
+  if (token && accountId) {
+    const expirations = await getPublicExpirations(ticker, token, accountId);
+    if (expirations.length > 0) expDate = expirations[0];
+  }
 
-    if (candidates.length > 0) {
-      // Parse strike from symbol and find closest to price
-      const best = candidates.reduce((a, b) => {
-        const strikeA = parseFloat(a.instrument?.symbol?.match(/\d+\.?\d*[CP]/)?.[0] || 0);
-        const strikeB = parseFloat(b.instrument?.symbol?.match(/\d+\.?\d*[CP]/)?.[0] || 0);
-        return Math.abs(strikeA - price) < Math.abs(strikeB - price) ? a : b;
+  if (token && accountId) {
+    const chain = await getPublicOptionChain(ticker, expDate, type, token, accountId);
+    if (chain.length > 0) {
+      const candidates = chain.filter(c => {
+        const mid = (parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2;
+        return mid >= MIN_PREMIUM && mid <= MAX_PREMIUM;
       });
 
-      const symbol = best.instrument?.symbol;
-      if (symbol) {
-        console.log(`[OPRA] ${ticker} resolved via Public: ${symbol}`);
-        return symbol;
+      if (candidates.length > 0) {
+        const withStrike = candidates.map(c => {
+          const sym    = c.instrument?.symbol || '';
+          const match  = sym.match(/(\d{6})([CP])(\d{8})$/);
+          const strike = match ? parseInt(match[3]) / 1000 : 0;
+          const mid    = (parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2;
+          return { ...c, strike, mid: parseFloat(mid.toFixed(2)), symbol: sym };
+        });
+
+        const best = withStrike.reduce((a, b) =>
+          Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
+        );
+
+        if (best.symbol) {
+          console.log(`[OPRA] ${ticker} resolved via Public ✅ ${best.symbol} strike $${best.strike} mid $${best.mid}`);
+          return best.symbol;
+        }
       }
     }
   }
 
   // Polygon fallback
+  console.log(`[OPRA] Falling back to Polygon for ${ticker}`);
   const lo = (price * 0.90).toFixed(0);
   const hi = (price * 1.10).toFixed(0);
 
   try {
-    let res  = await fetch(`${BASE_URL}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expDate}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${apiKey()}`);
+    let res  = await fetch(`${POLY_BASE}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expDate}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${polyKey()}`);
     let data = await res.json();
     let contracts = data?.results || [];
 
     if (!contracts.length) {
       const next = new Date();
       next.setDate(next.getDate() + 7);
-      res  = await fetch(`${BASE_URL}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${next.toISOString().slice(0,10)}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${apiKey()}`);
-      data = await res.json();
+      res       = await fetch(`${POLY_BASE}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${next.toISOString().slice(0,10)}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${polyKey()}`);
+      data      = await res.json();
       contracts = data?.results || [];
     }
 
-    if (!contracts.length) return null;
+    if (!contracts.length) { console.error(`[OPRA] No contracts for ${ticker}`); return null; }
 
     const best = contracts.reduce((a, b) =>
       Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
     );
-
-    console.log(`[OPRA] ${ticker} resolved via Polygon: ${best.ticker}`);
+    console.log(`[OPRA] ${ticker} via Polygon: ${best.ticker}`);
     return best.ticker;
-  } catch { return null; }
+  } catch (err) { console.error(`[OPRA] Polygon failed:`, err.message); return null; }
 }
 
 // ── PARSE OPRA ────────────────────────────────────────────────────
@@ -193,7 +238,7 @@ function parseOPRA(opraSymbol) {
 // ── GET OPTION SNAPSHOT — Polygon ────────────────────────────────
 async function getOptionSnapshot(optionTicker) {
   try {
-    const res    = await fetch(`${BASE_URL}/v3/snapshot/options/${optionTicker}?apiKey=${apiKey()}`);
+    const res    = await fetch(`${POLY_BASE}/v3/snapshot/options/${optionTicker}?apiKey=${polyKey()}`);
     const data   = await res.json();
     const result = data?.results;
     if (!result) return null;
@@ -205,8 +250,8 @@ async function getOptionSnapshot(optionTicker) {
     const ask = quote.ask  || day.close || 0;
     const mid = bid && ask ? parseFloat(((bid + ask) / 2).toFixed(2)) : 0;
     return {
-      ticker: optionTicker, bid: parseFloat(bid.toFixed(2)),
-      ask: parseFloat(ask.toFixed(2)), mid,
+      ticker: optionTicker,
+      bid: parseFloat(bid.toFixed(2)), ask: parseFloat(ask.toFixed(2)), mid,
       volume: day.volume || 0, openInterest: result.open_interest || 0,
       delta: parseFloat((greeks.delta || 0).toFixed(4)),
       gamma: parseFloat((greeks.gamma || 0).toFixed(4)),
@@ -219,7 +264,7 @@ async function getOptionSnapshot(optionTicker) {
   } catch { return null; }
 }
 
-// ── FIND BEST CONTRACT — used by alerter.js ───────────────────────
+// ── FIND BEST CONTRACT ────────────────────────────────────────────
 async function findBestContract(opraSymbol) {
   const parsed = parseOPRA(opraSymbol);
   if (!parsed) return { error: 'Could not parse OPRA: ' + opraSymbol };
@@ -228,33 +273,37 @@ async function findBestContract(opraSymbol) {
   const price = await getPrice(ticker);
   if (!price) return { error: `No price for ${ticker}` };
 
-  const res  = await fetch(`${BASE_URL}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expiry}&strike_price_gte=${(price*0.90).toFixed(0)}&strike_price_lte=${(price*1.10).toFixed(0)}&limit=50&apiKey=${apiKey()}`);
-  const data = await res.json();
-  const contracts = data?.results || [];
-  if (!contracts.length) return { error: `No contracts for ${ticker} ${type} ${expiry}` };
+  const lo = (price * 0.90).toFixed(0);
+  const hi = (price * 1.10).toFixed(0);
 
-  let best = null;
-  for (const c of contracts) {
-    const snap    = await getOptionSnapshot(c.ticker);
-    if (!snap) continue;
-    const premium = snap.mid || snap.ask;
-    if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
-    const score   = scoreContract(snap, price);
-    if (!best || score.total > best.score.total) {
-      best = {
-        ticker, optionTicker: c.ticker,
-        strike: snap.strike, expiry: snap.expiry,
-        type, premium, bid: snap.bid, ask: snap.ask, mid: snap.mid,
-        volume: snap.volume, openInterest: snap.openInterest,
-        delta: snap.delta, gamma: snap.gamma, theta: snap.theta,
-        vega: snap.vega, iv: snap.iv, price, score, isLive: true,
-        volumeProfile: null, kingNodeLine: null,
-      };
+  try {
+    const res  = await fetch(`${POLY_BASE}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expiry}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${polyKey()}`);
+    const data = await res.json();
+    const contracts = data?.results || [];
+    if (!contracts.length) return { error: `No contracts for ${ticker} ${type} ${expiry}` };
+
+    let best = null;
+    for (const c of contracts) {
+      const snap    = await getOptionSnapshot(c.ticker);
+      if (!snap) continue;
+      const premium = snap.mid || snap.ask;
+      if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
+      const score   = scoreContract(snap, price);
+      if (!best || score.total > best.score.total) {
+        best = {
+          ticker, optionTicker: c.ticker,
+          strike: snap.strike, expiry: snap.expiry,
+          type, premium, bid: snap.bid, ask: snap.ask, mid: snap.mid,
+          volume: snap.volume, openInterest: snap.openInterest,
+          delta: snap.delta, gamma: snap.gamma, theta: snap.theta,
+          vega: snap.vega, iv: snap.iv, price, score, isLive: true,
+          volumeProfile: null, kingNodeLine: null,
+        };
+      }
     }
-  }
-
-  if (!best) return { error: `No contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range` };
-  return best;
+    if (!best) return { error: `No contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range` };
+    return best;
+  } catch (err) { return { error: err.message }; }
 }
 
 // ── SCORE CONTRACT ────────────────────────────────────────────────
