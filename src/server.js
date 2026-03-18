@@ -1,6 +1,7 @@
 // server.js — Stratum Flow Scout v5.7
 // 3 Discord channels — strat, flow, conviction
 // Fixed: Public.com token exchange authentication
+// UPDATED: No watchlist filter — all tickers processed
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -78,7 +79,6 @@ app.get('/prices', async (req, res) => {
       }
     }
 
-    // Polygon fallback
     const prevRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
     const prevData = await prevRes.json();
     const prev     = prevData?.results?.[0]?.c;
@@ -104,11 +104,6 @@ app.post('/webhook/tradingview', async (req, res) => {
     const opra   = body.opra   || null;
 
     if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
-
-    if (!resolver.WATCHLIST.has(ticker)) {
-      console.log(`[WEBHOOK] ${ticker} not on watchlist — skipping`);
-      return res.json({ status: 'skipped', reason: 'Not on watchlist' });
-    }
 
     const opraSymbol = opra || await buildFallbackOPRA(ticker, action);
     if (!opraSymbol) {
@@ -211,7 +206,7 @@ app.get('/test/bullflow', async (req, res) => {
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log(`✅ Flow Scout v5.7 running on port ${PORT}`);
-  console.log(`   Watchlist: ${[...resolver.WATCHLIST].join(', ')}`);
+  console.log(`   All tickers — no watchlist filter`);
   console.log(`   Premium range: $${resolver.MIN_PREMIUM}–$${resolver.MAX_PREMIUM}`);
   bullflow.startBullflowStream();
 });
