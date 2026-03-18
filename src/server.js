@@ -1,6 +1,7 @@
 // server.js — Stratum Flow Scout v5.7
 // 3 Discord channels — strat, flow, conviction
 // Fixed: Public.com token exchange authentication
+// Fixed: Public.com price lookup in buildFallbackOPRA
 // UPDATED: No watchlist filter — all tickers processed
 // ─────────────────────────────────────────────────────────────────
 
@@ -136,7 +137,7 @@ app.post('/webhook/bullflow', async (req, res) => {
   }
 });
 
-// ── FALLBACK OPRA BUILDER ─────────────────────────────────────────
+// ── FALLBACK OPRA BUILDER — Public first, Polygon fallback ────────
 async function buildFallbackOPRA(ticker, action) {
   const type = (action === 'BUY' || action === 'CALL') ? 'call'
              : (action === 'SELL' || action === 'PUT') ? 'put'
@@ -150,12 +151,40 @@ async function buildFallbackOPRA(ticker, action) {
   const expDate = expiry.toISOString().slice(0, 10);
 
   try {
-    const priceRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
-    const priceData = await priceRes.json();
-    const price     = priceData?.results?.[0]?.c;
-    if (!price) throw new Error(`No price for ${ticker}`);
-    console.log(`[OPRA] ${ticker} prev close: $${price}`);
+    // ── Step 1: Get price — Public first, Polygon fallback ────────
+    let price = null;
 
+    try {
+      const token = await getPublicAccessToken();
+      if (token && process.env.PUBLIC_ACCOUNT_ID) {
+        const pubRes  = await fetch(
+          `https://api.public.com/userapigateway/marketdata/${process.env.PUBLIC_ACCOUNT_ID}/quotes`,
+          {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+            body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
+          }
+        );
+        const pubData = await pubRes.json();
+        const quote   = pubData?.quotes?.[0];
+        if (quote?.outcome === 'SUCCESS') {
+          price = parseFloat(quote.last);
+          console.log(`[OPRA] ${ticker} live price (Public): $${price}`);
+        }
+      }
+    } catch { }
+
+    // Polygon fallback
+    if (!price) {
+      const priceRes  = await fetch(`https://api.polygon.io/v2/aggs/ticker/${ticker}/prev?adjusted=true&apiKey=${process.env.POLYGON_API_KEY}`);
+      const priceData = await priceRes.json();
+      price = priceData?.results?.[0]?.c || null;
+      if (price) console.log(`[OPRA] ${ticker} prev close (Polygon): $${price}`);
+    }
+
+    if (!price) throw new Error(`No price for ${ticker}`);
+
+    // ── Step 2: Find ATM contracts via Polygon ────────────────────
     const lo = (price * 0.90).toFixed(0);
     const hi = (price * 1.10).toFixed(0);
 
