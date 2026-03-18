@@ -1,4 +1,5 @@
 // contractResolver.js — Stratum Flow Scout v5.8
+// FIXED: Skip expired expirations — use next valid date
 // All Public.com request formats verified against API docs
 // ─────────────────────────────────────────────────────────────────
 
@@ -20,9 +21,6 @@ const WATCHLIST = new Set([
 ]);
 
 // ── TOKEN ─────────────────────────────────────────────────────────
-// POST https://api.public.com/userapiauthservice/personal/access-tokens
-// Body: { secret, validityInMinutes }
-// Response: { accessToken }
 async function getPublicToken() {
   try {
     const secret = process.env.PUBLIC_API_KEY;
@@ -40,10 +38,7 @@ async function getPublicToken() {
   } catch (err) { console.error('[PUBLIC] Token error:', err.message); return null; }
 }
 
-// ── QUOTES ────────────────────────────────────────────────────────
-// POST /userapigateway/marketdata/{accountId}/quotes
-// Body: { "instruments": [ { "symbol": "SPY", "type": "EQUITY" } ] }
-// Response: { "quotes": [ { "last": "182.45", "bid": "...", "ask": "..." } ] }
+// ── GET STOCK PRICE ───────────────────────────────────────────────
 async function getPrice(ticker) {
   const accountId = process.env.PUBLIC_ACCOUNT_ID;
 
@@ -57,9 +52,7 @@ async function getPrice(ticker) {
           'Authorization': `Bearer ${token}`,
           'User-Agent':    'stratum-flow-scout',
         },
-        body: JSON.stringify({
-          instruments: [{ symbol: ticker, type: 'EQUITY' }],
-        }),
+        body: JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
       });
       const data  = await res.json();
       const quote = data?.quotes?.[0];
@@ -92,9 +85,6 @@ async function getPrice(ticker) {
 }
 
 // ── OPTION EXPIRATIONS ────────────────────────────────────────────
-// POST /userapigateway/marketdata/{accountId}/option-expirations
-// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" } }   ← singular
-// Response: { "expirations": ["2026-03-20", "2026-03-27"] }
 async function getPublicExpirations(ticker, token, accountId) {
   try {
     const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-expirations`, {
@@ -104,9 +94,7 @@ async function getPublicExpirations(ticker, token, accountId) {
         'Authorization': `Bearer ${token}`,
         'User-Agent':    'stratum-flow-scout',
       },
-      body: JSON.stringify({
-        instrument: { symbol: ticker, type: 'EQUITY' },
-      }),
+      body: JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' } }),
     });
     const data        = await res.json();
     const expirations = data?.expirations || [];
@@ -117,10 +105,6 @@ async function getPublicExpirations(ticker, token, accountId) {
 }
 
 // ── OPTION CHAIN ──────────────────────────────────────────────────
-// POST /userapigateway/marketdata/{accountId}/option-chain
-// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" }, "expirationDate": "2026-03-20" }
-// Response: { "calls": [...], "puts": [...] }
-// Each contract has: bid, ask, last, volume, openInterest
 async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
   try {
     const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-chain`, {
@@ -142,7 +126,7 @@ async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
   } catch (err) { console.error(`[PUBLIC CHAIN] Error:`, err.message); return []; }
 }
 
-// ── NEXT FRIDAY ───────────────────────────────────────────────────
+// ── NEXT FRIDAY FALLBACK ──────────────────────────────────────────
 function getNextExpiry() {
   const now    = new Date();
   const day    = now.getDay();
@@ -163,11 +147,21 @@ async function resolveContract(ticker, type = 'call') {
 
   if (token && accountId) {
     const expirations = await getPublicExpirations(ticker, token, accountId);
-    if (expirations.length > 0) expDate = expirations[0];
+
+    // FIXED: Skip today and past dates — only use future expirations
+    const today    = new Date().toISOString().slice(0, 10);
+    const validExp = expirations.filter(e => e > today);
+    if (validExp.length > 0) {
+      expDate = validExp[0];
+      console.log(`[EXPIRY] ${ticker} using ${expDate} ✅`);
+    } else {
+      console.log(`[EXPIRY] ${ticker} no future expirations — using fallback ${expDate}`);
+    }
   }
 
   if (token && accountId) {
     const chain = await getPublicOptionChain(ticker, expDate, type, token, accountId);
+
     if (chain.length > 0) {
       const candidates = chain.filter(c => {
         const mid = (parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2;
@@ -191,6 +185,8 @@ async function resolveContract(ticker, type = 'call') {
           console.log(`[OPRA] ${ticker} resolved via Public ✅ ${best.symbol} strike $${best.strike} mid $${best.mid}`);
           return best.symbol;
         }
+      } else {
+        console.log(`[OPRA] ${ticker} — no contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range`);
       }
     }
   }
@@ -220,7 +216,7 @@ async function resolveContract(ticker, type = 'call') {
     );
     console.log(`[OPRA] ${ticker} via Polygon: ${best.ticker}`);
     return best.ticker;
-  } catch (err) { console.error(`[OPRA] Polygon failed:`, err.message); return null; }
+  } catch (err) { console.error(`[OPRA] Polygon failed:`, err.message); return null; return null; }
 }
 
 // ── PARSE OPRA ────────────────────────────────────────────────────
@@ -264,7 +260,7 @@ async function getOptionSnapshot(optionTicker) {
   } catch { return null; }
 }
 
-// ── FIND BEST CONTRACT ────────────────────────────────────────────
+// ── FIND BEST CONTRACT — used by alerter.js ───────────────────────
 async function findBestContract(opraSymbol) {
   const parsed = parseOPRA(opraSymbol);
   if (!parsed) return { error: 'Could not parse OPRA: ' + opraSymbol };
