@@ -1,7 +1,6 @@
 // server.js — Stratum Flow Scout v5.8
-// All tickers — no watchlist filter
-// 5/6+ confluence only
-// Public.com live prices + Polygon fallback
+// FIXED: resolveContract returns object — mid price passed to alerter
+// All tickers — no watchlist filter — 5/6+ confluence only
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -60,15 +59,16 @@ app.post('/webhook/tradingview', async (req, res) => {
 
     console.log(`[WEBHOOK] ${ticker} ${confluence} — PROCESSING ✅`);
 
-    const opraSymbol = await resolver.resolveContract(ticker, type);
-    if (!opraSymbol) {
+    // resolveContract now returns { symbol, mid, bid, ask, strike, expiry }
+    const resolved = await resolver.resolveContract(ticker, type);
+    if (!resolved) {
       console.log(`[WEBHOOK] Could not resolve contract for ${ticker}`);
       return res.json({ status: 'skipped', reason: 'No contract found' });
     }
 
-    const tvBias = { weekly, daily, h4, confluence };
-    alerter.sendTradeAlert(opraSymbol, tvBias, {}, true).catch(console.error);
-    res.json({ status: 'processing', ticker, opra: opraSymbol });
+    const tvBias = { weekly, daily, h4, confluence, mid: resolved.mid, bid: resolved.bid, ask: resolved.ask };
+    alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true).catch(console.error);
+    res.json({ status: 'processing', ticker, opra: resolved.symbol, mid: resolved.mid });
 
   } catch (err) {
     console.error('[WEBHOOK] Error:', err.message);
