@@ -1,72 +1,83 @@
-// bullflowStream.js — Stratum Flow Scout v5.7
-// Fixed: passes full flowData to sendFlowAlert for proper scoring
-// Wide net — all tickers, no watchlist filter on flow
+// bullflowStream.js — Stratum Flow Scout v5.8
+// FIXED: All flow goes to #flow-alerts
+// Only high conviction goes to #conviction-trades
 // ─────────────────────────────────────────────────────────────────
 
 const fetch    = require('node-fetch');
 const alerter  = require('./alerter');
 const resolver = require('./contractResolver');
 
-// ── LIVE AGGREGATOR — for /flow/summary endpoint ──────────────────
+// ── ALL alerts fire to #flow-alerts ──────────────────────────────
+// Only these fire the full card to #conviction-trades
+const HIGH_CONVICTION_ALERTS = [
+  'Urgent Repeater',
+  'Sizable Sweep',
+  'Whale Alert',
+  'Large Block',
+  'Unusual Sweep',
+  'Giant Sweep',
+  'Explosive',
+];
+
+function isHighConviction(alertName, alertPremium) {
+  const nameMatch    = HIGH_CONVICTION_ALERTS.some(name =>
+    (alertName || '').toLowerCase().includes(name.toLowerCase())
+  );
+  const premiumMatch = parseFloat(alertPremium || 0) >= 50000;
+  return nameMatch || premiumMatch;
+}
+
+// ── LIVE FLOW AGGREGATOR ──────────────────────────────────────────
 const liveAggregator = {
   data:          {},
+  alertLog:      [],
   lastResetDate: null,
 
   checkReset() {
     const now   = new Date();
     const today = now.toISOString().slice(0, 10);
-    const etH   = now.getUTCHours() - 4;
-    const etM   = now.getUTCMinutes();
-    if ((etH > 9 || (etH === 9 && etM >= 30)) && this.lastResetDate !== today) {
-      this.data          = {};
-      this.lastResetDate = today;
+    const etHour = now.getUTCHours() - 4;
+    const etMin  = now.getUTCMinutes();
+    const isAfterOpen = etHour > 9 || (etHour === 9 && etMin >= 30);
+    if (isAfterOpen && this.lastResetDate !== today) {
       console.log('[AGGREGATOR] Daily reset');
+      this.data          = {};
+      this.alertLog      = [];
+      this.lastResetDate = today;
     }
   },
 
-  add(ticker, type, premium, alertName) {
+  add(ticker, type, premium, orderType, alertName) {
     this.checkReset();
     const key = `${ticker}:${type}`;
     if (!this.data[key]) {
-      this.data[key] = { ticker, type, total: 0, count: 0, sweeps: 0, firstSeen: new Date() };
+      this.data[key] = {
+        ticker, type,
+        total: 0, count: 0, sweeps: 0,
+        firstSeen: new Date().toISOString(),
+        lastSeen:  new Date().toISOString(),
+        clusterThreshold: null,
+      };
     }
     const e    = this.data[key];
     e.total   += parseFloat(premium || 0);
     e.count   += 1;
-    if ((alertName || '').toLowerCase().includes('sweep')) e.sweeps += 1;
+    e.lastSeen = new Date().toISOString();
+    if ((orderType || '').toUpperCase() === 'SWEEP') e.sweeps++;
+    this.alertLog.push({ ticker, type, premium, orderType, alertName, time: new Date().toISOString() });
+    const thresholds = [500000, 1000000, 2000000];
+    for (const t of thresholds) {
+      if (e.total >= t) { e.clusterThreshold = t; }
+    }
     return e;
   },
 
   getSummary() {
-    const entries  = Object.values(this.data);
-    const calls    = entries.filter(e => e.type === 'call').reduce((s, e) => s + e.total, 0);
-    const puts     = entries.filter(e => e.type === 'put').reduce((s, e) => s + e.total, 0);
-    const total    = calls + puts;
-    const clusters = entries.filter(e => e.total >= 500000).length;
-    const alerts   = entries.reduce((s, e) => s + e.count, 0);
-
-    const tickers = entries
-      .sort((a, b) => b.total - a.total)
-      .slice(0, 20)
-      .map(e => ({
-        ticker:    e.ticker,
-        type:      e.type,
-        total:     e.total,
-        count:     e.count,
-        sweeps:    e.sweeps,
-        firstSeen: e.firstSeen,
-      }));
-
     return {
-      version:       '5.7',
-      connected:     true,
-      totalFlow:     total,
-      callFlow:      calls,
-      putFlow:       puts,
-      clusterCount:  clusters,
-      alertCount:    alerts,
-      tickers,
-      lastUpdate:    new Date().toISOString(),
+      data:       this.data,
+      alertCount: this.alertLog.length,
+      resetDate:  this.lastResetDate,
+      asOf:       new Date().toISOString(),
     };
   },
 };
@@ -79,16 +90,50 @@ function parseOPRA(symbol) {
     if (!match) return null;
     const [, ticker, date, typeChar, strikePadded] = match;
     const strike = parseInt(strikePadded) / 1000;
-    const yy     = date.slice(0, 2);
-    const mm     = date.slice(2, 4);
-    const dd     = date.slice(4, 6);
-    const expiry = `20${yy}-${mm}-${dd}`;
+    const expiry = `20${date.slice(0,2)}-${date.slice(2,4)}-${date.slice(4,6)}`;
     const type   = typeChar === 'C' ? 'call' : 'put';
     return { ticker, expiry, type, strike };
   } catch { return null; }
 }
 
-// ── MAIN STREAM ───────────────────────────────────────────────────
+// ── SEND FLOW DISCORD MESSAGE ─────────────────────────────────────
+async function sendFlowDiscord(parsed, alertName, alertPremium, orderType, price) {
+  const FLOW_WEBHOOK = process.env.DISCORD_FLOW_WEBHOOK_URL;
+  if (!FLOW_WEBHOOK) return;
+
+  const direction  = parsed.type === 'call' ? '🟢 BULLISH' : '🔴 BEARISH';
+  const typeLabel  = parsed.type === 'call' ? 'C' : 'P';
+  const premiumFmt = alertPremium >= 1000000
+    ? `$${(alertPremium/1000000).toFixed(1)}M`
+    : alertPremium >= 1000
+    ? `$${(alertPremium/1000).toFixed(0)}K`
+    : `$${alertPremium}`;
+
+  const isSwept  = (orderType || '').toLowerCase().includes('sweep');
+  const orderTag = isSwept ? '⚡ SWEEP' : '■ BLOCK';
+
+  const lines = [
+    `🌊 FLOW — ${parsed.ticker} ${parsed.type.toUpperCase()}`,
+    `${parsed.ticker} $${parsed.strike}${typeLabel} ${parsed.expiry.slice(5).replace('-','/')} — ${direction}`,
+    price ? `Stock   $${price} LIVE` : null,
+    `═══════════════════════════════`,
+    `Premium ${premiumFmt}`,
+    `Type    ${orderTag}`,
+    `Alert   ${alertName || 'Flow Alert'}`,
+    `───────────────────────────────`,
+    isHighConviction(alertName, alertPremium) ? `🔥 HIGH CONVICTION — watch for Strat signal` : `👁️ Watch for Strat confirmation`,
+    `⏰ ${new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'})} ET`,
+  ].filter(Boolean);
+
+  const fetch2 = require('node-fetch');
+  await fetch2(FLOW_WEBHOOK, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ content: '```\n' + lines.join('\n') + '\n```', username: 'Stratum Flow' }),
+  });
+}
+
+// ── MAIN STREAM CONNECTION ────────────────────────────────────────
 async function startBullflowStream() {
   const apiKey = process.env.BULLFLOW_API_KEY;
   if (!apiKey) {
@@ -106,7 +151,7 @@ async function startBullflowStream() {
       );
 
       if (!res.ok) {
-        console.error('[BULLFLOW] Connection failed:', res.status);
+        console.error('[BULLFLOW] Stream connection failed:', res.status);
         scheduleReconnect();
         return;
       }
@@ -118,11 +163,15 @@ async function startBullflowStream() {
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue;
           try {
-            const envelope = JSON.parse(line.slice(6));
-            const message  = envelope?.data;
-            const event    = message?.event;
+            const envelope    = JSON.parse(line.slice(6));
+            const message     = envelope?.data;
+            const event       = message?.event;
 
-            if (event === 'heartbeat' || event === 'init') return;
+            if (event === 'init') {
+              console.log('[BULLFLOW] Stream initialized');
+              return;
+            }
+            if (event === 'heartbeat') return;
 
             if (event === 'alert') {
               const alert = message?.data;
@@ -131,43 +180,41 @@ async function startBullflowStream() {
               const symbol       = alert.symbol       || '';
               const alertName    = alert.alertName    || '';
               const alertPremium = parseFloat(alert.alertPremium || 0);
-              const alertType    = (alert.alertType   || '').toLowerCase();
-              const side         = (alert.side        || '').toLowerCase();
+              const alertType    = alert.alertType    || '';
+              const orderType    = alertName.toLowerCase().includes('sweep') ? 'SWEEP' : 'BLOCK';
 
-              console.log(`[BULLFLOW] Alert: ${symbol} — ${alertName} — $${alertPremium}`);
+              console.log(`[BULLFLOW] ${symbol} — ${alertName} — $${alertPremium}`);
 
               const parsed = parseOPRA(symbol);
-              if (!parsed) {
-                console.log('[BULLFLOW] Could not parse OPRA:', symbol);
-                return;
-              }
+              if (!parsed) return;
 
               const { ticker, type } = parsed;
 
-              // ── ALWAYS ACCUMULATE ─────────────────────────────
-              liveAggregator.add(ticker, type, alertPremium, alertName);
+              // Always accumulate in aggregator
+              liveAggregator.add(ticker, type, alertPremium, orderType, alertName);
 
-              // ── BUILD FULL FLOW DATA ──────────────────────────
-              // This is what feeds scoreFlow() in alerter.js
-              const flowData = {
-                alertName,
-                alertPremium,
-                totalPremium: alertPremium,
-                orderType:    alertName.toLowerCase().includes('sweep') ? 'SWEEP' : 'BLOCK',
-                side,
-                alertType,
-                ticker,
-                type,
-                symbol,
-              };
+              // Get live price
+              const price = await resolver.getPrice(ticker).catch(() => null);
 
-              // ── SEND TO FLOW ALERT — wide net, all tickers ────
-              // No watchlist filter — cast wide
-              alerter.sendTradeAlert(symbol, {}, flowData, false).catch(console.error);
+              // Send ALL alerts to #flow-alerts — no filter
+              await sendFlowDiscord(parsed, alertName, alertPremium, orderType, price);
+              console.log(`[FLOW] Sent to #flow-alerts: ${ticker} ${type} $${alertPremium}`);
+
+              // High conviction — also resolve contract and send full card
+              if (isHighConviction(alertName, alertPremium)) {
+                console.log(`[BULLFLOW] HIGH CONVICTION — resolving contract: ${symbol}`);
+                const flowData = {
+                  sigScore:     alertType === 'algo' ? 0.85 : 0.5,
+                  orderType,
+                  totalPremium: alertPremium,
+                  alertName,
+                };
+                alerter.sendTradeAlert(symbol, {}, flowData, false).catch(console.error);
+              }
             }
 
             if (event === 'error' || event === 'cancelled') {
-              console.error('[BULLFLOW] Stream event:', event);
+              console.error('[BULLFLOW] Stream error — reconnecting...');
               scheduleReconnect();
             }
 
