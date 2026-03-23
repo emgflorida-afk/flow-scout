@@ -272,22 +272,4 @@ async function sendSystemMessage(msg) {
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
-```
 
----
-
-## 📋 3 Steps
-
-**①** GitHub → `src/contractResolver.js` → select all → paste → **Commit**
-
-**②** GitHub → `src/server.js` → select all → paste → **Commit**
-
-**③** GitHub → `src/alerter.js` → select all → paste → **Commit**
-
-Next alert will show exact dollar figures:
-```
-Entry   $0.83 x2 = $166
-Stop    $0.42 (loss -$84)
-T1      $1.25 (profit +$84)
-T2      $1.66 (runner)
-Risk    1.2% of $7K
