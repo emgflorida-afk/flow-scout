@@ -1,6 +1,7 @@
 // contractResolver.js — Stratum Flow Scout v5.8
-// FIXED: Skip expired expirations — use next valid date
-// All Public.com request formats verified against API docs
+// FIXED: resolveContract returns object with symbol + mid + strike
+// Public.com for prices, expirations, option chain
+// Polygon fallback only
 // ─────────────────────────────────────────────────────────────────
 
 const fetch = require('node-fetch');
@@ -39,6 +40,8 @@ async function getPublicToken() {
 }
 
 // ── GET STOCK PRICE ───────────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/quotes
+// Body: { "instruments": [ { "symbol": "SPY", "type": "EQUITY" } ] }
 async function getPrice(ticker) {
   const accountId = process.env.PUBLIC_ACCOUNT_ID;
 
@@ -47,12 +50,8 @@ async function getPrice(ticker) {
     if (token && accountId) {
       const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/quotes`, {
         method:  'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'Authorization': `Bearer ${token}`,
-          'User-Agent':    'stratum-flow-scout',
-        },
-        body: JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
+        body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
       });
       const data  = await res.json();
       const quote = data?.quotes?.[0];
@@ -84,40 +83,34 @@ async function getPrice(ticker) {
   return null;
 }
 
-// ── OPTION EXPIRATIONS ────────────────────────────────────────────
+// ── GET OPTION EXPIRATIONS ────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/option-expirations
+// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" } }
 async function getPublicExpirations(ticker, token, accountId) {
   try {
     const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-expirations`, {
       method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${token}`,
-        'User-Agent':    'stratum-flow-scout',
-      },
-      body: JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' } }),
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
+      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' } }),
     });
     const data        = await res.json();
     const expirations = data?.expirations || [];
     if (expirations.length) console.log(`[PUBLIC] ${ticker} expirations: ${expirations.slice(0,3).join(', ')} ✅`);
-    else console.log(`[PUBLIC] No expirations:`, JSON.stringify(data));
     return expirations;
   } catch (err) { console.error(`[PUBLIC EXPIRY] Error:`, err.message); return []; }
 }
 
-// ── OPTION CHAIN ──────────────────────────────────────────────────
+// ── GET OPTION CHAIN ──────────────────────────────────────────────
+// POST /userapigateway/marketdata/{accountId}/option-chain
+// Body: { "instrument": { "symbol": "SPY", "type": "EQUITY" }, "expirationDate": "2026-03-27" }
+// Response: { "calls": [...], "puts": [...] }
+// Each contract: bid, ask, last, volume, openInterest, instrument.symbol
 async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
   try {
     const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-chain`, {
       method:  'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${token}`,
-        'User-Agent':    'stratum-flow-scout',
-      },
-      body: JSON.stringify({
-        instrument:     { symbol: ticker, type: 'EQUITY' },
-        expirationDate: expDate,
-      }),
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
+      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' }, expirationDate: expDate }),
     });
     const data  = await res.json();
     const chain = type === 'call' ? (data?.calls || []) : (data?.puts || []);
@@ -136,7 +129,7 @@ function getNextExpiry() {
   return expiry.toISOString().slice(0, 10);
 }
 
-// ── RESOLVE CONTRACT ──────────────────────────────────────────────
+// ── RESOLVE CONTRACT — returns { symbol, mid, strike, expiry, bid, ask } ──
 async function resolveContract(ticker, type = 'call') {
   const price     = await getPrice(ticker);
   if (!price) return null;
@@ -147,15 +140,11 @@ async function resolveContract(ticker, type = 'call') {
 
   if (token && accountId) {
     const expirations = await getPublicExpirations(ticker, token, accountId);
-
-    // FIXED: Skip today and past dates — only use future expirations
-    const today    = new Date().toISOString().slice(0, 10);
-    const validExp = expirations.filter(e => e > today);
+    const today       = new Date().toISOString().slice(0, 10);
+    const validExp    = expirations.filter(e => e > today);
     if (validExp.length > 0) {
       expDate = validExp[0];
       console.log(`[EXPIRY] ${ticker} using ${expDate} ✅`);
-    } else {
-      console.log(`[EXPIRY] ${ticker} no future expirations — using fallback ${expDate}`);
     }
   }
 
@@ -163,30 +152,37 @@ async function resolveContract(ticker, type = 'call') {
     const chain = await getPublicOptionChain(ticker, expDate, type, token, accountId);
 
     if (chain.length > 0) {
-      const candidates = chain.filter(c => {
-        const mid = (parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2;
-        return mid >= MIN_PREMIUM && mid <= MAX_PREMIUM;
-      });
+      // Filter by premium range and parse strike
+      const withStrike = chain.map(c => {
+        const sym    = c.instrument?.symbol || '';
+        const match  = sym.match(/(\d{6})([CP])(\d{8})$/);
+        const strike = match ? parseInt(match[3]) / 1000 : 0;
+        const bid    = parseFloat(c.bid || 0);
+        const ask    = parseFloat(c.ask || 0);
+        const mid    = parseFloat(((bid + ask) / 2).toFixed(2));
+        return { ...c, strike, mid, bid, ask, symbol: sym };
+      }).filter(c => c.mid >= MIN_PREMIUM && c.mid <= MAX_PREMIUM && c.strike > 0);
 
-      if (candidates.length > 0) {
-        const withStrike = candidates.map(c => {
-          const sym    = c.instrument?.symbol || '';
-          const match  = sym.match(/(\d{6})([CP])(\d{8})$/);
-          const strike = match ? parseInt(match[3]) / 1000 : 0;
-          const mid    = (parseFloat(c.bid || 0) + parseFloat(c.ask || 0)) / 2;
-          return { ...c, strike, mid: parseFloat(mid.toFixed(2)), symbol: sym };
-        });
-
+      if (withStrike.length > 0) {
         const best = withStrike.reduce((a, b) =>
           Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
         );
 
         if (best.symbol) {
           console.log(`[OPRA] ${ticker} resolved via Public ✅ ${best.symbol} strike $${best.strike} mid $${best.mid}`);
-          return best.symbol;
+          return {
+            symbol: best.symbol,
+            mid:    best.mid,
+            bid:    best.bid,
+            ask:    best.ask,
+            strike: best.strike,
+            expiry: expDate,
+            volume: best.volume || 0,
+            openInterest: best.openInterest || 0,
+          };
         }
       } else {
-        console.log(`[OPRA] ${ticker} — no contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range`);
+        console.log(`[OPRA] ${ticker} — no contracts in $${MIN_PREMIUM}–$${MAX_PREMIUM} range on ${expDate}`);
       }
     }
   }
@@ -214,9 +210,10 @@ async function resolveContract(ticker, type = 'call') {
     const best = contracts.reduce((a, b) =>
       Math.abs(a.strike_price - price) < Math.abs(b.strike_price - price) ? a : b
     );
+
     console.log(`[OPRA] ${ticker} via Polygon: ${best.ticker}`);
-    return best.ticker;
-  } catch (err) { console.error(`[OPRA] Polygon failed:`, err.message); return null; return null; }
+    return { symbol: best.ticker, mid: null, bid: null, ask: null, strike: best.strike_price, expiry: expDate };
+  } catch (err) { console.error(`[OPRA] Polygon failed:`, err.message); return null; }
 }
 
 // ── PARSE OPRA ────────────────────────────────────────────────────
@@ -337,7 +334,7 @@ function calculatePositionSize(premium, accountSize = 7000) {
 
   return {
     viable: true, contracts, premium,
-    totalCost: costPerContract * contracts,
+    totalCost: parseFloat((costPerContract * contracts).toFixed(0)),
     stopPrice: parseFloat((premium * 0.50).toFixed(2)),
     t1Price:   parseFloat((premium * 1.50).toFixed(2)),
     t2Price:   parseFloat((premium * 2.00).toFixed(2)),
