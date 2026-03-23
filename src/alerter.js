@@ -1,6 +1,7 @@
 // alerter.js — Stratum Flow Scout v5.8
-// FIXED: Live premium from resolveContract mid price
+// TWO MODE SYSTEM: DAY and SWING
 // Shows exact Entry, Stop, T1, T2 dollar amounts
+// Mode-aware sizing from contractResolver
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -48,10 +49,10 @@ function scoreFlow(flowData = {}) {
   if (orderType === 'SWEEP')      { score += 2; flags.push('⚡ SWEEP'); }
   else if (orderType === 'BLOCK') { score += 1; flags.push('■ BLOCK'); }
 
-  if (premium >= 1000000)         { score += 4; flags.push(`💰 $${(premium/1000000).toFixed(1)}M — WHALE`); }
-  else if (premium >= 500000)     { score += 3; flags.push(`💰 $${(premium/1000).toFixed(0)}K — LARGE`); }
-  else if (premium >= 100000)     { score += 2; flags.push(`💰 $${(premium/1000).toFixed(0)}K`); }
-  else if (premium >= 25000)      { score += 1; flags.push(`💰 $${(premium/1000).toFixed(0)}K`); }
+  if (premium >= 1000000)     { score += 4; flags.push(`💰 $${(premium/1000000).toFixed(1)}M — WHALE`); }
+  else if (premium >= 500000) { score += 3; flags.push(`💰 $${(premium/1000).toFixed(0)}K — LARGE`); }
+  else if (premium >= 100000) { score += 2; flags.push(`💰 $${(premium/1000).toFixed(0)}K`); }
+  else if (premium >= 25000)  { score += 1; flags.push(`💰 $${(premium/1000).toFixed(0)}K`); }
 
   if (alertName.includes('urgent') || alertName.includes('whale') || alertName.includes('giant')) {
     score += 2; flags.push(`🔥 ${flowData.alertName}`);
@@ -71,39 +72,25 @@ function scoreFlow(flowData = {}) {
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
-// ── POSITION SIZING ───────────────────────────────────────────────
-function calcSizing(premium, accountSize = 7000) {
-  if (!premium || premium <= 0) return null;
-  const maxLoss         = accountSize * 0.02;
-  const costPerContract = premium * 100;
-  const contracts       = premium <= 1.20 ? 2 : 1;
-  const stopPrice       = parseFloat((premium * 0.50).toFixed(2));
-  const t1Price         = parseFloat((premium * 1.50).toFixed(2));
-  const t2Price         = parseFloat((premium * 2.00).toFixed(2));
-  const stopLoss        = parseFloat((costPerContract * 0.50 * contracts).toFixed(0));
-  const t1Profit        = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
-  const riskPct         = parseFloat((stopLoss / accountSize * 100).toFixed(1));
-
-  if (stopLoss > maxLoss) return null;
-
-  return { contracts, premium, costPerContract, stopPrice, t1Price, t2Price, stopLoss, t1Profit, riskPct };
-}
-
 // ── BUILD STRAT ALERT CARD ────────────────────────────────────────
 function buildStratCard(opraSymbol, tvData = {}) {
   const parsed = resolver.parseOPRA(opraSymbol);
   if (!parsed) return null;
 
   const { ticker, expiry, type, strike } = parsed;
-  const dte       = calcDTE(expiry);
+  const dte       = tvData.dte ?? calcDTE(expiry);
   const direction = type === 'put' ? '🔴 BEARISH' : '🟢 BULLISH';
   const typeLabel = type === 'put' ? 'P' : 'C';
   const expiryFmt = expiry.slice(5).replace('-', '/');
   const dteLabel  = dte === 0 ? '0DTE' : dte === 1 ? '1DTE' : `${dte}DTE`;
 
-  // Use mid price passed from resolveContract via tvData
-  const premium = tvData.mid || null;
-  const sizing  = premium ? calcSizing(premium) : null;
+  const mode      = tvData.mode || 'SWING';
+  const premium   = tvData.mid  || null;
+  const sizing    = premium ? resolver.calculatePositionSize(premium, mode) : null;
+  const s         = sizing?.viable ? sizing : null;
+
+  const modeConfig = resolver.MODES?.[mode] || {};
+  const modeLabel  = mode === 'DAY' ? '⚡ DAY TRADE' : '📈 SWING TRADE';
 
   const confluence = tvData.confluence || '';
   const tfLine = [
@@ -113,27 +100,26 @@ function buildStratCard(opraSymbol, tvData = {}) {
     tvData.h1     ? `H1:${tvData.h1}`         : null,
   ].filter(Boolean).join('  ');
 
-  const livePrice = tvData.stockPrice || null;
-
   const lines = [
-    `📊 STRAT SIGNAL — ${dteLabel}`,
+    `${modeLabel} — ${dteLabel}`,
     `${ticker} $${strike}${typeLabel} ${expiryFmt} — ${direction}`,
-    livePrice ? `Stock   $${livePrice} LIVE` : null,
     `═══════════════════════════════`,
     confluence ? `Confluence  ${confluence}` : null,
     tfLine     ? `Bias    ${tfLine}` : null,
     `───────────────────────────────`,
     `Strike  $${strike} — ATM via Public.com`,
     `Expiry  ${expiryFmt} (${dteLabel})`,
-    sizing ? `Bid/Ask $${tvData.bid?.toFixed(2) || '—'} / $${tvData.ask?.toFixed(2) || '—'}` : null,
+    tvData.bid && tvData.ask ? `Bid/Ask $${parseFloat(tvData.bid).toFixed(2)} / $${parseFloat(tvData.ask).toFixed(2)}` : null,
     `───────────────────────────────`,
-    sizing ? `Entry   $${sizing.premium.toFixed(2)} x${sizing.contracts} = $${(sizing.costPerContract * sizing.contracts).toFixed(0)}` : '⚠️  Check live premium before entry',
-    sizing ? `Stop    $${sizing.stopPrice} (loss -$${sizing.stopLoss})` : `Stop    50% of premium`,
-    sizing ? `T1      $${sizing.t1Price} (profit +$${sizing.t1Profit})` : `T1      +50% of premium`,
-    sizing ? `T2      $${sizing.t2Price} (runner)` : `T2      +100% of premium`,
-    sizing ? `Risk    ${sizing.riskPct}% of $7K = $${sizing.stopLoss} max` : `Risk    2% of $7K = $140 max`,
+    s ? `Entry   $${s.premium.toFixed(2)} x${s.contracts} = $${s.totalCost}` : '⚠️  Check live premium before entry',
+    s ? `Stop    $${s.stopPrice} (loss -$${s.stopLoss})` : `Stop    40% of premium`,
+    s ? `T1      $${s.t1Price} (profit +$${s.t1Profit})` : `T1      +60% of premium`,
+    s ? `T2      $${s.t2Price} (runner)` : `T2      +120% of premium`,
+    s ? `Risk    ${s.riskPct}% of $7K = $${s.stopLoss} max` : `Risk    2% of $7K max`,
     `───────────────────────────────`,
-    `⏰ 9:30AM–4PM ET`,
+    mode === 'DAY'   ? `Hold    Exit by 3:45PM ET same day` : `Hold    1–3 days max`,
+    mode === 'DAY'   ? `Window  10AM–11:30AM | 3PM–3:45PM` : `Window  9:30AM–4PM ET`,
+    `⏰ ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} ET`,
   ].filter(l => l !== null);
 
   return lines.join('\n');
@@ -160,7 +146,7 @@ async function sendStratAlert(opraSymbol, tvData = {}) {
     recentStratTickers.set(key, Date.now());
     setTimeout(() => recentStratTickers.delete(key), 30 * 60 * 1000);
     if (recentFlowTickers.has(key)) {
-      await sendToChannel('conviction', card.replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE'));
+      await sendToChannel('conviction', card.replace('📈 SWING TRADE', '👑 CONVICTION TRADE').replace('⚡ DAY TRADE', '👑 CONVICTION TRADE'));
       console.log(`[CONVICTION] Both signals on ${parsed.ticker} ✅`);
     }
   }
@@ -204,13 +190,19 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
   if (flowConviction.isHighConviction) {
     const calCheck = await calendar.shouldBlockAlert();
     if (!calCheck.block) {
-      const resolved = await resolver.resolveContract(parsed.ticker, parsed.type);
+      const resolved = await resolver.resolveContract(parsed.ticker, parsed.type, 'SWING');
       if (resolved) {
-        const card = buildStratCard(resolved.symbol, { mid: resolved.mid, bid: resolved.bid, ask: resolved.ask });
+        const card = buildStratCard(resolved.symbol, {
+          mid:    resolved.mid,
+          bid:    resolved.bid,
+          ask:    resolved.ask,
+          mode:   resolved.mode,
+          dte:    resolved.dte,
+        });
         if (card) {
-          await sendToChannel('flow', card.replace('📊 STRAT SIGNAL', '🌊 FLOW — HIGH CONVICTION'));
+          await sendToChannel('flow', card.replace('📈 SWING TRADE', '🌊 FLOW — HIGH CONVICTION').replace('⚡ DAY TRADE', '🌊 FLOW — HIGH CONVICTION'));
           if (recentStratTickers.has(key)) {
-            await sendToChannel('conviction', card.replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE'));
+            await sendToChannel('conviction', card.replace('📈 SWING TRADE', '👑 CONVICTION TRADE').replace('⚡ DAY TRADE', '👑 CONVICTION TRADE'));
           }
         }
       }
@@ -240,8 +232,8 @@ async function sendMorningBrief() {
     : parseFloat(uvxyPrice) >= 20 ? '⚠️ ELEVATED — be careful'
     : '✅ NORMAL'
     : '';
-  const vixLine  = uvxyPrice ? `UVXY $${uvxyPrice} ${vixLevel}` : 'VIX  — unavailable';
-  const spyBias  = spyPrice ? '➡️  Wait for 9:30AM open direction' : '➡️  Unavailable pre-market';
+  const vixLine = uvxyPrice ? `UVXY $${uvxyPrice} ${vixLevel}` : 'VIX  — unavailable';
+  const spyBias = spyPrice ? '➡️  Wait for 9:30AM open direction' : '➡️  Unavailable pre-market';
 
   const lines = [
     `📊 STRATUM MORNING BRIEF`,
@@ -252,14 +244,16 @@ async function sendMorningBrief() {
     `───────────────────────────────`,
     `😨 ${vixLine}`,
     `───────────────────────────────`,
-    `💰 Max premium $5.00  |  Max loss $140`,
-    `📏 ≤$1.20 = 2 contracts  |  >$1.20 = 1`,
-    `⏰ 9:30AM–4PM ET`,
+    `⚡ DAY TRADE   0-1DTE  $0.30–$1.50  risk $120`,
+    `📈 SWING TRADE 5-7DTE  $0.50–$3.00  risk $140`,
     `───────────────────────────────`,
     `🎯 Only 5/6+ confluence fires alerts`,
     `📊 #strat-alerts      — Chart setups`,
     `🌊 #flow-alerts       — Unusual flow`,
     `👑 #conviction-trades — Execute`,
+    `───────────────────────────────`,
+    `⏰ DAY window:   10AM–11:30AM | 3PM–3:45PM`,
+    `⏰ SWING window: 9:30AM–4PM ET`,
   ];
 
   await sendToChannel('strat', lines.join('\n'));
@@ -272,4 +266,5 @@ async function sendSystemMessage(msg) {
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
+
 
