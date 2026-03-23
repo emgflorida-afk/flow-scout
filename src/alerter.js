@@ -1,6 +1,6 @@
 // alerter.js — Stratum Flow Scout v5.8
-// FIXED: Live premium from Public.com chain — no Polygon dependency
-// 3 Discord channels — strat, flow, conviction
+// FIXED: Live premium from resolveContract mid price
+// Shows exact Entry, Stop, T1, T2 dollar amounts
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
@@ -73,23 +73,24 @@ const recentStratTickers = new Map();
 
 // ── POSITION SIZING ───────────────────────────────────────────────
 function calcSizing(premium, accountSize = 7000) {
-  const maxLoss = accountSize * 0.02;
   if (!premium || premium <= 0) return null;
-
-  const contracts      = premium <= 1.20 ? 2 : 1;
+  const maxLoss         = accountSize * 0.02;
   const costPerContract = premium * 100;
-  const stopPrice      = parseFloat((premium * 0.50).toFixed(2));
-  const t1Price        = parseFloat((premium * 1.50).toFixed(2));
-  const t2Price        = parseFloat((premium * 2.00).toFixed(2));
-  const stopLoss       = parseFloat((costPerContract * 0.50 * contracts).toFixed(0));
-  const t1Profit       = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
-  const riskPct        = parseFloat((stopLoss / accountSize * 100).toFixed(1));
+  const contracts       = premium <= 1.20 ? 2 : 1;
+  const stopPrice       = parseFloat((premium * 0.50).toFixed(2));
+  const t1Price         = parseFloat((premium * 1.50).toFixed(2));
+  const t2Price         = parseFloat((premium * 2.00).toFixed(2));
+  const stopLoss        = parseFloat((costPerContract * 0.50 * contracts).toFixed(0));
+  const t1Profit        = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
+  const riskPct         = parseFloat((stopLoss / accountSize * 100).toFixed(1));
 
-  return { contracts, premium, costPerContract, stopPrice, t1Price, t2Price, stopLoss, t1Profit, riskPct, maxLoss };
+  if (stopLoss > maxLoss) return null;
+
+  return { contracts, premium, costPerContract, stopPrice, t1Price, t2Price, stopLoss, t1Profit, riskPct };
 }
 
 // ── BUILD STRAT ALERT CARD ────────────────────────────────────────
-function buildStratCard(opraSymbol, tvData = {}, pubContract = null) {
+function buildStratCard(opraSymbol, tvData = {}) {
   const parsed = resolver.parseOPRA(opraSymbol);
   if (!parsed) return null;
 
@@ -100,9 +101,9 @@ function buildStratCard(opraSymbol, tvData = {}, pubContract = null) {
   const expiryFmt = expiry.slice(5).replace('-', '/');
   const dteLabel  = dte === 0 ? '0DTE' : dte === 1 ? '1DTE' : `${dte}DTE`;
 
-  // Use Public.com mid price if available
-  const premium   = pubContract?.mid || null;
-  const sizing    = premium ? calcSizing(premium) : null;
+  // Use mid price passed from resolveContract via tvData
+  const premium = tvData.mid || null;
+  const sizing  = premium ? calcSizing(premium) : null;
 
   const confluence = tvData.confluence || '';
   const tfLine = [
@@ -112,7 +113,7 @@ function buildStratCard(opraSymbol, tvData = {}, pubContract = null) {
     tvData.h1     ? `H1:${tvData.h1}`         : null,
   ].filter(Boolean).join('  ');
 
-  const livePrice = pubContract?.stockPrice || null;
+  const livePrice = tvData.stockPrice || null;
 
   const lines = [
     `📊 STRAT SIGNAL — ${dteLabel}`,
@@ -124,6 +125,7 @@ function buildStratCard(opraSymbol, tvData = {}, pubContract = null) {
     `───────────────────────────────`,
     `Strike  $${strike} — ATM via Public.com`,
     `Expiry  ${expiryFmt} (${dteLabel})`,
+    sizing ? `Bid/Ask $${tvData.bid?.toFixed(2) || '—'} / $${tvData.ask?.toFixed(2) || '—'}` : null,
     `───────────────────────────────`,
     sizing ? `Entry   $${sizing.premium.toFixed(2)} x${sizing.contracts} = $${(sizing.costPerContract * sizing.contracts).toFixed(0)}` : '⚠️  Check live premium before entry',
     sizing ? `Stop    $${sizing.stopPrice} (loss -$${sizing.stopLoss})` : `Stop    50% of premium`,
@@ -138,7 +140,7 @@ function buildStratCard(opraSymbol, tvData = {}, pubContract = null) {
 }
 
 // ── STRAT ALERT → #strat-alerts ──────────────────────────────────
-async function sendStratAlert(opraSymbol, tvData = {}, pubContract = null) {
+async function sendStratAlert(opraSymbol, tvData = {}) {
   console.log('[STRAT] Processing:', opraSymbol);
 
   const calCheck = await calendar.shouldBlockAlert();
@@ -147,7 +149,7 @@ async function sendStratAlert(opraSymbol, tvData = {}, pubContract = null) {
     return false;
   }
 
-  const card = buildStratCard(opraSymbol, tvData, pubContract);
+  const card = buildStratCard(opraSymbol, tvData);
   if (!card) { console.log('[STRAT] Could not build card'); return false; }
 
   await sendToChannel('strat', card);
@@ -157,7 +159,6 @@ async function sendStratAlert(opraSymbol, tvData = {}, pubContract = null) {
     const key = `${parsed.ticker}:${parsed.type}`;
     recentStratTickers.set(key, Date.now());
     setTimeout(() => recentStratTickers.delete(key), 30 * 60 * 1000);
-
     if (recentFlowTickers.has(key)) {
       await sendToChannel('conviction', card.replace('📊 STRAT SIGNAL', '👑 CONVICTION TRADE'));
       console.log(`[CONVICTION] Both signals on ${parsed.ticker} ✅`);
@@ -203,9 +204,9 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
   if (flowConviction.isHighConviction) {
     const calCheck = await calendar.shouldBlockAlert();
     if (!calCheck.block) {
-      const resolvedOpra = await resolver.resolveContract(parsed.ticker, parsed.type);
-      if (resolvedOpra) {
-        const card = buildStratCard(resolvedOpra, {}, null);
+      const resolved = await resolver.resolveContract(parsed.ticker, parsed.type);
+      if (resolved) {
+        const card = buildStratCard(resolved.symbol, { mid: resolved.mid, bid: resolved.bid, ask: resolved.ask });
         if (card) {
           await sendToChannel('flow', card.replace('📊 STRAT SIGNAL', '🌊 FLOW — HIGH CONVICTION'));
           if (recentStratTickers.has(key)) {
@@ -221,7 +222,7 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
 
 // ── MAIN WRAPPER ──────────────────────────────────────────────────
 async function sendTradeAlert(opraSymbol, tvData = {}, flowData = {}, isStratSignal = false) {
-  if (isStratSignal) return sendStratAlert(opraSymbol, tvData, flowData?.pubContract || null);
+  if (isStratSignal) return sendStratAlert(opraSymbol, tvData);
   return sendFlowAlert(opraSymbol, flowData);
 }
 
@@ -240,8 +241,7 @@ async function sendMorningBrief() {
     : '✅ NORMAL'
     : '';
   const vixLine  = uvxyPrice ? `UVXY $${uvxyPrice} ${vixLevel}` : 'VIX  — unavailable';
-
-  const spyBias = spyPrice ? '➡️  Wait for 9:30AM open direction' : '➡️  Unavailable pre-market';
+  const spyBias  = spyPrice ? '➡️  Wait for 9:30AM open direction' : '➡️  Unavailable pre-market';
 
   const lines = [
     `📊 STRATUM MORNING BRIEF`,
@@ -272,3 +272,22 @@ async function sendSystemMessage(msg) {
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
+```
+
+---
+
+## 📋 3 Steps
+
+**①** GitHub → `src/contractResolver.js` → select all → paste → **Commit**
+
+**②** GitHub → `src/server.js` → select all → paste → **Commit**
+
+**③** GitHub → `src/alerter.js` → select all → paste → **Commit**
+
+Next alert will show exact dollar figures:
+```
+Entry   $0.83 x2 = $166
+Stop    $0.42 (loss -$84)
+T1      $1.25 (profit +$84)
+T2      $1.66 (runner)
+Risk    1.2% of $7K
