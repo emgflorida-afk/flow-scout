@@ -39,8 +39,11 @@ app.get('/flow/summary', (req, res) => {
 // GET /dashboard       — serves the HTML UI
 // GET /dashboard/data  — returns JSON market scoring data
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard.html'));
+  res.sendFile(path.join(__dirname, 'dashboard.html'), err => {
+    if (err) res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
+  });
 });
+
 
 app.get('/dashboard/data', async (req, res) => {
   try {
