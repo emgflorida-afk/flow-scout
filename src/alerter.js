@@ -1,15 +1,12 @@
-// alerter.js — Stratum Flow Scout v5.8
-// TWO MODE SYSTEM: DAY and SWING
-// Shows exact Entry, Stop, T1, T2 dollar amounts
-// Mode-aware sizing from contractResolver
+// alerter.js — Stratum Flow Scout v5.9
+// THREE MODE SYSTEM: DAY / SWING / SPREAD
+// Spread card shows both legs, debit, max profit, max loss, breakeven
 // ─────────────────────────────────────────────────────────────────
 
 const fetch      = require('node-fetch');
 const resolver   = require('./contractResolver');
 const calendar   = require('./economicCalendar');
-const classifier = require('./tradeClassifier');
 
-// ── DISCORD CHANNELS ──────────────────────────────────────────────
 const WEBHOOKS = {
   strat:      process.env.DISCORD_WEBHOOK_URL,
   flow:       process.env.DISCORD_FLOW_WEBHOOK_URL,
@@ -68,11 +65,65 @@ function scoreFlow(flowData = {}) {
   return { score, flags, label, isHighConviction: score >= 4 };
 }
 
-// ── CONVICTION TRACKING ───────────────────────────────────────────
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
-// ── BUILD STRAT ALERT CARD ────────────────────────────────────────
+// ── BUILD SPREAD CARD ─────────────────────────────────────────────
+function buildSpreadCard(resolved, tvData = {}) {
+  const parsed    = resolver.parseOPRA(resolved.symbol);
+  if (!parsed) return null;
+
+  const { ticker, expiry, type } = parsed;
+  const dte       = resolved.dte ?? calcDTE(expiry);
+  const dteLabel  = `${dte}DTE`;
+  const expiryFmt = expiry.slice(5).replace('-', '/');
+  const direction = type === 'put' ? '🔴 BEARISH' : '🟢 BULLISH';
+  const typeLabel = type === 'put' ? 'P' : 'C';
+
+  const debit     = resolved.debit;
+  const maxProfit = resolved.maxProfit;
+  const breakeven = resolved.breakeven;
+  const width     = resolved.spreadWidth;
+
+  const sizing    = resolver.calculatePositionSize(debit, 'SPREAD', 7000, resolved);
+  const s         = sizing?.viable ? sizing : null;
+
+  const confluence = tvData.confluence || '';
+  const tfLine = [
+    tvData.weekly ? `WEEKLY:${tvData.weekly}` : null,
+    tvData.daily  ? `DAILY:${tvData.daily}`   : null,
+    tvData.h4     ? `H4:${tvData.h4}`         : null,
+  ].filter(Boolean).join('  ');
+
+  const lines = [
+    `📊 SPREAD TRADE — ${dteLabel}`,
+    `${ticker} $${resolved.strike}/$${resolved.sellStrike}${typeLabel} ${expiryFmt} — ${direction}`,
+    `═══════════════════════════════`,
+    confluence ? `Confluence  ${confluence}` : null,
+    tfLine     ? `Bias    ${tfLine}` : null,
+    `───────────────────────────────`,
+    `BUY     ${ticker} $${resolved.strike}${typeLabel} ${expiryFmt}`,
+    `SELL    ${ticker} $${resolved.sellStrike}${typeLabel} ${expiryFmt}`,
+    `Width   $${width} spread`,
+    `───────────────────────────────`,
+    s ? `Debit   $${debit.toFixed(2)} x${s.contracts} = $${s.totalCost}` : `Debit   $${debit?.toFixed(2) || '—'}`,
+    s ? `Max Loss    $${s.maxLoss} (debit paid)` : `Max Loss    $${(debit * 100).toFixed(0)}`,
+    s ? `Max Profit  $${s.maxGain} ($${width} - debit)` : `Max Profit  $${(maxProfit * 100).toFixed(0)}`,
+    `Breakeven   $${breakeven}`,
+    `───────────────────────────────`,
+    s ? `Stop    $${s.stopPrice} (50% of debit)` : `Stop    50% of debit`,
+    s ? `T1      $${s.t1Price} (100% gain)` : `T1      +100% of debit`,
+    s ? `Risk    ${s.riskPct}% of $7K = $${s.maxLoss}` : `Risk    defined`,
+    `───────────────────────────────`,
+    `Hold    1–3 days max`,
+    `Window  9:30AM–4PM ET`,
+    `⏰ ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} ET`,
+  ].filter(l => l !== null);
+
+  return lines.join('\n');
+}
+
+// ── BUILD STRAT CARD ──────────────────────────────────────────────
 function buildStratCard(opraSymbol, tvData = {}) {
   const parsed = resolver.parseOPRA(opraSymbol);
   if (!parsed) return null;
@@ -89,8 +140,7 @@ function buildStratCard(opraSymbol, tvData = {}) {
   const sizing    = premium ? resolver.calculatePositionSize(premium, mode) : null;
   const s         = sizing?.viable ? sizing : null;
 
-  const modeConfig = resolver.MODES?.[mode] || {};
-  const modeLabel  = mode === 'DAY' ? '⚡ DAY TRADE' : '📈 SWING TRADE';
+  const modeLabel = mode === 'DAY' ? '⚡ DAY TRADE' : '📈 SWING TRADE';
 
   const confluence = tvData.confluence || '';
   const tfLine = [
@@ -117,16 +167,16 @@ function buildStratCard(opraSymbol, tvData = {}) {
     s ? `T2      $${s.t2Price} (runner)` : `T2      +120% of premium`,
     s ? `Risk    ${s.riskPct}% of $7K = $${s.stopLoss} max` : `Risk    2% of $7K max`,
     `───────────────────────────────`,
-    mode === 'DAY'   ? `Hold    Exit by 3:45PM ET same day` : `Hold    1–3 days max`,
-    mode === 'DAY'   ? `Window  10AM–11:30AM | 3PM–3:45PM` : `Window  9:30AM–4PM ET`,
+    mode === 'DAY' ? `Hold    Exit by 3:45PM ET same day` : `Hold    1–3 days max`,
+    mode === 'DAY' ? `Window  10AM–11:30AM | 3PM–3:45PM` : `Window  9:30AM–4PM ET`,
     `⏰ ${new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' })} ET`,
   ].filter(l => l !== null);
 
   return lines.join('\n');
 }
 
-// ── STRAT ALERT → #strat-alerts ──────────────────────────────────
-async function sendStratAlert(opraSymbol, tvData = {}) {
+// ── STRAT ALERT ───────────────────────────────────────────────────
+async function sendStratAlert(opraSymbol, tvData = {}, resolved = null) {
   console.log('[STRAT] Processing:', opraSymbol);
 
   const calCheck = await calendar.shouldBlockAlert();
@@ -135,9 +185,15 @@ async function sendStratAlert(opraSymbol, tvData = {}) {
     return false;
   }
 
-  const card = buildStratCard(opraSymbol, tvData);
-  if (!card) { console.log('[STRAT] Could not build card'); return false; }
+  // Use spread card if mode is SPREAD
+  let card;
+  if (tvData.mode === 'SPREAD' && resolved?.debit) {
+    card = buildSpreadCard(resolved, tvData);
+  } else {
+    card = buildStratCard(opraSymbol, tvData);
+  }
 
+  if (!card) { console.log('[STRAT] Could not build card'); return false; }
   await sendToChannel('strat', card);
 
   const parsed = resolver.parseOPRA(opraSymbol);
@@ -146,15 +202,18 @@ async function sendStratAlert(opraSymbol, tvData = {}) {
     recentStratTickers.set(key, Date.now());
     setTimeout(() => recentStratTickers.delete(key), 30 * 60 * 1000);
     if (recentFlowTickers.has(key)) {
-      await sendToChannel('conviction', card.replace('📈 SWING TRADE', '👑 CONVICTION TRADE').replace('⚡ DAY TRADE', '👑 CONVICTION TRADE'));
+      await sendToChannel('conviction', card
+        .replace('📊 SPREAD TRADE', '👑 CONVICTION SPREAD')
+        .replace('📈 SWING TRADE',  '👑 CONVICTION TRADE')
+        .replace('⚡ DAY TRADE',    '👑 CONVICTION TRADE')
+      );
       console.log(`[CONVICTION] Both signals on ${parsed.ticker} ✅`);
     }
   }
-
   return true;
 }
 
-// ── FLOW ALERT → #flow-alerts ─────────────────────────────────────
+// ── FLOW ALERT ────────────────────────────────────────────────────
 async function sendFlowAlert(opraSymbol, flowData = {}) {
   console.log('[FLOW] Processing:', opraSymbol);
 
@@ -192,29 +251,24 @@ async function sendFlowAlert(opraSymbol, flowData = {}) {
     if (!calCheck.block) {
       const resolved = await resolver.resolveContract(parsed.ticker, parsed.type, 'SWING');
       if (resolved) {
-        const card = buildStratCard(resolved.symbol, {
-          mid:    resolved.mid,
-          bid:    resolved.bid,
-          ask:    resolved.ask,
-          mode:   resolved.mode,
-          dte:    resolved.dte,
-        });
+        const card = resolved.mode === 'SPREAD' && resolved.debit
+          ? buildSpreadCard(resolved, {})
+          : buildStratCard(resolved.symbol, { mid: resolved.mid, bid: resolved.bid, ask: resolved.ask, mode: resolved.mode, dte: resolved.dte });
         if (card) {
-          await sendToChannel('flow', card.replace('📈 SWING TRADE', '🌊 FLOW — HIGH CONVICTION').replace('⚡ DAY TRADE', '🌊 FLOW — HIGH CONVICTION'));
+          await sendToChannel('flow', card.replace('📈 SWING TRADE', '🌊 FLOW — HIGH CONVICTION'));
           if (recentStratTickers.has(key)) {
-            await sendToChannel('conviction', card.replace('📈 SWING TRADE', '👑 CONVICTION TRADE').replace('⚡ DAY TRADE', '👑 CONVICTION TRADE'));
+            await sendToChannel('conviction', card.replace('📈 SWING TRADE', '👑 CONVICTION TRADE'));
           }
         }
       }
     }
   }
-
   return true;
 }
 
 // ── MAIN WRAPPER ──────────────────────────────────────────────────
-async function sendTradeAlert(opraSymbol, tvData = {}, flowData = {}, isStratSignal = false) {
-  if (isStratSignal) return sendStratAlert(opraSymbol, tvData);
+async function sendTradeAlert(opraSymbol, tvData = {}, flowData = {}, isStratSignal = false, resolved = null) {
+  if (isStratSignal) return sendStratAlert(opraSymbol, tvData, resolved);
   return sendFlowAlert(opraSymbol, flowData);
 }
 
@@ -233,27 +287,28 @@ async function sendMorningBrief() {
     : '✅ NORMAL'
     : '';
   const vixLine = uvxyPrice ? `UVXY $${uvxyPrice} ${vixLevel}` : 'VIX  — unavailable';
-  const spyBias = spyPrice ? '➡️  Wait for 9:30AM open direction' : '➡️  Unavailable pre-market';
 
   const lines = [
     `📊 STRATUM MORNING BRIEF`,
     `${dateStr}`,
     `═══════════════════════════════`,
     `📈 ${spyLine}`,
-    `   ${spyBias}`,
+    `   ➡️  Wait for 9:30AM open direction`,
     `───────────────────────────────`,
     `😨 ${vixLine}`,
     `───────────────────────────────`,
-    `⚡ DAY TRADE   0-1DTE  $0.30–$1.50  risk $120`,
-    `📈 SWING TRADE 5-7DTE  $0.50–$3.00  risk $140`,
+    `⚡ DAY    0-1DTE  $0.30–$1.50  risk $120`,
+    `📈 SWING  5-7DTE  $0.50–$3.00  risk $140`,
+    `📊 SPREAD 5-7DTE  $0.50–$1.50  risk $150`,
     `───────────────────────────────`,
     `🎯 Only 5/6+ confluence fires alerts`,
     `📊 #strat-alerts      — Chart setups`,
     `🌊 #flow-alerts       — Unusual flow`,
     `👑 #conviction-trades — Execute`,
     `───────────────────────────────`,
-    `⏰ DAY window:   10AM–11:30AM | 3PM–3:45PM`,
-    `⏰ SWING window: 9:30AM–4PM ET`,
+    `⏰ DAY:    10AM–11:30AM | 3PM–3:45PM`,
+    `⏰ SWING:  9:30AM–4PM ET`,
+    `⏰ SPREAD: 9:30AM–4PM ET`,
   ];
 
   await sendToChannel('strat', lines.join('\n'));
