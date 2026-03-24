@@ -1,0 +1,769 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STRATUM — Should I Be Trading?</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600;700&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap');
+
+  :root {
+    --bg:        #0a0a0a;
+    --bg2:       #111111;
+    --bg3:       #161616;
+    --border:    #222222;
+    --border2:   #2a2a2a;
+    --green:     #00cc66;
+    --green-dim: #004422;
+    --amber:     #ffaa00;
+    --amber-dim: #332200;
+    --red:       #ff3333;
+    --red-dim:   #330000;
+    --text:      #e0e0e0;
+    --text-dim:  #666666;
+    --text-mid:  #999999;
+    --cyan:      #00aaff;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── SCANLINE EFFECT ── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.03) 2px,
+      rgba(0,0,0,0.03) 4px
+    );
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  /* ── HEADER ── */
+  .header {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border2);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .logo {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--amber);
+    text-transform: uppercase;
+  }
+
+  .logo span {
+    color: var(--text-dim);
+    font-weight: 300;
+  }
+
+  .header-time {
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  /* ── MODE TOGGLE ── */
+  .mode-toggle {
+    display: flex;
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .mode-btn {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    padding: 5px 14px;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  .mode-btn.active {
+    background: var(--amber);
+    color: #000;
+  }
+
+  .mode-btn:not(.active):hover {
+    background: var(--border);
+    color: var(--text);
+  }
+
+  .refresh-btn {
+    background: none;
+    border: 1px solid var(--border2);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    padding: 5px 10px;
+    cursor: pointer;
+    border-radius: 2px;
+    transition: all 0.15s;
+    text-transform: uppercase;
+  }
+
+  .refresh-btn:hover { border-color: var(--amber); color: var(--amber); }
+
+  /* ── COUNTDOWN ── */
+  .countdown {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    min-width: 60px;
+    text-align: right;
+  }
+
+  .countdown.urgent { color: var(--amber); }
+
+  /* ── MAIN LAYOUT ── */
+  .main {
+    padding: 16px 20px;
+    display: grid;
+    grid-template-columns: 280px 1fr;
+    grid-template-rows: auto auto;
+    gap: 12px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* ── VERDICT PANEL ── */
+  .verdict-panel {
+    grid-column: 1;
+    grid-row: 1 / 3;
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .verdict-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+  }
+
+  .verdict-question {
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 300;
+    color: var(--text-mid);
+    letter-spacing: 0.02em;
+  }
+
+  .verdict-main {
+    text-align: center;
+    padding: 24px 0;
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .verdict-emoji {
+    font-size: 36px;
+    display: block;
+    margin-bottom: 10px;
+    filter: drop-shadow(0 0 20px currentColor);
+  }
+
+  .verdict-word {
+    font-size: 42px;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    display: block;
+    line-height: 1;
+  }
+
+  .verdict-word.yes    { color: var(--green); text-shadow: 0 0 30px rgba(0,204,102,0.4); }
+  .verdict-word.caution { color: var(--amber); text-shadow: 0 0 30px rgba(255,170,0,0.4); }
+  .verdict-word.no     { color: var(--red);   text-shadow: 0 0 30px rgba(255,51,51,0.4); }
+
+  .verdict-score {
+    margin-top: 12px;
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  .score-bar {
+    margin-top: 8px;
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .score-fill {
+    height: 100%;
+    border-radius: 2px;
+    transition: width 0.8s ease;
+  }
+
+  .score-fill.yes    { background: var(--green); }
+  .score-fill.caution { background: var(--amber); }
+  .score-fill.no     { background: var(--red); }
+
+  /* ── AI SUMMARY ── */
+  .ai-summary {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--amber);
+    border-radius: 2px;
+    padding: 12px;
+  }
+
+  .ai-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: var(--amber);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .ai-text {
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 300;
+    color: var(--text-mid);
+    line-height: 1.6;
+  }
+
+  /* ── MODE LABEL ── */
+  .mode-label {
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.1em;
+  }
+
+  .mode-label span {
+    color: var(--amber);
+    font-weight: 600;
+  }
+
+  /* ── RIGHT COLUMN ── */
+  .right-col {
+    grid-column: 2;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  /* ── MARKET ROW ── */
+  .market-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .market-tile {
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    padding: 12px;
+  }
+
+  .market-ticker {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    margin-bottom: 4px;
+  }
+
+  .market-price {
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .market-change {
+    font-size: 11px;
+    font-weight: 500;
+    margin-top: 4px;
+    letter-spacing: 0.03em;
+  }
+
+  .market-change.up   { color: var(--green); }
+  .market-change.down { color: var(--red); }
+  .market-change.flat { color: var(--text-dim); }
+
+  .market-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    margin-top: 2px;
+    letter-spacing: 0.05em;
+  }
+
+  /* ── SCORES GRID ── */
+  .scores-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+  }
+
+  .score-card {
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    padding: 12px 10px;
+  }
+
+  .score-card-label {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .score-card-value {
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .score-card-name {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    margin-bottom: 6px;
+  }
+
+  .score-card-detail {
+    font-size: 10px;
+    color: var(--text-dim);
+    line-height: 1.4;
+  }
+
+  .score-mini-bar {
+    height: 2px;
+    background: var(--border);
+    border-radius: 1px;
+    margin-bottom: 8px;
+    overflow: hidden;
+  }
+
+  .score-mini-fill {
+    height: 100%;
+    border-radius: 1px;
+    transition: width 0.6s ease;
+  }
+
+  .weight-label {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+  }
+
+  /* ── SECTORS ── */
+  .sectors-panel {
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: 2px;
+    padding: 12px;
+  }
+
+  .panel-title {
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sectors-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+  }
+
+  .sector-tile {
+    text-align: center;
+    padding: 8px 4px;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    transition: border-color 0.2s;
+  }
+
+  .sector-tile.up   { border-color: var(--green-dim); background: rgba(0,204,102,0.05); }
+  .sector-tile.down { border-color: var(--red-dim);   background: rgba(255,51,51,0.05); }
+
+  .sector-name {
+    font-size: 9px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    margin-bottom: 4px;
+  }
+
+  .sector-change {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .sector-change.up   { color: var(--green); }
+  .sector-change.down { color: var(--red); }
+  .sector-change.flat { color: var(--text-dim); }
+
+  /* ── COLOR HELPERS ── */
+  .c-green  { color: var(--green); }
+  .c-amber  { color: var(--amber); }
+  .c-red    { color: var(--red); }
+  .c-dim    { color: var(--text-dim); }
+  .c-cyan   { color: var(--cyan); }
+
+  /* ── STATUS BAR ── */
+  .status-bar {
+    background: var(--bg2);
+    border-top: 1px solid var(--border);
+    padding: 6px 20px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.05em;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+  }
+
+  .status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 4px;
+  }
+
+  .status-dot.green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .status-dot.amber { background: var(--amber); }
+  .status-dot.red   { background: var(--red); }
+
+  /* ── LOADING ── */
+  .loading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 200px;
+    color: var(--text-dim);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .blink {
+    animation: blink 1s step-end infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+
+  /* ── PULSE ON UPDATE ── */
+  .pulse {
+    animation: pulse 0.4s ease-out;
+  }
+
+  @keyframes pulse {
+    0%   { opacity: 0.5; }
+    100% { opacity: 1; }
+  }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; }
+    .verdict-panel { grid-column: 1; grid-row: auto; }
+    .right-col { grid-column: 1; }
+    .scores-grid { grid-template-columns: repeat(3, 1fr); }
+    .market-row  { grid-template-columns: repeat(2, 1fr); }
+    .sectors-grid { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  pb { padding-bottom: 16px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-left">
+    <div class="logo">STRATUM <span>// FLOW SCOUT</span></div>
+    <div class="header-time" id="clock">--:-- -- ET</div>
+  </div>
+  <div class="header-right">
+    <div class="mode-toggle">
+      <button class="mode-btn active" id="btn-day"   onclick="setMode('DAY')">DAY</button>
+      <button class="mode-btn"        id="btn-swing" onclick="setMode('SWING')">SWING</button>
+    </div>
+    <button class="refresh-btn" onclick="fetchData()">↺ REFRESH</button>
+    <div class="countdown" id="countdown">45s</div>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div class="main" id="main-content">
+  <div class="loading">LOADING MARKET DATA<span class="blink">_</span></div>
+</div>
+
+<!-- STATUS BAR -->
+<div class="status-bar">
+  <span><span class="status-dot green" id="status-dot"></span><span id="status-text">CONNECTING</span></span>
+  <span id="last-update">—</span>
+  <span id="data-source">—</span>
+</div>
+
+<script>
+  let currentMode = 'DAY';
+  let countdown   = 45;
+  let countdownTimer;
+  let lastData    = null;
+
+  // ── CLOCK ──
+  function updateClock() {
+    const now = new Date();
+    const et  = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: true
+    }).format(now);
+    document.getElementById('clock').textContent = et + ' ET';
+  }
+  setInterval(updateClock, 1000);
+  updateClock();
+
+  // ── MODE TOGGLE ──
+  function setMode(mode) {
+    currentMode = mode;
+    document.getElementById('btn-day').classList.toggle('active',   mode === 'DAY');
+    document.getElementById('btn-swing').classList.toggle('active', mode === 'SWING');
+    fetchData();
+  }
+
+  // ── COUNTDOWN ──
+  function startCountdown() {
+    clearInterval(countdownTimer);
+    countdown = 45;
+    countdownTimer = setInterval(() => {
+      countdown--;
+      const el = document.getElementById('countdown');
+      el.textContent = countdown + 's';
+      el.classList.toggle('urgent', countdown <= 10);
+      if (countdown <= 0) fetchData();
+    }, 1000);
+  }
+
+  // ── FETCH DATA ──
+  async function fetchData() {
+    try {
+      const res  = await fetch(`/dashboard/data?mode=${currentMode}`);
+      const data = await res.json();
+      lastData   = data;
+      renderDashboard(data);
+      document.getElementById('status-dot').className  = 'status-dot green';
+      document.getElementById('status-text').textContent = 'LIVE';
+      document.getElementById('last-update').textContent = 'Updated ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit' }) + ' ET';
+      document.getElementById('data-source').textContent = 'Public.com + Polygon';
+    } catch (err) {
+      document.getElementById('status-dot').className  = 'status-dot red';
+      document.getElementById('status-text').textContent = 'ERROR — retrying';
+      console.error(err);
+    }
+    startCountdown();
+  }
+
+  // ── SCORE COLOR ──
+  function scoreColor(score) {
+    if (score >= 70) return 'c-green';
+    if (score >= 45) return 'c-amber';
+    return 'c-red';
+  }
+
+  function scoreFillClass(score) {
+    if (score >= 70) return 'yes';
+    if (score >= 45) return 'caution';
+    return 'no';
+  }
+
+  function changeClass(chg) {
+    if (chg > 0.05)  return 'up';
+    if (chg < -0.05) return 'down';
+    return 'flat';
+  }
+
+  function fmtChange(chg) {
+    if (chg == null) return '—';
+    return (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+  }
+
+  // ── RENDER ──
+  function renderDashboard(data) {
+    const { decision, totalScore, scores, market, aiSummary, mode } = data;
+    const verdictClass = decision.verdict.toLowerCase().replace(' ', '');
+
+    const html = `
+      <!-- VERDICT PANEL -->
+      <div class="verdict-panel pulse">
+        <div>
+          <div class="verdict-label">TRADING CONDITION</div>
+          <div class="verdict-question">Should I be trading right now?</div>
+        </div>
+
+        <div class="verdict-main">
+          <span class="verdict-emoji">${decision.emoji}</span>
+          <span class="verdict-word ${verdictClass}">${decision.verdict}</span>
+          <div class="verdict-score">${totalScore}/100 COMPOSITE SCORE</div>
+          <div class="score-bar">
+            <div class="score-fill ${scoreFillClass(totalScore)}" style="width:${totalScore}%"></div>
+          </div>
+        </div>
+
+        <div class="ai-summary">
+          <div class="ai-label">⬡ AI ANALYSIS</div>
+          <div class="ai-text">${aiSummary || 'Analyzing market conditions...'}</div>
+        </div>
+
+        <div class="mode-label">MODE: <span>${mode}</span></div>
+      </div>
+
+      <!-- RIGHT COLUMN -->
+      <div class="right-col">
+
+        <!-- MARKET ROW -->
+        <div class="market-row">
+          ${renderMarketTile('SPY', market.spy, 'S&P 500 ETF')}
+          ${renderMarketTile('QQQ', market.qqq, 'NASDAQ ETF')}
+          ${renderMarketTile('IWM', market.iwm, 'Russell 2000')}
+          ${renderVIXTile(market.vixEstimate, market.uvxy)}
+        </div>
+
+        <!-- SCORES -->
+        <div class="scores-grid">
+          ${renderScoreCard('VOLATILITY', scores.volatility, '25%')}
+          ${renderScoreCard('MOMENTUM',   scores.momentum,   '25%')}
+          ${renderScoreCard('TREND',      scores.trend,      '20%')}
+          ${renderScoreCard('BREADTH',    scores.breadth,    '20%')}
+          ${renderScoreCard('SESSION',    scores.macro,      '10%')}
+        </div>
+
+        <!-- SECTORS -->
+        <div class="sectors-panel">
+          <div class="panel-title">SECTOR BREADTH</div>
+          <div class="sectors-grid">
+            ${(market.sectors || []).map(s => `
+              <div class="sector-tile ${changeClass(s.change)}">
+                <div class="sector-name">${s.name}</div>
+                <div class="sector-change ${changeClass(s.change)}">${fmtChange(s.change)}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+
+      </div>
+    `;
+
+    document.getElementById('main-content').innerHTML = html;
+    document.getElementById('main-content').className = 'main';
+  }
+
+  function renderMarketTile(ticker, data, label) {
+    const price  = data?.price  ? '$' + data.price.toFixed(2) : '—';
+    const change = data?.change ?? null;
+    const cls    = changeClass(change);
+    return `
+      <div class="market-tile">
+        <div class="market-ticker">${ticker}</div>
+        <div class="market-price">${price}</div>
+        <div class="market-change ${cls}">${fmtChange(change)}</div>
+        <div class="market-label">${label}</div>
+      </div>
+    `;
+  }
+
+  function renderVIXTile(vixEst, uvxy) {
+    const vix    = vixEst ? vixEst.toFixed(1) : '—';
+    const uvxyP  = uvxy?.price ? '$' + uvxy.price.toFixed(2) : '—';
+    const vixNum = parseFloat(vix);
+    const cls    = !isNaN(vixNum) ? (vixNum < 15 ? 'c-green' : vixNum < 25 ? 'c-amber' : 'c-red') : 'c-dim';
+    return `
+      <div class="market-tile">
+        <div class="market-ticker">VIX EST</div>
+        <div class="market-price ${cls}">${vix}</div>
+        <div class="market-change flat">UVXY ${uvxyP}</div>
+        <div class="market-label">Volatility proxy</div>
+      </div>
+    `;
+  }
+
+  function renderScoreCard(label, scoreObj, weight) {
+    const cls = scoreColor(scoreObj.score);
+    return `
+      <div class="score-card">
+        <div class="score-card-label">${label}</div>
+        <div class="score-mini-bar">
+          <div class="score-mini-fill ${scoreFillClass(scoreObj.score)}" style="width:${scoreObj.score}%"></div>
+        </div>
+        <div class="score-card-value ${cls}">${scoreObj.score}</div>
+        <div class="score-card-name ${cls}">${scoreObj.label}</div>
+        <div class="score-card-detail">${scoreObj.detail}</div>
+        <div class="weight-label" style="margin-top:6px">weight ${weight}</div>
+      </div>
+    `;
+  }
+
+  // ── INIT ──
+  fetchData();
+</script>
+</body>
+</html>
