@@ -1,5 +1,6 @@
-// alerter.js — Stratum Flow Scout v6.0
+// alerter.js — Stratum Flow Scout v6.1
 // FULL EDGE: Time guardrails, spread warning, GEX, Max Pain, OI nodes, IV context
+// TECHNICALS: RSI(14) + VWAP from TradingView webhook payload
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,39 @@ async function sendDiscordRaw(msg) { await sendToChannel('strat', msg); }
 function calcDTE(expiryDateStr) {
   const diff = Math.ceil((new Date(expiryDateStr + 'T16:00:00-04:00') - new Date()) / (1000 * 60 * 60 * 24));
   return Math.max(0, diff);
+}
+
+// ── RSI LABEL ─────────────────────────────────────────────────────
+function getRsiLabel(rsi) {
+  if (rsi == null || isNaN(rsi)) return '—';
+  if (rsi > 70) return 'overbought ⚠️';
+  if (rsi < 30) return 'oversold ⚠️';
+  if (rsi > 55) return 'bullish momentum';
+  if (rsi < 45) return 'room to fall ✅';
+  return 'neutral';
+}
+
+// ── BUILD TECHNICALS SECTION ──────────────────────────────────────
+// Expects tvData.rsi (number) and tvData.vwap (number) + tvData.vwapBias ('above'|'below')
+function buildTechnicalsSection(tvData = {}) {
+  const rsi      = tvData.rsi      != null ? parseFloat(tvData.rsi)      : null;
+  const vwap     = tvData.vwap     != null ? parseFloat(tvData.vwap)     : null;
+  const vwapBias = tvData.vwapBias || null;
+
+  // Only render section if at least one value present
+  if (rsi == null && vwap == null) return [];
+
+  const lines = [];
+  if (rsi != null && !isNaN(rsi)) {
+    lines.push(`RSI (14)    ${rsi.toFixed(0)} — ${getRsiLabel(rsi)}`);
+  }
+  if (vwap != null && !isNaN(vwap) && vwapBias) {
+    const biasIcon  = vwapBias === 'above' ? '🔼' : '🔽';
+    const biasLabel = vwapBias === 'above' ? 'bullish' : 'bearish';
+    lines.push(`VWAP        $${vwap.toFixed(2)} — price ${vwapBias.toUpperCase()} ${biasIcon} ${biasLabel} confirmed`);
+  }
+
+  return lines;
 }
 
 // ── FLOW SCORING ──────────────────────────────────────────────────
@@ -71,7 +105,7 @@ function buildEdgeSection(resolved) {
   const lines = [];
   if (!resolved) return lines;
 
-  const { maxPain, gex, oiNodes, ivCtx, timeCtx, wideSpread, spreadWidth, bid, ask } = resolved;
+  const { maxPain, gex, oiNodes, ivCtx, timeCtx, wideSpread, bid, ask } = resolved;
 
   // Time guardrail
   if (timeCtx?.warning) lines.push(timeCtx.warning);
@@ -94,10 +128,10 @@ function buildEdgeSection(resolved) {
   // Max Pain
   if (maxPain) lines.push(`Max Pain    $${maxPain} — price magnet into expiry`);
 
-  // GEX
+  // GEX — shows source (real greeks ✅ or estimated ⚠️)
   if (gex) {
     const gexM = (gex.netGEX / 1000000).toFixed(0);
-    lines.push(`GEX         ${gex.netGEX > 0 ? '+' : ''}$${gexM}M — ${gex.isPositive ? 'POSITIVE (range bound)' : 'NEGATIVE (trending)'}`);
+    lines.push(`GEX         ${gex.netGEX > 0 ? '+' : ''}$${gexM}M — ${gex.isPositive ? 'POSITIVE (range bound)' : 'NEGATIVE (trending)'} ${gex.source || ''}`);
     if (gex.topGEXStrike) lines.push(`GEX Pin     $${gex.topGEXStrike} — highest dealer hedge zone`);
   }
 
@@ -139,7 +173,8 @@ function buildSpreadCard(resolved, tvData = {}) {
     tvData.h4     ? `H4:${tvData.h4}`         : null,
   ].filter(Boolean).join('  ');
 
-  const edgeLines = buildEdgeSection(resolved);
+  const edgeLines        = buildEdgeSection(resolved);
+  const technicalsLines  = buildTechnicalsSection(tvData);
 
   const lines = [
     `📊 SPREAD TRADE — ${dteLabel}`,
@@ -160,6 +195,8 @@ function buildSpreadCard(resolved, tvData = {}) {
     s ? `Stop    $${s.stopPrice} (50% of debit)` : `Stop    50% of debit`,
     s ? `T1      $${s.t1Price} (100% gain)` : `T1      +100% of debit`,
     s ? `Risk    ${s.riskPct}% of $7K = $${s.maxLoss}` : `Risk    defined`,
+    technicalsLines.length > 0 ? `───────────────────────────────` : null,
+    ...technicalsLines,
     edgeLines.length > 0 ? `───────────────────────────────` : null,
     ...edgeLines,
     `───────────────────────────────`,
@@ -196,8 +233,8 @@ function buildStratCard(opraSymbol, tvData = {}, resolved = null) {
     tvData.h1     ? `H1:${tvData.h1}`         : null,
   ].filter(Boolean).join('  ');
 
-  // Use resolved edge data if available
-  const edgeLines = resolved ? buildEdgeSection(resolved) : [];
+  const edgeLines       = resolved ? buildEdgeSection(resolved) : [];
+  const technicalsLines = buildTechnicalsSection(tvData);
 
   const lines = [
     `${modeLabel} — ${dteLabel}`,
@@ -215,6 +252,8 @@ function buildStratCard(opraSymbol, tvData = {}, resolved = null) {
     s ? `T1      $${s.t1Price} (profit +$${s.t1Profit})` : `T1      +${mode === 'DAY' ? '35' : '60'}% of premium`,
     s ? `T2      $${s.t2Price} (runner)` : `T2      +${mode === 'DAY' ? '70' : '120'}% of premium`,
     s ? `Risk    ${s.riskPct}% of $7K = $${s.stopLoss} max` : `Risk    2% of $7K max`,
+    technicalsLines.length > 0 ? `───────────────────────────────` : null,
+    ...technicalsLines,
     edgeLines.length > 0 ? `───────────────────────────────` : null,
     ...edgeLines,
     `───────────────────────────────`,
@@ -329,7 +368,7 @@ async function sendMorningBrief() {
   const vixLine   = uvxyPrice ? `UVXY $${uvxyPrice} ${vixLevel}` : 'VIX  — unavailable';
 
   const lines = [
-    `📊 STRATUM MORNING BRIEF v6.0`,
+    `📊 STRATUM MORNING BRIEF v6.1`,
     `${dateStr}`,
     `═══════════════════════════════`,
     `📈 ${spyLine}`,
@@ -366,43 +405,5 @@ async function sendSystemMessage(msg) {
 }
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
-```
-
----
-
-## 📋 2 Steps
-
-**①** GitHub → `src/contractResolver.js` → select all → paste → **Commit**
-
-**②** GitHub → `src/alerter.js` → select all → paste → **Commit**
-
-Tomorrow morning every alert card will look like this:
-```
-📈 SWING TRADE — 4DTE
-GOOGL $287.5P 03/27 — 🔴 BEARISH
-═══════════════════════════════
-Confluence  6/6
-Bias    WEEKLY:2D  DAILY:2D  H4:2D
-───────────────────────────────
-Strike  $287.5 — ATM via Public.com
-Expiry  03/27 (4DTE)
-Bid/Ask $2.45 / $2.49
-───────────────────────────────
-Entry   $2.47 x1 = $247
-Stop    $1.48 (loss -$99)
-T1      $3.95 (profit +$148)
-T2      $5.43 (runner)
-Risk    1.4% of $7K = $99 max
-───────────────────────────────
-Max Pain    $285 — price magnet into expiry
-GEX         -$42M — NEGATIVE (trending)
-GEX Pin     $290 — highest dealer hedge zone
-OI Walls    $285(🔴 PUT WALL) | $290(🟢 CALL WALL)
-IV Regime   ELEVATED — spreads or naked
-Impl Move   ±3.2% | Daily ±1.6%
-───────────────────────────────
-Hold    1–3 days max
-Window  9:45AM–3:30PM ET
-⏰ 08:59 AM ET
 
 
