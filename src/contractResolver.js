@@ -1,5 +1,5 @@
-// contractResolver.js — Stratum Flow Scout v6.0
-// FULL EDGE: GEX, Max Pain, High OI nodes, IV context
+// contractResolver.js — Stratum Flow Scout v6.1
+// FULL EDGE: Real Greeks, GEX, Max Pain, High OI nodes, IV context
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // ─────────────────────────────────────────────────────────────────
 
@@ -142,13 +142,52 @@ async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
       body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' }, expirationDate: expDate }),
     });
     const data  = await res.json();
-    // Get both calls and puts for GEX/Max Pain calculation
     const calls = data?.calls || [];
     const puts  = data?.puts  || [];
     const chain = type === 'call' ? calls : puts;
     console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} — ${chain.length} contracts ✅`);
     return { chain, calls, puts };
   } catch (err) { console.error(`[PUBLIC CHAIN] Error:`, err.message); return { chain: [], calls: [], puts: [] }; }
+}
+
+// ── GET REAL GREEKS FROM PUBLIC.COM ───────────────────────────────
+// GET /userapigateway/option-details/{accountId}/greeks
+// Returns: delta, gamma, theta, vega, rho, impliedVolatility per osiSymbol
+async function getPublicGreeks(osiSymbols, token, accountId) {
+  try {
+    if (!osiSymbols?.length) return {};
+    const params = osiSymbols.map(s => `osiSymbols=${encodeURIComponent(s)}`).join('&');
+    const res = await fetch(
+      `${PUB_GATEWAY}/option-details/${accountId}/greeks?${params}`,
+      {
+        method:  'GET',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'User-Agent':    'stratum-flow-scout',
+        },
+      }
+    );
+    const data = await res.json();
+    // Key by osiSymbol for O(1) lookup in calculateGEX
+    const map = {};
+    for (const item of (data || [])) {
+      if (item.osiSymbol) {
+        map[item.osiSymbol] = {
+          delta:             parseFloat(item.delta             || 0),
+          gamma:             parseFloat(item.gamma             || 0),
+          theta:             parseFloat(item.theta             || 0),
+          vega:              parseFloat(item.vega              || 0),
+          rho:               parseFloat(item.rho               || 0),
+          impliedVolatility: parseFloat(item.impliedVolatility || 0),
+        };
+      }
+    }
+    console.log(`[GREEKS] Real greeks fetched for ${Object.keys(map).length} contracts ✅`);
+    return map;
+  } catch (err) {
+    console.error('[GREEKS] Error:', err.message);
+    return {};
+  }
 }
 
 // ── CALCULATE DTE ─────────────────────────────────────────────────
@@ -195,25 +234,18 @@ function calculateMaxPain(calls, puts) {
     const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0);
     const strikes     = [...new Set([...parsedCalls.map(c => c.strike), ...parsedPuts.map(c => c.strike)])].sort((a,b) => a-b);
 
-    let minPain  = Infinity;
-    let maxPain  = null;
+    let minPain = Infinity;
+    let maxPain = null;
 
     for (const testStrike of strikes) {
-      // Call pain = sum of (strike - testStrike) * OI for all calls where strike > testStrike
       const callPain = parsedCalls
         .filter(c => c.strike > testStrike)
         .reduce((sum, c) => sum + (c.strike - testStrike) * c.openInterest, 0);
-
-      // Put pain = sum of (testStrike - strike) * OI for all puts where strike < testStrike
       const putPain = parsedPuts
         .filter(c => c.strike < testStrike)
         .reduce((sum, c) => sum + (testStrike - c.strike) * c.openInterest, 0);
-
       const totalPain = callPain + putPain;
-      if (totalPain < minPain) {
-        minPain = totalPain;
-        maxPain = testStrike;
-      }
+      if (totalPain < minPain) { minPain = totalPain; maxPain = testStrike; }
     }
 
     console.log(`[MAX PAIN] $${maxPain} ✅`);
@@ -222,53 +254,47 @@ function calculateMaxPain(calls, puts) {
 }
 
 // ── CALCULATE GEX ─────────────────────────────────────────────────
-// Gamma Exposure = gamma * OI * 100 * price^2 * 0.01 per strike
+// Uses real gamma from Public.com greeks endpoint when available
+// Falls back to estimation if greeksMap is empty or symbol not found
 // Positive GEX = dealers long gamma = price stays in range
 // Negative GEX = dealers short gamma = price moves fast and far
-// Net GEX by strike shows where dealers need to hedge most
-function calculateGEX(calls, puts, price) {
+function calculateGEX(calls, puts, price, greeksMap = {}) {
   try {
-    const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0);
-    const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0);
+    const parsedCalls   = calls.map(parseChainContract).filter(c => c.strike > 0);
+    const parsedPuts    = puts.map(parseChainContract).filter(c => c.strike > 0);
+    const hasRealGreeks = Object.keys(greeksMap).length > 0;
 
-    // Calculate net GEX per strike
-    // Without actual greeks from Public.com, we estimate using OI and proximity to price
-    // Delta proxy: ATM ~ 0.50, each $1 away from ATM = ~0.01 less delta
-    // Gamma proxy: highest at ATM, falls off with distance
     const gexByStrike = {};
 
     for (const c of parsedCalls) {
-      const distPct  = Math.abs(c.strike - price) / price;
-      const gammaEst = Math.max(0, 0.05 - distPct * 0.5); // rough gamma estimate
-      const gex      = gammaEst * c.openInterest * 100 * price * price * 0.01;
+      const realGreeks = greeksMap[c.symbol];
+      const gamma = realGreeks
+        ? realGreeks.gamma
+        : Math.max(0, 0.05 - (Math.abs(c.strike - price) / price) * 0.5); // fallback estimate
+      const gex = gamma * c.openInterest * 100 * price * price * 0.01;
       gexByStrike[c.strike] = (gexByStrike[c.strike] || 0) + gex;
     }
 
     for (const p of parsedPuts) {
-      const distPct  = Math.abs(p.strike - price) / price;
-      const gammaEst = Math.max(0, 0.05 - distPct * 0.5);
-      const gex      = gammaEst * p.openInterest * 100 * price * price * 0.01 * -1; // puts are negative GEX
+      const realGreeks = greeksMap[p.symbol];
+      const gamma = realGreeks
+        ? realGreeks.gamma
+        : Math.max(0, 0.05 - (Math.abs(p.strike - price) / price) * 0.5); // fallback estimate
+      const gex = gamma * p.openInterest * 100 * price * price * 0.01 * -1; // puts = negative GEX
       gexByStrike[p.strike] = (gexByStrike[p.strike] || 0) + gex;
     }
 
-    // Find highest positive GEX strike (dealer support = price magnet)
-    const netGEX      = Object.values(gexByStrike).reduce((a, b) => a + b, 0);
+    const netGEX        = Object.values(gexByStrike).reduce((a, b) => a + b, 0);
     const sortedStrikes = Object.entries(gexByStrike).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
     const topGEXStrike  = sortedStrikes[0] ? parseFloat(sortedStrikes[0][0]) : null;
-
-    const gexRegime = netGEX > 0
+    const gexRegime     = netGEX > 0
       ? 'POSITIVE — price likely to stay in range'
       : 'NEGATIVE — price likely to move fast and far';
+    const source = hasRealGreeks ? 'real greeks ✅' : 'estimated ⚠️';
 
-    console.log(`[GEX] Net: ${netGEX > 0 ? '+' : ''}${(netGEX/1000000).toFixed(1)}M | Top strike: $${topGEXStrike} | ${gexRegime}`);
+    console.log(`[GEX] Net: ${netGEX > 0 ? '+' : ''}${(netGEX/1000000).toFixed(1)}M | Top: $${topGEXStrike} | ${gexRegime} | ${source}`);
 
-    return {
-      netGEX,
-      topGEXStrike,
-      gexRegime,
-      gexByStrike,
-      isPositive: netGEX > 0,
-    };
+    return { netGEX, topGEXStrike, gexRegime, gexByStrike, isPositive: netGEX > 0, source };
   } catch (err) { console.error('[GEX] Error:', err.message); return null; }
 }
 
@@ -279,7 +305,6 @@ function getHighOINodes(calls, puts, price, topN = 3) {
     const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0 && c.openInterest > 0);
     const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0 && c.openInterest > 0);
 
-    // Combine OI by strike
     const oiByStrike = {};
     for (const c of parsedCalls) {
       oiByStrike[c.strike] = (oiByStrike[c.strike] || { call: 0, put: 0 });
@@ -290,14 +315,13 @@ function getHighOINodes(calls, puts, price, topN = 3) {
       oiByStrike[p.strike].put += p.openInterest;
     }
 
-    // Total OI per strike
     const sorted = Object.entries(oiByStrike)
       .map(([strike, oi]) => ({
-        strike:    parseFloat(strike),
-        totalOI:   oi.call + oi.put,
-        callOI:    oi.call,
-        putOI:     oi.put,
-        bias:      oi.call > oi.put ? '🟢 CALL WALL' : '🔴 PUT WALL',
+        strike:  parseFloat(strike),
+        totalOI: oi.call + oi.put,
+        callOI:  oi.call,
+        putOI:   oi.put,
+        bias:    oi.call > oi.put ? '🟢 CALL WALL' : '🔴 PUT WALL',
       }))
       .sort((a, b) => b.totalOI - a.totalOI)
       .slice(0, topN);
@@ -308,15 +332,12 @@ function getHighOINodes(calls, puts, price, topN = 3) {
 }
 
 // ── IV CONTEXT ────────────────────────────────────────────────────
-// Estimate IV regime from ATM option pricing relative to stock price
-// High IV = favor spreads (sell premium)
-// Low IV  = favor naked options (buy premium)
+// High IV = favor spreads | Low IV = favor naked options
 function getIVContext(calls, puts, price, dte) {
   try {
     const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0);
     const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0);
 
-    // Find ATM call and put
     const atmCall = parsedCalls.reduce((a, b) =>
       Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
     );
@@ -324,12 +345,10 @@ function getIVContext(calls, puts, price, dte) {
       Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
     );
 
-    // ATM straddle = total implied move
     const straddle    = (atmCall?.mid || 0) + (atmPut?.mid || 0);
     const impliedMove = parseFloat((straddle / price * 100).toFixed(1));
     const dailyMove   = dte > 0 ? parseFloat((impliedMove / Math.sqrt(dte)).toFixed(1)) : impliedMove;
 
-    // IV regime based on implied daily move
     const ivRegime = dailyMove > 2.5 ? 'HIGH — favor spreads'
                    : dailyMove > 1.5 ? 'ELEVATED — spreads or naked'
                    : 'LOW — favor naked options';
@@ -337,12 +356,9 @@ function getIVContext(calls, puts, price, dte) {
     console.log(`[IV] Implied move: ±${impliedMove}% | Daily: ±${dailyMove}% | ${ivRegime}`);
 
     return {
-      straddle,
-      impliedMove,
-      dailyMove,
-      ivRegime,
-      isHighIV: dailyMove > 2.0,
-      recommendSpreads: dailyMove > 2.5,
+      straddle, impliedMove, dailyMove, ivRegime,
+      isHighIV:          dailyMove > 2.0,
+      recommendSpreads:  dailyMove > 2.5,
     };
   } catch (err) { console.error('[IV] Error:', err.message); return null; }
 }
@@ -352,30 +368,30 @@ function getTimeContext() {
   const now    = new Date();
   const etHour = now.getUTCHours() - 4;
   const etMin  = now.getUTCMinutes();
-  const etTime = etHour * 60 + etMin; // minutes since midnight ET
+  const etTime = etHour * 60 + etMin;
 
-  const OPEN        = 9  * 60 + 30;  // 9:30AM
-  const EARLY_END   = 9  * 60 + 45;  // 9:45AM
-  const POWER_START = 15 * 60 + 0;   // 3:00PM
-  const POWER_END   = 15 * 60 + 30;  // 3:30PM
-  const LATE_ENTRY  = 15 * 60 + 30;  // 3:30PM
-  const CLOSE       = 16 * 60 + 0;   // 4:00PM
+  const OPEN        = 9  * 60 + 30;
+  const EARLY_END   = 9  * 60 + 45;
+  const POWER_START = 15 * 60 + 0;
+  const POWER_END   = 15 * 60 + 30;
+  const LATE_ENTRY  = 15 * 60 + 30;
+  const CLOSE       = 16 * 60 + 0;
 
-  if (etTime < OPEN)        return { window: 'PREMARKET', ok: false, warning: '⚠️ PRE-MARKET — wait for 9:30AM open' };
-  if (etTime < EARLY_END)   return { window: 'EARLY', ok: false, warning: '⚠️ EARLY — wait for market to settle (9:45AM)' };
+  if (etTime < OPEN)        return { window: 'PREMARKET',   ok: false, warning: '⚠️ PRE-MARKET — wait for 9:30AM open' };
+  if (etTime < EARLY_END)   return { window: 'EARLY',       ok: false, warning: '⚠️ EARLY — wait for market to settle (9:45AM)' };
   if (etTime >= LATE_ENTRY && etTime < CLOSE) return { window: 'LATE', ok: false, warning: '⚠️ LATE ENTRY — too close to close, wait for tomorrow' };
   if (etTime >= POWER_START && etTime < POWER_END) return { window: 'POWER_HOUR', ok: true, warning: '✅ POWER HOUR — strong entry window' };
-  if (etTime >= CLOSE)      return { window: 'CLOSED', ok: false, warning: '🚫 MARKET CLOSED' };
+  if (etTime >= CLOSE)      return { window: 'CLOSED',      ok: false, warning: '🚫 MARKET CLOSED' };
 
   return { window: 'OPEN', ok: true, warning: null };
 }
 
 // ── FIND SPREAD LEGS ──────────────────────────────────────────────
 function findSpreadLegs(chain, price, type, ticker) {
-  const width    = getSpreadWidth(ticker);
-  const parsed   = chain.map(parseChainContract).filter(c => c.strike > 0);
+  const width  = getSpreadWidth(ticker);
+  const parsed = chain.map(parseChainContract).filter(c => c.strike > 0);
 
-  const buyLeg   = parsed.reduce((a, b) =>
+  const buyLeg = parsed.reduce((a, b) =>
     Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
   );
   if (!buyLeg) return null;
@@ -406,7 +422,7 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
 
   console.log(`[MODE] ${ticker} — ${mode} (${config.minDTE}-${config.maxDTE}DTE)`);
 
-  const price     = await getPrice(ticker);
+  const price = await getPrice(ticker);
   if (!price) return null;
 
   const accountId = process.env.PUBLIC_ACCOUNT_ID;
@@ -417,21 +433,34 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
   const expDate     = selectExpiry(expirations, mode);
   if (!expDate) return null;
 
-  const dte      = calcDTE(expDate);
+  const dte       = calcDTE(expDate);
   const chainData = await getPublicOptionChain(ticker, expDate, type, token, accountId);
   const { chain, calls, puts } = chainData;
   if (!chain.length) return null;
 
-  // ── EDGE CALCULATIONS ─────────────────────────────────────────
-  // Pull both calls and puts for full chain analysis
   const allCalls = calls.length > 0 ? calls : chain;
   const allPuts  = puts.length  > 0 ? puts  : chain;
 
-  const maxPain  = calculateMaxPain(allCalls, allPuts);
-  const gex      = calculateGEX(allCalls, allPuts, price);
-  const oiNodes  = getHighOINodes(allCalls, allPuts, price);
-  const ivCtx    = getIVContext(allCalls, allPuts, price, dte);
-  const timeCtx  = getTimeContext();
+  // ── FETCH REAL GREEKS ─────────────────────────────────────────
+  // Pull ATM contracts within ±10% of price for greeks call
+  // Capped at 20 symbols to stay within rate limits
+  const atmCalls = allCalls.map(parseChainContract)
+    .filter(c => Math.abs(c.strike - price) / price < 0.10 && c.symbol)
+    .map(c => c.symbol);
+  const atmPuts = allPuts.map(parseChainContract)
+    .filter(c => Math.abs(c.strike - price) / price < 0.10 && c.symbol)
+    .map(c => c.symbol);
+  const osiSymbols = [...new Set([...atmCalls, ...atmPuts])].slice(0, 20);
+  const greeksMap  = osiSymbols.length > 0
+    ? await getPublicGreeks(osiSymbols, token, accountId)
+    : {};
+
+  // ── EDGE CALCULATIONS ─────────────────────────────────────────
+  const maxPain = calculateMaxPain(allCalls, allPuts);
+  const gex     = calculateGEX(allCalls, allPuts, price, greeksMap); // real greeks passed in
+  const oiNodes = getHighOINodes(allCalls, allPuts, price);
+  const ivCtx   = getIVContext(allCalls, allPuts, price, dte);
+  const timeCtx = getTimeContext();
 
   // ── SPREAD MODE ───────────────────────────────────────────────
   if (mode === 'SPREAD') {
@@ -450,11 +479,10 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
       sellStrike:  legs.sellLeg.strike,
       expiry:      expDate,
       mode:        'SPREAD',
-      dte, debit: legs.debit,
+      dte, debit:  legs.debit,
       maxProfit:   legs.maxProfit,
       breakeven:   legs.breakeven,
       spreadWidth: legs.spreadWidth,
-      // Edge data
       maxPain, gex, oiNodes, ivCtx, timeCtx, price,
     };
   }
@@ -492,10 +520,9 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
     Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
   );
 
-  // Spread width check
   const spreadWidth = best.ask - best.bid;
   const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;
-  const wideSpread  = spreadPct > 0.15; // > 15% of ask = wide
+  const wideSpread  = spreadPct > 0.15;
 
   console.log(`[OPRA] ${ticker} ✅ ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
 
@@ -504,9 +531,8 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
     bid: best.bid, ask: best.ask,
     strike: best.strike, expiry: expDate,
     mode, dte, wideSpread, spreadWidth,
-    volume: best.volume || 0,
+    volume:       best.volume || 0,
     openInterest: best.openInterest || 0,
-    // Edge data
     maxPain, gex, oiNodes, ivCtx, timeCtx, price,
   };
 }
@@ -573,7 +599,13 @@ async function findBestContract(opraSymbol) {
       if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
       const score = scoreContract(snap, price);
       if (!best || score.total > best.score.total) {
-        best = { ticker, optionTicker: c.ticker, strike: snap.strike, expiry: snap.expiry, type, premium, bid: snap.bid, ask: snap.ask, mid: snap.mid, volume: snap.volume, openInterest: snap.openInterest, delta: snap.delta, gamma: snap.gamma, theta: snap.theta, vega: snap.vega, iv: snap.iv, price, score, isLive: true };
+        best = {
+          ticker, optionTicker: c.ticker, strike: snap.strike, expiry: snap.expiry,
+          type, premium, bid: snap.bid, ask: snap.ask, mid: snap.mid,
+          volume: snap.volume, openInterest: snap.openInterest,
+          delta: snap.delta, gamma: snap.gamma, theta: snap.theta, vega: snap.vega,
+          iv: snap.iv, price, score, isLive: true,
+        };
       }
     }
     if (!best) return { error: 'No contracts in range' };
@@ -604,16 +636,20 @@ function calculatePositionSize(premium, mode = 'SWING', accountSize = 7000, spre
   if (!premium || premium <= 0) return { viable: false, reason: 'No premium' };
 
   if (mode === 'SPREAD' && spreadData) {
-    const debit      = spreadData.debit;
-    const maxProfit  = spreadData.maxProfit;
-    const stopPrice  = parseFloat((debit * 0.50).toFixed(2));
-    const t1Price    = parseFloat((debit * 2.00).toFixed(2));
+    const debit        = spreadData.debit;
+    const maxProfit    = spreadData.maxProfit;
+    const stopPrice    = parseFloat((debit * 0.50).toFixed(2));
+    const t1Price      = parseFloat((debit * 2.00).toFixed(2));
     const maxContracts = Math.floor(config.maxRisk / (debit * 100));
-    const contracts  = Math.max(1, Math.min(maxContracts, 3));
-    const totalCost  = parseFloat((debit * 100 * contracts).toFixed(0));
-    const maxGain    = parseFloat((maxProfit * 100 * contracts).toFixed(0));
-    const riskPct    = parseFloat((totalCost / accountSize * 100).toFixed(1));
-    return { viable: true, mode: 'SPREAD', contracts, debit, maxProfit, stopPrice, t1Price, totalCost, maxLoss: totalCost, maxGain, riskPct, breakeven: spreadData.breakeven };
+    const contracts    = Math.max(1, Math.min(maxContracts, 3));
+    const totalCost    = parseFloat((debit * 100 * contracts).toFixed(0));
+    const maxGain      = parseFloat((maxProfit * 100 * contracts).toFixed(0));
+    const riskPct      = parseFloat((totalCost / accountSize * 100).toFixed(1));
+    return {
+      viable: true, mode: 'SPREAD', contracts, debit, maxProfit,
+      stopPrice, t1Price, totalCost, maxLoss: totalCost, maxGain, riskPct,
+      breakeven: spreadData.breakeven,
+    };
   }
 
   if (premium > config.maxPremium) return { viable: false, reason: `Premium $${premium} over max` };
@@ -630,7 +666,11 @@ function calculatePositionSize(premium, mode = 'SWING', accountSize = 7000, spre
   const t1Profit        = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
   const riskPct         = parseFloat((totalStop / accountSize * 100).toFixed(1));
 
-  return { viable: true, mode, contracts, premium, totalCost: parseFloat((costPerContract * contracts).toFixed(0)), stopPrice, t1Price, t2Price, stopLoss: totalStop, t1Profit, riskPct };
+  return {
+    viable: true, mode, contracts, premium,
+    totalCost: parseFloat((costPerContract * contracts).toFixed(0)),
+    stopPrice, t1Price, t2Price, stopLoss: totalStop, t1Profit, riskPct,
+  };
 }
 
 module.exports = {
@@ -638,7 +678,7 @@ module.exports = {
   getOptionSnapshot, getPrice, scoreContract,
   calculatePositionSize, findSpreadLegs,
   calculateMaxPain, calculateGEX, getHighOINodes,
-  getIVContext, getTimeContext,
+  getIVContext, getTimeContext, getPublicGreeks,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };
 
