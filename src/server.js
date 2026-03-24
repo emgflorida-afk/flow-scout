@@ -1,6 +1,7 @@
-// server.js — Stratum Flow Scout v5.9
+// server.js — Stratum Flow Scout v6.1
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // tradeType from Pine Script determines mode
+// RSI(14) + VWAP parsed from webhook payload
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
@@ -24,7 +25,7 @@ app.use((req, res, next) => {
 });
 
 app.get('/', (req, res) => {
-  res.json({ status: 'Stratum Flow Scout ✅', version: '5.9', time: new Date().toISOString() });
+  res.json({ status: 'Stratum Flow Scout ✅', version: '6.1', time: new Date().toISOString() });
 });
 
 app.get('/flow/summary', (req, res) => {
@@ -46,6 +47,14 @@ app.post('/webhook/tradingview', async (req, res) => {
     const h4         = body.h4          || null;
     const h1         = body.h1          || null;
 
+    // RSI + VWAP from Pine Script plot_8 / plot_9
+    const rsi         = body.rsi  != null ? parseFloat(body.rsi)  : null;
+    const vwap        = body.vwap != null ? parseFloat(body.vwap) : null;
+    // plot_9 sends 1 (above) or 0 (below) — decode to string
+    const vwapBias    = body.vwapBias != null
+      ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
+      : null;
+
     if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
 
     const score = parseInt(confluence.split('/')[0]) || 0;
@@ -54,7 +63,7 @@ app.post('/webhook/tradingview', async (req, res) => {
       return res.json({ status: 'skipped', reason: `Confluence ${confluence} below 5/6` });
     }
 
-    console.log(`[WEBHOOK] ${ticker} ${confluence} ${tradeType} — PROCESSING ✅`);
+    console.log(`[WEBHOOK] ${ticker} ${confluence} ${tradeType} RSI:${rsi ?? '—'} VWAP:${vwapBias ?? '—'} — PROCESSING ✅`);
 
     const resolved = await resolver.resolveContract(ticker, type, tradeType);
     if (!resolved) {
@@ -64,17 +73,21 @@ app.post('/webhook/tradingview', async (req, res) => {
 
     const tvBias = {
       weekly, daily, h4, h1, confluence,
-      mid:        resolved.mid,
-      bid:        resolved.bid,
-      ask:        resolved.ask,
-      mode:       resolved.mode,
-      dte:        resolved.dte,
+      mid:         resolved.mid,
+      bid:         resolved.bid,
+      ask:         resolved.ask,
+      mode:        resolved.mode,
+      dte:         resolved.dte,
+      // RSI + VWAP technicals
+      rsi,
+      vwap,
+      vwapBias,
       // Spread specific
-      debit:      resolved.debit      || null,
-      maxProfit:  resolved.maxProfit  || null,
-      breakeven:  resolved.breakeven  || null,
-      sellStrike: resolved.sellStrike || null,
-      spreadWidth:resolved.spreadWidth|| null,
+      debit:       resolved.debit       || null,
+      maxProfit:   resolved.maxProfit   || null,
+      breakeven:   resolved.breakeven   || null,
+      sellStrike:  resolved.sellStrike  || null,
+      spreadWidth: resolved.spreadWidth || null,
     };
 
     alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true, resolved).catch(console.error);
@@ -125,16 +138,17 @@ app.get('/test/brief', async (req, res) => {
 });
 
 app.get('/test/bullflow', async (req, res) => {
-  res.json({ status: 'Bullflow stream running ✅', version: '5.9' });
+  res.json({ status: 'Bullflow stream running ✅', version: '6.1' });
 });
 
 // ── START ─────────────────────────────────────────────────────────
 app.listen(PORT, () => {
-  console.log(`✅ Flow Scout v5.9 running on port ${PORT}`);
+  console.log(`✅ Flow Scout v6.1 running on port ${PORT}`);
   console.log(`   All tickers — no watchlist filter`);
   console.log(`   5/6+ confluence only`);
   console.log(`   DAY mode:    0-1DTE  $0.30–$1.50`);
   console.log(`   SWING mode:  5-7DTE  $0.50–$3.00`);
   console.log(`   SPREAD mode: 5-7DTE  $0.50–$1.50 vertical debit`);
+  console.log(`   RSI(14) + VWAP technicals on every card`);
   bullflow.startBullflowStream();
 });
