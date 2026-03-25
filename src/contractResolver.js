@@ -522,7 +522,7 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
 
   const spreadWidth = best.ask - best.bid;
   const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;
-  const wideSpread  = spreadPct > 0.15;
+  const wideSpread  = spreadPct > 0.12;
 
   console.log(`[OPRA] ${ticker} ✅ ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
 
