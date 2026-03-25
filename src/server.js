@@ -62,24 +62,13 @@ app.get('/dashboard/data', async function(req, res) {
 });
 
 // -- DISCORD INTERACTIONS -----------------------------------------
-// Discord sends slash command interactions here
-// Set this URL in Discord Developer Portal -> Interactions Endpoint URL:
-// https://flow-scout-production.up.railway.app/interactions
 app.post('/interactions', async function(req, res) {
   try {
-    const body = req.body;
-    console.log('[INTERACTIONS] Received type:', body.type);
-
-    // Discord ping verification
-    if (body.type === 1) {
-      return res.json({ type: 1 });
-    }
-
-    const result = await handleInteraction(body);
-    res.json(result);
+    console.log('[INTERACTIONS] Received type:', req.body && req.body.type);
+    await handleInteraction(req, res);
   } catch (err) {
     console.error('[INTERACTIONS] Error:', err.message);
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 
