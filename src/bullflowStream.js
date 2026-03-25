@@ -263,7 +263,7 @@ async function startBullflowStream() {
           try {
             const parsed = JSON.parse(raw);
             const event  = parsed && parsed.event ? parsed.event : '';
-            if (event === 'heartbeat' || event === 'init') return;
+            if (event === 'heartbeat' || event === 'init') continue;
 
             if (event === 'alert') {
               const data = parsed.data || parsed;
