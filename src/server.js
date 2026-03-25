@@ -2,14 +2,17 @@
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // tradeType from Pine Script determines mode
 // RSI(14) + VWAP parsed from webhook payload
+// Dashboard: /dashboard — Should I Be Trading?
 // ─────────────────────────────────────────────────────────────────
 
 require('dotenv').config();
 const express  = require('express');
+const path     = require('path');
 const cron     = require('node-cron');
 const alerter  = require('./alerter');
 const resolver = require('./contractResolver');
 const bullflow = require('./bullflowStream');
+const dashboard = require('./dashboard');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -32,6 +35,27 @@ app.get('/flow/summary', (req, res) => {
   res.json(bullflow.liveAggregator.getSummary());
 });
 
+// ── DASHBOARD ─────────────────────────────────────────────────────
+// GET /dashboard       — serves the HTML UI
+// GET /dashboard/data  — returns JSON market scoring data
+app.get('/dashboard', (req, res) => {
+  res.sendFile(path.join(__dirname, 'dashboard.html'), err => {
+    if (err) res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
+  });
+});
+
+
+app.get('/dashboard/data', async (req, res) => {
+  try {
+    const mode = (req.query.mode || 'DAY').toUpperCase();
+    const data = await dashboard.getDashboardData(mode);
+    res.json(data);
+  } catch (err) {
+    console.error('[DASHBOARD] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
 app.post('/webhook/tradingview', async (req, res) => {
   try {
@@ -47,11 +71,10 @@ app.post('/webhook/tradingview', async (req, res) => {
     const h4         = body.h4          || null;
     const h1         = body.h1          || null;
 
-    // RSI + VWAP from Pine Script plot_8 / plot_9
-    const rsi         = body.rsi  != null ? parseFloat(body.rsi)  : null;
-    const vwap        = body.vwap != null ? parseFloat(body.vwap) : null;
-    // plot_9 sends 1 (above) or 0 (below) — decode to string
-    const vwapBias    = body.vwapBias != null
+    // RSI + VWAP from Pine Script plot_8 / plot_9 / plot_10
+    const rsi      = body.rsi  != null ? parseFloat(body.rsi)  : null;
+    const vwap     = body.vwap != null ? parseFloat(body.vwap) : null;
+    const vwapBias = body.vwapBias != null
       ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
       : null;
 
@@ -78,11 +101,9 @@ app.post('/webhook/tradingview', async (req, res) => {
       ask:         resolved.ask,
       mode:        resolved.mode,
       dte:         resolved.dte,
-      // RSI + VWAP technicals
       rsi,
       vwap,
       vwapBias,
-      // Spread specific
       debit:       resolved.debit       || null,
       maxProfit:   resolved.maxProfit   || null,
       breakeven:   resolved.breakeven   || null,
@@ -149,6 +170,7 @@ app.listen(PORT, () => {
   console.log(`   DAY mode:    0-1DTE  $0.30–$1.50`);
   console.log(`   SWING mode:  5-7DTE  $0.50–$3.00`);
   console.log(`   SPREAD mode: 5-7DTE  $0.50–$1.50 vertical debit`);
-  console.log(`   RSI(14) + VWAP technicals on every card`);
+  console.log(`   RSI(14) + VWAP on every alert card`);
+  console.log(`   Dashboard: /dashboard`);
   bullflow.startBullflowStream();
 });
