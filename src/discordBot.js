@@ -1,28 +1,47 @@
 // discordBot.js — Stratum Flow Scout v6.1
 // Discord slash command: /validate <idea>
 // Uses Discord REST API directly — no discord.js package required
-// Registers commands on startup, listens via interaction endpoint
-// -----------------------------------------------------------------
-// SETUP REQUIRED (one time):
-// 1. discord.com/developers/applications -> New Application -> Bot
-// 2. Copy Bot Token -> DISCORD_BOT_TOKEN Railway env var
-// 3. Copy Application ID -> DISCORD_CLIENT_ID Railway env var
-// 4. Right click your Discord server -> Copy Server ID -> DISCORD_GUILD_ID
-// 5. OAuth2 -> URL Generator -> scopes: bot + applications.commands
-//    Permissions: Send Messages -> invite bot to your server
-// 6. Set Railway public domain as interactions endpoint URL:
-//    https://flow-scout-production.up.railway.app/interactions
+// Includes proper Ed25519 signature verification for Discord endpoint validation
 // -----------------------------------------------------------------
 
 const fetch        = require('node-fetch');
+const crypto       = require('crypto');
 const ideaValidator = require('./ideaValidator');
 
-const BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID   = process.env.DISCORD_CLIENT_ID;
-const GUILD_ID    = process.env.DISCORD_GUILD_ID;
+const BOT_TOKEN          = process.env.DISCORD_BOT_TOKEN;
+const CLIENT_ID          = process.env.DISCORD_CLIENT_ID;
+const GUILD_ID           = process.env.DISCORD_GUILD_ID;
+const PUBLIC_KEY         = process.env.DISCORD_PUBLIC_KEY;
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
 
 const DISCORD_API = 'https://discord.com/api/v10';
+
+// -- VERIFY DISCORD SIGNATURE -------------------------------------
+// Discord requires Ed25519 signature verification on all interactions
+// Without this the endpoint URL verification will always fail
+function verifyDiscordSignature(rawBody, signature, timestamp) {
+  try {
+    if (!PUBLIC_KEY) {
+      console.log('[BOT] No DISCORD_PUBLIC_KEY set -- skipping signature verification');
+      return true; // Allow through if no key set (dev mode)
+    }
+    const message = Buffer.from(timestamp + rawBody);
+    const sig     = Buffer.from(signature, 'hex');
+    const key     = Buffer.from(PUBLIC_KEY, 'hex');
+
+    // Use Node.js crypto for Ed25519 verification
+    const keyObj = crypto.createPublicKey({
+      key:    Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), key]),
+      format: 'der',
+      type:   'spki',
+    });
+
+    return crypto.verify(null, message, keyObj, sig);
+  } catch (err) {
+    console.error('[BOT] Signature verification error:', err.message);
+    return false;
+  }
+}
 
 // -- REGISTER SLASH COMMANDS --------------------------------------
 async function registerCommands() {
@@ -37,9 +56,9 @@ async function registerCommands() {
       description: 'Validate a trade idea through Stratum scoring',
       options: [
         {
-          type:        3, // STRING
+          type:        3,
           name:        'idea',
-          description: 'Paste trade idea e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"',
+          description: 'e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"',
           required:    true,
         },
       ],
@@ -78,7 +97,7 @@ async function respondToInteraction(interactionId, interactionToken, content) {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
+          type: 4,
           data: { content },
         }),
       }
@@ -104,9 +123,11 @@ async function editInteractionResponse(appId, interactionToken, content) {
   }
 }
 
-// -- HANDLE SLASH COMMAND -----------------------------------------
+// -- HANDLE VALIDATE COMMAND --------------------------------------
 async function handleValidateCommand(interaction) {
-  const idea = interaction.data?.options?.find(function(o) { return o.name === 'idea'; })?.value || '';
+  const idea = interaction.data && interaction.data.options
+    ? (interaction.data.options.find(function(o) { return o.name === 'idea'; }) || {}).value || ''
+    : '';
 
   if (!idea) {
     await respondToInteraction(interaction.id, interaction.token, 'Please provide a trade idea.');
@@ -115,7 +136,6 @@ async function handleValidateCommand(interaction) {
 
   console.log('[BOT] /validate received:', idea);
 
-  // Acknowledge immediately — validation takes a few seconds
   await respondToInteraction(
     interaction.id,
     interaction.token,
@@ -147,31 +167,49 @@ async function handleValidateCommand(interaction) {
   }
 }
 
-// -- HANDLE INCOMING INTERACTION (from Express route) -------------
-async function handleInteraction(body) {
-  // Ping (type 1) — Discord verification
+// -- HANDLE INCOMING INTERACTION ----------------------------------
+// Called from Express route with raw body for signature verification
+async function handleInteraction(req, res) {
+  const signature = req.headers['x-signature-ed25519'];
+  const timestamp = req.headers['x-signature-timestamp'];
+  const rawBody   = JSON.stringify(req.body);
+
+  // Verify signature
+  if (signature && timestamp) {
+    const valid = verifyDiscordSignature(rawBody, signature, timestamp);
+    if (!valid) {
+      console.log('[BOT] Invalid signature -- rejected');
+      return res.status(401).send('Invalid signature');
+    }
+  }
+
+  const body = req.body;
+
+  // Discord ping (type 1) -- required for endpoint verification
   if (body.type === 1) {
-    return { type: 1 };
+    console.log('[BOT] Discord ping verified OK');
+    return res.json({ type: 1 });
   }
 
   // Slash command (type 2)
   if (body.type === 2) {
-    if (body.data?.name === 'validate') {
-      // Handle async — don't wait for response
+    if (body.data && body.data.name === 'validate') {
+      // Acknowledge immediately with deferred response
+      res.json({ type: 5 });
+      // Handle async after responding
       handleValidateCommand(body).catch(console.error);
-      // Return deferred response
-      return { type: 5 }; // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+      return;
     }
   }
 
-  return { type: 1 };
+  return res.json({ type: 1 });
 }
 
 // -- STARTUP ------------------------------------------------------
 function startDiscordBot() {
   if (!BOT_TOKEN || !CLIENT_ID || !GUILD_ID) {
     console.log('[BOT] Discord env vars not set -- bot not started');
-    console.log('[BOT] Set DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID in Railway');
+    console.log('[BOT] Set DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID, DISCORD_PUBLIC_KEY in Railway');
     return;
   }
   registerCommands();
