@@ -1,101 +1,181 @@
 // discordBot.js — Stratum Flow Scout v6.1
 // Discord slash command: /validate <idea>
-// Paste any trade idea → Stratum scores it → posts to #conviction-trades
+// Uses Discord REST API directly — no discord.js package required
+// Registers commands on startup, listens via interaction endpoint
 // -----------------------------------------------------------------
 // SETUP REQUIRED (one time):
-// 1. Go to https://discord.com/developers/applications
-// 2. Create new application → Bot → copy token → DISCORD_BOT_TOKEN env var
-// 3. OAuth2 → URL Generator → scopes: bot, applications.commands
-// 4. Bot permissions: Send Messages, Use Slash Commands
-// 5. Add bot to your server via generated URL
-// 6. Copy your server ID → DISCORD_GUILD_ID env var
+// 1. discord.com/developers/applications -> New Application -> Bot
+// 2. Copy Bot Token -> DISCORD_BOT_TOKEN Railway env var
+// 3. Copy Application ID -> DISCORD_CLIENT_ID Railway env var
+// 4. Right click your Discord server -> Copy Server ID -> DISCORD_GUILD_ID
+// 5. OAuth2 -> URL Generator -> scopes: bot + applications.commands
+//    Permissions: Send Messages -> invite bot to your server
+// 6. Set Railway public domain as interactions endpoint URL:
+//    https://flow-scout-production.up.railway.app/interactions
 // -----------------------------------------------------------------
 
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const fetch        = require('node-fetch');
 const ideaValidator = require('./ideaValidator');
 
+const BOT_TOKEN   = process.env.DISCORD_BOT_TOKEN;
+const CLIENT_ID   = process.env.DISCORD_CLIENT_ID;
+const GUILD_ID    = process.env.DISCORD_GUILD_ID;
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-const BOT_TOKEN           = process.env.DISCORD_BOT_TOKEN;
-const GUILD_ID            = process.env.DISCORD_GUILD_ID;
-const CLIENT_ID           = process.env.DISCORD_CLIENT_ID;
 
-// -- REGISTER SLASH COMMAND ---------------------------------------
+const DISCORD_API = 'https://discord.com/api/v10';
+
+// -- REGISTER SLASH COMMANDS --------------------------------------
 async function registerCommands() {
   if (!BOT_TOKEN || !CLIENT_ID || !GUILD_ID) {
-    console.log('[BOT] Missing DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID or DISCORD_GUILD_ID — skipping slash command registration');
+    console.log('[BOT] Missing env vars -- skipping slash command registration');
     return;
   }
 
   const commands = [
-    new SlashCommandBuilder()
-      .setName('validate')
-      .setDescription('Validate a trade idea through Stratum scoring')
-      .addStringOption(function(opt) {
-        return opt
-          .setName('idea')
-          .setDescription('Paste the trade idea e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"')
-          .setRequired(true);
-      })
-      .toJSON(),
+    {
+      name:        'validate',
+      description: 'Validate a trade idea through Stratum scoring',
+      options: [
+        {
+          type:        3, // STRING
+          name:        'idea',
+          description: 'Paste trade idea e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"',
+          required:    true,
+        },
+      ],
+    },
   ];
 
   try {
-    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log('[BOT] Slash commands registered OK');
+    const res = await fetch(
+      DISCORD_API + '/applications/' + CLIENT_ID + '/guilds/' + GUILD_ID + '/commands',
+      {
+        method:  'PUT',
+        headers: {
+          'Authorization': 'Bot ' + BOT_TOKEN,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify(commands),
+      }
+    );
+    if (res.ok) {
+      console.log('[BOT] Slash commands registered OK');
+    } else {
+      const err = await res.text();
+      console.error('[BOT] Command registration failed:', err);
+    }
   } catch (err) {
-    console.error('[BOT] Command registration error:', err.message);
+    console.error('[BOT] Registration error:', err.message);
   }
 }
 
-// -- START BOT ----------------------------------------------------
-function startDiscordBot() {
-  if (!BOT_TOKEN) {
-    console.log('[BOT] No DISCORD_BOT_TOKEN — bot not started');
+// -- RESPOND TO INTERACTION ---------------------------------------
+async function respondToInteraction(interactionId, interactionToken, content) {
+  try {
+    await fetch(
+      DISCORD_API + '/interactions/' + interactionId + '/' + interactionToken + '/callback',
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          type: 4, // CHANNEL_MESSAGE_WITH_SOURCE
+          data: { content },
+        }),
+      }
+    );
+  } catch (err) {
+    console.error('[BOT] Respond error:', err.message);
+  }
+}
+
+// -- EDIT INTERACTION RESPONSE ------------------------------------
+async function editInteractionResponse(appId, interactionToken, content) {
+  try {
+    await fetch(
+      DISCORD_API + '/webhooks/' + appId + '/' + interactionToken + '/messages/@original',
+      {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content }),
+      }
+    );
+  } catch (err) {
+    console.error('[BOT] Edit response error:', err.message);
+  }
+}
+
+// -- HANDLE SLASH COMMAND -----------------------------------------
+async function handleValidateCommand(interaction) {
+  const idea = interaction.data?.options?.find(function(o) { return o.name === 'idea'; })?.value || '';
+
+  if (!idea) {
+    await respondToInteraction(interaction.id, interaction.token, 'Please provide a trade idea.');
     return;
   }
 
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  console.log('[BOT] /validate received:', idea);
 
-  client.once('ready', function() {
-    console.log('[BOT] Discord bot online as ' + client.user.tag + ' OK');
-    registerCommands();
-  });
+  // Acknowledge immediately — validation takes a few seconds
+  await respondToInteraction(
+    interaction.id,
+    interaction.token,
+    'Validating: *' + idea + '*\nRunning Stratum scoring...'
+  );
 
-  client.on('interactionCreate', async function(interaction) {
-    if (!interaction.isChatInputCommand()) return;
-    if (interaction.commandName !== 'validate') return;
+  try {
+    const result = await ideaValidator.validateAndPost(idea, CONVICTION_WEBHOOK);
 
-    const idea = interaction.options.getString('idea');
-    console.log('[BOT] /validate received:', idea);
-
-    // Acknowledge immediately — validation takes a few seconds
-    await interaction.reply({ content: 'Validating: *' + idea + '*\nRunning Stratum scoring...', ephemeral: false });
-
-    try {
-      const result = await ideaValidator.validateAndPost(idea, CONVICTION_WEBHOOK);
-
-      if (result.error) {
-        await interaction.editReply('Could not parse trade idea. Try format: `TICKER STRIKE P/C EXPIRY` e.g. `MSTR 136P 3/27 bearish`');
-        return;
-      }
-
-      await interaction.editReply(
-        'Validation complete for **' + result.ticker + '** ' + result.direction.toUpperCase() + '\n' +
-        'Score: **' + result.score + '/5** — ' + result.verdict + '\n' +
-        'Full card posted to #conviction-trades'
+    if (!result || result.error) {
+      await editInteractionResponse(
+        CLIENT_ID,
+        interaction.token,
+        'Could not parse trade idea. Try: `TICKER STRIKE P/C EXPIRY` e.g. `MSTR 136P 3/27 bearish`'
       );
-    } catch (err) {
-      console.error('[BOT] Validation error:', err.message);
-      await interaction.editReply('Validation failed — check Railway logs');
+      return;
     }
-  });
 
-  client.login(BOT_TOKEN).catch(function(err) {
-    console.error('[BOT] Login error:', err.message);
-  });
-
-  return client;
+    await editInteractionResponse(
+      CLIENT_ID,
+      interaction.token,
+      'Validation complete for **' + result.ticker + '** ' + (result.direction || '').toUpperCase() + '\n' +
+      'Score: **' + result.score + '/5** -- ' + result.verdict + '\n' +
+      'Full card posted to #conviction-trades'
+    );
+  } catch (err) {
+    console.error('[BOT] Validation error:', err.message);
+    await editInteractionResponse(CLIENT_ID, interaction.token, 'Validation failed -- check Railway logs');
+  }
 }
 
-module.exports = { startDiscordBot };
+// -- HANDLE INCOMING INTERACTION (from Express route) -------------
+async function handleInteraction(body) {
+  // Ping (type 1) — Discord verification
+  if (body.type === 1) {
+    return { type: 1 };
+  }
+
+  // Slash command (type 2)
+  if (body.type === 2) {
+    if (body.data?.name === 'validate') {
+      // Handle async — don't wait for response
+      handleValidateCommand(body).catch(console.error);
+      // Return deferred response
+      return { type: 5 }; // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+    }
+  }
+
+  return { type: 1 };
+}
+
+// -- STARTUP ------------------------------------------------------
+function startDiscordBot() {
+  if (!BOT_TOKEN || !CLIENT_ID || !GUILD_ID) {
+    console.log('[BOT] Discord env vars not set -- bot not started');
+    console.log('[BOT] Set DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID in Railway');
+    return;
+  }
+  registerCommands();
+  console.log('[BOT] Discord bot initialized OK -- /interactions endpoint ready');
+}
+
+module.exports = { startDiscordBot, handleInteraction };
