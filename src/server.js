@@ -12,7 +12,10 @@ const cron     = require('node-cron');
 const alerter  = require('./alerter');
 const resolver = require('./contractResolver');
 const bullflow = require('./bullflowStream');
-const dashboard = require('./dashboard');
+const dashboard   = require('./dashboard');
+const ideaValidator      = require('./ideaValidator');
+const { startDiscordBot } = require('./discordBot');
+const { getClusterSummary } = require('./flowCluster');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -35,15 +38,17 @@ app.get('/flow/summary', (req, res) => {
   res.json(bullflow.liveAggregator.getSummary());
 });
 
+// GET /flow/clusters — shows live cluster state for all tickers
+app.get('/flow/clusters', (req, res) => {
+  res.json(getClusterSummary());
+});
+
 // ── DASHBOARD ─────────────────────────────────────────────────────
 // GET /dashboard       — serves the HTML UI
 // GET /dashboard/data  — returns JSON market scoring data
 app.get('/dashboard', (req, res) => {
-  res.sendFile(path.join(__dirname, 'dashboard.html'), err => {
-    if (err) res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
-  });
+  res.sendFile(path.join(__dirname, 'dashboard.html'));
 });
-
 
 app.get('/dashboard/data', async (req, res) => {
   try {
@@ -56,7 +61,28 @@ app.get('/dashboard/data', async (req, res) => {
   }
 });
 
-// ── TRADINGVIEW WEBHOOK ───────────────────────────────────────────
+// -- IDEA VALIDATOR -----------------------------------------------
+// POST /webhook/idea — paste any trade idea, get Stratum verdict
+// Used for forwarding ideas from other Discord servers
+app.post('/webhook/idea', async (req, res) => {
+  try {
+    const body = req.body;
+    const text = body.text || body.content || body.idea || '';
+    if (!text) return res.status(400).json({ error: 'Missing text field' });
+
+    const webhookUrl = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
+    if (!webhookUrl) return res.status(500).json({ error: 'No conviction webhook configured' });
+
+    console.log('[IDEA] Received:', text);
+    ideaValidator.validateAndPost(text, webhookUrl).catch(console.error);
+    res.json({ status: 'processing', text });
+  } catch (err) {
+    console.error('[IDEA] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 app.post('/webhook/tradingview', async (req, res) => {
   try {
     const body       = req.body;
@@ -71,12 +97,18 @@ app.post('/webhook/tradingview', async (req, res) => {
     const h4         = body.h4          || null;
     const h1         = body.h1          || null;
 
-    // RSI + VWAP from Pine Script plot_8 / plot_9 / plot_10
+    // RSI + VWAP from Pine Script plot_1 / plot_2 / plot_3
     const rsi      = body.rsi  != null ? parseFloat(body.rsi)  : null;
     const vwap     = body.vwap != null ? parseFloat(body.vwap) : null;
     const vwapBias = body.vwapBias != null
       ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
       : null;
+
+    // FVG from Pine Script plot_4 / plot_5 / plot_6 / plot_7
+    const bearFVGTop    = body.bearFVGTop    != null ? parseFloat(body.bearFVGTop)    : null;
+    const bearFVGBottom = body.bearFVGBottom != null ? parseFloat(body.bearFVGBottom) : null;
+    const bullFVGTop    = body.bullFVGTop    != null ? parseFloat(body.bullFVGTop)    : null;
+    const bullFVGBottom = body.bullFVGBottom != null ? parseFloat(body.bullFVGBottom) : null;
 
     if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
 
@@ -104,6 +136,10 @@ app.post('/webhook/tradingview', async (req, res) => {
       rsi,
       vwap,
       vwapBias,
+      bearFVGTop,
+      bearFVGBottom,
+      bullFVGTop,
+      bullFVGBottom,
       debit:       resolved.debit       || null,
       maxProfit:   resolved.maxProfit   || null,
       breakeven:   resolved.breakeven   || null,
@@ -171,6 +207,8 @@ app.listen(PORT, () => {
   console.log(`   SWING mode:  5-7DTE  $0.50–$3.00`);
   console.log(`   SPREAD mode: 5-7DTE  $0.50–$1.50 vertical debit`);
   console.log(`   RSI(14) + VWAP on every alert card`);
-  console.log(`   Dashboard: /dashboard`);
+  console.log('   Idea Validator: /webhook/idea');
+  console.log('   Flow Clusters:  /flow/clusters (fires at $500K+ in 10min)');
   bullflow.startBullflowStream();
+  startDiscordBot();
 });
