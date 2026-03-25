@@ -1,11 +1,13 @@
-// bullflowStream.js — Stratum Flow Scout v5.9
+// bullflowStream.js — Stratum Flow Scout v6.1
 // HIGH CONVICTION: sends BOTH naked option AND spread card to #flow-alerts
+// CLUSTER ENGINE: aggregates flow by ticker, fires when $500K+ in 10 min
 // ALL alerts go to #flow-alerts — no filter
-// ─────────────────────────────────────────────────────────────────
+// -----------------------------------------------------------------
 
 const fetch    = require('node-fetch');
 const resolver = require('./contractResolver');
 const alerter  = require('./alerter');
+const { processFlow } = require('./flowCluster'); // CLUSTER ENGINE
 
 const FLOW_WEBHOOK = process.env.DISCORD_FLOW_WEBHOOK_URL;
 
@@ -21,31 +23,31 @@ const HIGH_CONVICTION_ALERTS = [
 ];
 
 function isHighConviction(alertName, alertPremium) {
-  const nameMatch    = HIGH_CONVICTION_ALERTS.some(name =>
-    (alertName || '').toLowerCase().includes(name.toLowerCase())
-  );
+  const nameMatch    = HIGH_CONVICTION_ALERTS.some(function(name) {
+    return (alertName || '').toLowerCase().includes(name.toLowerCase());
+  });
   const premiumMatch = parseFloat(alertPremium || 0) >= 50000;
   return nameMatch || premiumMatch;
 }
 
-// ── LIVE AGGREGATOR ───────────────────────────────────────────────
+// -- LIVE AGGREGATOR ----------------------------------------------
 const liveAggregator = {
   data: {}, alertLog: [], lastResetDate: null,
 
-  checkReset() {
+  checkReset: function() {
     const now    = new Date();
     const today  = now.toISOString().slice(0, 10);
     const etHour = now.getUTCHours() - 4;
     const etMin  = now.getUTCMinutes();
     if ((etHour > 9 || (etHour === 9 && etMin >= 30)) && this.lastResetDate !== today) {
       this.data = {}; this.alertLog = []; this.lastResetDate = today;
-      console.log('[AGGREGATOR] Daily reset ✅');
+      console.log('[AGGREGATOR] Daily reset OK');
     }
   },
 
-  add(ticker, type, premium, orderType, alertName) {
+  add: function(ticker, type, premium, orderType, alertName) {
     this.checkReset();
-    const key = `${ticker}:${type}`;
+    const key = ticker + ':' + type;
     if (!this.data[key]) {
       this.data[key] = { ticker, type, total: 0, count: 0, sweeps: 0, firstSeen: new Date().toISOString() };
     }
@@ -58,12 +60,12 @@ const liveAggregator = {
     return e;
   },
 
-  getSummary() {
+  getSummary: function() {
     return { data: this.data, alertCount: this.alertLog.length, resetDate: this.lastResetDate };
   },
 };
 
-// ── SEND TO DISCORD ───────────────────────────────────────────────
+// -- SEND TO DISCORD ----------------------------------------------
 async function sendFlowToDiscord(message) {
   if (!FLOW_WEBHOOK) { console.log('[FLOW] No webhook URL'); return; }
   try {
@@ -72,11 +74,11 @@ async function sendFlowToDiscord(message) {
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ content: '```\n' + message + '\n```', username: 'Stratum Flow' }),
     });
-    console.log('[FLOW] Sent to #flow-alerts ✅');
+    console.log('[FLOW] Sent to #flow-alerts OK');
   } catch (err) { console.error('[FLOW] Discord error:', err.message); }
 }
 
-// ── PARSE OPRA ────────────────────────────────────────────────────
+// -- PARSE OPRA ---------------------------------------------------
 function parseOPRA(symbol) {
   try {
     const clean = (symbol || '').replace('O:', '');
@@ -86,13 +88,13 @@ function parseOPRA(symbol) {
     return {
       ticker,
       strike:  parseInt(strikePadded) / 1000,
-      expiry:  `20${date.slice(0,2)}-${date.slice(2,4)}-${date.slice(4,6)}`,
+      expiry:  '20' + date.slice(0,2) + '-' + date.slice(2,4) + '-' + date.slice(4,6),
       type:    typeChar === 'C' ? 'call' : 'put',
     };
   } catch { return null; }
 }
 
-// ── PROCESS ALERT ─────────────────────────────────────────────────
+// -- PROCESS ALERT ------------------------------------------------
 async function processAlert(raw) {
   console.log('[BULLFLOW RAW]', JSON.stringify(raw));
 
@@ -112,105 +114,106 @@ async function processAlert(raw) {
   const expiryFmt  = typeof expiry === 'string' && expiry.length > 5
     ? expiry.slice(5).replace('-', '/') : expiry;
 
-  const direction  = type === 'call' ? '🟢 BULLISH' : '🔴 BEARISH';
+  const direction  = type === 'call' ? 'BULLISH' : 'BEARISH';
   const typeLabel  = type === 'call' ? 'C' : 'P';
   const isSwept    = (orderType || alertName || '').toLowerCase().includes('sweep');
-  const orderTag   = isSwept ? '⚡ SWEEP' : '■ BLOCK';
-  const premiumFmt = premium >= 1000000 ? `$${(premium/1000000).toFixed(1)}M`
-                   : premium >= 1000    ? `$${(premium/1000).toFixed(0)}K`
-                   : `$${premium}`;
+  const orderTag   = isSwept ? 'SWEEP' : 'BLOCK';
+  const premiumFmt = premium >= 1000000 ? '$' + (premium/1000000).toFixed(1) + 'M'
+                   : premium >= 1000    ? '$' + (premium/1000).toFixed(0) + 'K'
+                   : '$' + premium;
 
   liveAggregator.add(ticker, type, premium, orderType, alertName);
 
-  const price = await resolver.getPrice(ticker).catch(() => null);
+  // -- FEED INTO CLUSTER ENGINE ---------------------------------
+  // Pass full raw data so cluster can parse OPRA and accumulate
+  processFlow({ ...raw, opra: symbol, totalPremium: premium, orderType, alertName }).catch(function(err) {
+    console.error('[CLUSTER] processFlow error:', err.message);
+  });
 
-  // ── BASIC FLOW CARD — all alerts ──────────────────────────────
+  const price = await resolver.getPrice(ticker).catch(function() { return null; });
+
+  // -- BASIC FLOW CARD — all alerts -----------------------------
   const flowLines = [
-    `🌊 FLOW — ${ticker} ${type.toUpperCase()}`,
-    `${ticker} $${strike}${typeLabel} ${expiryFmt} — ${direction}`,
-    price ? `Stock   $${price} LIVE` : null,
-    `═══════════════════════════════`,
-    `Premium ${premiumFmt}`,
-    `Type    ${orderTag}`,
-    `Alert   ${alertName}`,
-    `───────────────────────────────`,
-    isHighConviction(alertName, premium) ? `🔥 HIGH CONVICTION` : `👁️ Watch for Strat confirmation`,
-    `⏰ ${new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'})} ET`,
+    'FLOW -- ' + ticker + ' ' + type.toUpperCase(),
+    ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
+    price ? 'Stock   $' + price + ' LIVE' : null,
+    '===============================',
+    'Premium ' + premiumFmt,
+    'Type    ' + orderTag,
+    'Alert   ' + alertName,
+    '-------------------------------',
+    isHighConviction(alertName, premium) ? 'HIGH CONVICTION' : 'Watch for Strat confirmation',
+    'Time    ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
   ].filter(Boolean);
 
   await sendFlowToDiscord(flowLines.join('\n'));
 
-  // ── HIGH CONVICTION — also send naked option + spread cards ──
+  // -- HIGH CONVICTION — naked option + spread cards -----------
   if (isHighConviction(alertName, premium)) {
-    console.log(`[BULLFLOW] HIGH CONVICTION — resolving contracts for ${ticker}`);
+    console.log('[BULLFLOW] HIGH CONVICTION -- resolving contracts for ' + ticker);
 
     try {
-      // Resolve SWING naked option
       const swingResolved = await resolver.resolveContract(ticker, type, 'SWING');
       if (swingResolved) {
-        // Build naked option card
         const swingCard = [
-          `📈 SWING TRADE — ${swingResolved.dte}DTE`,
-          `${ticker} $${swingResolved.strike}${typeLabel} ${swingResolved.expiry?.slice(5).replace('-','/')} — ${direction}`,
-          `═══════════════════════════════`,
-          `Flow trigger: ${alertName} ${premiumFmt}`,
-          `───────────────────────────────`,
-          `Strike  $${swingResolved.strike} — ATM via Public.com`,
-          `Expiry  ${swingResolved.expiry?.slice(5).replace('-','/')} (${swingResolved.dte}DTE)`,
-          swingResolved.bid && swingResolved.ask
-            ? `Bid/Ask $${swingResolved.bid.toFixed(2)} / $${swingResolved.ask.toFixed(2)}` : null,
-          `───────────────────────────────`,
+          'SWING TRADE -- ' + swingResolved.dte + 'DTE',
+          ticker + ' $' + swingResolved.strike + typeLabel + ' ' + (swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--') + ' -- ' + direction,
+          '===============================',
+          'Flow trigger: ' + alertName + ' ' + premiumFmt,
+          '-------------------------------',
+          'Strike  $' + swingResolved.strike + ' -- ATM via Public.com',
+          'Expiry  ' + (swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--') + ' (' + swingResolved.dte + 'DTE)',
+          (swingResolved.bid && swingResolved.ask) ? 'Bid/Ask $' + swingResolved.bid.toFixed(2) + ' / $' + swingResolved.ask.toFixed(2) : null,
+          '-------------------------------',
         ].filter(Boolean);
 
         const sizing = resolver.calculatePositionSize(swingResolved.mid, 'SWING');
-        if (sizing?.viable) {
+        if (sizing && sizing.viable) {
           swingCard.push(
-            `Entry   $${sizing.premium.toFixed(2)} x${sizing.contracts} = $${sizing.totalCost}`,
-            `Stop    $${sizing.stopPrice} (loss -$${sizing.stopLoss})`,
-            `T1      $${sizing.t1Price} (profit +$${sizing.t1Profit})`,
-            `T2      $${sizing.t2Price} (runner)`,
-            `Risk    ${sizing.riskPct}% of $7K = $${sizing.stopLoss} max`,
+            'Entry   $' + sizing.premium.toFixed(2) + ' x' + sizing.contracts + ' = $' + sizing.totalCost,
+            'Stop    $' + sizing.stopPrice + ' (loss -$' + sizing.stopLoss + ')',
+            'T1      $' + sizing.t1Price + ' (profit +$' + sizing.t1Profit + ')',
+            'T2      $' + sizing.t2Price + ' (runner)',
+            'Risk    ' + sizing.riskPct + '% of $7K = $' + sizing.stopLoss + ' max'
           );
         } else {
-          swingCard.push(`⚠️  Check live premium before entry`);
+          swingCard.push('Check live premium before entry');
         }
-        swingCard.push(`───────────────────────────────`, `Hold    1–3 days max`);
-
+        swingCard.push('-------------------------------', 'Hold    1-3 days max');
         await sendFlowToDiscord(swingCard.join('\n'));
 
-        // Resolve SPREAD using same ticker
+        // Spread card
         const spreadResolved = await resolver.resolveContract(ticker, type, 'SPREAD');
-        if (spreadResolved?.debit) {
-          const spreadSizing = resolver.calculatePositionSize(
-            spreadResolved.debit, 'SPREAD', 7000, spreadResolved
-          );
-          const s = spreadSizing?.viable ? spreadSizing : null;
+        if (spreadResolved && spreadResolved.debit) {
+          const spreadSizing = resolver.calculatePositionSize(spreadResolved.debit, 'SPREAD', 7000, spreadResolved);
+          const s = spreadSizing && spreadSizing.viable ? spreadSizing : null;
+          const exFmt = spreadResolved.expiry ? spreadResolved.expiry.slice(5).replace('-','/') : '--';
 
           const spreadCard = [
-            `📊 SPREAD TRADE — ${spreadResolved.dte}DTE`,
-            `${ticker} $${spreadResolved.strike}/$${spreadResolved.sellStrike}${typeLabel} ${spreadResolved.expiry?.slice(5).replace('-','/')} — ${direction}`,
-            `═══════════════════════════════`,
-            `Flow trigger: ${alertName} ${premiumFmt}`,
-            `───────────────────────────────`,
-            `BUY     ${ticker} $${spreadResolved.strike}${typeLabel} ${spreadResolved.expiry?.slice(5).replace('-','/')}`,
-            `SELL    ${ticker} $${spreadResolved.sellStrike}${typeLabel} ${spreadResolved.expiry?.slice(5).replace('-','/')}`,
-            `Width   $${spreadResolved.spreadWidth} spread`,
-            `───────────────────────────────`,
-            s ? `Debit   $${s.debit.toFixed(2)} x${s.contracts} = $${s.totalCost}` : `Debit   $${spreadResolved.debit?.toFixed(2)}`,
-            s ? `Max Loss    $${s.maxLoss}` : null,
-            s ? `Max Profit  $${s.maxGain}` : null,
-            `Breakeven   $${spreadResolved.breakeven}`,
-            `───────────────────────────────`,
-            s ? `Stop    $${s.stopPrice} (50% of debit)` : `Stop    50% of debit`,
-            s ? `T1      $${s.t1Price} (100% gain)` : `T1      +100% of debit`,
-            s ? `Risk    ${s.riskPct}% of $7K = $${s.maxLoss}` : `Risk    defined`,
-            `───────────────────────────────`,
-            `Hold    1–3 days max`,
-            `⏰ ${new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'})} ET`,
+            'SPREAD TRADE -- ' + spreadResolved.dte + 'DTE',
+            ticker + ' $' + spreadResolved.strike + '/$' + spreadResolved.sellStrike + typeLabel + ' ' + exFmt + ' -- ' + direction,
+            '===============================',
+            'Flow trigger: ' + alertName + ' ' + premiumFmt,
+            '-------------------------------',
+            'BUY     ' + ticker + ' $' + spreadResolved.strike    + typeLabel + ' ' + exFmt,
+            'SELL    ' + ticker + ' $' + spreadResolved.sellStrike + typeLabel + ' ' + exFmt,
+            'Width   $' + spreadResolved.spreadWidth + ' spread',
+            '-------------------------------',
+            s ? 'Debit   $' + s.debit.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Debit   $' + (spreadResolved.debit ? spreadResolved.debit.toFixed(2) : '--'),
+            s ? 'Max Loss    $' + s.maxLoss   : null,
+            s ? 'Max Profit  $' + s.maxGain   : null,
+            'Breakeven   $' + spreadResolved.breakeven,
+            '-------------------------------',
+            s ? 'Stop    $' + s.stopPrice + ' (50% of debit)' : 'Stop    50% of debit',
+            s ? 'T1      $' + s.t1Price   + ' (100% gain)'   : 'T1      +100% of debit',
+            s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.maxLoss : 'Risk    defined',
+            '-------------------------------',
+            'Hold    1-3 days max',
+            'Time    ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
           ].filter(Boolean);
 
           await sendFlowToDiscord(spreadCard.join('\n'));
-          console.log(`[SPREAD] Sent spread card for ${ticker} ✅`);
+          console.log('[SPREAD] Sent spread card for ' + ticker + ' OK');
         }
       }
     } catch (err) {
@@ -219,17 +222,17 @@ async function processAlert(raw) {
   }
 }
 
-// ── MAIN STREAM ───────────────────────────────────────────────────
+// -- MAIN STREAM --------------------------------------------------
 async function startBullflowStream() {
   const apiKey = process.env.BULLFLOW_API_KEY;
   if (!apiKey) { console.error('[BULLFLOW] No API key'); return; }
 
   console.log('[BULLFLOW] Connecting to stream...');
 
-  const connect = async () => {
+  const connect = async function() {
     try {
       const res = await fetch(
-        `https://api.bullflow.io/v1/streaming/alerts?key=${apiKey}`,
+        'https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey,
         { headers: { Accept: 'text/event-stream' } }
       );
 
@@ -239,11 +242,11 @@ async function startBullflowStream() {
         return;
       }
 
-      console.log('[BULLFLOW] Stream connected ✅');
+      console.log('[BULLFLOW] Stream connected OK');
 
       let buffer = '';
 
-      res.body.on('data', async (chunk) => {
+      res.body.on('data', async function(chunk) {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
         buffer = lines.pop();
@@ -259,11 +262,11 @@ async function startBullflowStream() {
 
           try {
             const parsed = JSON.parse(raw);
-            const event  = parsed?.event || '';
+            const event  = parsed && parsed.event ? parsed.event : '';
             if (event === 'heartbeat' || event === 'init') return;
 
             if (event === 'alert') {
-              const data = parsed?.data || parsed;
+              const data = parsed.data || parsed;
               await processAlert(data);
             }
           } catch (err) {
@@ -272,13 +275,13 @@ async function startBullflowStream() {
         }
       });
 
-      res.body.on('error', (err) => {
+      res.body.on('error', function(err) {
         console.error('[BULLFLOW] Stream error:', err.message);
         scheduleReconnect();
       });
 
-      res.body.on('end', () => {
-        console.log('[BULLFLOW] Stream ended — reconnecting...');
+      res.body.on('end', function() {
+        console.log('[BULLFLOW] Stream ended -- reconnecting...');
         scheduleReconnect();
       });
 
@@ -288,7 +291,7 @@ async function startBullflowStream() {
     }
   };
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = function() {
     console.log('[BULLFLOW] Reconnecting in 10 seconds...');
     setTimeout(connect, 10000);
   };
