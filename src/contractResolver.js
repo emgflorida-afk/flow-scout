@@ -169,8 +169,10 @@ async function getPublicGreeks(osiSymbols, token, accountId) {
     );
     const data = await res.json();
     // Key by osiSymbol for O(1) lookup in calculateGEX
+    // Handle non-array response from Public.com gracefully
+    const items = Array.isArray(data) ? data : (data?.greeks || data?.data || []);
     const map = {};
-    for (const item of (data || [])) {
+    for (const item of items) {
       if (item.osiSymbol) {
         map[item.osiSymbol] = {
           delta:             parseFloat(item.delta             || 0),
@@ -522,7 +524,7 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
 
   const spreadWidth = best.ask - best.bid;
   const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;
-  const wideSpread  = spreadPct > 0.12;
+  const wideSpread  = spreadPct > 0.15;
 
   console.log(`[OPRA] ${ticker} ✅ ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
 
