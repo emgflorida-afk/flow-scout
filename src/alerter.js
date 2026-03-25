@@ -99,10 +99,10 @@ function calcDTE(expiryDateStr) {
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
-  if (rsi > 70) return 'overbought WARNING';
-  if (rsi < 30) return 'oversold WARNING';
+  if (rsi > 70) return 'overbought \u26a0\ufe0f';
+  if (rsi < 30) return 'oversold \u26a0\ufe0f';
   if (rsi > 55) return 'bullish momentum';
-  if (rsi < 45) return 'room to fall OK';
+  if (rsi < 45) return 'room to fall \u2705';
   return 'neutral';
 }
 
@@ -120,9 +120,8 @@ function buildTechnicalsSection(tvData) {
     lines.push('RSI (14)    ' + rsi.toFixed(0) + ' -- ' + getRsiLabel(rsi));
   }
   if (vwap != null && !isNaN(vwap) && vwapBias) {
-    const biasIcon  = vwapBias === 'above' ? 'ABOVE ^' : 'BELOW v';
-    const biasLabel = vwapBias === 'above' ? 'bullish' : 'bearish';
-    lines.push('VWAP        $' + vwap.toFixed(2) + ' -- price ' + biasIcon + ' ' + biasLabel + ' confirmed');
+    const biasIcon  = vwapBias === 'above' ? 'ABOVE \ud83d\udd3c bullish' : 'BELOW \ud83d\udd3d bearish';
+    lines.push('VWAP        $' + vwap.toFixed(2) + ' -- price ' + biasIcon + ' confirmed');
   }
   return lines;
 }
@@ -172,13 +171,13 @@ function buildEdgeSection(resolved) {
 
   if (wideSpread && bid && ask) {
     const sw = parseFloat((ask - bid).toFixed(2));
-    lines.push('WARNING WIDE SPREAD -- $' + sw + ' wide -- risky fill, limit at mid only');
+    lines.push('\u26a0\ufe0f WIDE SPREAD -- $' + sw + ' wide -- risky fill, limit at mid only');
   }
 
   if (resolved.dte === 0) {
     const now    = new Date();
     const etHour = now.getUTCHours() - 4;
-    if (etHour >= 14) lines.push('0DTE after 2PM -- DO NOT ENTER');
+    if (etHour >= 14) lines.push('\ud83d\udeab 0DTE after 2PM -- DO NOT ENTER');
   }
 
   if (lines.length > 0) lines.push('-------------------------------');
@@ -199,7 +198,7 @@ function buildEdgeSection(resolved) {
   if (ivCtx) {
     lines.push('IV Regime   ' + ivCtx.ivRegime);
     lines.push('Impl Move   +-' + ivCtx.impliedMove + '% | Daily +-' + ivCtx.dailyMove + '%');
-    if (ivCtx.recommendSpreads) lines.push('High IV -- consider spread instead of naked');
+    if (ivCtx.recommendSpreads) lines.push('\ud83d\udca1 High IV -- consider spread instead of naked');
   }
 
   return lines;
@@ -446,17 +445,17 @@ async function sendMorningBrief() {
   const vixLine = uvxyPrice ? 'UVXY $' + uvxyPrice + ' ' + vixLevel : 'VIX  -- unavailable';
 
   const lines = [
-    'STRATUM MORNING BRIEF v6.1',
+    '\ud83d\udcca STRATUM MORNING BRIEF v6.1',
     dateStr,
     '===============================',
-    spyLine,
-    '   Wait for 9:45AM to settle',
+    '\ud83d\udcc8 ' + spyLine,
+    '   \u27a1\ufe0f  Wait for 9:45AM to settle',
     '-------------------------------',
-    vixLine,
+    '\ud83d\ude28 ' + vixLine,
     '-------------------------------',
-    'DAY    0-1DTE  $0.30-$1.50  T1:+35%  risk $120',
-    'SWING  5-7DTE  $0.50-$3.00  T1:+60%  risk $140',
-    'SPREAD 5-7DTE  $0.50-$1.50  T1:+100% risk $150',
+    '\u26a1 DAY    0-1DTE  $0.30-$1.50  T1:+35%  risk $120',
+    '\ud83d\udcc8 SWING  5-7DTE  $0.50-$3.00  T1:+60%  risk $140',
+    '\ud83d\udcca SPREAD 5-7DTE  $0.50-$1.50  T1:+100% risk $150',
     '-------------------------------',
     'RULES:',
     '6/6 confluence -- execute immediately',
@@ -464,13 +463,13 @@ async function sendMorningBrief() {
     'Flow high conviction -- execute swing or spread card',
     'Flow + Strat same ticker -- conviction trade',
     '-------------------------------',
-    'Entry window: 9:45AM - 3:30PM ET',
-    'No entries after 3:30PM',
-    'No 0DTE entries after 2PM',
+    '\u23f0 Entry window: 9:45AM - 3:30PM ET',
+    '\ud83d\udeab No entries after 3:30PM',
+    '\ud83d\udeab No 0DTE entries after 2PM',
     '-------------------------------',
-    '#strat-alerts      -- Chart setups',
-    '#flow-alerts       -- Unusual flow',
-    '#conviction-trades -- Execute',
+    '\ud83d\udcca #strat-alerts      -- Chart setups',
+    '\ud83c\udf0a #flow-alerts       -- Unusual flow',
+    '\ud83d\udc51 #conviction-trades -- Execute',
   ];
 
   await sendToChannel('strat', lines.join('\n'));
