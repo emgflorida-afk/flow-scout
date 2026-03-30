@@ -1,23 +1,26 @@
-// ideaValidator.js  Stratum Flow Scout v6.1
+// ideaValidator.js - Stratum Flow Scout v7.0
 // Parses trade ideas from any text format using Claude AI
-// Runs full Stratum validation  confluence, RSI, VWAP, GEX, Max Pain
+// Runs full Stratum validation - confluence, RSI, VWAP, GEX, Max Pain
 // Posts scored verdict card to #conviction-trades
 // —————————————————————–
 
 const fetch    = require(‘node-fetch’);
 const resolver = require(’./contractResolver’);
 
+// Capitol Trades loaded safely
+let capitol = null;
+try { capitol = require(’./capitolTrades’); } catch(e) { console.log(’[CAPITOL] Not loaded in validator’); }
+
 // – PARSE TRADE IDEA WITH CLAUDE AI ——————————
-// Accepts any format: “NVDA puts $120 4/2”, “buying SPY 560P this week”, etc.
 async function parseTradeIdea(rawText) {
 try {
 const apiKey = process.env.ANTHROPIC_API_KEY;
 if (!apiKey) return null;
 
 ```
-const prompt = 'Extract the trade idea from this text and return ONLY a JSON object with no markdown or explanation.\n\nText: ' + rawText + '\n\nReturn this exact JSON format:\n{\n  "ticker": "SYMBOL",\n  "direction": "call" or "put",\n  "strike": number or null,\n  "expiry": "YYYY-MM-DD" or null,\n  "confidence": "high" or "medium" or "low"\n}\n\nRules:\n- ticker must be uppercase stock symbol\n- direction: if bearish/puts/short = "put", if bullish/calls/long = "call"\n- strike: extract number if mentioned, else null\n- expiry: convert to YYYY-MM-DD if mentioned, else null\n- confidence: how clearly the idea is expressed\n- If no valid trade idea found, return {"error": "no trade idea found"}';
+const prompt = 'Extract the trade idea from this text and return ONLY a JSON object with no markdown or explanation.\n\nText: ' + rawText + '\n\nReturn this exact JSON format:\n{\n  "ticker": "SYMBOL",\n  "direction": "call" or "put",\n  "strike": number or null,\n  "expiry": "YYYY-MM-DD" or null,\n  "confidence": "high" or "medium" or "low"\n}\n\nRules:\n- ticker must be uppercase stock symbol\n- direction: if bearish/puts/short = "put", if bullish/calls/long = "call"\n- strike: extract number if mentioned, else null\n- expiry: convert to YYYY-MM-DD if mentioned, else null\n- If no valid trade idea found, return {"error": "no trade idea found"}';
 
-const res  = await fetch('https://api.anthropic.com/v1/messages', {
+const res = await fetch('https://api.anthropic.com/v1/messages', {
   method:  'POST',
   headers: {
     'Content-Type':      'application/json',
@@ -31,9 +34,9 @@ const res  = await fetch('https://api.anthropic.com/v1/messages', {
   }),
 });
 
-const data = await res.json();
-const text = data?.content?.[0]?.text || '';
-const clean = text.replace(/```json|```/g, '').trim();
+const data   = await res.json();
+const text   = data && data.content && data.content[0] ? data.content[0].text : '';
+const clean  = text.replace(/```json|```/g, '').trim();
 const parsed = JSON.parse(clean);
 if (parsed.error) return null;
 console.log('[IDEA] Parsed:', JSON.stringify(parsed));
@@ -48,21 +51,21 @@ return null;
 
 // – VALIDATE IDEA AGAINST STRATUM ––––––––––––––––
 async function validateIdea(parsed) {
-const { ticker, direction, strike, expiry } = parsed;
+const ticker    = parsed.ticker;
+const direction = parsed.direction;
+const strike    = parsed.strike;
+const expiry    = parsed.expiry;
 
-// Resolve contract  gets price, chain, GEX, Max Pain, IV context
 const resolved = await resolver.resolveContract(ticker, direction, ‘SWING’);
 if (!resolved) return { error: ’Could not resolve contract for ’ + ticker };
 
-// Score the setup
-const price    = resolved.price;
-const gex      = resolved.gex;
-const maxPain  = resolved.maxPain;
-const ivCtx    = resolved.ivCtx;
-const timeCtx  = resolved.timeCtx;
-const oiNodes  = resolved.oiNodes;
+const price   = resolved.price;
+const gex     = resolved.gex;
+const maxPain = resolved.maxPain;
+const ivCtx   = resolved.ivCtx;
+const timeCtx = resolved.timeCtx;
+const oiNodes = resolved.oiNodes;
 
-// Build validation score
 let score = 0;
 const checks = [];
 
@@ -89,8 +92,8 @@ checks.push(‘Impl Move +-’ + ivCtx.impliedMove + ‘% | Daily +-’ + ivCtx.
 
 // OI nodes
 if (oiNodes && oiNodes.length > 0) {
-const topNode = oiNodes[0];
-const nodeAligned = (direction === ‘put’ && topNode.bias.includes(‘PUT’)) || (direction === ‘call’ && topNode.bias.includes(‘CALL’));
+var topNode    = oiNodes[0];
+var nodeAligned = (direction === ‘put’ && topNode.bias.includes(‘PUT’)) || (direction === ‘call’ && topNode.bias.includes(‘CALL’));
 if (nodeAligned) { score += 1; checks.push(‘OI Wall $’ + topNode.strike + ’ ’ + topNode.bias + ’ – aligned’); }
 else             { checks.push(‘OI Wall $’ + topNode.strike + ’ ’ + topNode.bias + ’ – against’); }
 }
@@ -99,29 +102,32 @@ else             { checks.push(‘OI Wall $’ + topNode.strike + ’ ’ + topN
 if (timeCtx && timeCtx.ok) { score += 1; checks.push(’Session: ’ + timeCtx.window); }
 
 // Verdict
-const verdict = score >= 4 ? { label: ‘VALIDATED – EXECUTE’,   emoji: ‘OK’,   color: ‘green’ }
+var verdict = score >= 4 ? { label: ‘VALIDATED – EXECUTE’,   emoji: ‘OK’,   color: ‘green’ }
 : score >= 2 ? { label: ‘CAUTION – VERIFY FIRST’, emoji: ‘WARN’, color: ‘amber’ }
-:              { label: ‘SKIP – EDGE NOT THERE’,  emoji: ‘NO’,   color: ‘red’   };
+:               { label: ‘SKIP – EDGE NOT THERE’,  emoji: ‘NO’,   color: ‘red’   };
 
-return {
-ticker, direction, strike, expiry,
-price, resolved, score,
-checks, verdict, gex, maxPain, ivCtx, timeCtx,
-};
+return { ticker, direction, strike, expiry, price, resolved, score, checks, verdict, gex, maxPain, ivCtx, timeCtx };
 }
 
 // – BUILD VERDICT CARD —————————————––
 function buildVerdictCard(rawText, parsed, validation) {
-const { ticker, direction, strike, expiry } = parsed;
-const { verdict, score, checks, price, resolved } = validation;
+var ticker    = parsed.ticker;
+var direction = parsed.direction;
+var strike    = parsed.strike;
+var expiry    = parsed.expiry;
+var verdict   = validation.verdict;
+var score     = validation.score;
+var checks    = validation.checks;
+var price     = validation.price;
+var resolved  = validation.resolved;
 
-const typeLabel = direction === ‘put’ ? ‘P’ : ‘C’;
-const dirLabel  = direction === ‘put’ ? ‘BEARISH’ : ‘BULLISH’;
-const strikeStr = strike  ? ‘$’ + strike   : ‘ATM’;
-const expiryStr = expiry  ? expiry.slice(5).replace(’-’, ‘/’) : ‘nearest’;
-const midStr    = resolved?.mid ? ‘$’ + resolved.mid.toFixed(2) : ‘–’;
+var typeLabel  = direction === ‘put’ ? ‘P’ : ‘C’;
+var dirLabel   = direction === ‘put’ ? ‘BEARISH’ : ‘BULLISH’;
+var strikeStr  = strike ? ‘$’ + strike : ‘ATM’;
+var expiryStr  = expiry ? expiry.slice(5).replace(’-’, ‘/’) : ‘nearest’;
+var midStr     = resolved && resolved.mid ? ‘$’ + resolved.mid.toFixed(2) : ‘–’;
 
-const lines = [
+var lines = [
 ’IDEA VALIDATOR – ’ + verdict.emoji,
 ticker + ’ ’ + strikeStr + typeLabel + ’ ’ + expiryStr + ’ – ’ + dirLabel,
 ‘===============================’,
@@ -129,63 +135,53 @@ ticker + ’ ’ + strikeStr + typeLabel + ’ ’ + expiryStr + ’ – ’ + d
 ‘”’ + rawText.slice(0, 80) + ‘”’,
 ‘—————————––’,
 ’VERDICT    ’ + verdict.label,
-‘Score      ’ + score + ‘/5’,
+’Score      ’ + score + ‘/5’,
 ‘—————————––’,
-‘Stock      $’ + (price ? price.toFixed(2) : ‘–’) + ’ LIVE’,
-resolved ? ’Contract   ’ + resolved.symbol : null,
-resolved ? ‘Premium    ’ + midStr : null,
-‘—————————––’,
-‘VALIDATION CHECKS:’,
-].concat(checks.map(function(c) { return ’  ’ + c; })).concat([
-‘—————————––’,
-resolved ? ‘Entry   ’ + midStr : null,
-resolved?.mid ? ‘Stop    $’ + (resolved.mid * 0.60).toFixed(2) + ’ (40% of premium)’ : null,
-resolved?.mid ? ‘T1      $’ + (resolved.mid * 1.60).toFixed(2) + ’ (+60%)’ : null,
-‘—————————––’,
-‘Time    ’ + new Date().toLocaleTimeString(‘en-US’, { timeZone: ‘America/New_York’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ’ ET’,
-]).filter(function(l) { return l !== null; });
+];
 
-return lines.join(’\n’);
+checks.forEach(function(c) { lines.push(’  ’ + c); });
+
+lines.push(’—————————––’);
+if (resolved && resolved.mid) lines.push(‘Premium    ’ + midStr + ’ (live)’);
+if (price) lines.push(‘Stock      $’ + price + ’ (live)’);
+lines.push(‘Time       ’ + new Date().toLocaleTimeString(‘en-US’, { timeZone: ‘America/New_York’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ’ ET’);
+
+return lines.filter(function(l) { return l !== null; }).join(’\n’);
 }
 
-// – MAIN EXPORT –––––––––––––––––––––––––
+// – VALIDATE AND POST ––––––––––––––––––––––
 async function validateAndPost(rawText, webhookUrl) {
 console.log(’[IDEA] Validating:’, rawText);
 
-// Step 1  Parse with Claude AI
-const parsed = await parseTradeIdea(rawText);
+var parsed = await parseTradeIdea(rawText);
 if (!parsed) {
-console.log(’[IDEA] Could not parse trade idea’);
-return { error: ‘Could not parse trade idea from text’ };
+await postToDiscord(webhookUrl, ‘IDEA VALIDATOR – ERROR\nCould not parse trade idea from: “’ + rawText.slice(0, 80) + ‘”’);
+return;
 }
 
-// Step 2  Validate against Stratum
-const validation = await validateIdea(parsed);
+var validation = await validateIdea(parsed);
 if (validation.error) {
-console.log(’[IDEA] Validation error:’, validation.error);
-return { error: validation.error };
+await postToDiscord(webhookUrl, ‘IDEA VALIDATOR – ERROR\n’ + validation.error);
+return;
 }
 
-// Step 3  Build and post verdict card
-const card = buildVerdictCard(rawText, parsed, validation);
+var card = buildVerdictCard(rawText, parsed, validation);
+await postToDiscord(webhookUrl, card);
+console.log(’[IDEA] Verdict posted – Score: ’ + validation.score + ’/5 – ’ + validation.verdict.label);
+}
 
+// – POST TO DISCORD –––––––––––––––––––––––
+async function postToDiscord(webhookUrl, message) {
+if (!webhookUrl) return;
 try {
-const res = await fetch(webhookUrl, {
+await fetch(webhookUrl, {
 method:  ‘POST’,
 headers: { ‘Content-Type’: ‘application/json’ },
-body:    JSON.stringify({ content: ‘`\n' + card + '\n`’, username: ‘Stratum Validator’ }),
+body:    JSON.stringify({ content: ‘`\n' + message + '\n`’, username: ‘Stratum Validator’ }),
 });
-if (res.ok) console.log(’[IDEA] Verdict posted to Discord OK’);
 } catch (err) {
-console.error(’[IDEA] Discord post error:’, err.message);
+console.error(’[IDEA] Discord error:’, err.message);
+}
 }
 
-return {
-ticker:   parsed.ticker,
-direction: parsed.direction,
-verdict:  validation.verdict.label,
-score:    validation.score,
-};
-}
-
-module.exports = { validateAndPost };
+module.exports = { validateAndPost, parseTradeIdea, validateIdea };
