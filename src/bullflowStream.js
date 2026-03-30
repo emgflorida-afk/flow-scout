@@ -205,16 +205,29 @@ async function processAlert(raw) {
     retrace250 = parseFloat((swingResolved.mid * 0.75).toFixed(2));
   }
 
+  // Check if flow expiry is expired or near-term vs long-term
+  var flowExpiryDate  = typeof expiry === 'string' && expiry.length > 7 ? new Date(expiry) : null;
+  var daysToExpiry    = flowExpiryDate ? Math.ceil((flowExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : null;
+  var isLongTerm      = daysToExpiry && daysToExpiry > 30;
+  var isExpired       = daysToExpiry && daysToExpiry < 0;
+
   const flowLines = [
     'FLOW -- ' + ticker + ' ' + type.toUpperCase(),
-    ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
-    price ? 'Stock   $' + price + ' LIVE' : null,
     '===============================',
+    // Original flow contract info
+    'SMART MONEY TRADE:',
+    ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + (isExpired ? ' -- EXPIRED' : isLongTerm ? ' -- LONG TERM (' + daysToExpiry + ' days)' : ' -- SHORT TERM'),
+    price ? 'Stock   $' + price + ' LIVE' : null,
     'Premium ' + premiumFmt,
     'Type    ' + orderTag,
     'Alert   ' + alertName,
     '-------------------------------',
     isHighConviction(alertName, premium) ? 'HIGH CONVICTION -- prepare entry' : 'Watch for Strat confirmation',
+    isLongTerm ? 'Signal  Long-term position build -- bullish for weeks/months' : null,
+    isExpired  ? 'WARNING Expired contract -- use swing card below for entry' : null,
+    // Your entry
+    retrace125 ? '-------------------------------' : null,
+    retrace125 ? 'YOUR ENTRY (ATM swing):' : null,
     retrace125 ? 'SET LIMIT AT RETRACEMENT:' : null,
     retrace125 ? '12.5%   $' + retrace125 + '  <-- PRIMARY LIMIT' : null,
     retrace250 ? '25.0%   $' + retrace250 + '  <-- SECONDARY' : null,

@@ -96,6 +96,39 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
+// -- RETRACEMENT LEVELS (VOLATILITY-AWARE) -----------------------
+// Low vol  (ADX < 20): tight retrace 12.5% / 25%
+// Normal   (ADX 20-30): standard 18.75% / 31.25%
+// High vol (ADX > 30): deep retrace 25% / 37.5%
+function getRetracementLevels(premium, adx) {
+  if (!premium || premium <= 0) return null;
+  var p   = parseFloat(premium);
+  var adxVal = adx ? parseFloat(adx) : 0;
+
+  var r1, r2, r3, label;
+  if (adxVal >= 30) {
+    // HIGH VOLATILITY -- deeper retrace needed
+    r1 = parseFloat((p * 0.75).toFixed(2));   // 25% retrace
+    r2 = parseFloat((p * 0.625).toFixed(2));  // 37.5% retrace
+    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
+    label = 'HIGH VOL (ADX ' + adxVal.toFixed(0) + ')';
+  } else if (adxVal >= 20) {
+    // NORMAL VOLATILITY -- standard retrace
+    r1 = parseFloat((p * 0.8125).toFixed(2)); // 18.75% retrace
+    r2 = parseFloat((p * 0.6875).toFixed(2)); // 31.25% retrace
+    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
+    label = 'NORMAL VOL (ADX ' + adxVal.toFixed(0) + ')';
+  } else {
+    // LOW VOLATILITY -- tight retrace
+    r1 = parseFloat((p * 0.875).toFixed(2));  // 12.5% retrace
+    r2 = parseFloat((p * 0.75).toFixed(2));   // 25% retrace
+    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
+    label = adxVal > 0 ? 'LOW VOL (ADX ' + adxVal.toFixed(0) + ')' : '';
+  }
+
+  return { primary: r1, secondary: r2, invalid: r3, label: label };
+}
+
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
@@ -359,25 +392,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   }
 
   if (!card) return false;
-
-  // Grade filter -- only A+ and A go to #conviction-trades
-  var parsedGrade = resolver.parseOPRA(opraSymbol);
-  var gradeCheck  = '';
-  if (card.text.includes('Grade    A+ --')) gradeCheck = 'A+';
-  else if (card.text.includes('Grade    A --')) gradeCheck = 'A';
-  else if (card.text.includes('Grade    B --')) gradeCheck = 'B';
-  else gradeCheck = 'C';
-
-  // All signals go to #strat-alerts
   await sendToChannel('strat', card.text, card.ticker);
-
-  // Only A+ and A go to #conviction-trades automatically
-  if (gradeCheck === 'A+' || gradeCheck === 'A') {
-    var convCard = card.text
-      .replace('SWING TRADE', gradeCheck === 'A+' ? 'A+ CONVICTION TRADE' : 'A CONVICTION TRADE');
-    await sendToChannel('conviction', convCard, card.ticker);
-    console.log('[CONVICTION] ' + gradeCheck + ' grade -- posted to #conviction-trades');
-  }
 
   const parsed = resolver.parseOPRA(opraSymbol);
   if (parsed) {
