@@ -18,6 +18,7 @@ const dashboard      = require('./dashboard');
 const ideaValidator  = require('./ideaValidator');
 const { startDiscordBot, handleInteraction } = require('./discordBot');
 const { getClusterSummary } = require('./flowCluster');
+const ts = require('./tradestation');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -204,6 +205,45 @@ app.get('/test/bullflow', function(req, res) {
   res.json({ status: 'Bullflow stream running OK', version: '6.1' });
 });
 
+// -- TRADESTATION AUTH --------------------------------------------
+// Step 1: Visit /ts-auth in browser → redirects to TradeStation login
+// Step 2: After login → /ts-callback → saves refresh token automatically
+// Step 3: Done forever — auto-refreshes every 20 minutes
+
+app.get('/ts-auth', function(req, res) {
+  const loginUrl = ts.getLoginUrl();
+  console.log('[TS AUTH] Redirecting to TradeStation login...');
+  res.redirect(loginUrl);
+});
+
+app.get('/ts-callback', async function(req, res) {
+  const code = req.query.code;
+  if (!code) {
+    return res.send('<h2>Error: No code received from TradeStation</h2>');
+  }
+  try {
+    console.log('[TS AUTH] Exchanging code for tokens...');
+    const data = await ts.exchangeCode(code);
+    if (data.refresh_token) {
+      ts.setRefreshToken(data.refresh_token);
+      console.log('[TS AUTH] Refresh token obtained OK ✅');
+      console.log('[TS AUTH] Add to Railway: TS_REFRESH_TOKEN=' + data.refresh_token);
+      res.send(
+        '<h2>✅ TradeStation Connected!</h2>' +
+        '<p>Copy this refresh token and add it to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>' +
+        '<textarea rows="4" cols="80" onclick="this.select()">' + data.refresh_token + '</textarea>' +
+        '<br><br><p>Once added to Railway, TradeStation will auto-refresh forever.</p>'
+      );
+    } else {
+      console.error('[TS AUTH] Failed:', JSON.stringify(data));
+      res.send('<h2>❌ Auth Failed</h2><pre>' + JSON.stringify(data, null, 2) + '</pre>');
+    }
+  } catch (err) {
+    console.error('[TS AUTH] Error:', err.message);
+    res.send('<h2>Error: ' + err.message + '</h2>');
+  }
+});
+
 // -- START --------------------------------------------------------
 app.listen(PORT, function() {
   console.log('Flow Scout v6.1 running on port ' + PORT);
@@ -214,7 +254,7 @@ app.listen(PORT, function() {
   console.log('   SPREAD mode: 5-7DTE  $0.50-$1.50 vertical debit');
   console.log('   RSI(14) + VWAP + FVG on every card');
   console.log('   Idea Validator: /webhook/idea');
-  console.log('   Discord Bot:    /interactions');
+  console.log('   TradeStation Auth: /ts-auth (one-time browser login)');
   console.log('   Flow Clusters:  /flow/clusters ($500K+ in 10min)');
   bullflow.startBullflowStream();
   startDiscordBot();
