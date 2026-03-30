@@ -96,6 +96,43 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
+// -- CANCEL BY TIME -----------------------------------------------
+// Returns "Cancel By HH:MM AM/PM ET" — fire time + 90 min
+// Capped at 11:30AM for morning window, 3:30PM for afternoon
+function getCancelByTime() {
+  const now   = new Date();
+  const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const h     = etNow.getHours();
+  const m     = etNow.getMinutes();
+
+  // After 3:30PM — hard block
+  if (h > 15 || (h === 15 && m >= 30)) return null;
+
+  // Add 90 minutes
+  let cancelMin = h * 60 + m + 90;
+
+  // Cap at 11:30AM for morning (before noon)
+  if (h < 12 && cancelMin > 11 * 60 + 30) cancelMin = 11 * 60 + 30;
+
+  // Cap at 3:30PM for afternoon
+  if (cancelMin > 15 * 60 + 30) cancelMin = 15 * 60 + 30;
+
+  const ch   = Math.floor(cancelMin / 60);
+  const cm   = cancelMin % 60;
+  const ampm = ch >= 12 ? 'PM' : 'AM';
+  const ch12 = ch > 12 ? ch - 12 : (ch === 0 ? 12 : ch);
+  return ch12 + ':' + (cm < 10 ? '0' + cm : cm) + ' ' + ampm + ' ET';
+}
+
+// -- IS LATE ENTRY ------------------------------------------------
+function isLateEntry() {
+  const now   = new Date();
+  const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const h     = etNow.getHours();
+  const m     = etNow.getMinutes();
+  return (h > 15 || (h === 15 && m >= 30));
+}
+
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
@@ -109,20 +146,32 @@ function getRsiLabel(rsi) {
 // -- BUILD TECHNICALS SECTION -------------------------------------
 function buildTechnicalsSection(tvData) {
   if (!tvData) return [];
-  const rsi      = tvData.rsi      != null ? parseFloat(tvData.rsi)  : null;
-  const vwap     = tvData.vwap     != null ? parseFloat(tvData.vwap) : null;
-  const vwapBias = tvData.vwapBias || null;
+  const rsi           = tvData.rsi           != null ? parseFloat(tvData.rsi)           : null;
+  const vwap          = tvData.vwap          != null ? parseFloat(tvData.vwap)          : null;
+  const vwapBias      = tvData.vwapBias      || null;
+  const bearFVGTop    = tvData.bearFVGTop    != null ? parseFloat(tvData.bearFVGTop)    : null;
+  const bearFVGBottom = tvData.bearFVGBottom != null ? parseFloat(tvData.bearFVGBottom) : null;
+  const bullFVGTop    = tvData.bullFVGTop    != null ? parseFloat(tvData.bullFVGTop)    : null;
+  const bullFVGBottom = tvData.bullFVGBottom != null ? parseFloat(tvData.bullFVGBottom) : null;
 
-  if (rsi == null && vwap == null) return [];
+  if (rsi == null && vwap == null && bearFVGTop == null && bullFVGTop == null) return [];
 
   const lines = [];
+
   if (rsi != null && !isNaN(rsi)) {
     lines.push('RSI (14)    ' + rsi.toFixed(0) + ' -- ' + getRsiLabel(rsi));
   }
   if (vwap != null && !isNaN(vwap) && vwapBias) {
-    const biasIcon  = vwapBias === 'above' ? 'ABOVE \ud83d\udd3c bullish' : 'BELOW \ud83d\udd3d bearish';
+    const biasIcon = vwapBias === 'above' ? 'ABOVE \ud83d\udd3c bullish' : 'BELOW \ud83d\udd3d bearish';
     lines.push('VWAP        $' + vwap.toFixed(2) + ' -- price ' + biasIcon + ' confirmed');
   }
+  if (bearFVGTop != null && bearFVGBottom != null && bearFVGTop > 0 && bearFVGBottom > 0) {
+    lines.push('FVG Above   $' + bearFVGBottom.toFixed(2) + '-$' + bearFVGTop.toFixed(2) + ' -- resistance gap');
+  }
+  if (bullFVGTop != null && bullFVGBottom != null && bullFVGTop > 0 && bullFVGBottom > 0) {
+    lines.push('FVG Below   $' + bullFVGBottom.toFixed(2) + '-$' + bullFVGTop.toFixed(2) + ' -- target magnet \u2705');
+  }
+
   return lines;
 }
 
@@ -322,6 +371,7 @@ function buildStratCard(opraSymbol, tvData, resolved) {
     mode === 'DAY' ? 'Hold    Exit same day by 3:30PM'     : 'Hold    1-3 days max',
     mode === 'DAY' ? 'Window  10AM-11:30AM | 3PM-3:30PM'  : 'Window  9:45AM-3:30PM ET',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
+    getCancelByTime() ? '⏰ Cancel By  ' + getCancelByTime() + ' if unfilled' : '⛔ LATE ENTRY -- Skip this trade',
   ]).filter(function(l) { return l !== null; });
 
   return { text: lines.join('\n'), ticker: ticker };
@@ -336,6 +386,12 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   const calCheck = await calendar.shouldBlockAlert();
   if (calCheck.block) {
     await sendToChannel('strat', 'BLOCKED\n' + calCheck.reason);
+    return false;
+  }
+
+  // HARD TIME GATE -- no entries after 3:30PM ET
+  if (isLateEntry()) {
+    console.log('[STRAT] Late entry blocked -- after 3:30PM ET');
     return false;
   }
 
@@ -480,6 +536,8 @@ async function sendMorningBrief() {
 async function sendSystemMessage(msg) {
   await sendToChannel('strat', 'STRATUM\n' + msg);
 }
+
+module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
 
