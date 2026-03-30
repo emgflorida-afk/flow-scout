@@ -228,7 +228,3 @@ stopTriggered:   state.stopTriggered,
 }
 
 module.exports = { recordTrade, getGoalCard, postGoalUpdate, isTradingAllowed, getState, resetIfNewDay };
-};
-}
-
-module.exports = { recordTrade, getGoalCard, postGoalUpdate, isTradingAllowed, getState, resetIfNewDay };
