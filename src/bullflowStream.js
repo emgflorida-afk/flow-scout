@@ -1,7 +1,7 @@
-// bullflowStream.js — Stratum Flow Scout v6.1
+// bullflowStream.js  Stratum Flow Scout v6.1
 // HIGH CONVICTION: sends BOTH naked option AND spread card to #flow-alerts
 // CLUSTER ENGINE: aggregates flow by ticker, fires when $500K+ in 10 min
-// ALL alerts go to #flow-alerts — no filter
+// ALL alerts go to #flow-alerts  no filter
 // -----------------------------------------------------------------
 
 const fetch    = require('node-fetch');
@@ -31,6 +31,44 @@ function isHighConviction(alertName, alertPremium) {
 }
 
 // -- LIVE AGGREGATOR ----------------------------------------------
+// -- PRE-ALERT WARMING SYSTEM ------------------------------------
+// Tracks flow building per ticker before conviction threshold
+// Fires WATCHING alert when $100K+ accumulates
+// Fires READY alert when $300K+ accumulates
+// Fires HIGH CONVICTION when $500K+ or high conviction name
+const warmingTracker = {};
+const WARM_THRESHOLD  = 100000;  // $100K = post WATCHING alert
+const READY_THRESHOLD = 300000;  // $300K = post READY alert
+const CONV_THRESHOLD  = 500000;  // $500K = HIGH CONVICTION
+
+function updateWarming(ticker, type, premium) {
+  var key = ticker + ':' + type;
+  if (!warmingTracker[key]) {
+    warmingTracker[key] = { total: 0, alerted100k: false, alerted300k: false, firstSeen: Date.now() };
+  }
+  var w = warmingTracker[key];
+  w.total += parseFloat(premium || 0);
+  w.lastSeen = Date.now();
+
+  // Reset after 30 minutes
+  if (Date.now() - w.firstSeen > 30 * 60 * 1000) {
+    warmingTracker[key] = { total: parseFloat(premium || 0), alerted100k: false, alerted300k: false, firstSeen: Date.now() };
+    return { level: null };
+  }
+
+  var totalK = (w.total / 1000).toFixed(0);
+
+  if (w.total >= READY_THRESHOLD && !w.alerted300k) {
+    w.alerted300k = true;
+    return { level: 'READY', totalK: totalK };
+  }
+  if (w.total >= WARM_THRESHOLD && !w.alerted100k) {
+    w.alerted100k = true;
+    return { level: 'WATCHING', totalK: totalK };
+  }
+  return { level: null };
+}
+
 const liveAggregator = {
   data: {}, alertLog: [], lastResetDate: null,
 
@@ -124,6 +162,23 @@ async function processAlert(raw) {
 
   liveAggregator.add(ticker, type, premium, orderType, alertName);
 
+  // -- WARMING SYSTEM -- post pre-alerts as flow builds
+  var warming = updateWarming(ticker, type, premium);
+  if (warming.level) {
+    var wIcon   = warming.level === 'READY' ? 'READY' : 'WATCHING';
+    var wLines  = [
+      wIcon + ' -- ' + ticker + ' ' + type.toUpperCase(),
+      '===============================',
+      warming.level === 'READY'
+        ? '$' + warming.totalK + 'K accumulated -- PREPARE FOR ENTRY'
+        : '$' + warming.totalK + 'K building -- watching for more',
+      'Direction  ' + direction,
+      'Watch      Set limit ready if Strat confirms',
+      'Time       ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
+    ];
+    sendFlowToDiscord(wLines.join('\n')).catch(console.error);
+  }
+
   // -- FEED INTO CLUSTER ENGINE ---------------------------------
   // Pass full raw data so cluster can parse OPRA and accumulate
   processFlow({ ...raw, opra: symbol, totalPremium: premium, orderType, alertName }).catch(function(err) {
@@ -132,7 +187,7 @@ async function processAlert(raw) {
 
   const price = await resolver.getPrice(ticker).catch(function() { return null; });
 
-  // -- BASIC FLOW CARD — all alerts -----------------------------
+  // -- BASIC FLOW CARD  all alerts -----------------------------
   const flowLines = [
     'FLOW -- ' + ticker + ' ' + type.toUpperCase(),
     ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
@@ -148,7 +203,7 @@ async function processAlert(raw) {
 
   await sendFlowToDiscord(flowLines.join('\n'));
 
-  // -- HIGH CONVICTION — naked option + spread cards -----------
+  // -- HIGH CONVICTION  naked option + spread cards -----------
   if (isHighConviction(alertName, premium)) {
     console.log('[BULLFLOW] HIGH CONVICTION -- resolving contracts for ' + ticker);
 

@@ -96,60 +96,6 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-
-// -- TRADE GRADE --------------------------------------------------
-// A+ = 6/6 confluence + fib zone + HTF bias aligned
-// A  = 5/6 confluence + most conditions met
-// B  = 4/6 confluence + standard setup
-// C  = 3/6 confluence + wait for confirmation
-function getTradeGrade(tvData, resolved) {
-  var score = 0;
-  var confluence = tvData.confluence || '0/6';
-  var confNum = parseInt(confluence.split('/')[0]) || 0;
-  var adx = tvData.adx ? parseFloat(tvData.adx) : 0;
-  var fib125 = tvData.fib125 ? parseFloat(tvData.fib125) : null;
-  var mid = tvData.mid ? parseFloat(tvData.mid) : null;
-
-  // Confluence score (0-3 points)
-  if (confNum >= 6) score += 3;
-  else if (confNum >= 5) score += 2;
-  else if (confNum >= 4) score += 1;
-
-  // Trending market (ADX > 25)
-  if (adx > 25) score += 1;
-
-  // In fib retracement zone
-  if (fib125 && mid) {
-    var fib250 = fib125 * 2;
-    if (mid >= fib125 * 0.9 && mid <= fib250 * 1.1) score += 1;
-  }
-
-  // GEX aligned
-  if (resolved && resolved.gex) {
-    var dir = tvData.type || 'call';
-    var gexOk = (dir === 'put' && !resolved.gex.isPositive) || (dir === 'call' && resolved.gex.isPositive);
-    if (gexOk) score += 1;
-  }
-
-  if (score >= 6) return 'A+';
-  if (score >= 4) return 'A';
-  if (score >= 3) return 'B';
-  return 'C';
-}
-
-// -- RETRACEMENT LEVELS -------------------------------------------
-// Calculates 12.5% and 25% limit entry levels from card premium
-// If premium = $1.00, 12.5% retrace = $0.875, 25% = $0.75
-function getRetracementLevels(premium) {
-  if (!premium || premium <= 0) return null;
-  var p = parseFloat(premium);
-  return {
-    primary:   parseFloat((p * (1 - 0.125)).toFixed(2)),  // 12.5% pullback
-    secondary: parseFloat((p * (1 - 0.25)).toFixed(2)),   // 25% pullback
-    invalid:   parseFloat((p * (1 - 0.50)).toFixed(2)),   // 50% - too deep
-  };
-}
-
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
@@ -225,6 +171,48 @@ function scoreFlow(flowData) {
 
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
+
+// -- DEDUPLICATION + DIRECTION LOCK ------------------------------
+// Prevents duplicate cards and contradicting bull/bear alerts
+// Per ticker: once a direction fires, block opposite for 30 min
+const recentCardSent  = new Map();  // key=ticker:type, value=timestamp
+const directionLock   = new Map();  // key=ticker, value={dir, expires}
+const CARD_COOLDOWN   = 5  * 60 * 1000;  // 5 min -- no duplicate cards
+const DIR_LOCK_TIME   = 30 * 60 * 1000;  // 30 min -- direction lock
+
+function isDuplicate(ticker, type) {
+  var key = ticker + ':' + type;
+  var last = recentCardSent.get(key);
+  if (last && Date.now() - last < CARD_COOLDOWN) {
+    console.log('[DEDUP] Skipping duplicate card for ' + key);
+    return true;
+  }
+  return false;
+}
+
+function isDirectionBlocked(ticker, type) {
+  var lock = directionLock.get(ticker);
+  if (!lock) return false;
+  if (Date.now() > lock.expires) {
+    directionLock.delete(ticker);
+    return false;
+  }
+  var opposite = type === 'call' ? 'put' : 'call';
+  if (lock.dir === opposite) {
+    console.log('[DIRLOCK] ' + ticker + ' locked ' + lock.dir.toUpperCase() + ' -- blocking ' + type.toUpperCase());
+    return true;
+  }
+  return false;
+}
+
+function setDirectionLock(ticker, type) {
+  directionLock.set(ticker, { dir: type, expires: Date.now() + DIR_LOCK_TIME });
+}
+
+function markCardSent(ticker, type) {
+  recentCardSent.set(ticker + ':' + type, Date.now());
+  setTimeout(function() { recentCardSent.delete(ticker + ':' + type); }, CARD_COOLDOWN);
+}
 
 // -- BUILD EDGE SECTION -------------------------------------------
 function buildEdgeSection(resolved) {
@@ -380,13 +368,6 @@ function buildStratCard(opraSymbol, tvData, resolved) {
     s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
     s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
     s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.stopLoss + ' max' : 'Risk    2% of $7K max',
-    '-------------------------------',
-    (function() { var retrace = s ? getRetracementLevels(s.premium) : null; return retrace ? 'SET LIMIT AT RETRACEMENT:' : null; })(),
-    (function() { var retrace = s ? getRetracementLevels(s.premium) : null; return retrace ? '12.5%   $' + retrace.primary + '  <-- PRIMARY LIMIT' : null; })(),
-    (function() { var retrace = s ? getRetracementLevels(s.premium) : null; return retrace ? '25.0%   $' + retrace.secondary + '  <-- SECONDARY' : null; })(),
-    (function() { var retrace = s ? getRetracementLevels(s.premium) : null; return retrace ? '50.0%   $' + retrace.invalid + '  <-- INVALID if hit' : null; })(),
-    '-------------------------------',
-    (function() { var grade = getTradeGrade(tvData, resolved); return 'Grade   ' + grade + (grade === 'A+' ? ' -- EXECUTE IMMEDIATELY' : grade === 'A' ? ' -- HIGH CONVICTION' : grade === 'B' ? ' -- WAIT FOR FLOW CONFIRM' : ' -- SKIP OR WAIT'); })(),
     technicalsLines.length > 0 ? '-------------------------------' : null,
   ].concat(technicalsLines).concat([
     edgeLines.length > 0 ? '-------------------------------' : null,
@@ -410,6 +391,15 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   if (calCheck.block) {
     await sendToChannel('strat', 'BLOCKED\n' + calCheck.reason);
     return false;
+  }
+
+  // Deduplication -- skip if same card sent in last 5 min
+  var parsedSym = resolver.parseOPRA(opraSymbol);
+  if (parsedSym) {
+    if (isDuplicate(parsedSym.ticker, parsedSym.type)) return false;
+    if (isDirectionBlocked(parsedSym.ticker, parsedSym.type)) return false;
+    setDirectionLock(parsedSym.ticker, parsedSym.type);
+    markCardSent(parsedSym.ticker, parsedSym.type);
   }
 
   let card;
