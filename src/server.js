@@ -20,6 +20,7 @@ const { startDiscordBot, handleInteraction } = require(’./discordBot’);
 const { getClusterSummary } = require(’./flowCluster’);
 const ts          = require(’./tradestation’);
 const goalTracker = require(’./goalTracker’);
+const finviz      = require(’./finvizScreener’);
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -209,6 +210,19 @@ catch (err) { res.status(500).json({ error: err.message }); }
 
 app.get(’/test/bullflow’, function(req, res) {
 res.json({ status: ‘Bullflow stream running OK’, version: ‘6.1’ });
+});
+
+// – FINVIZ SCREENER –––––––––––––––––––––––
+// Fires at 9:15AM ET every trading day
+cron.schedule(‘15 13 * * 1-5’, async function() {
+console.log(’[SCREENER] Running morning screener…’);
+try { await finviz.postScreenerCard(); }
+catch (err) { console.error(’[SCREENER] Failed:’, err.message); }
+});
+
+app.get(’/test/screener’, async function(req, res) {
+try { await finviz.postScreenerCard(); res.json({ status: ‘Sent OK’ }); }
+catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // – GOAL TRACKER ———————————————––
