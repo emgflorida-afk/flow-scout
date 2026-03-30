@@ -1,156 +1,191 @@
-// finvizScreener.js  Stratum Flow Scout v7.0
-// Fetches live Finviz screener data via CSV export
-// Posts to #screener-watchlist at 9:15AM ET daily
-// Screener 1: Mega cap + options + relative volume >1x
-// Screener 2: Large cap momentum up from open
-// Cross-references with flow alerts for highest conviction
+// ideaValidator.js  Stratum Flow Scout v6.1
+// Parses trade ideas from any text format using Claude AI
+// Runs full Stratum validation  confluence, RSI, VWAP, GEX, Max Pain
+// Posts scored verdict card to #conviction-trades
 // —————————————————————–
 
-const fetch = require(‘node-fetch’);
+const fetch    = require(‘node-fetch’);
+const resolver = require(’./contractResolver’);
 
-const SCREENER_WEBHOOK = process.env.DISCORD_SCREENER_WEBHOOK || process.env.DISCORD_WEBHOOK_URL;
-
-// Finviz CSV export URLs  live data, no scraping needed
-const SCREENER_1_URL = ‘https://finviz.com/export.ashx?v=152&f=cap_mega,sh_opt_option,sh_relvol_o1&o=-marketcap&c=1,2,3,4,5,6,7,8,9,65,67’;
-const SCREENER_2_URL = ‘https://finviz.com/export.ashx?v=152&f=cap_large,sh_opt_option,sh_relvol_o1,ta_change_u,ta_changeopen_u&o=-relativevolume&c=1,2,3,4,5,6,7,8,9,65,67’;
-
-const HEADERS = {
-‘User-Agent’: ‘Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36’,
-‘Referer’:    ‘https://finviz.com’,
-};
-
-// – PARSE CSV ––––––––––––––––––––––––––
-function parseCSV(csv) {
-const lines = csv.trim().split(’\n’);
-if (lines.length < 2) return [];
-
-const headers = lines[0].split(’,’).map(h => h.replace(/”/g, ‘’).trim());
-
-return lines.slice(1).map(function(line) {
-const values = line.split(’,’).map(v => v.replace(/”/g, ‘’).trim());
-const row    = {};
-headers.forEach(function(h, i) { row[h] = values[i] || ‘’; });
-return row;
-}).filter(function(r) { return r.Ticker; });
-}
-
-// – FETCH SCREENER ———————————————–
-async function fetchScreener(url, label) {
+// – PARSE TRADE IDEA WITH CLAUDE AI ——————————
+// Accepts any format: “NVDA puts $120 4/2”, “buying SPY 560P this week”, etc.
+async function parseTradeIdea(rawText) {
 try {
-const res = await fetch(url, { headers: HEADERS });
-if (!res.ok) {
-console.error(’[SCREENER] ’ + label + ’ failed: ’ + res.status);
-return [];
-}
-const csv  = await res.text();
-const rows = parseCSV(csv);
-console.log(’[SCREENER] ’ + label + ’  ’ + rows.length + ’ tickers ‘);
-return rows;
-} catch (err) {
-console.error(’[SCREENER] ’ + label + ’ error:’, err.message);
-return [];
-}
-}
+const apiKey = process.env.ANTHROPIC_API_KEY;
+if (!apiKey) return null;
 
-// – FORMAT ROW —————————————————
-function formatRow(row, rank) {
-const ticker  = row.Ticker  || ‘–’;
-const price   = row.Price   || ‘–’;
-const change  = row.Change  || ‘–’;
-const relVol  = row[‘Relative Volume’] || row.RelVolume || ‘–’;
-const vol     = row.Volume  || ‘–’;
+```
+const prompt = 'Extract the trade idea from this text and return ONLY a JSON object with no markdown or explanation.\n\nText: ' + rawText + '\n\nReturn this exact JSON format:\n{\n  "ticker": "SYMBOL",\n  "direction": "call" or "put",\n  "strike": number or null,\n  "expiry": "YYYY-MM-DD" or null,\n  "confidence": "high" or "medium" or "low"\n}\n\nRules:\n- ticker must be uppercase stock symbol\n- direction: if bearish/puts/short = "put", if bullish/calls/long = "call"\n- strike: extract number if mentioned, else null\n- expiry: convert to YYYY-MM-DD if mentioned, else null\n- confidence: how clearly the idea is expressed\n- If no valid trade idea found, return {"error": "no trade idea found"}';
 
-const changeNum = parseFloat(change);
-const arrow     = changeNum >= 0 ? ‘’ : ‘’;
-const changeStr = (changeNum >= 0 ? ‘+’ : ‘’) + change;
-
-return rank + ‘. ’ +
-ticker.padEnd(6) +
-(’$’ + price).padEnd(10) +
-(arrow + changeStr).padEnd(10) +
-(’RelVol ’ + relVol);
-}
-
-// – BUILD AND POST SCREENER CARD ———————————
-async function postScreenerCard() {
-if (!SCREENER_WEBHOOK) {
-console.log(’[SCREENER] No webhook configured’);
-return;
-}
-
-console.log(’[SCREENER] Fetching live data…’);
-
-const [mega, momentum] = await Promise.all([
-fetchScreener(SCREENER_1_URL, ‘Mega Cap’),
-fetchScreener(SCREENER_2_URL, ‘Momentum’),
-]);
-
-const dateStr = new Date().toLocaleDateString(‘en-US’, {
-timeZone: ‘America/New_York’,
-weekday:  ‘long’,
-month:    ‘short’,
-day:      ‘numeric’,
+const res  = await fetch('https://api.anthropic.com/v1/messages', {
+  method:  'POST',
+  headers: {
+    'Content-Type':      'application/json',
+    'x-api-key':         apiKey,
+    'anthropic-version': '2023-06-01',
+  },
+  body: JSON.stringify({
+    model:      'claude-haiku-4-5-20251001',
+    max_tokens: 200,
+    messages:   [{ role: 'user', content: prompt }],
+  }),
 });
+
+const data = await res.json();
+const text = data?.content?.[0]?.text || '';
+const clean = text.replace(/```json|```/g, '').trim();
+const parsed = JSON.parse(clean);
+if (parsed.error) return null;
+console.log('[IDEA] Parsed:', JSON.stringify(parsed));
+return parsed;
+```
+
+} catch (err) {
+console.error(’[IDEA] Parse error:’, err.message);
+return null;
+}
+}
+
+// – VALIDATE IDEA AGAINST STRATUM ––––––––––––––––
+async function validateIdea(parsed) {
+const { ticker, direction, strike, expiry } = parsed;
+
+// Resolve contract  gets price, chain, GEX, Max Pain, IV context
+const resolved = await resolver.resolveContract(ticker, direction, ‘SWING’);
+if (!resolved) return { error: ’Could not resolve contract for ’ + ticker };
+
+// Score the setup
+const price    = resolved.price;
+const gex      = resolved.gex;
+const maxPain  = resolved.maxPain;
+const ivCtx    = resolved.ivCtx;
+const timeCtx  = resolved.timeCtx;
+const oiNodes  = resolved.oiNodes;
+
+// Build validation score
+let score = 0;
+const checks = [];
+
+// GEX alignment
+if (gex) {
+const gexAligned = (direction === ‘put’ && !gex.isPositive) || (direction === ‘call’ && gex.isPositive);
+if (gexAligned) { score += 2; checks.push(’GEX aligned ’ + (direction === ‘put’ ? ‘NEGATIVE trending’ : ‘POSITIVE range’)); }
+else            { checks.push(’GEX against – ’ + (gex.isPositive ? ‘POSITIVE range bound’ : ‘NEGATIVE trending’)); }
+}
+
+// Max Pain alignment
+if (maxPain && price) {
+const painAligned = (direction === ‘put’ && price > maxPain) || (direction === ‘call’ && price < maxPain);
+if (painAligned) { score += 1; checks.push(‘Max Pain $’ + maxPain + ’ – price pulled toward it’); }
+else             { checks.push(‘Max Pain $’ + maxPain + ’ – against direction’); }
+}
+
+// IV context
+if (ivCtx) {
+if (ivCtx.ivRegime.includes(‘LOW’))      { score += 1; checks.push(‘IV LOW – good for buying’); }
+if (ivCtx.ivRegime.includes(‘ELEVATED’)) { score += 1; checks.push(‘IV ELEVATED – spreads preferred’); }
+checks.push(‘Impl Move +-’ + ivCtx.impliedMove + ‘% | Daily +-’ + ivCtx.dailyMove + ‘%’);
+}
+
+// OI nodes
+if (oiNodes && oiNodes.length > 0) {
+const topNode = oiNodes[0];
+const nodeAligned = (direction === ‘put’ && topNode.bias.includes(‘PUT’)) || (direction === ‘call’ && topNode.bias.includes(‘CALL’));
+if (nodeAligned) { score += 1; checks.push(‘OI Wall $’ + topNode.strike + ’ ’ + topNode.bias + ’ – aligned’); }
+else             { checks.push(‘OI Wall $’ + topNode.strike + ’ ’ + topNode.bias + ’ – against’); }
+}
+
+// Time context
+if (timeCtx && timeCtx.ok) { score += 1; checks.push(’Session: ’ + timeCtx.window); }
+
+// Verdict
+const verdict = score >= 4 ? { label: ‘VALIDATED – EXECUTE’,   emoji: ‘OK’,   color: ‘green’ }
+: score >= 2 ? { label: ‘CAUTION – VERIFY FIRST’, emoji: ‘WARN’, color: ‘amber’ }
+:              { label: ‘SKIP – EDGE NOT THERE’,  emoji: ‘NO’,   color: ‘red’   };
+
+return {
+ticker, direction, strike, expiry,
+price, resolved, score,
+checks, verdict, gex, maxPain, ivCtx, timeCtx,
+};
+}
+
+// – BUILD VERDICT CARD —————————————––
+function buildVerdictCard(rawText, parsed, validation) {
+const { ticker, direction, strike, expiry } = parsed;
+const { verdict, score, checks, price, resolved } = validation;
+
+const typeLabel = direction === ‘put’ ? ‘P’ : ‘C’;
+const dirLabel  = direction === ‘put’ ? ‘BEARISH’ : ‘BULLISH’;
+const strikeStr = strike  ? ‘$’ + strike   : ‘ATM’;
+const expiryStr = expiry  ? expiry.slice(5).replace(’-’, ‘/’) : ‘nearest’;
+const midStr    = resolved?.mid ? ‘$’ + resolved.mid.toFixed(2) : ‘–’;
 
 const lines = [
-’ MORNING SCREENER  ’ + dateStr,
+’IDEA VALIDATOR – ’ + verdict.emoji,
+ticker + ’ ’ + strikeStr + typeLabel + ’ ’ + expiryStr + ’ – ’ + dirLabel,
 ‘===============================’,
-’ MEGA CAP + OPTIONS + REL VOL >1x’,
-];
+‘Original idea:’,
+‘”’ + rawText.slice(0, 80) + ‘”’,
+‘—————————––’,
+’VERDICT    ’ + verdict.label,
+‘Score      ’ + score + ‘/5’,
+‘—————————––’,
+‘Stock      $’ + (price ? price.toFixed(2) : ‘–’) + ’ LIVE’,
+resolved ? ’Contract   ’ + resolved.symbol : null,
+resolved ? ‘Premium    ’ + midStr : null,
+‘—————————––’,
+‘VALIDATION CHECKS:’,
+].concat(checks.map(function(c) { return ’  ’ + c; })).concat([
+‘—————————––’,
+resolved ? ‘Entry   ’ + midStr : null,
+resolved?.mid ? ‘Stop    $’ + (resolved.mid * 0.60).toFixed(2) + ’ (40% of premium)’ : null,
+resolved?.mid ? ‘T1      $’ + (resolved.mid * 1.60).toFixed(2) + ’ (+60%)’ : null,
+‘—————————––’,
+‘Time    ’ + new Date().toLocaleTimeString(‘en-US’, { timeZone: ‘America/New_York’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ’ ET’,
+]).filter(function(l) { return l !== null; });
 
-if (mega.length === 0) {
-lines.push(’  No data available’);
-} else {
-mega.slice(0, 8).forEach(function(row, i) {
-lines.push(’  ’ + formatRow(row, i + 1));
-});
+return lines.join(’\n’);
 }
 
-lines.push(’—————————––’);
-lines.push(’ LARGE CAP MOMENTUM (up from open)’);
+// – MAIN EXPORT –––––––––––––––––––––––––
+async function validateAndPost(rawText, webhookUrl) {
+console.log(’[IDEA] Validating:’, rawText);
 
-if (momentum.length === 0) {
-lines.push(’  No data available’);
-} else {
-momentum.slice(0, 8).forEach(function(row, i) {
-lines.push(’  ’ + formatRow(row, i + 1));
-});
+// Step 1  Parse with Claude AI
+const parsed = await parseTradeIdea(rawText);
+if (!parsed) {
+console.log(’[IDEA] Could not parse trade idea’);
+return { error: ‘Could not parse trade idea from text’ };
 }
 
-lines.push(’—————————––’);
-lines.push(’ Flow + Screener = HIGHEST CONVICTION’);
-lines.push(’   Cross-check tickers with #flow-alerts’);
-lines.push(‘Time  9:15 AM ET’);
+// Step 2  Validate against Stratum
+const validation = await validateIdea(parsed);
+if (validation.error) {
+console.log(’[IDEA] Validation error:’, validation.error);
+return { error: validation.error };
+}
 
-const card = lines.join(’\n’);
+// Step 3  Build and post verdict card
+const card = buildVerdictCard(rawText, parsed, validation);
 
 try {
-await fetch(SCREENER_WEBHOOK, {
+const res = await fetch(webhookUrl, {
 method:  ‘POST’,
 headers: { ‘Content-Type’: ‘application/json’ },
-body:    JSON.stringify({
-content:  ‘`\n' + card + '\n`’,
-username: ‘Stratum Screener’,
-}),
+body:    JSON.stringify({ content: ‘`\n' + card + '\n`’, username: ‘Stratum Validator’ }),
 });
-console.log(’[SCREENER] Posted to Discord OK ‘);
+if (res.ok) console.log(’[IDEA] Verdict posted to Discord OK’);
 } catch (err) {
-console.error(’[SCREENER] Post error:’, err.message);
-}
-}
-
-// – GET TICKERS LIST (for cross-reference with flow alerts) ——
-async function getScreenerTickers() {
-const [mega, momentum] = await Promise.all([
-fetchScreener(SCREENER_1_URL, ‘Mega Cap’),
-fetchScreener(SCREENER_2_URL, ‘Momentum’),
-]);
-
-const tickers = new Set();
-mega.forEach(function(r)     { if (r.Ticker) tickers.add(r.Ticker); });
-momentum.forEach(function(r) { if (r.Ticker) tickers.add(r.Ticker); });
-
-return Array.from(tickers);
+console.error(’[IDEA] Discord post error:’, err.message);
 }
 
-module.exports = { postScreenerCard, getScreenerTickers };
+return {
+ticker:   parsed.ticker,
+direction: parsed.direction,
+verdict:  validation.verdict.label,
+score:    validation.score,
+};
+}
+
+module.exports = { validateAndPost };
