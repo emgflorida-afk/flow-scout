@@ -1,7 +1,7 @@
-// contractResolver.js — Stratum Flow Scout v6.1
+// contractResolver.js - Stratum Flow Scout v6.1
 // FULL EDGE: Real Greeks, GEX, Max Pain, High OI nodes, IV context
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
-// ─────────────────────────────────────────────────────────────────
+// —————————————————————–
 
 const fetch = require(‘node-fetch’);
 
@@ -11,7 +11,7 @@ const PUB_GATEWAY = ‘https://api.public.com/userapigateway’;
 
 function polyKey() { return process.env.POLYGON_API_KEY; }
 
-// ── TRADE MODE CONFIGS ────────────────────────────────────────────
+// – TRADE MODE CONFIGS ––––––––––––––––––––––
 const MODES = {
 DAY: {
 label:      ‘DAY TRADE’,
@@ -69,7 +69,7 @@ const WATCHLIST = new Set([
 ‘MRNA’,‘MRVL’,‘GUSH’,‘UVXY’,‘KO’,‘PEP’
 ]);
 
-// ── TOKEN ─────────────────────────────────────────────────────────
+// – TOKEN ———————————————————
 async function getPublicToken() {
 try {
 const secret = process.env.PUBLIC_API_KEY;
@@ -81,13 +81,13 @@ body:    JSON.stringify({ secret, validityInMinutes: 30 }),
 });
 const data  = await res.json();
 const token = data?.accessToken || null;
-if (token) console.log(’[PUBLIC] Token obtained ✅’);
+if (token) console.log(’[PUBLIC] Token obtained ‘);
 else       console.log(’[PUBLIC] Token failed:’, JSON.stringify(data));
 return token;
 } catch (err) { console.error(’[PUBLIC] Token error:’, err.message); return null; }
 }
 
-// ── GET STOCK PRICE ───────────────────────────────────────────────
+// – GET STOCK PRICE ———————————————–
 async function getPrice(ticker) {
 const accountId = process.env.PUBLIC_ACCOUNT_ID;
 try {
@@ -101,7 +101,7 @@ body:    JSON.stringify({ instruments: [{ symbol: ticker, type: ‘EQUITY’ }] 
 const data  = await res.json();
 const quote = data?.quotes?.[0];
 if (quote?.last) {
-console.log(`[PRICE] ${ticker} $${quote.last} — Public.com ✅`);
+console.log(`[PRICE] ${ticker} $${quote.last} - Public.com `);
 return parseFloat(quote.last);
 }
 }
@@ -111,14 +111,14 @@ try {
 const res  = await fetch(`${POLY_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${polyKey()}`);
 const data = await res.json();
 const price = data?.ticker?.lastTrade?.p || data?.ticker?.prevDay?.c || null;
-if (price) { console.log(`[PRICE] ${ticker} $${price} — Polygon ✅`); return price; }
+if (price) { console.log(`[PRICE] ${ticker} $${price} - Polygon `); return price; }
 } catch { }
 
 console.error(`[PRICE] No price for ${ticker}`);
 return null;
 }
 
-// ── GET OPTION EXPIRATIONS ────────────────────────────────────────
+// – GET OPTION EXPIRATIONS ––––––––––––––––––––
 async function getPublicExpirations(ticker, token, accountId) {
 try {
 const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-expirations`, {
@@ -128,12 +128,12 @@ body:    JSON.stringify({ instrument: { symbol: ticker, type: ‘EQUITY’ } }),
 });
 const data        = await res.json();
 const expirations = data?.expirations || [];
-if (expirations.length) console.log(`[PUBLIC] ${ticker} expirations: ${expirations.slice(0,4).join(', ')} ✅`);
+if (expirations.length) console.log(`[PUBLIC] ${ticker} expirations: ${expirations.slice(0,4).join(', ')} `);
 return expirations;
 } catch (err) { console.error(`[PUBLIC EXPIRY] Error:`, err.message); return []; }
 }
 
-// ── GET OPTION CHAIN ──────────────────────────────────────────────
+// – GET OPTION CHAIN –––––––––––––––––––––––
 async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
 try {
 const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-chain`, {
@@ -145,12 +145,12 @@ const data  = await res.json();
 const calls = data?.calls || [];
 const puts  = data?.puts  || [];
 const chain = type === ‘call’ ? calls : puts;
-console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} — ${chain.length} contracts ✅`);
+console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} - ${chain.length} contracts `);
 return { chain, calls, puts };
 } catch (err) { console.error(`[PUBLIC CHAIN] Error:`, err.message); return { chain: [], calls: [], puts: [] }; }
 }
 
-// ── GET REAL GREEKS FROM PUBLIC.COM ───────────────────────────────
+// – GET REAL GREEKS FROM PUBLIC.COM —————————––
 // GET /userapigateway/option-details/{accountId}/greeks
 // Returns: delta, gamma, theta, vega, rho, impliedVolatility per osiSymbol
 async function getPublicGreeks(osiSymbols, token, accountId) {
@@ -184,7 +184,7 @@ impliedVolatility: parseFloat(item.impliedVolatility || 0),
 };
 }
 }
-console.log(`[GREEKS] Real greeks fetched for ${Object.keys(map).length} contracts ✅`);
+console.log(`[GREEKS] Real greeks fetched for ${Object.keys(map).length} contracts `);
 return map;
 } catch (err) {
 console.error(’[GREEKS] Error:’, err.message);
@@ -192,13 +192,13 @@ return {};
 }
 }
 
-// ── CALCULATE DTE ─────────────────────────────────────────────────
+// – CALCULATE DTE ———————————————––
 function calcDTE(expDateStr) {
 const expiry = new Date(expDateStr + ‘T16:00:00-04:00’);
 return Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
 }
 
-// ── SELECT EXPIRY FOR MODE ────────────────────────────────────────
+// – SELECT EXPIRY FOR MODE ––––––––––––––––––––
 function selectExpiry(expirations, mode) {
 const today  = new Date().toISOString().slice(0, 10);
 const config = MODES[mode];
@@ -207,14 +207,14 @@ const dte = calcDTE(e);
 return dte >= config.minDTE && dte <= config.maxDTE;
 });
 if (valid.length > 0) {
-console.log(`[EXPIRY] ${mode} — using ${valid[0]} (${calcDTE(valid[0])}DTE) ✅`);
+console.log(`[EXPIRY] ${mode} - using ${valid[0]} (${calcDTE(valid[0])}DTE) `);
 return valid[0];
 }
 const future = expirations.filter(e => e > today);
 return future.length > 0 ? future[0] : null;
 }
 
-// ── PARSE CHAIN CONTRACT ──────────────────────────────────────────
+// – PARSE CHAIN CONTRACT ——————————————
 function parseChainContract(c) {
 const sym    = c.instrument?.symbol || ‘’;
 const match  = sym.match(/(\d{6})([CP])(\d{8})$/);
@@ -227,9 +227,9 @@ const oi     = parseInt(c.openInterest || 0);
 return { …c, strike, mid, bid, ask, symbol: sym, volume, openInterest: oi };
 }
 
-// ── CALCULATE MAX PAIN ────────────────────────────────────────────
+// – CALCULATE MAX PAIN ––––––––––––––––––––––
 // Max pain = strike where total option value (calls + puts) is minimized
-// This is where market makers profit most — price tends to gravitate here into expiry
+// This is where market makers profit most - price tends to gravitate here into expiry
 function calculateMaxPain(calls, puts) {
 try {
 const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0);
@@ -251,14 +251,14 @@ for (const testStrike of strikes) {
   if (totalPain < minPain) { minPain = totalPain; maxPain = testStrike; }
 }
 
-console.log(`[MAX PAIN] $${maxPain} ✅`);
+console.log(`[MAX PAIN] $${maxPain} `);
 return maxPain;
 ```
 
 } catch (err) { console.error(’[MAX PAIN] Error:’, err.message); return null; }
 }
 
-// ── CALCULATE GEX ─────────────────────────────────────────────────
+// – CALCULATE GEX ———————————————––
 // Uses real gamma from Public.com greeks endpoint when available
 // Falls back to estimation if greeksMap is empty or symbol not found
 // Positive GEX = dealers long gamma = price stays in range
@@ -294,9 +294,9 @@ const netGEX        = Object.values(gexByStrike).reduce((a, b) => a + b, 0);
 const sortedStrikes = Object.entries(gexByStrike).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
 const topGEXStrike  = sortedStrikes[0] ? parseFloat(sortedStrikes[0][0]) : null;
 const gexRegime     = netGEX > 0
-  ? 'POSITIVE — price likely to stay in range'
-  : 'NEGATIVE — price likely to move fast and far';
-const source = hasRealGreeks ? 'real greeks ✅' : 'estimated ⚠️';
+  ? 'POSITIVE - price likely to stay in range'
+  : 'NEGATIVE - price likely to move fast and far';
+const source = hasRealGreeks ? 'real greeks ' : 'estimated ';
 
 console.log(`[GEX] Net: ${netGEX > 0 ? '+' : ''}${(netGEX/1000000).toFixed(1)}M | Top: $${topGEXStrike} | ${gexRegime} | ${source}`);
 
@@ -306,7 +306,7 @@ return { netGEX, topGEXStrike, gexRegime, gexByStrike, isPositive: netGEX > 0, s
 } catch (err) { console.error(’[GEX] Error:’, err.message); return null; }
 }
 
-// ── HIGH OI NODES ─────────────────────────────────────────────────
+// – HIGH OI NODES ———————————————––
 // Strikes with highest open interest act as magnets or walls
 function getHighOINodes(calls, puts, price, topN = 3) {
 try {
@@ -330,7 +330,7 @@ const sorted = Object.entries(oiByStrike)
     totalOI: oi.call + oi.put,
     callOI:  oi.call,
     putOI:   oi.put,
-    bias:    oi.call > oi.put ? '🟢 CALL WALL' : '🔴 PUT WALL',
+    bias:    oi.call > oi.put ? ' CALL WALL' : ' PUT WALL',
   }))
   .sort((a, b) => b.totalOI - a.totalOI)
   .slice(0, topN);
@@ -342,7 +342,7 @@ return sorted;
 } catch (err) { console.error(’[OI NODES] Error:’, err.message); return []; }
 }
 
-// ── IV CONTEXT ────────────────────────────────────────────────────
+// – IV CONTEXT ––––––––––––––––––––––––––
 // High IV = favor spreads | Low IV = favor naked options
 function getIVContext(calls, puts, price, dte) {
 try {
@@ -361,11 +361,11 @@ const straddle    = (atmCall?.mid || 0) + (atmPut?.mid || 0);
 const impliedMove = parseFloat((straddle / price * 100).toFixed(1));
 const dailyMove   = dte > 0 ? parseFloat((impliedMove / Math.sqrt(dte)).toFixed(1)) : impliedMove;
 
-const ivRegime = dailyMove > 2.5 ? 'HIGH — favor spreads'
-               : dailyMove > 1.5 ? 'ELEVATED — spreads or naked'
-               : 'LOW — favor naked options';
+const ivRegime = dailyMove > 2.5 ? 'HIGH - favor spreads'
+               : dailyMove > 1.5 ? 'ELEVATED - spreads or naked'
+               : 'LOW - favor naked options';
 
-console.log(`[IV] Implied move: ±${impliedMove}% | Daily: ±${dailyMove}% | ${ivRegime}`);
+console.log(`[IV] Implied move: ${impliedMove}% | Daily: ${dailyMove}% | ${ivRegime}`);
 
 return {
   straddle, impliedMove, dailyMove, ivRegime,
@@ -377,7 +377,7 @@ return {
 } catch (err) { console.error(’[IV] Error:’, err.message); return null; }
 }
 
-// ── TIME CONTEXT ──────────────────────────────────────────────────
+// – TIME CONTEXT –––––––––––––––––––––––––
 function getTimeContext() {
 const now    = new Date();
 const etHour = now.getUTCHours() - 4;
@@ -391,16 +391,16 @@ const POWER_END   = 15 * 60 + 30;
 const LATE_ENTRY  = 15 * 60 + 30;
 const CLOSE       = 16 * 60 + 0;
 
-if (etTime < OPEN)        return { window: ‘PREMARKET’,   ok: false, warning: ‘⚠️ PRE-MARKET — wait for 9:30AM open’ };
-if (etTime < EARLY_END)   return { window: ‘EARLY’,       ok: false, warning: ‘⚠️ EARLY — wait for market to settle (9:45AM)’ };
-if (etTime >= LATE_ENTRY && etTime < CLOSE) return { window: ‘LATE’, ok: false, warning: ‘⚠️ LATE ENTRY — too close to close, wait for tomorrow’ };
-if (etTime >= POWER_START && etTime < POWER_END) return { window: ‘POWER_HOUR’, ok: true, warning: ‘✅ POWER HOUR — strong entry window’ };
-if (etTime >= CLOSE)      return { window: ‘CLOSED’,      ok: false, warning: ‘🚫 MARKET CLOSED’ };
+if (etTime < OPEN)        return { window: ‘PREMARKET’,   ok: false, warning: ’ PRE-MARKET - wait for 9:30AM open’ };
+if (etTime < EARLY_END)   return { window: ‘EARLY’,       ok: false, warning: ’ EARLY - wait for market to settle (9:45AM)’ };
+if (etTime >= LATE_ENTRY && etTime < CLOSE) return { window: ‘LATE’, ok: false, warning: ’ LATE ENTRY - too close to close, wait for tomorrow’ };
+if (etTime >= POWER_START && etTime < POWER_END) return { window: ‘POWER_HOUR’, ok: true, warning: ’ POWER HOUR - strong entry window’ };
+if (etTime >= CLOSE)      return { window: ‘CLOSED’,      ok: false, warning: ’ MARKET CLOSED’ };
 
 return { window: ‘OPEN’, ok: true, warning: null };
 }
 
-// ── FIND SPREAD LEGS ──────────────────────────────────────────────
+// – FIND SPREAD LEGS –––––––––––––––––––––––
 function findSpreadLegs(chain, price, type, ticker) {
 const width  = getSpreadWidth(ticker);
 const parsed = chain.map(parseChainContract).filter(c => c.strike > 0);
@@ -427,14 +427,14 @@ if (debit <= 0) return null;
 return { buyLeg, sellLeg, debit, maxProfit, breakeven, spreadWidth: width, type };
 }
 
-// ── RESOLVE CONTRACT ──────────────────────────────────────────────
+// – RESOLVE CONTRACT –––––––––––––––––––––––
 async function resolveContract(ticker, type = ‘call’, tradeType = ‘SWING’) {
 const mode   = (tradeType || ‘’).toUpperCase().includes(‘DAY’)    ? ‘DAY’
 : (tradeType || ‘’).toUpperCase().includes(‘SPREAD’) ? ‘SPREAD’
 : ‘SWING’;
 const config = MODES[mode];
 
-console.log(`[MODE] ${ticker} — ${mode} (${config.minDTE}-${config.maxDTE}DTE)`);
+console.log(`[MODE] ${ticker} - ${mode} (${config.minDTE}-${config.maxDTE}DTE)`);
 
 const price = await getPrice(ticker);
 if (!price) return null;
@@ -455,8 +455,8 @@ if (!chain.length) return null;
 const allCalls = calls.length > 0 ? calls : chain;
 const allPuts  = puts.length  > 0 ? puts  : chain;
 
-// ── FETCH REAL GREEKS ─────────────────────────────────────────
-// Pull ATM contracts within ±10% of price for greeks call
+// – FETCH REAL GREEKS —————————————–
+// Pull ATM contracts within 10% of price for greeks call
 // Capped at 20 symbols to stay within rate limits
 const atmCalls = allCalls.map(parseChainContract)
 .filter(c => Math.abs(c.strike - price) / price < 0.10 && c.symbol)
@@ -469,18 +469,18 @@ const greeksMap  = osiSymbols.length > 0
 ? await getPublicGreeks(osiSymbols, token, accountId)
 : {};
 
-// ── EDGE CALCULATIONS ─────────────────────────────────────────
+// – EDGE CALCULATIONS —————————————–
 const maxPain = calculateMaxPain(allCalls, allPuts);
 const gex     = calculateGEX(allCalls, allPuts, price, greeksMap); // real greeks passed in
 const oiNodes = getHighOINodes(allCalls, allPuts, price);
 const ivCtx   = getIVContext(allCalls, allPuts, price, dte);
 const timeCtx = getTimeContext();
 
-// ── SPREAD MODE ───────────────────────────────────────────────
+// – SPREAD MODE ———————————————–
 if (mode === ‘SPREAD’) {
 const legs = findSpreadLegs(chain, price, type, ticker);
 if (!legs || legs.debit < config.minPremium || legs.debit > config.maxPremium) {
-console.log(`[SPREAD] No valid spread for ${ticker} — falling back to SWING`);
+console.log(`[SPREAD] No valid spread for ${ticker} - falling back to SWING`);
 return resolveContract(ticker, type, ‘SWING’);
 }
 return {
@@ -501,7 +501,7 @@ maxPain, gex, oiNodes, ivCtx, timeCtx, price,
 };
 }
 
-// ── DAY / SWING MODE ──────────────────────────────────────────
+// – DAY / SWING MODE ——————————————
 const withStrike = chain.map(parseChainContract).filter(c =>
 c.mid >= config.minPremium && c.mid <= config.maxPremium && c.strike > 0
 );
@@ -538,7 +538,7 @@ const spreadWidth = best.ask - best.bid;
 const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;
 const wideSpread  = spreadPct > 0.15;
 
-console.log(`[OPRA] ${ticker} ✅ ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
+console.log(`[OPRA] ${ticker}  ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
 
 return {
 symbol: best.symbol, mid: best.mid,
@@ -551,7 +551,7 @@ maxPain, gex, oiNodes, ivCtx, timeCtx, price,
 };
 }
 
-// ── RESOLVE CONTRACT WITH SPECIFIC EXPIRY (for Card A flow expiry) ─
+// – RESOLVE CONTRACT WITH SPECIFIC EXPIRY (for Card A flow expiry) -
 async function resolveContractWithExpiry(ticker, type, expiry) {
 try {
 const price = await getPrice(ticker);
@@ -573,7 +573,7 @@ const best = contracts.reduce((a, b) =>
 );
 
 const dte = calcDTE(expiry);
-console.log('[OPRA FLOW EXPIRY] ' + ticker + ' ✅ ' + best.symbol + ' strike $' + best.strike + ' mid $' + best.mid + ' ' + dte + 'DTE');
+console.log('[OPRA FLOW EXPIRY] ' + ticker + '  ' + best.symbol + ' strike $' + best.strike + ' mid $' + best.mid + ' ' + dte + 'DTE');
 
 return {
   symbol: best.symbol, mid: best.mid,
@@ -589,7 +589,7 @@ return null;
 }
 }
 
-// ── PARSE OPRA ────────────────────────────────────────────────────
+// – PARSE OPRA ––––––––––––––––––––––––––
 function parseOPRA(opraSymbol) {
 try {
 const raw   = (opraSymbol || ‘’).replace(/^O:/, ‘’);
@@ -601,7 +601,7 @@ return { ticker, expiry, type: type === ‘C’ ? ‘call’ : ‘put’, strike
 } catch { return null; }
 }
 
-// ── GET OPTION SNAPSHOT ───────────────────────────────────────────
+// – GET OPTION SNAPSHOT —————————————––
 async function getOptionSnapshot(optionTicker) {
 try {
 const res    = await fetch(`${POLY_BASE}/v3/snapshot/options/${optionTicker}?apiKey=${polyKey()}`);
@@ -629,7 +629,7 @@ strike: details.strike_price || 0, expiry: details.expiration_date || ‘’,
 } catch { return null; }
 }
 
-// ── FIND BEST CONTRACT ────────────────────────────────────────────
+// – FIND BEST CONTRACT ––––––––––––––––––––––
 async function findBestContract(opraSymbol) {
 const parsed = parseOPRA(opraSymbol);
 if (!parsed) return { error: ‘Could not parse OPRA’ };
@@ -665,7 +665,7 @@ return best;
 } catch (err) { return { error: err.message }; }
 }
 
-// ── SCORE CONTRACT ────────────────────────────────────────────────
+// – SCORE CONTRACT ————————————————
 function scoreContract(snap, underlyingPrice) {
 let total = 0; const warnings = [];
 const premium   = snap.mid || snap.ask;
@@ -682,7 +682,7 @@ if (snap.openInterest >= 100)             { total += 1; } else { warnings.push(�
 return { total, max: 11, warnings, profitProb: Math.round(absDelta * 100) };
 }
 
-// ── POSITION SIZING ───────────────────────────────────────────────
+// – POSITION SIZING ———————————————–
 function calculatePositionSize(premium, mode = ‘SWING’, accountSize = 7000, spreadData = null) {
 const config = MODES[mode] || MODES.SWING;
 if (!premium || premium <= 0) return { viable: false, reason: ‘No premium’ };
@@ -732,7 +732,5 @@ calculatePositionSize, findSpreadLegs,
 calculateMaxPain, calculateGEX, getHighOINodes,
 getIVContext, getTimeContext, getPublicGreeks,
 WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
-};
-  WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };
 
