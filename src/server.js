@@ -1,10 +1,13 @@
-// server.js — Stratum Flow Scout v6.1
+// server.js — Stratum Flow Scout v7.0
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // RSI(14) + VWAP + FVG parsed from webhook payload
 // Dashboard: /dashboard
 // Idea Validator: /webhook/idea
-// Discord Bot: /interactions (no discord.js package needed)
+// Discord Bot: /interactions
 // Flow Clusters: /flow/clusters
+// Goal Tracker: /goal
+// Finviz Screener: fires 9:15AM ET
+// TradeStation Auth: /ts-auth
 // —————————————————————–
 
 require(‘dotenv’).config();
@@ -14,13 +17,21 @@ const cron     = require(‘node-cron’);
 const alerter  = require(’./alerter’);
 const resolver = require(’./contractResolver’);
 const bullflow = require(’./bullflowStream’);
-const dashboard      = require(’./dashboard’);
-const ideaValidator  = require(’./ideaValidator’);
+const dashboard     = require(’./dashboard’);
+const ideaValidator = require(’./ideaValidator’);
 const { startDiscordBot, handleInteraction } = require(’./discordBot’);
 const { getClusterSummary } = require(’./flowCluster’);
-const ts          = require(’./tradestation’);
 const goalTracker = require(’./goalTracker’);
 const finviz      = require(’./finvizScreener’);
+
+// TradeStation loaded safely – won’t crash server if it fails
+let ts = null;
+try {
+ts = require(’./tradestation’);
+console.log(’[TS] tradestation.js loaded OK’);
+} catch (err) {
+console.log(’[TS] tradestation.js not available – skipping’);
+}
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -36,7 +47,7 @@ next();
 });
 
 app.get(’/’, function(req, res) {
-res.json({ status: ‘Stratum Flow Scout OK’, version: ‘6.1’, time: new Date().toISOString() });
+res.json({ status: ‘Stratum Flow Scout OK’, version: ‘7.0’, time: new Date().toISOString() });
 });
 
 // – FLOW SUMMARY + CLUSTERS –––––––––––––––––––
@@ -81,16 +92,11 @@ try {
 const body = req.body;
 const text = body.text || body.content || body.idea || ‘’;
 if (!text) return res.status(400).json({ error: ‘Missing text field’ });
-
-```
 const webhookUrl = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-if (!webhookUrl) return res.status(500).json({ error: 'No conviction webhook configured' });
-
-console.log('[IDEA] Received:', text);
+if (!webhookUrl) return res.status(500).json({ error: ‘No conviction webhook configured’ });
+console.log(’[IDEA] Received:’, text);
 ideaValidator.validateAndPost(text, webhookUrl).catch(console.error);
-res.json({ status: 'processing', text });
-```
-
+res.json({ status: ‘processing’, text });
 } catch (err) {
 console.error(’[IDEA] Error:’, err.message);
 res.status(500).json({ error: err.message });
@@ -102,63 +108,47 @@ app.post(’/webhook/tradingview’, async function(req, res) {
 try {
 const body       = req.body;
 console.log(’[WEBHOOK] Received:’, JSON.stringify(body));
-
-```
-const ticker     = (body.ticker     || '').toUpperCase().trim();
-const type       = (body.type       || 'call').toLowerCase().trim();
-const confluence = body.confluence  || '0/6';
-const tradeType  = body.tradeType   || 'SWING';
+const ticker     = (body.ticker     || ‘’).toUpperCase().trim();
+const type       = (body.type       || ‘call’).toLowerCase().trim();
+const confluence = body.confluence  || ‘0/6’;
+const tradeType  = body.tradeType   || ‘SWING’;
 const weekly     = body.weekly      || null;
 const daily      = body.daily       || null;
 const h4         = body.h4          || null;
 const h1         = body.h1          || null;
-
-// RSI + VWAP — plot_1, plot_2, plot_3
 const rsi      = body.rsi      != null ? parseFloat(body.rsi)      : null;
 const vwap     = body.vwap     != null ? parseFloat(body.vwap)     : null;
 const vwapBias = body.vwapBias != null
-  ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
-  : null;
-
-// FVG — plot_4, plot_5, plot_6, plot_7
+? (parseFloat(body.vwapBias) === 1 || body.vwapBias === ‘above’ ? ‘above’ : ‘below’)
+: null;
 const bearFVGTop    = body.bearFVGTop    != null ? parseFloat(body.bearFVGTop)    : null;
 const bearFVGBottom = body.bearFVGBottom != null ? parseFloat(body.bearFVGBottom) : null;
 const bullFVGTop    = body.bullFVGTop    != null ? parseFloat(body.bullFVGTop)    : null;
 const bullFVGBottom = body.bullFVGBottom != null ? parseFloat(body.bullFVGBottom) : null;
 
+```
 if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
-
 const score = parseInt(confluence.split('/')[0]) || 0;
 if (score < 5) {
   console.log('[WEBHOOK] ' + ticker + ' confluence ' + confluence + ' -- skipping');
   return res.json({ status: 'skipped', reason: 'Confluence ' + confluence + ' below 5/6' });
 }
-
-console.log('[WEBHOOK] ' + ticker + ' ' + confluence + ' ' + tradeType + ' RSI:' + (rsi || '--') + ' VWAP:' + (vwapBias || '--') + ' -- PROCESSING OK');
-
+console.log('[WEBHOOK] ' + ticker + ' ' + confluence + ' ' + tradeType + ' -- PROCESSING OK');
 const resolved = await resolver.resolveContract(ticker, type, tradeType);
 if (!resolved) {
   console.log('[WEBHOOK] Could not resolve contract for ' + ticker);
   return res.json({ status: 'skipped', reason: 'No contract found' });
 }
-
 const tvBias = {
   weekly, daily, h4, h1, confluence,
-  mid:         resolved.mid,
-  bid:         resolved.bid,
-  ask:         resolved.ask,
-  mode:        resolved.mode,
-  dte:         resolved.dte,
+  mid: resolved.mid, bid: resolved.bid, ask: resolved.ask,
+  mode: resolved.mode, dte: resolved.dte,
   rsi, vwap, vwapBias,
-  bearFVGTop, bearFVGBottom,
-  bullFVGTop, bullFVGBottom,
-  debit:       resolved.debit       || null,
-  maxProfit:   resolved.maxProfit   || null,
-  breakeven:   resolved.breakeven   || null,
-  sellStrike:  resolved.sellStrike  || null,
+  bearFVGTop, bearFVGBottom, bullFVGTop, bullFVGBottom,
+  debit: resolved.debit || null, maxProfit: resolved.maxProfit || null,
+  breakeven: resolved.breakeven || null, sellStrike: resolved.sellStrike || null,
   spreadWidth: resolved.spreadWidth || null,
 };
-
 alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true, resolved).catch(console.error);
 res.json({ status: 'processing', ticker, opra: resolved.symbol, mode: resolved.mode, mid: resolved.mid });
 ```
@@ -196,11 +186,11 @@ res.status(500).json({ error: err.message });
 }
 });
 
-// – MORNING BRIEF — 9:15AM ET ————————————
+// – FINVIZ SCREENER + MORNING BRIEF — 9:15AM ET ——————
 cron.schedule(‘15 13 * * 1-5’, async function() {
-console.log(’[CRON] Firing morning brief…’);
-try { await alerter.sendMorningBrief(); }
-catch (err) { console.error(’[CRON] Failed:’, err.message); }
+console.log(’[CRON] Morning brief + screener…’);
+try { await alerter.sendMorningBrief(); } catch (err) { console.error(’[BRIEF] Failed:’, err.message); }
+try { await finviz.postScreenerCard(); }  catch (err) { console.error(’[SCREENER] Failed:’, err.message); }
 });
 
 app.get(’/test/brief’, async function(req, res) {
@@ -208,28 +198,16 @@ try { await alerter.sendMorningBrief(); res.json({ status: ‘Sent OK’ }); }
 catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get(’/test/bullflow’, function(req, res) {
-res.json({ status: ‘Bullflow stream running OK’, version: ‘6.1’ });
-});
-
-// – FINVIZ SCREENER –––––––––––––––––––––––
-// Fires at 9:15AM ET every trading day
-cron.schedule(‘15 13 * * 1-5’, async function() {
-console.log(’[SCREENER] Running morning screener…’);
-try { await finviz.postScreenerCard(); }
-catch (err) { console.error(’[SCREENER] Failed:’, err.message); }
-});
-
 app.get(’/test/screener’, async function(req, res) {
 try { await finviz.postScreenerCard(); res.json({ status: ‘Sent OK’ }); }
 catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// – GOAL TRACKER ———————————————––
-// GET /goal — current state
-// POST /goal/trade — record a trade result
-// GET /goal/reset — manual reset
+app.get(’/test/bullflow’, function(req, res) {
+res.json({ status: ‘Bullflow stream running OK’, version: ‘7.0’ });
+});
 
+// – GOAL TRACKER ———————————————––
 app.get(’/goal’, function(req, res) {
 res.json(goalTracker.getState());
 });
@@ -247,7 +225,6 @@ goalTracker.resetIfNewDay();
 res.json({ status: ‘reset OK’, state: goalTracker.getState() });
 });
 
-// Post goal update at market open 9:30AM and close 4PM
 cron.schedule(‘30 13 * * 1-5’, function() {
 console.log(’[GOAL] Market open – posting daily goal’);
 goalTracker.postGoalUpdate().catch(console.error);
@@ -258,57 +235,40 @@ console.log(’[GOAL] Market close – posting final P&L’);
 goalTracker.postGoalUpdate().catch(console.error);
 });
 
-// – TRADESTATION AUTH ––––––––––––––––––––––
-// Step 1: Visit /ts-auth in browser → redirects to TradeStation login
-// Step 2: After login → /ts-callback → saves refresh token automatically
-// Step 3: Done forever — auto-refreshes every 20 minutes
-
+// – TRADESTATION AUTH (only if ts loaded) ————————
 app.get(’/ts-auth’, function(req, res) {
-const loginUrl = ts.getLoginUrl();
-console.log(’[TS AUTH] Redirecting to TradeStation login…’);
-res.redirect(loginUrl);
+if (!ts) return res.send(’<h2>TradeStation module not loaded</h2>’);
+res.redirect(ts.getLoginUrl());
 });
 
 app.get(’/ts-callback’, async function(req, res) {
+if (!ts) return res.send(’<h2>TradeStation module not loaded</h2>’);
 const code = req.query.code;
-if (!code) {
-return res.send(’<h2>Error: No code received from TradeStation</h2>’);
-}
+if (!code) return res.send(’<h2>Error: No code received</h2>’);
 try {
-console.log(’[TS AUTH] Exchanging code for tokens…’);
 const data = await ts.exchangeCode(code);
 if (data.refresh_token) {
 ts.setRefreshToken(data.refresh_token);
 console.log(’[TS AUTH] Refresh token obtained OK ✅’);
-console.log(’[TS AUTH] Add to Railway: TS_REFRESH_TOKEN=’ + data.refresh_token);
 res.send(
 ‘<h2>✅ TradeStation Connected!</h2>’ +
-‘<p>Copy this refresh token and add it to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>’ +
-‘<textarea rows="4" cols="80" onclick="this.select()">’ + data.refresh_token + ‘</textarea>’ +
-‘<br><br><p>Once added to Railway, TradeStation will auto-refresh forever.</p>’
+‘<p>Add this to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>’ +
+‘<textarea rows="4" cols="80" onclick="this.select()">’ + data.refresh_token + ‘</textarea>’
 );
 } else {
-console.error(’[TS AUTH] Failed:’, JSON.stringify(data));
 res.send(’<h2>❌ Auth Failed</h2><pre>’ + JSON.stringify(data, null, 2) + ‘</pre>’);
 }
 } catch (err) {
-console.error(’[TS AUTH] Error:’, err.message);
 res.send(’<h2>Error: ’ + err.message + ‘</h2>’);
 }
 });
 
 // – START ––––––––––––––––––––––––––––
 app.listen(PORT, function() {
-console.log(‘Flow Scout v6.1 running on port ’ + PORT);
-console.log(’   All tickers – no watchlist filter’);
-console.log(’   5/6+ confluence only’);
-console.log(’   DAY mode:    0-1DTE  $0.30-$1.50’);
-console.log(’   SWING mode:  5-7DTE  $0.50-$3.00’);
-console.log(’   SPREAD mode: 5-7DTE  $0.50-$1.50 vertical debit’);
-console.log(’   RSI(14) + VWAP + FVG on every card’);
-console.log(’   Idea Validator: /webhook/idea’);
-console.log(’   TradeStation Auth: /ts-auth (one-time browser login)’);
-console.log(’   Flow Clusters:  /flow/clusters ($500K+ in 10min)’);
+console.log(‘Flow Scout v7.0 running on port ’ + PORT);
+console.log(’   Bullflow stream + Discord bot + Goal tracker + Finviz screener’);
 bullflow.startBullflowStream();
+startDiscordBot();
+});
 startDiscordBot();
 });
