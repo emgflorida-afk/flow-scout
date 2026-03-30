@@ -1,4 +1,4 @@
-// finvizScreener.js — Stratum Flow Scout v7.0
+// finvizScreener.js  Stratum Flow Scout v7.0
 // Fetches live Finviz screener data via CSV export
 // Posts to #screener-watchlist at 9:15AM ET daily
 // Screener 1: Mega cap + options + relative volume >1x
@@ -10,7 +10,7 @@ const fetch = require(‘node-fetch’);
 
 const SCREENER_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 
-// Finviz CSV export URLs — live data, no scraping needed
+// Finviz CSV export URLs  live data, no scraping needed
 const SCREENER_1_URL = ‘https://finviz.com/export.ashx?v=152&f=cap_mega,sh_opt_option,sh_relvol_o1&o=-marketcap&c=1,2,3,4,5,6,7,8,9,65,67’;
 const SCREENER_2_URL = ‘https://finviz.com/export.ashx?v=152&f=cap_large,sh_opt_option,sh_relvol_o1,ta_change_u,ta_changeopen_u&o=-relativevolume&c=1,2,3,4,5,6,7,8,9,65,67’;
 
@@ -44,7 +44,7 @@ return [];
 }
 const csv  = await res.text();
 const rows = parseCSV(csv);
-console.log(’[SCREENER] ’ + label + ’ — ’ + rows.length + ’ tickers ✅’);
+console.log(’[SCREENER] ’ + label + ’  ’ + rows.length + ’ tickers ‘);
 return rows;
 } catch (err) {
 console.error(’[SCREENER] ’ + label + ’ error:’, err.message);
@@ -61,7 +61,7 @@ const relVol  = row[‘Relative Volume’] || row.RelVolume || ‘–’;
 const vol     = row.Volume  || ‘–’;
 
 const changeNum = parseFloat(change);
-const arrow     = changeNum >= 0 ? ‘▲’ : ‘▼’;
+const arrow     = changeNum >= 0 ? ‘’ : ‘’;
 const changeStr = (changeNum >= 0 ? ‘+’ : ‘’) + change;
 
 return rank + ‘. ’ +
@@ -93,9 +93,9 @@ day:      ‘numeric’,
 });
 
 const lines = [
-’📊 MORNING SCREENER — ’ + dateStr,
+’ MORNING SCREENER  ’ + dateStr,
 ‘===============================’,
-‘🔵 MEGA CAP + OPTIONS + REL VOL >1x’,
+’ MEGA CAP + OPTIONS + REL VOL >1x’,
 ];
 
 if (mega.length === 0) {
@@ -107,7 +107,7 @@ lines.push(’  ’ + formatRow(row, i + 1));
 }
 
 lines.push(’—————————––’);
-lines.push(‘🟢 LARGE CAP MOMENTUM (up from open)’);
+lines.push(’ LARGE CAP MOMENTUM (up from open)’);
 
 if (momentum.length === 0) {
 lines.push(’  No data available’);
@@ -118,7 +118,7 @@ lines.push(’  ’ + formatRow(row, i + 1));
 }
 
 lines.push(’—————————––’);
-lines.push(‘⚡ Flow + Screener = HIGHEST CONVICTION’);
+lines.push(’ Flow + Screener = HIGHEST CONVICTION’);
 lines.push(’   Cross-check tickers with #flow-alerts’);
 lines.push(‘Time  9:15 AM ET’);
 
@@ -133,7 +133,7 @@ content:  ‘`\n' + card + '\n`’,
 username: ‘Stratum Screener’,
 }),
 });
-console.log(’[SCREENER] Posted to Discord OK ✅’);
+console.log(’[SCREENER] Posted to Discord OK ‘);
 } catch (err) {
 console.error(’[SCREENER] Post error:’, err.message);
 }
