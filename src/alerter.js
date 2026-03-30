@@ -96,37 +96,69 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-// -- RETRACEMENT LEVELS (VOLATILITY-AWARE) -----------------------
-// Low vol  (ADX < 20): tight retrace 12.5% / 25%
-// Normal   (ADX 20-30): standard 18.75% / 31.25%
-// High vol (ADX > 30): deep retrace 25% / 37.5%
-function getRetracementLevels(premium, adx) {
-  if (!premium || premium <= 0) return null;
-  var p   = parseFloat(premium);
-  var adxVal = adx ? parseFloat(adx) : 0;
 
-  var r1, r2, r3, label;
-  if (adxVal >= 30) {
-    // HIGH VOLATILITY -- deeper retrace needed
-    r1 = parseFloat((p * 0.75).toFixed(2));   // 25% retrace
-    r2 = parseFloat((p * 0.625).toFixed(2));  // 37.5% retrace
-    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
-    label = 'HIGH VOL (ADX ' + adxVal.toFixed(0) + ')';
-  } else if (adxVal >= 20) {
-    // NORMAL VOLATILITY -- standard retrace
-    r1 = parseFloat((p * 0.8125).toFixed(2)); // 18.75% retrace
-    r2 = parseFloat((p * 0.6875).toFixed(2)); // 31.25% retrace
-    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
-    label = 'NORMAL VOL (ADX ' + adxVal.toFixed(0) + ')';
-  } else {
-    // LOW VOLATILITY -- tight retrace
-    r1 = parseFloat((p * 0.875).toFixed(2));  // 12.5% retrace
-    r2 = parseFloat((p * 0.75).toFixed(2));   // 25% retrace
-    r3 = parseFloat((p * 0.50).toFixed(2));   // 50% invalid
-    label = adxVal > 0 ? 'LOW VOL (ADX ' + adxVal.toFixed(0) + ')' : '';
-  }
+// -- MARGIN STOCK CARD -------------------------------------------
+// Used for leveraged ETFs and high-conviction stocks
+// No theta decay -- hold overnight safely without PDT risk
+// ATR-based stop placement for wider breathing room
+// PDT rule: do NOT open and close same day -- hold overnight
+function buildMarginStockCard(ticker, price, direction, tvData, atr) {
+  if (!price || !ticker) return null;
+  atr = atr || price * 0.02; // default 2% ATR if not provided
 
-  return { primary: r1, secondary: r2, invalid: r3, label: label };
+  var isBull    = direction === 'BULL' || direction === 'call';
+  var dirLabel  = isBull ? 'BULLISH' : 'BEARISH';
+  var action    = isBull ? 'BUY' : 'SELL SHORT';
+
+  // Position sizing based on $7K account with 2:1 margin = $14K buying power
+  // Risk 1.5% of account = $105 per trade
+  var riskDollars  = 105;
+  var stopDist     = parseFloat((atr * 1.5).toFixed(2));  // 1.5x ATR stop
+  var shares       = Math.floor(riskDollars / stopDist);
+  shares           = Math.max(1, Math.min(shares, 100));  // cap at 100 shares
+
+  var stopPrice    = isBull
+    ? parseFloat((price - stopDist).toFixed(2))
+    : parseFloat((price + stopDist).toFixed(2));
+  var t1Price      = isBull
+    ? parseFloat((price + stopDist * 2).toFixed(2))   // 2:1 R/R
+    : parseFloat((price - stopDist * 2).toFixed(2));
+  var t2Price      = isBull
+    ? parseFloat((price + stopDist * 4).toFixed(2))   // 4:1 runner
+    : parseFloat((price - stopDist * 4).toFixed(2));
+
+  var totalCost    = parseFloat((shares * price).toFixed(2));
+  var riskAmt      = parseFloat((shares * stopDist).toFixed(2));
+  var t1Profit     = parseFloat((shares * stopDist * 2).toFixed(2));
+
+  var confluence   = tvData ? (tvData.confluence || '') : '';
+  var adxVal       = tvData ? (tvData.adx ? parseFloat(tvData.adx) : 0) : 0;
+  var volRatio     = tvData ? (tvData.volRatio ? parseFloat(tvData.volRatio) : null) : null;
+
+  var lines = [
+    'MARGIN STOCK TRADE',
+    ticker + ' -- ' + dirLabel,
+    '===============================',
+    confluence ? 'Confluence  ' + confluence : null,
+    '-------------------------------',
+    'Price   $' + price,
+    action + '  ' + shares + ' shares = $' + totalCost,
+    'Stop    $' + stopPrice + ' (-$' + riskAmt + ')',
+    'T1      $' + t1Price + ' (profit +$' + t1Profit + ')',
+    'T2      $' + t2Price + ' (runner)',
+    'Risk    $' + riskAmt + ' max (1.5% of $7K)',
+    '-------------------------------',
+    'NO THETA -- hold overnight safely',
+    'PDT     Do NOT close same day -- swing only',
+    adxVal > 30 ? 'Regime  HIGH VOL (ADX ' + adxVal.toFixed(0) + ') -- trending hard' : null,
+    volRatio && volRatio >= 2 ? 'Volume  ' + volRatio.toFixed(1) + 'x avg -- high conviction' : null,
+    '-------------------------------',
+    'Hold    1-3 days minimum',
+    'Window  9:45AM-3:30PM ET entry only',
+    'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
+  ].filter(function(l) { return l !== null; });
+
+  return { text: lines.join('\n'), ticker: ticker };
 }
 
 // -- RSI LABEL ----------------------------------------------------
@@ -384,8 +416,22 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     return false;
   }
 
+  // Check if this is a leveraged ETF -- use margin stock card instead
+  var parsedForStock  = resolver.parseOPRA(opraSymbol);
+  var stockTicker     = parsedForStock ? parsedForStock.ticker : null;
+  var leveragedETFs   = ['TQQQ','SQQQ','SPXL','SPXS','TNA','TZA','XLF','XLE','XLK','ARKK'];
+  var isLeveragedETF  = stockTicker && leveragedETFs.indexOf(stockTicker) >= 0;
+
   let card;
-  if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
+  if (isLeveragedETF && resolved && resolved.price) {
+    // Generate BOTH a margin stock card AND an options card
+    var direction    = (tvData.type === 'put' || tvData.action === 'BEAR') ? 'BEAR' : 'BULL';
+    var stockCard    = buildMarginStockCard(stockTicker, resolved.price, direction, tvData, null);
+    if (stockCard) {
+      await sendToChannel('strat', '[MARGIN STOCK OPTION]\n' + stockCard.text, stockCard.ticker);
+    }
+    card = buildStratCard(opraSymbol, tvData, resolved);
+  } else if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
     card = buildSpreadCard(resolved, tvData);
   } else {
     card = buildStratCard(opraSymbol, tvData, resolved);
