@@ -97,68 +97,16 @@ function calcDTE(expiryDateStr) {
 }
 
 
-// -- MARGIN STOCK CARD -------------------------------------------
-// Used for leveraged ETFs and high-conviction stocks
-// No theta decay -- hold overnight safely without PDT risk
-// ATR-based stop placement for wider breathing room
-// PDT rule: do NOT open and close same day -- hold overnight
-function buildMarginStockCard(ticker, price, direction, tvData, atr) {
-  if (!price || !ticker) return null;
-  atr = atr || price * 0.02; // default 2% ATR if not provided
-
-  var isBull    = direction === 'BULL' || direction === 'call';
-  var dirLabel  = isBull ? 'BULLISH' : 'BEARISH';
-  var action    = isBull ? 'BUY' : 'SELL SHORT';
-
-  // Position sizing based on $7K account with 2:1 margin = $14K buying power
-  // Risk 1.5% of account = $105 per trade
-  var riskDollars  = 105;
-  var stopDist     = parseFloat((atr * 1.5).toFixed(2));  // 1.5x ATR stop
-  var shares       = Math.floor(riskDollars / stopDist);
-  shares           = Math.max(1, Math.min(shares, 100));  // cap at 100 shares
-
-  var stopPrice    = isBull
-    ? parseFloat((price - stopDist).toFixed(2))
-    : parseFloat((price + stopDist).toFixed(2));
-  var t1Price      = isBull
-    ? parseFloat((price + stopDist * 2).toFixed(2))   // 2:1 R/R
-    : parseFloat((price - stopDist * 2).toFixed(2));
-  var t2Price      = isBull
-    ? parseFloat((price + stopDist * 4).toFixed(2))   // 4:1 runner
-    : parseFloat((price - stopDist * 4).toFixed(2));
-
-  var totalCost    = parseFloat((shares * price).toFixed(2));
-  var riskAmt      = parseFloat((shares * stopDist).toFixed(2));
-  var t1Profit     = parseFloat((shares * stopDist * 2).toFixed(2));
-
-  var confluence   = tvData ? (tvData.confluence || '') : '';
-  var adxVal       = tvData ? (tvData.adx ? parseFloat(tvData.adx) : 0) : 0;
-  var volRatio     = tvData ? (tvData.volRatio ? parseFloat(tvData.volRatio) : null) : null;
-
-  var lines = [
-    'MARGIN STOCK TRADE',
-    ticker + ' -- ' + dirLabel,
-    '===============================',
-    confluence ? 'Confluence  ' + confluence : null,
-    '-------------------------------',
-    'Price   $' + price,
-    action + '  ' + shares + ' shares = $' + totalCost,
-    'Stop    $' + stopPrice + ' (-$' + riskAmt + ')',
-    'T1      $' + t1Price + ' (profit +$' + t1Profit + ')',
-    'T2      $' + t2Price + ' (runner)',
-    'Risk    $' + riskAmt + ' max (1.5% of $7K)',
-    '-------------------------------',
-    'NO THETA -- hold overnight safely',
-    'PDT     Do NOT close same day -- swing only',
-    adxVal > 30 ? 'Regime  HIGH VOL (ADX ' + adxVal.toFixed(0) + ') -- trending hard' : null,
-    volRatio && volRatio >= 2 ? 'Volume  ' + volRatio.toFixed(1) + 'x avg -- high conviction' : null,
-    '-------------------------------',
-    'Hold    1-3 days minimum',
-    'Window  9:45AM-3:30PM ET entry only',
-    'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
-  ].filter(function(l) { return l !== null; });
-
-  return { text: lines.join('\n'), ticker: ticker };
+// -- GRADE BASED CONTRACT SIZING ----------------------------------
+// A+ (8+ points) = 4 contracts -- max conviction
+// A  (6-7 points) = 3 contracts -- high conviction  
+// B  (4-5 points) = 2 contracts -- standard
+// C  (0-3 points) = 1 contract  -- minimum (should skip)
+function getContractsByGrade(grade) {
+  if (grade === 'A+') return 4;
+  if (grade === 'A')  return 3;
+  if (grade === 'B')  return 2;
+  return 1;
 }
 
 // -- RSI LABEL ----------------------------------------------------
@@ -360,7 +308,8 @@ function buildStratCard(opraSymbol, tvData, resolved) {
 
   const mode      = tvData.mode || 'SWING';
   const premium   = tvData.mid  || null;
-  const sizing    = premium ? resolver.calculatePositionSize(premium, mode) : null;
+  var gradeContracts = grade ? getContractsByGrade(grade) : 1;
+  const sizing    = premium ? resolver.calculatePositionSize(premium, mode, 7000, null, gradeContracts) : null;
   const s         = sizing && sizing.viable ? sizing : null;
   const modeLabel = mode === 'DAY' ? 'DAY TRADE' : 'SWING TRADE';
 
@@ -386,7 +335,7 @@ function buildStratCard(opraSymbol, tvData, resolved) {
     'Expiry  ' + expiryFmt + ' (' + dteLabel + ')',
     (tvData.bid && tvData.ask) ? 'Bid/Ask $' + parseFloat(tvData.bid).toFixed(2) + ' / $' + parseFloat(tvData.ask).toFixed(2) : null,
     '-------------------------------',
-    s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Check live premium before entry',
+    s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost + ' (' + (grade || 'C') + ' size)' : 'Check live premium before entry',
     s ? 'Stop    $' + s.stopPrice + ' (loss -$' + s.stopLoss + ')'      : 'Stop    ' + (mode === 'DAY' ? '35' : '40') + '% of premium',
     s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
     s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
@@ -416,22 +365,8 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     return false;
   }
 
-  // Check if this is a leveraged ETF -- use margin stock card instead
-  var parsedForStock  = resolver.parseOPRA(opraSymbol);
-  var stockTicker     = parsedForStock ? parsedForStock.ticker : null;
-  var leveragedETFs   = ['TQQQ','SQQQ','SPXL','SPXS','TNA','TZA','XLF','XLE','XLK','ARKK'];
-  var isLeveragedETF  = stockTicker && leveragedETFs.indexOf(stockTicker) >= 0;
-
   let card;
-  if (isLeveragedETF && resolved && resolved.price) {
-    // Generate BOTH a margin stock card AND an options card
-    var direction    = (tvData.type === 'put' || tvData.action === 'BEAR') ? 'BEAR' : 'BULL';
-    var stockCard    = buildMarginStockCard(stockTicker, resolved.price, direction, tvData, null);
-    if (stockCard) {
-      await sendToChannel('strat', '[MARGIN STOCK OPTION]\n' + stockCard.text, stockCard.ticker);
-    }
-    card = buildStratCard(opraSymbol, tvData, resolved);
-  } else if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
+  if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
     card = buildSpreadCard(resolved, tvData);
   } else {
     card = buildStratCard(opraSymbol, tvData, resolved);

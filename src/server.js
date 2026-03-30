@@ -1,6 +1,5 @@
 // server.js - Stratum Flow Scout v7.2
-// All modules loaded safely - cannot crash server
-// TradeStation auth: /ts-auth + /ts-callback
+// Complete final version with all modules + AYCE pre-market scanner
 
 require('dotenv').config();
 var express  = require('express');
@@ -14,14 +13,17 @@ var ideaValidator = require('./ideaValidator');
 var discordBot    = require('./discordBot');
 var flowCluster   = require('./flowCluster');
 
-var goalTracker = null;
-var finviz      = null;
-var capitol     = null;
-var ts          = null;
-try { goalTracker = require('./goalTracker');    console.log('[GOAL] Loaded OK'); }    catch(e) { console.log('[GOAL] Skipped:', e.message); }
-try { finviz      = require('./finvizScreener'); console.log('[FINVIZ] Loaded OK'); }  catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
-try { capitol     = require('./capitolTrades');  console.log('[CAPITOL] Loaded OK'); } catch(e) { console.log('[CAPITOL] Skipped:', e.message); }
-try { ts          = require('./tradestation');   console.log('[TS] Loaded OK'); }      catch(e) { console.log('[TS] Skipped:', e.message); }
+var goalTracker      = null;
+var finviz           = null;
+var capitol          = null;
+var ts               = null;
+var preMarketScanner = null;
+
+try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
+try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
+try { capitol          = require('./capitolTrades');    console.log('[CAPITOL] Loaded OK'); } catch(e) { console.log('[CAPITOL] Skipped:', e.message); }
+try { ts               = require('./tradestation');     console.log('[TS] Loaded OK');      } catch(e) { console.log('[TS] Skipped:', e.message); }
+try { preMarketScanner = require('./preMarketScanner'); console.log('[SCANNER] Loaded OK'); } catch(e) { console.log('[SCANNER] Skipped:', e.message); }
 
 var app  = express();
 var PORT = process.env.PORT || 3000;
@@ -35,11 +37,13 @@ app.use(function(req, res, next) {
   next();
 });
 
+// -- ROUTES -------------------------------------------------------
+
 app.get('/', function(req, res) {
   res.json({ status: 'Stratum Flow Scout OK', version: '7.2', time: new Date().toISOString() });
 });
 
-app.get('/flow/summary', function(req, res) { res.json(bullflow.liveAggregator.getSummary()); });
+app.get('/flow/summary',  function(req, res) { res.json(bullflow.liveAggregator.getSummary()); });
 app.get('/flow/clusters', function(req, res) { res.json(flowCluster.getClusterSummary()); });
 
 app.get('/dashboard', function(req, res) {
@@ -124,7 +128,7 @@ app.get('/prices', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GOAL TRACKER
+// -- GOAL TRACKER -------------------------------------------------
 app.get('/goal', function(req, res) {
   if (!goalTracker) return res.json({ status: 'Goal tracker not loaded' });
   res.json(goalTracker.getState());
@@ -139,9 +143,9 @@ app.post('/goal/trade', function(req, res) {
   res.json(goalTracker.getState());
 });
 
-// TRADESTATION AUTH
+// -- TRADESTATION AUTH --------------------------------------------
 app.get('/ts-auth', function(req, res) {
-  if (!ts) return res.send('<h2>TradeStation module not loaded. Upload tradestation.js to GitHub src/ folder.</h2>');
+  if (!ts) return res.send('<h2>TradeStation module not loaded. Upload tradestation.js to src/ folder.</h2>');
   console.log('[TS AUTH] Redirecting to TradeStation login...');
   res.redirect(ts.getLoginUrl());
 });
@@ -168,27 +172,42 @@ app.get('/ts-callback', async function(req, res) {
   } catch(e) { res.send('<h2>Error: ' + e.message + '</h2>'); }
 });
 
-// CRONS
+// -- TEST ROUTES --------------------------------------------------
+app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'Finviz not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/scanner',  async function(req, res) { if (!preMarketScanner) return res.json({ status: 'Scanner not loaded' }); try { await preMarketScanner.runPreMarketScan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/322',      async function(req, res) { if (!preMarketScanner) return res.json({ status: 'Scanner not loaded' }); try { await preMarketScanner.run322Scan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/bullflow', function(req, res) { res.json({ status: 'Bullflow running OK', version: '7.2' }); });
+
+// -- CRONS --------------------------------------------------------
+
+// 9:15AM ET -- morning brief + screener + goal + capitol + AYCE pre-market scan
 cron.schedule('15 13 * * 1-5', async function() {
-  console.log('[CRON] Morning brief + screener...');
-  try { await alerter.sendMorningBrief(); } catch(e) {}
-  if (finviz)      { try { await finviz.postScreenerCard();     } catch(e) {} }
-  if (goalTracker) { try { await goalTracker.postGoalUpdate();  } catch(e) {} }
-  if (capitol)     { try { await capitol.fetchCongressTrades(); } catch(e) {} }
+  console.log('[CRON] 9:15AM -- morning brief + pre-market scan...');
+  try { await alerter.sendMorningBrief(); } catch(e) { console.error('[BRIEF]', e.message); }
+  if (finviz)           { try { await finviz.postScreenerCard();          } catch(e) { console.error('[FINVIZ]', e.message); } }
+  if (goalTracker)      { try { await goalTracker.postGoalUpdate();        } catch(e) { console.error('[GOAL]', e.message); } }
+  if (capitol)          { try { await capitol.fetchCongressTrades();       } catch(e) { console.error('[CAPITOL]', e.message); } }
+  if (preMarketScanner) { try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); } }
 });
+
+// 9:30AM ET -- market open goal post
 cron.schedule('30 13 * * 1-5', function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
 });
+
+// 10:00AM ET -- 3-2-2 First Live scan (after 9AM candle closes)
+cron.schedule('0 14 * * 1-5', async function() {
+  console.log('[CRON] 10:00AM -- 3-2-2 scan...');
+  if (preMarketScanner) { try { await preMarketScanner.run322Scan(); } catch(e) { console.error('[322]', e.message); } }
+});
+
+// 4:00PM ET -- end of day goal post
 cron.schedule('0 20 * * 1-5', function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
 });
 
-// TEST ROUTES
-app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'Finviz not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/bullflow', function(req, res) { res.json({ status: 'Bullflow running OK', version: '7.2' }); });
-
-// START
+// -- START --------------------------------------------------------
 app.listen(PORT, function() {
   console.log('Flow Scout v7.2 running on port ' + PORT);
   bullflow.startBullflowStream();

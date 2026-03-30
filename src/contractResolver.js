@@ -668,7 +668,10 @@ function scoreContract(snap, underlyingPrice) {
 }
 
 // -- POSITION SIZING -----------------------------------------------
-function calculatePositionSize(premium, mode = 'SWING', accountSize = 7000, spreadData = null) {
+function calculatePositionSize(premium, mode, accountSize, spreadData, contractsOverride) {
+  if (!mode) mode = 'SWING';
+  if (!accountSize) accountSize = 7000;
+  if (!spreadData) spreadData = null;
   const config = MODES[mode] || MODES.SWING;
   if (!premium || premium <= 0) return { viable: false, reason: 'No premium' };
 
@@ -718,4 +721,3 @@ module.exports = {
   getIVContext, getTimeContext, getPublicGreeks,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };
-
