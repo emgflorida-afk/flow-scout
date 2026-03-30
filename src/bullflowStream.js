@@ -186,8 +186,25 @@ async function processAlert(raw) {
   });
 
   const price = await resolver.getPrice(ticker).catch(function() { return null; });
+  // Pre-resolve contract for retracement levels on flow card
+  var swingResolved = null;
+  try {
+    var flowExpiry2 = typeof expiry === 'string' && expiry.length > 7 ? expiry : null;
+    swingResolved = flowExpiry2
+      ? await resolver.resolveContractWithExpiry(ticker, type, flowExpiry2)
+      : await resolver.resolveContract(ticker, type, 'SWING');
+  } catch(e) { swingResolved = null; }
 
   // -- BASIC FLOW CARD  all alerts -----------------------------
+  // Retracement levels based on flow premium
+  var flowPremiumNum = premium > 0 ? premium / 100 : null; // convert cents to dollars estimate
+  var retrace125 = null;
+  var retrace250 = null;
+  if (swingResolved && swingResolved.mid) {
+    retrace125 = parseFloat((swingResolved.mid * 0.875).toFixed(2));
+    retrace250 = parseFloat((swingResolved.mid * 0.75).toFixed(2));
+  }
+
   const flowLines = [
     'FLOW -- ' + ticker + ' ' + type.toUpperCase(),
     ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
@@ -197,7 +214,11 @@ async function processAlert(raw) {
     'Type    ' + orderTag,
     'Alert   ' + alertName,
     '-------------------------------',
-    isHighConviction(alertName, premium) ? 'HIGH CONVICTION' : 'Watch for Strat confirmation',
+    isHighConviction(alertName, premium) ? 'HIGH CONVICTION -- prepare entry' : 'Watch for Strat confirmation',
+    retrace125 ? 'SET LIMIT AT RETRACEMENT:' : null,
+    retrace125 ? '12.5%   $' + retrace125 + '  <-- PRIMARY LIMIT' : null,
+    retrace250 ? '25.0%   $' + retrace250 + '  <-- SECONDARY' : null,
+    '-------------------------------',
     'Time    ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
   ].filter(Boolean);
 

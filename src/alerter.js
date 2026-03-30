@@ -96,45 +96,6 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-
-// -- TRADE GRADE --------------------------------------------------
-function getTradeGrade(tvData, resolved, isBOS, isLiqGrab, isVolSpike, isSqz, momCount) {
-  if (!isBOS) isBOS = false;
-  if (!isLiqGrab) isLiqGrab = false;
-  if (!isVolSpike) isVolSpike = false;
-  if (!isSqz) isSqz = false;
-  var score = 0;
-  var conf = tvData.confluence || '0/6';
-  var n = parseInt(conf.split('/')[0]) || 0;
-  if (n >= 6) score += 3;
-  else if (n >= 5) score += 2;
-  else if (n >= 4) score += 1;
-  if (isBOS) score += 1;
-  if (isLiqGrab) score += 1;
-  if (isVolSpike) score += 1;
-  if (isSqz) score += 1;
-  if (momCount && momCount >= 5) score += 1;
-  if (resolved && resolved.gex) {
-    var dir = tvData.type || 'call';
-    if ((dir === 'put' && !resolved.gex.isPositive) || (dir === 'call' && resolved.gex.isPositive)) score += 1;
-  }
-  if (score >= 8) return 'A+';
-  if (score >= 6) return 'A';
-  if (score >= 4) return 'B';
-  return 'C';
-}
-
-// -- RETRACEMENT LEVELS -------------------------------------------
-function getRetracementLevels(premium) {
-  if (!premium || premium <= 0) return null;
-  var p = parseFloat(premium);
-  return {
-    primary:   parseFloat((p * 0.875).toFixed(2)),
-    secondary: parseFloat((p * 0.75).toFixed(2)),
-    invalid:   parseFloat((p * 0.50).toFixed(2)),
-  };
-}
-
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
@@ -209,27 +170,6 @@ function scoreFlow(flowData) {
 }
 
 const recentFlowTickers  = new Map();
-const recentCardSent   = new Map();
-const directionLock    = new Map();
-const CARD_COOLDOWN    = 5  * 60 * 1000;
-const DIR_LOCK_TIME    = 30 * 60 * 1000;
-
-function isDuplicate(ticker, type) {
-  var key = ticker + ':' + type;
-  var last = recentCardSent.get(key);
-  if (last && Date.now() - last < CARD_COOLDOWN) { console.log('[DEDUP] Skipping ' + key); return true; }
-  return false;
-}
-function isDirectionBlocked(ticker, type) {
-  var lock = directionLock.get(ticker);
-  if (!lock) return false;
-  if (Date.now() > lock.expires) { directionLock.delete(ticker); return false; }
-  var opp = type === 'call' ? 'put' : 'call';
-  if (lock.dir === opp) { console.log('[DIRLOCK] ' + ticker + ' locked ' + lock.dir + ' blocking ' + type); return true; }
-  return false;
-}
-function setDirectionLock(ticker, type) { directionLock.set(ticker, { dir: type, expires: Date.now() + DIR_LOCK_TIME }); }
-function markCardSent(ticker, type) { recentCardSent.set(ticker + ':' + type, Date.now()); }
 const recentStratTickers = new Map();
 
 // -- BUILD EDGE SECTION -------------------------------------------
@@ -367,22 +307,6 @@ function buildStratCard(opraSymbol, tvData, resolved) {
   if (tvData.h1)     tfParts.push('H1:'     + tvData.h1);
   const tfLine = tfParts.join('  ');
 
-  var bullBOS = tvData.bullBOS ? parseFloat(tvData.bullBOS) > 0 : false;
-  var bearBOS = tvData.bearBOS ? parseFloat(tvData.bearBOS) > 0 : false;
-  var bullLiqGrab = tvData.bullLiqGrab ? parseFloat(tvData.bullLiqGrab) > 0 : false;
-  var bearLiqGrab = tvData.bearLiqGrab ? parseFloat(tvData.bearLiqGrab) > 0 : false;
-  var volRatio  = tvData.volRatio  ? parseFloat(tvData.volRatio)  : null;
-  var momCount  = tvData.momCount  ? parseFloat(tvData.momCount)  : null;
-  var sqzFiring = tvData.sqzFiring ? parseFloat(tvData.sqzFiring) > 0 : false;
-  var isBOS      = type === 'call' ? bullBOS     : bearBOS;
-  var isLiqGrab  = type === 'call' ? bullLiqGrab : bearLiqGrab;
-  var isVolSpike = volRatio && volRatio >= 2.0;
-  var grade      = getTradeGrade(tvData, resolved, isBOS, isLiqGrab, isVolSpike, sqzFiring, momCount);
-  var retrace    = s ? getRetracementLevels(s.premium) : null;
-  var flowKey    = parsed ? (parsed.ticker + ':' + parsed.type) : null;
-  var hasFlow    = flowKey && recentFlowTickers && recentFlowTickers.has(flowKey);
-  var flowAge    = hasFlow ? Math.round((Date.now() - recentFlowTickers.get(flowKey)) / 60000) : null;
-
   const edgeLines       = resolved ? buildEdgeSection(resolved) : [];
   const technicalsLines = buildTechnicalsSection(tvData);
 
@@ -402,23 +326,6 @@ function buildStratCard(opraSymbol, tvData, resolved) {
     s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
     s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
     s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.stopLoss + ' max' : 'Risk    2% of $7K max',
-    '-------------------------------',
-    retrace ? 'SET LIMIT AT RETRACEMENT:' : null,
-    retrace ? '12.5%   $' + retrace.primary   + '  <-- PRIMARY LIMIT' : null,
-    retrace ? '25.0%   $' + retrace.secondary + '  <-- SECONDARY'     : null,
-    retrace ? '50.0%   $' + retrace.invalid   + '  <-- INVALID if hit': null,
-    '-------------------------------',
-    (function() {
-      var flags = [];
-      if (isBOS) flags.push('BOS');
-      if (isLiqGrab) flags.push('Liq grab');
-      if (isVolSpike && volRatio) flags.push('Vol ' + volRatio.toFixed(1) + 'x');
-      if (sqzFiring) flags.push('SQZ FIRING');
-      if (momCount !== null && momCount >= 5) flags.push('MOM ' + momCount + '/7');
-      return flags.length ? 'Confirm  ' + flags.join(' | ') : null;
-    })(),
-    hasFlow ? 'Flow     CONFIRMED -- seen ' + flowAge + ' min ago' : (grade === 'B' ? 'Flow     NOT YET -- wait for flow confirm' : null),
-    'Grade    ' + grade + (grade === 'A+' ? ' -- EXECUTE IMMEDIATELY' : grade === 'A' ? ' -- HIGH CONVICTION' : grade === 'B' ? ' -- WAIT FOR FLOW CONFIRM' : ' -- SKIP OR WAIT'),
     technicalsLines.length > 0 ? '-------------------------------' : null,
   ].concat(technicalsLines).concat([
     edgeLines.length > 0 ? '-------------------------------' : null,
@@ -452,7 +359,25 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   }
 
   if (!card) return false;
+
+  // Grade filter -- only A+ and A go to #conviction-trades
+  var parsedGrade = resolver.parseOPRA(opraSymbol);
+  var gradeCheck  = '';
+  if (card.text.includes('Grade    A+ --')) gradeCheck = 'A+';
+  else if (card.text.includes('Grade    A --')) gradeCheck = 'A';
+  else if (card.text.includes('Grade    B --')) gradeCheck = 'B';
+  else gradeCheck = 'C';
+
+  // All signals go to #strat-alerts
   await sendToChannel('strat', card.text, card.ticker);
+
+  // Only A+ and A go to #conviction-trades automatically
+  if (gradeCheck === 'A+' || gradeCheck === 'A') {
+    var convCard = card.text
+      .replace('SWING TRADE', gradeCheck === 'A+' ? 'A+ CONVICTION TRADE' : 'A CONVICTION TRADE');
+    await sendToChannel('conviction', convCard, card.ticker);
+    console.log('[CONVICTION] ' + gradeCheck + ' grade -- posted to #conviction-trades');
+  }
 
   const parsed = resolver.parseOPRA(opraSymbol);
   if (parsed) {
