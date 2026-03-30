@@ -185,8 +185,8 @@ return ‘Progress [’ + bar + ’] ’ + pct + ‘%’;
 
 // – POST TO DISCORD –––––––––––––––––––––––
 async function postGoalUpdate() {
-const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
+const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
+const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
 if (!webhookUrl) return;
 
 try {
@@ -224,6 +224,10 @@ trades:          state.trades.length,
 consecutiveLoss: state.consecutiveLoss,
 goalHit:         state.goalHit,
 stopTriggered:   state.stopTriggered,
+};
+}
+
+module.exports = { recordTrade, getGoalCard, postGoalUpdate, isTradingAllowed, getState, resetIfNewDay };
 };
 }
 
