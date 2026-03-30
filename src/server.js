@@ -270,5 +270,3 @@ console.log(’   Bullflow stream + Discord bot + Goal tracker + Finviz screener
 bullflow.startBullflowStream();
 startDiscordBot();
 });
-startDiscordBot();
-});
