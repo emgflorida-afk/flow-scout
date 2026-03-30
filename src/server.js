@@ -5,20 +5,21 @@
 // Idea Validator: /webhook/idea
 // Discord Bot: /interactions (no discord.js package needed)
 // Flow Clusters: /flow/clusters
-// -----------------------------------------------------------------
+// —————————————————————–
 
-require('dotenv').config();
-const express  = require('express');
-const path     = require('path');
-const cron     = require('node-cron');
-const alerter  = require('./alerter');
-const resolver = require('./contractResolver');
-const bullflow = require('./bullflowStream');
-const dashboard      = require('./dashboard');
-const ideaValidator  = require('./ideaValidator');
-const { startDiscordBot, handleInteraction } = require('./discordBot');
-const { getClusterSummary } = require('./flowCluster');
-const ts = require('./tradestation');
+require(‘dotenv’).config();
+const express  = require(‘express’);
+const path     = require(‘path’);
+const cron     = require(‘node-cron’);
+const alerter  = require(’./alerter’);
+const resolver = require(’./contractResolver’);
+const bullflow = require(’./bullflowStream’);
+const dashboard      = require(’./dashboard’);
+const ideaValidator  = require(’./ideaValidator’);
+const { startDiscordBot, handleInteraction } = require(’./discordBot’);
+const { getClusterSummary } = require(’./flowCluster’);
+const ts          = require(’./tradestation’);
+const goalTracker = require(’./goalTracker’);
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -26,236 +27,274 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 
 app.use(function(req, res, next) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  if (req.method === 'OPTIONS') return res.sendStatus(200);
-  next();
+res.setHeader(‘Access-Control-Allow-Origin’, ‘*’);
+res.setHeader(‘Access-Control-Allow-Methods’, ‘GET, POST, OPTIONS’);
+res.setHeader(‘Access-Control-Allow-Headers’, ‘Content-Type’);
+if (req.method === ‘OPTIONS’) return res.sendStatus(200);
+next();
 });
 
-app.get('/', function(req, res) {
-  res.json({ status: 'Stratum Flow Scout OK', version: '6.1', time: new Date().toISOString() });
+app.get(’/’, function(req, res) {
+res.json({ status: ‘Stratum Flow Scout OK’, version: ‘6.1’, time: new Date().toISOString() });
 });
 
-// -- FLOW SUMMARY + CLUSTERS --------------------------------------
-app.get('/flow/summary', function(req, res) {
-  res.json(bullflow.liveAggregator.getSummary());
+// – FLOW SUMMARY + CLUSTERS –––––––––––––––––––
+app.get(’/flow/summary’, function(req, res) {
+res.json(bullflow.liveAggregator.getSummary());
 });
 
-app.get('/flow/clusters', function(req, res) {
-  res.json(getClusterSummary());
+app.get(’/flow/clusters’, function(req, res) {
+res.json(getClusterSummary());
 });
 
-// -- DASHBOARD ----------------------------------------------------
-app.get('/dashboard', function(req, res) {
-  res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
+// – DASHBOARD ––––––––––––––––––––––––––
+app.get(’/dashboard’, function(req, res) {
+res.sendFile(path.join(process.cwd(), ‘src’, ‘dashboard.html’));
 });
 
-app.get('/dashboard/data', async function(req, res) {
-  try {
-    const mode = (req.query.mode || 'DAY').toUpperCase();
-    const data = await dashboard.getDashboardData(mode);
-    res.json(data);
-  } catch (err) {
-    console.error('[DASHBOARD] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+app.get(’/dashboard/data’, async function(req, res) {
+try {
+const mode = (req.query.mode || ‘DAY’).toUpperCase();
+const data = await dashboard.getDashboardData(mode);
+res.json(data);
+} catch (err) {
+console.error(’[DASHBOARD] Error:’, err.message);
+res.status(500).json({ error: err.message });
+}
 });
 
-// -- DISCORD INTERACTIONS -----------------------------------------
-app.post('/interactions', async function(req, res) {
-  try {
-    console.log('[INTERACTIONS] Received type:', req.body && req.body.type);
-    await handleInteraction(req, res);
-  } catch (err) {
-    console.error('[INTERACTIONS] Error:', err.message);
-    if (!res.headersSent) res.status(500).json({ error: err.message });
-  }
+// – DISCORD INTERACTIONS —————————————–
+app.post(’/interactions’, async function(req, res) {
+try {
+console.log(’[INTERACTIONS] Received type:’, req.body && req.body.type);
+await handleInteraction(req, res);
+} catch (err) {
+console.error(’[INTERACTIONS] Error:’, err.message);
+if (!res.headersSent) res.status(500).json({ error: err.message });
+}
 });
 
-// -- IDEA VALIDATOR -----------------------------------------------
-app.post('/webhook/idea', async function(req, res) {
-  try {
-    const body = req.body;
-    const text = body.text || body.content || body.idea || '';
-    if (!text) return res.status(400).json({ error: 'Missing text field' });
+// – IDEA VALIDATOR ———————————————–
+app.post(’/webhook/idea’, async function(req, res) {
+try {
+const body = req.body;
+const text = body.text || body.content || body.idea || ‘’;
+if (!text) return res.status(400).json({ error: ‘Missing text field’ });
 
-    const webhookUrl = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-    if (!webhookUrl) return res.status(500).json({ error: 'No conviction webhook configured' });
+```
+const webhookUrl = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
+if (!webhookUrl) return res.status(500).json({ error: 'No conviction webhook configured' });
 
-    console.log('[IDEA] Received:', text);
-    ideaValidator.validateAndPost(text, webhookUrl).catch(console.error);
-    res.json({ status: 'processing', text });
-  } catch (err) {
-    console.error('[IDEA] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+console.log('[IDEA] Received:', text);
+ideaValidator.validateAndPost(text, webhookUrl).catch(console.error);
+res.json({ status: 'processing', text });
+```
+
+} catch (err) {
+console.error(’[IDEA] Error:’, err.message);
+res.status(500).json({ error: err.message });
+}
 });
 
-// -- TRADINGVIEW WEBHOOK ------------------------------------------
-app.post('/webhook/tradingview', async function(req, res) {
-  try {
-    const body       = req.body;
-    console.log('[WEBHOOK] Received:', JSON.stringify(body));
+// – TRADINGVIEW WEBHOOK ——————————————
+app.post(’/webhook/tradingview’, async function(req, res) {
+try {
+const body       = req.body;
+console.log(’[WEBHOOK] Received:’, JSON.stringify(body));
 
-    const ticker     = (body.ticker     || '').toUpperCase().trim();
-    const type       = (body.type       || 'call').toLowerCase().trim();
-    const confluence = body.confluence  || '0/6';
-    const tradeType  = body.tradeType   || 'SWING';
-    const weekly     = body.weekly      || null;
-    const daily      = body.daily       || null;
-    const h4         = body.h4          || null;
-    const h1         = body.h1          || null;
+```
+const ticker     = (body.ticker     || '').toUpperCase().trim();
+const type       = (body.type       || 'call').toLowerCase().trim();
+const confluence = body.confluence  || '0/6';
+const tradeType  = body.tradeType   || 'SWING';
+const weekly     = body.weekly      || null;
+const daily      = body.daily       || null;
+const h4         = body.h4          || null;
+const h1         = body.h1          || null;
 
-    // RSI + VWAP — plot_1, plot_2, plot_3
-    const rsi      = body.rsi      != null ? parseFloat(body.rsi)      : null;
-    const vwap     = body.vwap     != null ? parseFloat(body.vwap)     : null;
-    const vwapBias = body.vwapBias != null
-      ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
-      : null;
+// RSI + VWAP — plot_1, plot_2, plot_3
+const rsi      = body.rsi      != null ? parseFloat(body.rsi)      : null;
+const vwap     = body.vwap     != null ? parseFloat(body.vwap)     : null;
+const vwapBias = body.vwapBias != null
+  ? (parseFloat(body.vwapBias) === 1 || body.vwapBias === 'above' ? 'above' : 'below')
+  : null;
 
-    // FVG — plot_4, plot_5, plot_6, plot_7
-    const bearFVGTop    = body.bearFVGTop    != null ? parseFloat(body.bearFVGTop)    : null;
-    const bearFVGBottom = body.bearFVGBottom != null ? parseFloat(body.bearFVGBottom) : null;
-    const bullFVGTop    = body.bullFVGTop    != null ? parseFloat(body.bullFVGTop)    : null;
-    const bullFVGBottom = body.bullFVGBottom != null ? parseFloat(body.bullFVGBottom) : null;
+// FVG — plot_4, plot_5, plot_6, plot_7
+const bearFVGTop    = body.bearFVGTop    != null ? parseFloat(body.bearFVGTop)    : null;
+const bearFVGBottom = body.bearFVGBottom != null ? parseFloat(body.bearFVGBottom) : null;
+const bullFVGTop    = body.bullFVGTop    != null ? parseFloat(body.bullFVGTop)    : null;
+const bullFVGBottom = body.bullFVGBottom != null ? parseFloat(body.bullFVGBottom) : null;
 
-    if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
+if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
 
-    const score = parseInt(confluence.split('/')[0]) || 0;
-    if (score < 5) {
-      console.log('[WEBHOOK] ' + ticker + ' confluence ' + confluence + ' -- skipping');
-      return res.json({ status: 'skipped', reason: 'Confluence ' + confluence + ' below 5/6' });
-    }
+const score = parseInt(confluence.split('/')[0]) || 0;
+if (score < 5) {
+  console.log('[WEBHOOK] ' + ticker + ' confluence ' + confluence + ' -- skipping');
+  return res.json({ status: 'skipped', reason: 'Confluence ' + confluence + ' below 5/6' });
+}
 
-    console.log('[WEBHOOK] ' + ticker + ' ' + confluence + ' ' + tradeType + ' RSI:' + (rsi || '--') + ' VWAP:' + (vwapBias || '--') + ' -- PROCESSING OK');
+console.log('[WEBHOOK] ' + ticker + ' ' + confluence + ' ' + tradeType + ' RSI:' + (rsi || '--') + ' VWAP:' + (vwapBias || '--') + ' -- PROCESSING OK');
 
-    const resolved = await resolver.resolveContract(ticker, type, tradeType);
-    if (!resolved) {
-      console.log('[WEBHOOK] Could not resolve contract for ' + ticker);
-      return res.json({ status: 'skipped', reason: 'No contract found' });
-    }
+const resolved = await resolver.resolveContract(ticker, type, tradeType);
+if (!resolved) {
+  console.log('[WEBHOOK] Could not resolve contract for ' + ticker);
+  return res.json({ status: 'skipped', reason: 'No contract found' });
+}
 
-    const tvBias = {
-      weekly, daily, h4, h1, confluence,
-      mid:         resolved.mid,
-      bid:         resolved.bid,
-      ask:         resolved.ask,
-      mode:        resolved.mode,
-      dte:         resolved.dte,
-      rsi, vwap, vwapBias,
-      bearFVGTop, bearFVGBottom,
-      bullFVGTop, bullFVGBottom,
-      debit:       resolved.debit       || null,
-      maxProfit:   resolved.maxProfit   || null,
-      breakeven:   resolved.breakeven   || null,
-      sellStrike:  resolved.sellStrike  || null,
-      spreadWidth: resolved.spreadWidth || null,
-    };
+const tvBias = {
+  weekly, daily, h4, h1, confluence,
+  mid:         resolved.mid,
+  bid:         resolved.bid,
+  ask:         resolved.ask,
+  mode:        resolved.mode,
+  dte:         resolved.dte,
+  rsi, vwap, vwapBias,
+  bearFVGTop, bearFVGBottom,
+  bullFVGTop, bullFVGBottom,
+  debit:       resolved.debit       || null,
+  maxProfit:   resolved.maxProfit   || null,
+  breakeven:   resolved.breakeven   || null,
+  sellStrike:  resolved.sellStrike  || null,
+  spreadWidth: resolved.spreadWidth || null,
+};
 
-    alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true, resolved).catch(console.error);
-    res.json({ status: 'processing', ticker, opra: resolved.symbol, mode: resolved.mode, mid: resolved.mid });
+alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true, resolved).catch(console.error);
+res.json({ status: 'processing', ticker, opra: resolved.symbol, mode: resolved.mode, mid: resolved.mid });
+```
 
-  } catch (err) {
-    console.error('[WEBHOOK] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+} catch (err) {
+console.error(’[WEBHOOK] Error:’, err.message);
+res.status(500).json({ error: err.message });
+}
 });
 
-// -- BULLFLOW WEBHOOK ---------------------------------------------
-app.post('/webhook/bullflow', async function(req, res) {
-  try {
-    const body = req.body;
-    const opra = body.opra || body.symbol || null;
-    if (!opra) return res.status(400).json({ error: 'No OPRA symbol' });
-    alerter.sendTradeAlert(opra, {}, body, false).catch(console.error);
-    res.json({ status: 'processing', opra });
-  } catch (err) {
-    console.error('[BULLFLOW] Error:', err.message);
-    res.status(500).json({ error: err.message });
-  }
+// – BULLFLOW WEBHOOK ———————————————
+app.post(’/webhook/bullflow’, async function(req, res) {
+try {
+const body = req.body;
+const opra = body.opra || body.symbol || null;
+if (!opra) return res.status(400).json({ error: ‘No OPRA symbol’ });
+alerter.sendTradeAlert(opra, {}, body, false).catch(console.error);
+res.json({ status: ‘processing’, opra });
+} catch (err) {
+console.error(’[BULLFLOW] Error:’, err.message);
+res.status(500).json({ error: err.message });
+}
 });
 
-// -- PRICES -------------------------------------------------------
-app.get('/prices', async function(req, res) {
-  const ticker = (req.query.ticker || '').toUpperCase().trim();
-  if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
-  try {
-    const price = await resolver.getPrice(ticker);
-    if (!price) return res.status(404).json({ error: 'No price data' });
-    return res.json({ ticker, price, live: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// – PRICES —————————————————––
+app.get(’/prices’, async function(req, res) {
+const ticker = (req.query.ticker || ‘’).toUpperCase().trim();
+if (!ticker) return res.status(400).json({ error: ‘Missing ticker’ });
+try {
+const price = await resolver.getPrice(ticker);
+if (!price) return res.status(404).json({ error: ‘No price data’ });
+return res.json({ ticker, price, live: true });
+} catch (err) {
+res.status(500).json({ error: err.message });
+}
 });
 
-// -- MORNING BRIEF — 9:15AM ET ------------------------------------
-cron.schedule('15 13 * * 1-5', async function() {
-  console.log('[CRON] Firing morning brief...');
-  try { await alerter.sendMorningBrief(); }
-  catch (err) { console.error('[CRON] Failed:', err.message); }
+// – MORNING BRIEF — 9:15AM ET ————————————
+cron.schedule(‘15 13 * * 1-5’, async function() {
+console.log(’[CRON] Firing morning brief…’);
+try { await alerter.sendMorningBrief(); }
+catch (err) { console.error(’[CRON] Failed:’, err.message); }
 });
 
-app.get('/test/brief', async function(req, res) {
-  try { await alerter.sendMorningBrief(); res.json({ status: 'Sent OK' }); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+app.get(’/test/brief’, async function(req, res) {
+try { await alerter.sendMorningBrief(); res.json({ status: ‘Sent OK’ }); }
+catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/test/bullflow', function(req, res) {
-  res.json({ status: 'Bullflow stream running OK', version: '6.1' });
+app.get(’/test/bullflow’, function(req, res) {
+res.json({ status: ‘Bullflow stream running OK’, version: ‘6.1’ });
 });
 
-// -- TRADESTATION AUTH --------------------------------------------
+// – GOAL TRACKER ———————————————––
+// GET /goal — current state
+// POST /goal/trade — record a trade result
+// GET /goal/reset — manual reset
+
+app.get(’/goal’, function(req, res) {
+res.json(goalTracker.getState());
+});
+
+app.post(’/goal/trade’, function(req, res) {
+const { ticker, pnl } = req.body;
+if (!ticker || pnl == null) return res.status(400).json({ error: ‘Missing ticker or pnl’ });
+goalTracker.recordTrade(ticker, parseFloat(pnl));
+goalTracker.postGoalUpdate().catch(console.error);
+res.json(goalTracker.getState());
+});
+
+app.get(’/goal/reset’, function(req, res) {
+goalTracker.resetIfNewDay();
+res.json({ status: ‘reset OK’, state: goalTracker.getState() });
+});
+
+// Post goal update at market open 9:30AM and close 4PM
+cron.schedule(‘30 13 * * 1-5’, function() {
+console.log(’[GOAL] Market open – posting daily goal’);
+goalTracker.postGoalUpdate().catch(console.error);
+});
+
+cron.schedule(‘0 20 * * 1-5’, function() {
+console.log(’[GOAL] Market close – posting final P&L’);
+goalTracker.postGoalUpdate().catch(console.error);
+});
+
+// – TRADESTATION AUTH ––––––––––––––––––––––
 // Step 1: Visit /ts-auth in browser → redirects to TradeStation login
 // Step 2: After login → /ts-callback → saves refresh token automatically
 // Step 3: Done forever — auto-refreshes every 20 minutes
 
-app.get('/ts-auth', function(req, res) {
-  const loginUrl = ts.getLoginUrl();
-  console.log('[TS AUTH] Redirecting to TradeStation login...');
-  res.redirect(loginUrl);
+app.get(’/ts-auth’, function(req, res) {
+const loginUrl = ts.getLoginUrl();
+console.log(’[TS AUTH] Redirecting to TradeStation login…’);
+res.redirect(loginUrl);
 });
 
-app.get('/ts-callback', async function(req, res) {
-  const code = req.query.code;
-  if (!code) {
-    return res.send('<h2>Error: No code received from TradeStation</h2>');
-  }
-  try {
-    console.log('[TS AUTH] Exchanging code for tokens...');
-    const data = await ts.exchangeCode(code);
-    if (data.refresh_token) {
-      ts.setRefreshToken(data.refresh_token);
-      console.log('[TS AUTH] Refresh token obtained OK ✅');
-      console.log('[TS AUTH] Add to Railway: TS_REFRESH_TOKEN=' + data.refresh_token);
-      res.send(
-        '<h2>✅ TradeStation Connected!</h2>' +
-        '<p>Copy this refresh token and add it to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>' +
-        '<textarea rows="4" cols="80" onclick="this.select()">' + data.refresh_token + '</textarea>' +
-        '<br><br><p>Once added to Railway, TradeStation will auto-refresh forever.</p>'
-      );
-    } else {
-      console.error('[TS AUTH] Failed:', JSON.stringify(data));
-      res.send('<h2>❌ Auth Failed</h2><pre>' + JSON.stringify(data, null, 2) + '</pre>');
-    }
-  } catch (err) {
-    console.error('[TS AUTH] Error:', err.message);
-    res.send('<h2>Error: ' + err.message + '</h2>');
-  }
+app.get(’/ts-callback’, async function(req, res) {
+const code = req.query.code;
+if (!code) {
+return res.send(’<h2>Error: No code received from TradeStation</h2>’);
+}
+try {
+console.log(’[TS AUTH] Exchanging code for tokens…’);
+const data = await ts.exchangeCode(code);
+if (data.refresh_token) {
+ts.setRefreshToken(data.refresh_token);
+console.log(’[TS AUTH] Refresh token obtained OK ✅’);
+console.log(’[TS AUTH] Add to Railway: TS_REFRESH_TOKEN=’ + data.refresh_token);
+res.send(
+‘<h2>✅ TradeStation Connected!</h2>’ +
+‘<p>Copy this refresh token and add it to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>’ +
+‘<textarea rows="4" cols="80" onclick="this.select()">’ + data.refresh_token + ‘</textarea>’ +
+‘<br><br><p>Once added to Railway, TradeStation will auto-refresh forever.</p>’
+);
+} else {
+console.error(’[TS AUTH] Failed:’, JSON.stringify(data));
+res.send(’<h2>❌ Auth Failed</h2><pre>’ + JSON.stringify(data, null, 2) + ‘</pre>’);
+}
+} catch (err) {
+console.error(’[TS AUTH] Error:’, err.message);
+res.send(’<h2>Error: ’ + err.message + ‘</h2>’);
+}
 });
 
-// -- START --------------------------------------------------------
+// – START ––––––––––––––––––––––––––––
 app.listen(PORT, function() {
-  console.log('Flow Scout v6.1 running on port ' + PORT);
-  console.log('   All tickers -- no watchlist filter');
-  console.log('   5/6+ confluence only');
-  console.log('   DAY mode:    0-1DTE  $0.30-$1.50');
-  console.log('   SWING mode:  5-7DTE  $0.50-$3.00');
-  console.log('   SPREAD mode: 5-7DTE  $0.50-$1.50 vertical debit');
-  console.log('   RSI(14) + VWAP + FVG on every card');
-  console.log('   Idea Validator: /webhook/idea');
-  console.log('   TradeStation Auth: /ts-auth (one-time browser login)');
-  console.log('   Flow Clusters:  /flow/clusters ($500K+ in 10min)');
-  bullflow.startBullflowStream();
-  startDiscordBot();
+console.log(‘Flow Scout v6.1 running on port ’ + PORT);
+console.log(’   All tickers – no watchlist filter’);
+console.log(’   5/6+ confluence only’);
+console.log(’   DAY mode:    0-1DTE  $0.30-$1.50’);
+console.log(’   SWING mode:  5-7DTE  $0.50-$3.00’);
+console.log(’   SPREAD mode: 5-7DTE  $0.50-$1.50 vertical debit’);
+console.log(’   RSI(14) + VWAP + FVG on every card’);
+console.log(’   Idea Validator: /webhook/idea’);
+console.log(’   TradeStation Auth: /ts-auth (one-time browser login)’);
+console.log(’   Flow Clusters:  /flow/clusters ($500K+ in 10min)’);
+bullflow.startBullflowStream();
+startDiscordBot();
 });
