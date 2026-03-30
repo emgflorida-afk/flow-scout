@@ -8,7 +8,7 @@
 
 const fetch = require(‘node-fetch’);
 
-const SCREENER_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
+const SCREENER_WEBHOOK = process.env.DISCORD_SCREENER_WEBHOOK || process.env.DISCORD_WEBHOOK_URL;
 
 // Finviz CSV export URLs  live data, no scraping needed
 const SCREENER_1_URL = ‘https://finviz.com/export.ashx?v=152&f=cap_mega,sh_opt_option,sh_relvol_o1&o=-marketcap&c=1,2,3,4,5,6,7,8,9,65,67’;
