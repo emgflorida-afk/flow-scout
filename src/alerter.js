@@ -1,4 +1,4 @@
-// alerter.js — Stratum Flow Scout v6.1
+// alerter.js - Stratum Flow Scout v6.1
 // FULL EDGE: Time guardrails, spread warning, GEX, Max Pain, OI nodes, IV context
 // TECHNICALS: RSI(14) + VWAP from TradingView webhook payload
 // CHART: Finviz daily chart auto-attached to every alert
@@ -36,7 +36,7 @@ return null;
 }
 
 // – SEND CHART VIA MULTIPART ———————————––
-// Uses raw multipart/form-data boundary — no FormData dependency
+// Uses raw multipart/form-data boundary - no FormData dependency
 async function sendChartToDiscord(webhookUrl, ticker, chartBuffer) {
 try {
 const boundary = ‘––StratumBoundary’ + Date.now();
@@ -103,7 +103,7 @@ return Math.max(0, diff);
 }
 
 // – CANCEL BY TIME ———————————————–
-// Returns “Cancel By HH:MM AM/PM ET” — fire time + 90 min
+// Returns “Cancel By HH:MM AM/PM ET” - fire time + 90 min
 // Capped at 11:30AM for morning window, 3:30PM for afternoon
 function getCancelByTime() {
 const now   = new Date();
@@ -111,7 +111,7 @@ const etNow = new Date(now.toLocaleString(‘en-US’, { timeZone: ‘America/Ne
 const h     = etNow.getHours();
 const m     = etNow.getMinutes();
 
-// After 3:30PM — hard block
+// After 3:30PM - hard block
 if (h > 15 || (h === 15 && m >= 30)) return null;
 
 // Add 90 minutes
@@ -377,7 +377,7 @@ edgeLines.length > 0 ? ‘—————————––’ : null,
 mode === ‘DAY’ ? ‘Hold    Exit same day by 3:30PM’     : ‘Hold    1-3 days max’,
 mode === ‘DAY’ ? ‘Window  10AM-11:30AM | 3PM-3:30PM’  : ‘Window  9:45AM-3:30PM ET’,
 ‘Time    ’ + new Date().toLocaleTimeString(‘en-US’, { timeZone: ‘America/New_York’, hour: ‘2-digit’, minute: ‘2-digit’ }) + ’ ET’,
-getCancelByTime() ? ‘⏰ Cancel By  ’ + getCancelByTime() + ’ if unfilled’ : ‘⛔ LATE ENTRY – Skip this trade’,
+getCancelByTime() ? ’ Cancel By  ’ + getCancelByTime() + ’ if unfilled’ : ’ LATE ENTRY – Skip this trade’,
 ]).filter(function(l) { return l !== null; });
 
 return { text: lines.join(’\n’), ticker: ticker };
@@ -467,7 +467,7 @@ flowData.alertName ? ’Alert   ’ + flowData.alertName : null,
 await sendToChannel(‘flow’, lines.join(’\n’), parsed.ticker);
 
 if (flowConviction.isHighConviction && recentStratTickers.has(key)) {
-// Card B — Stratum 9DTE rules
+// Card B - Stratum 9DTE rules
 const res2 = await resolver.resolveContract(parsed.ticker, parsed.type, ‘SWING’);
 if (res2) {
 const card = (res2.mode === ‘SPREAD’ && res2.debit)
