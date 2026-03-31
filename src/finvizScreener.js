@@ -31,25 +31,21 @@ async function getPublicToken() {
   } catch(e) { console.error('[FINVIZ] Token error:', e.message); return null; }
 }
 
-// -- GET QUOTE FOR ONE TICKER ----------------------------------
-async function getQuote(ticker, token) {
+// -- GET BATCH QUOTES FROM PUBLIC.COM --------------------------
+async function getBatchQuotes(tickers, token) {
   try {
-    var res = await fetch('https://api.public.com/userapigateway/market-data/tickers/' + ticker + '/quote', {
-      headers: { 'Authorization': 'Bearer ' + token }
+    var accountId = process.env.PUBLIC_ACCOUNT_ID;
+    if (!accountId) { console.log('[FINVIZ] No PUBLIC_ACCOUNT_ID'); return []; }
+    var res = await fetch('https://api.public.com/userapigateway/marketdata/' + accountId + '/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'User-Agent': 'stratum-flow-scout' },
+      body: JSON.stringify({ tickers: tickers })
     });
-    if (!res.ok) return null;
+    if (!res.ok) { console.error('[FINVIZ] Quotes error:', res.status); return []; }
     var data = await res.json();
-    if (!data) return null;
-    var price     = parseFloat(data.last || data.close || 0);
-    var prevClose = parseFloat(data.prevClose || data.previousClose || price);
-    var change    = parseFloat((price - prevClose).toFixed(2));
-    var changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
-    var volume    = parseInt(data.volume || 0);
-    var avgVol    = parseInt(data.averageVolume || data.avgVolume || 1);
-    var relVol    = avgVol > 0 ? parseFloat((volume / avgVol).toFixed(1)) : 0;
-    return { ticker: ticker, price: price, change: change, changePct: changePct,
-             volume: volume, relVol: relVol };
-  } catch(e) { return null; }
+    var quotes = (data && data.quotes) ? data.quotes : [];
+    return quotes;
+  } catch(e) { console.error('[FINVIZ] getBatchQuotes error:', e.message); return []; }
 }
 
 // -- FORMAT VOLUME ---------------------------------------------
@@ -67,12 +63,23 @@ async function postScreenerCard() {
   var token = await getPublicToken();
   if (!token) { console.log('[FINVIZ] No Public.com token'); return; }
 
-  // Fetch all quotes
+  // Fetch all quotes in one batch call
+  var rawQuotes = await getBatchQuotes(WATCHLIST, token);
   var quotes = [];
-  for (var i = 0; i < WATCHLIST.length; i++) {
-    var q = await getQuote(WATCHLIST[i], token);
-    if (q && q.price > 0) quotes.push(q);
-  }
+  rawQuotes.forEach(function(q) {
+    if (!q) return;
+    var price     = parseFloat(q.last || q.close || 0);
+    var prevClose = parseFloat(q.prevClose || q.previousClose || price);
+    var change    = parseFloat((price - prevClose).toFixed(2));
+    var changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
+    var volume    = parseInt(q.volume || 0);
+    var avgVol    = parseInt(q.averageVolume || q.avgVolume || 1);
+    var relVol    = avgVol > 0 ? parseFloat((volume / avgVol).toFixed(1)) : 0;
+    if (price > 0) {
+      quotes.push({ ticker: q.ticker || q.symbol, price: price, change: change,
+                    changePct: changePct, volume: volume, relVol: relVol });
+    }
+  });
 
   if (quotes.length === 0) {
     console.log('[FINVIZ] No quotes returned');
