@@ -388,6 +388,57 @@ function getTimeContext() {
   return { window: 'OPEN', ok: true, warning: null };
 }
 
+// -- CONTRACT FRESHNESS CHECK -------------------------------------
+// Checks if a contract has already made its big move today
+// If contract is up >50% from day low -- move already happened -- BLOCK
+// If up 25-50% -- CAUTION -- extended
+// If <25% -- FRESH -- good entry timing
+async function checkContractFreshness(opraSymbol, currentMid) {
+  try {
+    const token     = await getPublicToken();
+    const accountId = process.env.PUBLIC_ACCOUNT_ID;
+    if (!token || !accountId || !currentMid) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+
+    // Get today's bars for the option via Polygon
+    const polyRes = await fetch(
+      POLY_BASE + '/v2/aggs/ticker/O:' + opraSymbol.replace(/^O:/, '') +
+      '/range/1/minute/' + new Date().toISOString().slice(0,10) + '/' +
+      new Date().toISOString().slice(0,10) +
+      '?adjusted=true&sort=asc&limit=390&apiKey=' + polyKey()
+    );
+    const polyData = await polyRes.json();
+    const results  = polyData?.results || [];
+
+    if (!results.length) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+
+    const dayLow = Math.min(...results.map(function(r) { return r.l; }));
+    if (!dayLow || dayLow <= 0) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+
+    const pctFromLow = parseFloat(((currentMid - dayLow) / dayLow * 100).toFixed(1));
+
+    var label, block;
+    if (pctFromLow > 50) {
+      label = 'MOVE ALREADY HAPPENED';
+      block = true;
+      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low $' + dayLow + ' -- BLOCKING');
+    } else if (pctFromLow > 25) {
+      label = 'EXTENDED';
+      block = false;
+      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low -- CAUTION');
+    } else {
+      label = 'FRESH';
+      block = false;
+      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low -- FRESH SETUP');
+    }
+
+    return { fresh: !block, label, pctFromLow, dayLow, block };
+  } catch (err) {
+    console.error('[FRESHNESS] Error:', err.message);
+    return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+  }
+}
+
+
 // -- FIND SPREAD LEGS ----------------------------------------------
 function findSpreadLegs(chain, price, type, ticker) {
   const width  = getSpreadWidth(ticker);
@@ -528,6 +579,12 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
 
   console.log(`[OPRA] ${ticker}  ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
 
+  // -- FRESHNESS CHECK ------------------------------------------
+  var freshness = null;
+  try {
+    freshness = await checkContractFreshness(best.symbol, best.mid);
+  } catch(e) { console.error('[FRESHNESS] check error:', e.message); }
+
   return {
     symbol: best.symbol, mid: best.mid,
     bid: best.bid, ask: best.ask,
@@ -536,6 +593,7 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
     volume:       best.volume || 0,
     openInterest: best.openInterest || 0,
     maxPain, gex, oiNodes, ivCtx, timeCtx, price,
+    freshness,
   };
 }
 
@@ -719,5 +777,6 @@ module.exports = {
   calculatePositionSize, findSpreadLegs,
   calculateMaxPain, calculateGEX, getHighOINodes,
   getIVContext, getTimeContext, getPublicGreeks,
+  checkContractFreshness,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };

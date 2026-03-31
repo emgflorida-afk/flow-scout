@@ -340,6 +340,7 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     '===============================',
     confluence ? 'Confluence  ' + confluence : null,
     'Grade   ' + gradeLabel,
+    resolved && resolved.freshness ? 'Freshness ' + resolved.freshness.label + (resolved.freshness.pctFromLow > 0 ? ' (' + resolved.freshness.pctFromLow + '% from day low)' : '') : null,
     tfLine     ? 'Bias    '     + tfLine     : null,
     '-------------------------------',
     'Strike  $' + strike + ' -- ATM via Public.com',
@@ -426,7 +427,18 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
 
     const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
     const hasFlow = recentFlowTickers.has(key);
-    const isConviction = confluenceScore >= 5 || (confluenceScore >= 4 && hasFlow);
+    const freshnessBlocked = resolved && resolved.freshness && resolved.freshness.block;
+    const isConviction = !freshnessBlocked && (confluenceScore >= 5 || (confluenceScore >= 4 && hasFlow));
+
+    if (freshnessBlocked) {
+      console.log('[FRESHNESS] ' + parsed.ticker + ' blocked -- move already happened (' + resolved.freshness.pctFromLow + '% from low)');
+      await sendToChannel('strat',
+        '\u26a0\ufe0f MOVE ALREADY HAPPENED -- ' + parsed.ticker + '\n' +
+        'Contract up ' + resolved.freshness.pctFromLow + '% from day low $' + resolved.freshness.dayLow + '\n' +
+        'Skip this card -- wait for reset or next day\n' +
+        'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET'
+      );
+    }
 
     if (isConviction) {
       var convLabel = confluenceScore >= 6 ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
