@@ -8,6 +8,7 @@ var fetch = require('node-fetch');
 function getFinnhubKey() { return process.env.FINNHUB_API_KEY; }
 function getPolygonKey() { return process.env.POLYGON_API_KEY; }
 function getWebhook()    { return process.env.DISCORD_CALENDAR_WEBHOOK || process.env.DISCORD_WEBHOOK_URL; }
+function getNewsApiKey() { return process.env.NEWS_API_KEY; }
 
 // Impact levels from Finnhub: 1=low, 2=medium, 3=high
 var IMPACT_LABELS = { '1': 'LOW', '2': 'MEDIUM', '3': 'HIGH' };
@@ -83,6 +84,22 @@ function isHighImpactEvent(eventName) {
   return HIGH_IMPACT_EVENTS.some(function(k) { return name.indexOf(k.toLowerCase()) >= 0; });
 }
 
+// -- SOURCE 3: NEWSAPI GEOPOLITICAL NEWS -----------------------
+async function fetchNewsApiGeo() {
+  var key = getNewsApiKey();
+  if (!key) { console.log('[CAL] No NEWS_API_KEY -- skipping NewsAPI'); return []; }
+  try {
+    var query = encodeURIComponent('Iran OR Hormuz OR tariff OR "peace deal" OR "trade deal" OR "ceasefire" OR "rate cut"');
+    var url   = 'https://newsapi.org/v2/everything?q=' + query + '&language=en&sortBy=publishedAt&pageSize=15&apiKey=' + key;
+    var res   = await fetch(url);
+    if (!res.ok) { console.error('[CAL] NewsAPI error:', res.status); return []; }
+    var data  = await res.json();
+    var articles = (data && data.articles) ? data.articles : [];
+    console.log('[CAL] NewsAPI: ' + articles.length + ' articles');
+    return articles;
+  } catch(e) { console.error('[CAL] NewsAPI error:', e.message); return []; }
+}
+
 // -- CHECK NEWS FOR GEOPOLITICAL ALERTS -----------------------
 function checkGeoAlerts(newsItems) {
   var alerts = [];
@@ -124,7 +141,12 @@ async function postDailyBrief() {
   if (!webhook) { console.log('[CAL] No webhook'); return; }
 
   var events   = await fetchEconomicCalendar();
-  var news     = await fetchMarketNews();
+  var news          = await fetchMarketNews();
+  var newsApiItems  = await fetchNewsApiGeo();
+  // Merge NewsAPI into news for geo analysis
+  newsApiItems.forEach(function(a) {
+    news.push({ title: a.title, description: a.description, article_url: a.url });
+  });
   var geoAlerts = checkGeoAlerts(news);
   var bias     = getMarketBias(geoAlerts, events);
 
@@ -226,6 +248,11 @@ function isTradingBlocked() {
 // -- CHECK NEWS EVERY 30 MIN FOR BREAKING GEO NEWS -----------
 async function checkBreakingNews() {
   var news      = await fetchMarketNews();
+  // Add NewsAPI articles to breaking news check
+  var newsApiItems2 = await fetchNewsApiGeo();
+  newsApiItems2.forEach(function(a) {
+    news.push({ title: a.title, description: a.description, article_url: a.url });
+  });
   var geoAlerts = checkGeoAlerts(news);
   state.geoAlerts = geoAlerts;
 
