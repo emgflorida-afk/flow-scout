@@ -1,5 +1,5 @@
 // server.js - Stratum Flow Scout v7.2
-// Complete final -- all modules + AYCE scanner + smart stops
+// Complete final -- all modules + AYCE scanner + smart stops + position offset analyzer
 
 require('dotenv').config();
 var express  = require('express');
@@ -21,6 +21,7 @@ var preMarketScanner = null;
 var smartStops       = null;
 var econCalendar     = null;
 var preMarketReport  = null;
+var positionOffset   = null;
 
 try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
 try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
@@ -30,6 +31,7 @@ try { preMarketScanner = require('./preMarketScanner'); console.log('[SCANNER] L
 try { smartStops       = require('./smartStops');       console.log('[STOPS] Loaded OK');   } catch(e) { console.log('[STOPS] Skipped:', e.message); }
 try { econCalendar     = require('./economicCalendar'); console.log('[CAL] Loaded OK');     } catch(e) { console.log('[CAL] Skipped:', e.message); }
 try { preMarketReport  = require('./preMarketReport');  console.log('[PMR] Loaded OK');     } catch(e) { console.log('[PMR] Skipped:', e.message); }
+try { positionOffset   = require('./positionOffset');   console.log('[OFFSET] Loaded OK');  } catch(e) { console.log('[OFFSET] Skipped:', e.message); }
 
 var app  = express();
 var PORT = process.env.PORT || 3000;
@@ -160,6 +162,13 @@ app.get('/stops/:ticker', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- POSITION OFFSET ---------------------------------------------
+app.get('/test/offset', async function(req, res) {
+  if (!positionOffset) return res.json({ status: 'not loaded' });
+  try { await positionOffset.runOffsetAnalysis(); res.json({ status: 'OK' }); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- TRADESTATION AUTH ------------------------------------------
 app.get('/ts-auth', function(req, res) {
   if (!ts) return res.send('<h2>TradeStation module not loaded</h2>');
@@ -192,22 +201,23 @@ app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({
 
 // -- CRONS ------------------------------------------------------
 
-// 8:00AM ET -- pre-market report (indices + oil + tech + breaking news)
+// 8:00AM ET -- pre-market report
 cron.schedule('0 12 * * 1-5', async function() {
   console.log('[CRON] 8:00AM -- pre-market report...');
   if (preMarketReport) { try { await preMarketReport.postPreMarketReport(); } catch(e) { console.error('[PMR]', e.message); } }
   if (econCalendar)    { try { await econCalendar.postDailyBrief();         } catch(e) { console.error('[CAL]', e.message); } }
 });
 
-// 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan
+// 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan + OFFSET ANALYZER
 cron.schedule('15 13 * * 1-5', async function() {
-  console.log('[CRON] 9:15AM -- morning brief + pre-market scan...');
+  console.log('[CRON] 9:15AM -- morning brief + pre-market scan + offset analysis...');
   try { await alerter.sendMorningBrief(); } catch(e) { console.error('[BRIEF]', e.message); }
-  if (finviz)           { try { await finviz.postScreenerCard();          } catch(e) { console.error('[FINVIZ]', e.message); } }
-  if (goalTracker)      { try { await goalTracker.postGoalUpdate();        } catch(e) { console.error('[GOAL]', e.message); } }
-  if (capitol)          { try { await capitol.fetchCongressTrades();       } catch(e) { console.error('[CAPITOL]', e.message); } }
-  if (preMarketScanner) { try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); } }
-  if (econCalendar)     { try { await econCalendar.postDailyBrief();          } catch(e) { console.error('[CAL]', e.message); } }
+  if (positionOffset)   { try { await positionOffset.runOffsetAnalysis();      } catch(e) { console.error('[OFFSET]', e.message); } }
+  if (finviz)           { try { await finviz.postScreenerCard();                } catch(e) { console.error('[FINVIZ]', e.message); } }
+  if (goalTracker)      { try { await goalTracker.postGoalUpdate();             } catch(e) { console.error('[GOAL]', e.message); } }
+  if (capitol)          { try { await capitol.fetchCongressTrades();            } catch(e) { console.error('[CAPITOL]', e.message); } }
+  if (preMarketScanner) { try { await preMarketScanner.runPreMarketScan();      } catch(e) { console.error('[SCANNER]', e.message); } }
+  if (econCalendar)     { try { await econCalendar.postDailyBrief();            } catch(e) { console.error('[CAL]', e.message); } }
 });
 
 // 9:30AM ET -- market open goal post

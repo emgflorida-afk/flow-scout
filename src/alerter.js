@@ -324,6 +324,7 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     (tvData.bid && tvData.ask) ? 'Bid/Ask $' + parseFloat(tvData.bid).toFixed(2) + ' / $' + parseFloat(tvData.ask).toFixed(2) : null,
     '-------------------------------',
     s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Check live premium before entry',
+    s ? 'Limit   $' + (s.premium * 0.875).toFixed(2) + ' (12.5% retrace -- SET THIS AS LIMIT)' : null,
     s ? 'Stop    $' + s.stopPrice + ' (loss -$' + s.stopLoss + ')'      : 'Stop    ' + (mode === 'DAY' ? '35' : '40') + '% of premium',
     s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
     s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
@@ -370,6 +371,19 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   }
 
   var ss = null;
+  if (smartStops) {
+    try {
+      var parsedForStop = resolver.parseOPRA(opraSymbol);
+      if (parsedForStop && tvData.mid) {
+        ss = await smartStops.getSmartStop(
+          parsedForStop.ticker,
+          parsedForStop.type,
+          tvData.mid,
+          tvData.delta || 0.45
+        );
+      }
+    } catch(e) { console.error('[STOPS] getSmartStop error:', e.message); }
+  }
 
   let card;
   if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
