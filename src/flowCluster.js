@@ -19,12 +19,26 @@ const CONFIG = {
 };
 
 // -- CLUSTER STATE ------------------------------------------------
-// Map of ticker -> { calls: [], puts: [] }
 const clusterState   = new Map();
-const cooldownState  = new Map(); // ticker -> timestamp last fired
+const cooldownState  = new Map();
+
+// -- DEDUPLICATION ------------------------------------------------
+// Track alert IDs we've already processed to prevent duplicate cards
+const processedAlertIds = new Set();
 
 // -- ADD FLOW TO CLUSTER ------------------------------------------
 function addFlow(flowData) {
+  // Deduplicate by alert ID
+  const alertId = flowData.id || flowData.alertId || null;
+  if (alertId) {
+    if (processedAlertIds.has(alertId)) {
+      return null; // already processed this exact alert
+    }
+    processedAlertIds.add(alertId);
+    // Clean old IDs after 30 min to prevent memory bloat
+    setTimeout(function() { processedAlertIds.delete(alertId); }, 30 * 60 * 1000);
+  }
+
   const opra    = flowData.opra || flowData.symbol || '';
   const parsed  = parseFlowSymbol(opra);
   if (!parsed) return null;
@@ -40,7 +54,6 @@ function addFlow(flowData) {
   const state = clusterState.get(ticker);
   const side  = type === 'call' ? 'calls' : 'puts';
 
-  // Add this flow
   state[side].push({
     premium,
     orderType:  flowData.orderType  || 'UNKNOWN',
@@ -53,10 +66,9 @@ function addFlow(flowData) {
 
   // Clean old entries outside window
   const cutoff = now - CONFIG.windowMs;
-  state.calls  = state.calls.filter(f => f.timestamp > cutoff);
-  state.puts   = state.puts.filter(f  => f.timestamp > cutoff);
+  state.calls  = state.calls.filter(function(f) { return f.timestamp > cutoff; });
+  state.puts   = state.puts.filter(function(f)  { return f.timestamp > cutoff; });
 
-  // Check cluster for dominant side
   return checkCluster(ticker, state, now);
 }
 
@@ -73,15 +85,12 @@ function checkCluster(ticker, state, now) {
     const totalPremium = orders.reduce(function(sum, f) { return sum + f.premium; }, 0);
     if (totalPremium < CONFIG.minPremium) continue;
 
-    // Check cooldown
     const cooldownKey = ticker + ':' + type;
     const lastFired   = cooldownState.get(cooldownKey) || 0;
     if (now - lastFired < CONFIG.cooldownMs) continue;
 
-    // CLUSTER THRESHOLD MET
     cooldownState.set(cooldownKey, now);
 
-    // Find dominant strike (most orders at same strike)
     const strikeCounts = {};
     orders.forEach(function(f) {
       strikeCounts[f.strike] = (strikeCounts[f.strike] || 0) + 1;
@@ -89,11 +98,9 @@ function checkCluster(ticker, state, now) {
     const dominantStrike = Object.entries(strikeCounts)
       .sort(function(a, b) { return b[1] - a[1]; })[0][0];
 
-    // Find nearest expiry
     const expiries = orders.map(function(f) { return f.expiry; }).filter(Boolean).sort();
     const nearestExpiry = expiries[0] || null;
 
-    // Count order types
     const sweeps = orders.filter(function(f) { return (f.orderType || '').toUpperCase() === 'SWEEP'; }).length;
     const blocks = orders.filter(function(f) { return (f.orderType || '').toUpperCase() === 'BLOCK'; }).length;
 
@@ -141,34 +148,49 @@ function buildClusterCard(cluster, resolved) {
     ? '$' + (totalPremium/1000000).toFixed(1) + 'M'
     : '$' + (totalPremium/1000).toFixed(0) + 'K';
 
-  const expiryFmt  = nearestExpiry ? nearestExpiry.slice(5).replace('-', '/') : '--';
   const orderTypeSummary = [
     sweepCount > 0 ? sweepCount + ' SWEEP' + (sweepCount > 1 ? 'S' : '') : null,
     blockCount > 0 ? blockCount + ' BLOCK' + (blockCount > 1 ? 'S' : '') : null,
   ].filter(Boolean).join(' + ') || orderCount + ' ORDERS';
 
-  const mid    = resolved?.mid   ? '$' + resolved.mid.toFixed(2)   : '--';
-  const stop   = resolved?.mid   ? '$' + (resolved.mid * 0.60).toFixed(2) : '--';
-  const t1     = resolved?.mid   ? '$' + (resolved.mid * 1.60).toFixed(2) : '--';
-  const t2     = resolved?.mid   ? '$' + (resolved.mid * 2.20).toFixed(2) : '--';
-  const strike = resolved?.strike || dominantStrike;
+  // -- USE STRATUM-RESOLVED CONTRACT (not smart money's deep ITM)
+  const resolvedStrike  = resolved ? resolved.strike  : dominantStrike;
+  const resolvedExpiry  = resolved ? (resolved.expiry ? resolved.expiry.slice(5).replace('-', '/') : '--') : (nearestExpiry ? nearestExpiry.slice(5).replace('-', '/') : '--');
+  const resolvedSymbol  = resolved ? resolved.symbol  : null;
+  const resolvedPrice   = resolved ? resolved.price   : null;
+
+  // Entry sizing from resolved contract
+  const mid  = resolved && resolved.mid  ? resolved.mid  : null;
+  const entry = mid ? '$' + mid.toFixed(2)                    : 'check live mid';
+  const stop  = mid ? '$' + (mid * 0.60).toFixed(2) + ' (40% stop)' : null;
+  const t1    = mid ? '$' + (mid * 1.60).toFixed(2) + ' (+60%)'     : null;
+  const t2    = mid ? '$' + (mid * 2.20).toFixed(2) + ' (+120% runner)' : null;
+
+  // Retracement entry
+  const retrace = mid ? '$' + (mid * 0.875).toFixed(2) + ' (12.5% retrace -- LIMIT)' : null;
+
+  // Contracts sizing (2% of $7K = $147 max risk)
+  var contracts = 1;
+  if (mid && mid > 0) {
+    contracts = Math.max(1, Math.floor(147 / (mid * 0.40 * 100)));
+  }
 
   const lines = [
     'CLUSTER ALERT -- ' + ticker + ' ' + type.toUpperCase() + 'S',
-    ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
+    ticker + ' $' + resolvedStrike + typeLabel + ' ' + resolvedExpiry + ' -- ' + direction,
     '===============================',
     'Total Flow   ' + premiumStr + ' in ' + windowMinutes + ' min',
     'Orders       ' + orderCount + ' (' + orderTypeSummary + ')',
-    'Strike       $' + dominantStrike + typeLabel + ' dominant',
-    'Expiry       ' + expiryFmt,
-    '===============================',
-    resolved ? 'Stock        $' + resolved.price.toFixed(2) + ' LIVE' : null,
-    resolved ? 'Contract     ' + resolved.symbol : null,
     '-------------------------------',
-    resolved ? 'Entry   ' + mid : 'Entry   check live mid',
-    resolved ? 'Stop    ' + stop + ' (40% of premium)' : null,
-    resolved ? 'T1      ' + t1 + ' (+60%)' : null,
-    resolved ? 'T2      ' + t2 + ' (+120% runner)' : null,
+    resolvedPrice  ? 'Stock        $' + resolvedPrice.toFixed(2) + ' LIVE'   : null,
+    resolvedSymbol ? 'Contract     ' + resolvedSymbol                         : null,
+    '-------------------------------',
+    'Entry   ' + entry,
+    retrace        ? 'Limit   ' + retrace : null,
+    stop           ? 'Stop    ' + stop    : null,
+    t1             ? 'T1      ' + t1      : null,
+    t2             ? 'T2      ' + t2      : null,
+    mid            ? 'Size    ' + contracts + ' contract' + (contracts > 1 ? 's' : '') + ' (2% risk max)' : null,
     '-------------------------------',
     'CONVICTION   HIGH -- execute on next candle close',
     'Window       9:45AM-3:30PM ET only',
@@ -182,7 +204,7 @@ function buildClusterCard(cluster, resolved) {
 async function sendClusterAlert(cluster) {
   console.log('[CLUSTER] ' + cluster.ticker + ' ' + cluster.type.toUpperCase() + ' -- $' + (cluster.totalPremium/1000).toFixed(0) + 'K in ' + cluster.orderCount + ' orders FIRING');
 
-  // Resolve contract for entry details
+  // Resolve YOUR Stratum swing contract -- not the smart money's contract
   let resolved = null;
   try {
     resolved = await resolver.resolveContract(cluster.ticker, cluster.type, 'SWING');
@@ -192,7 +214,6 @@ async function sendClusterAlert(cluster) {
 
   const card = buildClusterCard(cluster, resolved);
 
-  // Send to conviction channel
   try {
     const res = await fetch(CONVICTION_WEBHOOK, {
       method:  'POST',
@@ -203,6 +224,7 @@ async function sendClusterAlert(cluster) {
       }),
     });
     if (res.ok) console.log('[CLUSTER] Alert sent to #conviction-trades OK');
+    else console.error('[CLUSTER] Webhook error:', res.status);
   } catch (err) {
     console.error('[CLUSTER] Send error:', err.message);
   }
@@ -211,7 +233,6 @@ async function sendClusterAlert(cluster) {
 }
 
 // -- PROCESS INCOMING FLOW ----------------------------------------
-// Call this from bullflowStream.js on every incoming flow alert
 async function processFlow(flowData) {
   const cluster = addFlow(flowData);
   if (cluster) {
@@ -219,7 +240,7 @@ async function processFlow(flowData) {
   }
 }
 
-// -- GET CURRENT CLUSTER STATE (for debugging) --------------------
+// -- GET CURRENT CLUSTER STATE ------------------------------------
 function getClusterSummary() {
   const summary = {};
   clusterState.forEach(function(state, ticker) {
