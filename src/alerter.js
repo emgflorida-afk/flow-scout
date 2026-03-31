@@ -123,12 +123,16 @@ function buildTechnicalsSection(tvData) {
 
   const lines = [];
 
-  if (rsi != null && !isNaN(rsi)) {
+  if (rsi != null && !isNaN(rsi) && rsi >= 0 && rsi <= 100) {
     lines.push('RSI (14)    ' + rsi.toFixed(0) + ' -- ' + getRsiLabel(rsi));
   }
-  if (vwap != null && !isNaN(vwap) && vwapBias) {
-    const biasIcon = vwapBias === 'above' ? 'ABOVE \ud83d\udd3c bullish' : 'BELOW \ud83d\udd3d bearish';
-    lines.push('VWAP        $' + vwap.toFixed(2) + ' -- price ' + biasIcon + ' confirmed');
+  if (vwap != null && !isNaN(vwap)) {
+    if (vwapBias) {
+      const biasIcon = vwapBias === 'above' ? 'ABOVE -- bullish' : 'BELOW -- bearish';
+      lines.push('VWAP        $' + vwap.toFixed(2) + ' -- price ' + biasIcon);
+    } else {
+      lines.push('VWAP        $' + vwap.toFixed(2));
+    }
   }
   if (bearFVGTop != null && bearFVGBottom != null && bearFVGTop > 0 && bearFVGBottom > 0) {
     lines.push('FVG Above   $' + bearFVGBottom.toFixed(2) + '-$' + bearFVGTop.toFixed(2) + ' -- resistance gap');
