@@ -20,6 +20,7 @@ var ts               = null;
 var preMarketScanner = null;
 var smartStops       = null;
 var econCalendar     = null;
+var preMarketReport  = null;
 
 try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
 try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
@@ -28,6 +29,7 @@ try { ts               = require('./tradestation');     console.log('[TS] Loaded
 try { preMarketScanner = require('./preMarketScanner'); console.log('[SCANNER] Loaded OK'); } catch(e) { console.log('[SCANNER] Skipped:', e.message); }
 try { smartStops       = require('./smartStops');       console.log('[STOPS] Loaded OK');   } catch(e) { console.log('[STOPS] Skipped:', e.message); }
 try { econCalendar     = require('./economicCalendar'); console.log('[CAL] Loaded OK');     } catch(e) { console.log('[CAL] Skipped:', e.message); }
+try { preMarketReport  = require('./preMarketReport');  console.log('[PMR] Loaded OK');     } catch(e) { console.log('[PMR] Skipped:', e.message); }
 
 var app  = express();
 var PORT = process.env.PORT || 3000;
@@ -184,10 +186,18 @@ app.get('/test/screener', async function(req, res) { if (!finviz) return res.jso
 app.get('/test/scanner',  async function(req, res) { if (!preMarketScanner) return res.json({ status: 'not loaded' }); try { await preMarketScanner.runPreMarketScan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/322',      async function(req, res) { if (!preMarketScanner) return res.json({ status: 'not loaded' }); try { await preMarketScanner.run322Scan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/bullflow', function(req, res) { res.json({ status: 'OK', version: '7.2' }); });
+app.get('/test/premarketreport', async function(req, res) { if (!preMarketReport) return res.json({ status: 'not loaded' }); try { await preMarketReport.postPreMarketReport(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/calendar', async function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); try { await econCalendar.postDailyBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); res.json(econCalendar.getState()); });
 
 // -- CRONS ------------------------------------------------------
+
+// 8:00AM ET -- pre-market report (indices + oil + tech + breaking news)
+cron.schedule('0 12 * * 1-5', async function() {
+  console.log('[CRON] 8:00AM -- pre-market report...');
+  if (preMarketReport) { try { await preMarketReport.postPreMarketReport(); } catch(e) { console.error('[PMR]', e.message); } }
+  if (econCalendar)    { try { await econCalendar.postDailyBrief();         } catch(e) { console.error('[CAL]', e.message); } }
+});
 
 // 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan
 cron.schedule('15 13 * * 1-5', async function() {

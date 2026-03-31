@@ -39,7 +39,7 @@ async function getBatchQuotes(tickers, token) {
     var res = await fetch('https://api.public.com/userapigateway/marketdata/' + accountId + '/quotes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'User-Agent': 'stratum-flow-scout' },
-      body: JSON.stringify({ tickers: tickers })
+      body: JSON.stringify({ instruments: tickers.map(function(t) { return { symbol: t, type: 'EQUITY' }; }) })
     });
     if (!res.ok) { console.error('[FINVIZ] Quotes error:', res.status); return []; }
     var data = await res.json();
@@ -68,15 +68,15 @@ async function postScreenerCard() {
   var quotes = [];
   rawQuotes.forEach(function(q) {
     if (!q) return;
-    var price     = parseFloat(q.last || q.close || 0);
-    var prevClose = parseFloat(q.prevClose || q.previousClose || price);
+    var price     = parseFloat(q.last || q.close || q.previousClose || 0);
+    var prevClose = parseFloat(q.prevDay && q.prevDay.close ? q.prevDay.close : q.previousClose || price);
     var change    = parseFloat((price - prevClose).toFixed(2));
     var changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
     var volume    = parseInt(q.volume || 0);
     var avgVol    = parseInt(q.averageVolume || q.avgVolume || 1);
     var relVol    = avgVol > 0 ? parseFloat((volume / avgVol).toFixed(1)) : 0;
     if (price > 0) {
-      quotes.push({ ticker: q.ticker || q.symbol, price: price, change: change,
+      quotes.push({ ticker: q.symbol || q.ticker, price: price, change: change,
                     changePct: changePct, volume: volume, relVol: relVol });
     }
   });
