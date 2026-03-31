@@ -1,230 +1,103 @@
-// goalTracker.js  Stratum Flow Scout v7.0
-// Real-time daily P&L tracker
-// Goal: $300/day
-// System states: WAIT / SET LIMIT / IN TRADE / HOLD / EXIT / STOP
-// Posts state updates to #conviction-trades
-// Resets daily at market open (9:30AM ET)
-// -----------------------------------------------------------------
+// goalTracker.js - Stratum Flow Scout v7.2
+// Daily $300 goal tracker -- posts to #goal-tracker channel
+// Tracks trades, P&L, and system state (WAIT/IN TRADE/STOP)
 
-const fetch = require('node-fetch');
+var fetch = require('node-fetch');
 
-const DAILY_GOAL     = 300;  // $300/day target
-const MAX_LOSS_DAY   = 150;  // Stop trading after -$150 (50% of goal)
-const MAX_LOSSES_ROW = 2;    // Stop after 2 consecutive losses
+var GOAL_AMOUNT = 300;
+var MAX_LOSS    = -150;
+var MAX_TRADES  = 4;
 
-// In-memory state  resets at market open
-let state = {
-  date:           '',
-  realizedPnL:    0,
-  trades:         [],
-  consecutiveLoss:0,
-  systemState:    'WAIT',
-  goalHit:        false,
-  stopTriggered:  false,
+function getWebhook() { return process.env.DISCORD_GOAL_WEBHOOK; }
+
+var state = {
+  date:        '',
+  trades:      [],
+  totalPnL:    0,
+  status:      'WAIT',
+  goalHit:     false,
+  stopHit:     false,
 };
 
-function getTodayET() {
-  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-}
-
-function getTimeET() {
-  return new Date().toLocaleTimeString('en-US', {
-    timeZone: 'America/New_York',
-    hour:     '2-digit',
-    minute:   '2-digit',
-  });
-}
-
-// -- RESET DAILY AT OPEN ------------------------------------------
 function resetIfNewDay() {
-  const today = getTodayET();
+  var today = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
   if (state.date !== today) {
-    state = {
-      date:            today,
-      realizedPnL:     0,
-      trades:          [],
-      consecutiveLoss: 0,
-      systemState:     'WAIT',
-      goalHit:         false,
-      stopTriggered:   false,
-    };
-    console.log('[GOAL] Daily reset -- new trading day: ' + today);
+    state.date     = today;
+    state.trades   = [];
+    state.totalPnL = 0;
+    state.status   = 'WAIT';
+    state.goalHit  = false;
+    state.stopHit  = false;
+    console.log('[GOAL] New day -- state reset');
   }
 }
 
-// -- CALCULATE SYSTEM STATE ---------------------------------------
-function calculateState() {
-  resetIfNewDay();
-
-  const pnl       = state.realizedPnL;
-  const remaining = DAILY_GOAL - pnl;
-
-  // Goal hit
-  if (pnl >= DAILY_GOAL) {
-    state.goalHit     = true;
-    state.systemState = 'STOP';
-    return;
-  }
-
-  // Max loss hit
-  if (pnl <= -MAX_LOSS_DAY) {
-    state.stopTriggered = true;
-    state.systemState   = 'STOP';
-    return;
-  }
-
-  // 2 consecutive losses
-  if (state.consecutiveLoss >= MAX_LOSSES_ROW) {
-    state.stopTriggered = true;
-    state.systemState   = 'STOP';
-    return;
-  }
-
-  // Close to goal (within $50)
-  if (remaining <= 50) {
-    state.systemState = 'WAIT';
-    return;
-  }
-
-  state.systemState = 'WAIT';
-}
-
-// -- RECORD TRADE -------------------------------------------------
 function recordTrade(ticker, pnl) {
   resetIfNewDay();
-
-  state.trades.push({
-    ticker,
-    pnl,
-    time: getTimeET(),
-  });
-
-  state.realizedPnL = state.trades.reduce(function(sum, t) { return sum + t.pnl; }, 0);
-
-  if (pnl < 0) {
-    state.consecutiveLoss++;
-  } else {
-    state.consecutiveLoss = 0;
-  }
-
-  calculateState();
-
-  console.log('[GOAL] Trade recorded: ' + ticker + ' P&L: $' + pnl + ' | Daily: $' + state.realizedPnL.toFixed(2) + ' | State: ' + state.systemState);
+  state.trades.push({ ticker: ticker, pnl: pnl, time: new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) });
+  state.totalPnL += pnl;
+  if (state.totalPnL >= GOAL_AMOUNT) { state.goalHit = true; state.status = 'GOAL HIT'; }
+  else if (state.totalPnL <= MAX_LOSS)  { state.stopHit = true; state.status = 'STOP TRADING'; }
+  else if (state.trades.length >= MAX_TRADES) { state.status = 'MAX TRADES'; }
+  else { state.status = 'IN TRADE'; }
+  console.log('[GOAL] Trade recorded: ' + ticker + ' ' + (pnl >= 0 ? '+' : '') + pnl + ' | Total: ' + state.totalPnL);
 }
 
-// -- GET GOAL CARD ------------------------------------------------
-function getGoalCard() {
+function getState() { resetIfNewDay(); return state; }
+
+async function postGoalUpdate() {
   resetIfNewDay();
-  calculateState();
+  var webhook = getWebhook();
+  if (!webhook) { console.log('[GOAL] No webhook configured'); return; }
 
-  const pnl       = state.realizedPnL;
-  const remaining = Math.max(0, DAILY_GOAL - pnl);
-  const pct       = Math.min(100, Math.round((pnl / DAILY_GOAL) * 100));
-  const bar       = buildProgressBar(pct);
+  var pct     = Math.min(100, Math.round((state.totalPnL / GOAL_AMOUNT) * 100));
+  var bar     = '';
+  var filled  = Math.round(pct / 10);
+  for (var i = 0; i < 10; i++) { bar += (i < filled ? '#' : '-'); }
 
-  const stateEmoji = {
-    'WAIT':     '',
-    'SET LIMIT':'',
-    'IN TRADE': '',
-    'HOLD':     '',
-    'EXIT':     '',
-    'STOP':     '',
-  }[state.systemState] || '';
+  var statusEmoji = state.goalHit ? 'GOAL HIT' : state.stopHit ? 'STOP TRADING' : state.status === 'IN TRADE' ? 'IN TRADE' : 'WAIT';
 
-  const lines = [
-    ' DAILY GOAL TRACKER',
-    getTodayET(),
+  var lines2 = [
+    'DAILY GOAL TRACKER',
+    state.date,
     '===============================',
-    'Goal     $' + DAILY_GOAL,
-    'P&L      ' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2),
-    'Left     $' + remaining.toFixed(2),
-    bar,
-    '-------------------------------',
-    stateEmoji + ' STATE: ' + state.systemState,
+    'Goal      $' + GOAL_AMOUNT + '/day',
+    'P&L       $' + state.totalPnL.toFixed(2) + ' (' + (pct) + '%)',
+    'Progress  [' + bar + '] ' + pct + '%',
+    'Status    ' + statusEmoji,
+    'Trades    ' + state.trades.length + '/' + MAX_TRADES,
     '-------------------------------',
   ];
 
-  if (state.goalHit) {
-    lines.push(' GOAL HIT -- Stop trading for today');
-    lines.push('Protect profits -- no more entries');
-  } else if (state.stopTriggered) {
-    if (pnl <= -MAX_LOSS_DAY) {
-      lines.push(' MAX LOSS HIT -- Stop trading');
-    } else {
-      lines.push(' 2 CONSECUTIVE LOSSES -- Stop trading');
-    }
-    lines.push('Protect capital -- no more entries');
-  } else {
-    const remaining50 = Math.max(0, DAILY_GOAL - pnl) <= 50;
-    if (remaining50) {
-      lines.push('  Close to goal -- high prob trades only');
-    } else {
-      lines.push('A+ setups only -- stick to the plan');
-    }
-  }
-
-  lines.push('-------------------------------');
-  lines.push('Trades today: ' + state.trades.length);
   if (state.trades.length > 0) {
-    state.trades.slice(-3).forEach(function(t) {
-      lines.push('  ' + t.ticker + '  ' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(0) + '  ' + t.time);
+    lines2.push('TRADE LOG:');
+    state.trades.forEach(function(t) {
+      lines2.push('  ' + t.time + '  ' + t.ticker + '  ' + (t.pnl >= 0 ? '+' : '') + '$' + t.pnl.toFixed(2));
     });
+    lines2.push('-------------------------------');
   }
-  lines.push('Time     ' + getTimeET() + ' ET');
 
-  return lines.join('\n');
-}
+  if (state.goalHit) {
+    lines2.push('GOAL REACHED -- STOP TRADING');
+    lines2.push('Protect your profits. No more trades today.');
+  } else if (state.stopHit) {
+    lines2.push('MAX LOSS HIT -- STOP TRADING');
+    lines2.push('Walk away. Come back tomorrow.');
+  } else {
+    lines2.push('Remaining to goal: $' + Math.max(0, GOAL_AMOUNT - state.totalPnL).toFixed(2));
+    lines2.push('Max loss remaining: $' + Math.abs(Math.max(0, state.totalPnL - MAX_LOSS)).toFixed(2));
+  }
 
-// -- PROGRESS BAR -------------------------------------------------
-function buildProgressBar(pct) {
-  const filled = Math.round(pct / 10);
-  const empty  = 10 - filled;
-  const bar    = ''.repeat(filled) + ''.repeat(empty);
-  return 'Progress [' + bar + '] ' + pct + '%';
-}
-
-// -- POST TO DISCORD ----------------------------------------------
-async function postGoalUpdate() {
-  const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-  const webhookUrl = process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_GOAL_WEBHOOK || process.env.DISCORD_CONVICTION_WEBHOOK_URL;
-  if (!webhookUrl) return;
+  var message = lines2.join('\n');
 
   try {
-    await fetch(GOAL_WEBHOOK, {
-      method:  'POST',
+    await fetch(webhook, {
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        content:  '```\n' + getGoalCard() + '\n```',
-        username: 'Stratum Goal',
-      }),
+      body: JSON.stringify({ content: '```\n' + message + '\n```', username: 'Stratum Goal Tracker' })
     });
-    console.log('[GOAL] Posted to Discord OK');
-  } catch (err) {
-    console.error('[GOAL] Discord error:', err.message);
-  }
+    console.log('[GOAL] Posted goal update -- P&L: $' + state.totalPnL.toFixed(2));
+  } catch(e) { console.error('[GOAL] Post error:', e.message); }
 }
 
-// -- IS TRADING ALLOWED -------------------------------------------
-function isTradingAllowed() {
-  resetIfNewDay();
-  calculateState();
-  return state.systemState !== 'STOP';
-}
-
-// -- GET STATE ----------------------------------------------------
-function getState() {
-  resetIfNewDay();
-  calculateState();
-  return {
-    state:           state.systemState,
-    pnl:             state.realizedPnL,
-    goal:            DAILY_GOAL,
-    remaining:       Math.max(0, DAILY_GOAL - state.realizedPnL),
-    trades:          state.trades.length,
-    consecutiveLoss: state.consecutiveLoss,
-    goalHit:         state.goalHit,
-    stopTriggered:   state.stopTriggered,
-  };
-}
-
-module.exports = { recordTrade, getGoalCard, postGoalUpdate, isTradingAllowed, getState, resetIfNewDay };
+module.exports = { recordTrade: recordTrade, getState: getState, postGoalUpdate: postGoalUpdate };
