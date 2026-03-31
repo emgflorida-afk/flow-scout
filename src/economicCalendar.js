@@ -288,9 +288,15 @@ async function checkBreakingNews() {
   }
 }
 
+// alerter.js calls calendar.shouldBlockAlert() -- alias to isTradingBlocked
+function shouldBlockAlert() {
+  return state.blockTrading === true;
+}
+
 module.exports = {
   postDailyBrief:    postDailyBrief,
   checkBreakingNews: checkBreakingNews,
   isTradingBlocked:  isTradingBlocked,
+  shouldBlockAlert:   shouldBlockAlert,
   getState:          function() { return state; },
 };
