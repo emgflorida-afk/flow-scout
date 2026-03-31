@@ -46,9 +46,19 @@ async function getPrice(ticker, token, accountId) {
     var q     = data && data.quotes && data.quotes[0] ? data.quotes[0] : null;
     if (!q) return null;
     // Log raw response for first ticker to debug field names
-    if (ticker === 'SPY') console.log('[FINVIZ] SPY raw:', JSON.stringify(q).slice(0, 200));
+    if (ticker === 'SPY') console.log('[FINVIZ] SPY raw:', JSON.stringify(q));
     var price     = parseFloat(q.last || q.close || 0);
-    var prevClose = q.prevDay && q.prevDay.close ? parseFloat(q.prevDay.close) : parseFloat(q.previousClose || price);
+    // prevDay may be null after hours -- fall back to previousClose or price
+    var prevClose = 0;
+    if (q.prevDay && q.prevDay.close && parseFloat(q.prevDay.close) > 0) {
+      prevClose = parseFloat(q.prevDay.close);
+    } else if (q.previousClose && parseFloat(q.previousClose) > 0) {
+      prevClose = parseFloat(q.previousClose);
+    } else if (q.open && parseFloat(q.open) > 0) {
+      prevClose = parseFloat(q.open);
+    } else {
+      prevClose = price;
+    }
     var change    = parseFloat((price - prevClose).toFixed(2));
     var changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
     var volume    = parseInt(q.volume || 0);
