@@ -369,13 +369,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     return false;
   }
 
-  // Calculate smart stop using structural levels
   var ss = null;
-  if (smartStops && parsed && s) {
-    try {
-      ss = await smartStops.getSmartStop(parsed.ticker, type, s.premium, s.delta || 0.45);
-    } catch(e) { console.error('[STOPS] getSmartStop error:', e.message); }
-  }
 
   let card;
   if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
