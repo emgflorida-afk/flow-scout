@@ -399,19 +399,40 @@ async function checkContractFreshness(opraSymbol, currentMid) {
     const accountId = process.env.PUBLIC_ACCOUNT_ID;
     if (!token || !accountId || !currentMid) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
 
-    // Get today's bars for the option via Polygon
-    const polyRes = await fetch(
-      POLY_BASE + '/v2/aggs/ticker/O:' + opraSymbol.replace(/^O:/, '') +
-      '/range/1/minute/' + new Date().toISOString().slice(0,10) + '/' +
-      new Date().toISOString().slice(0,10) +
-      '?adjusted=true&sort=asc&limit=390&apiKey=' + polyKey()
-    );
-    const polyData = await polyRes.json();
-    const results  = polyData?.results || [];
+    // Use Public.com option chain to get day low via bid/ask history
+    // Parse the OPRA symbol to get underlying ticker, expiry, type
+    const raw   = (opraSymbol || '').replace(/^O:/, '');
+    const match = raw.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+    if (!match) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
 
-    if (!results.length) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+    const ticker   = match[1];
+    const dateStr  = match[2];
+    const typeChar = match[3];
+    const expiry   = '20' + dateStr.slice(0,2) + '-' + dateStr.slice(2,4) + '-' + dateStr.slice(4,6);
+    const type     = typeChar === 'C' ? 'call' : 'put';
+    const strike   = parseInt(match[4]) / 1000;
 
-    const dayLow = Math.min(...results.map(function(r) { return r.l; }));
+    // Get option chain from Public.com for this expiry
+    const chainRes = await fetch(PUB_GATEWAY + '/marketdata/' + accountId + '/option-chain', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'User-Agent': 'stratum-flow-scout' },
+      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' }, expirationDate: expiry }),
+    });
+    const chainData = await chainRes.json();
+    const contracts = type === 'call' ? (chainData?.calls || []) : (chainData?.puts || []);
+
+    // Find this specific contract
+    const thisContract = contracts.find(function(c) {
+      const sym = c.instrument?.symbol || '';
+      const m = sym.match(/(\d{8})$/);
+      if (!m) return false;
+      return Math.abs(parseInt(m[1]) / 1000 - strike) < 0.01;
+    });
+
+    if (!thisContract) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+
+    // Use today's low from the contract data
+    const dayLow = parseFloat(thisContract.low || thisContract.bid || 0);
     if (!dayLow || dayLow <= 0) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
 
     const pctFromLow = parseFloat(((currentMid - dayLow) / dayLow * 100).toFixed(1));
@@ -420,15 +441,15 @@ async function checkContractFreshness(opraSymbol, currentMid) {
     if (pctFromLow > 50) {
       label = 'MOVE ALREADY HAPPENED';
       block = true;
-      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low $' + dayLow + ' -- BLOCKING');
+      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low $' + dayLow + ' -- BLOCKING');
     } else if (pctFromLow > 25) {
       label = 'EXTENDED';
       block = false;
-      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low -- CAUTION');
+      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low -- CAUTION');
     } else {
       label = 'FRESH';
       block = false;
-      console.log('[FRESHNESS] ' + opraSymbol + ' up ' + pctFromLow + '% from day low -- FRESH SETUP');
+      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low -- FRESH SETUP');
     }
 
     return { fresh: !block, label, pctFromLow, dayLow, block };
@@ -569,9 +590,24 @@ async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
     return null;
   }
 
-  const best = withStrike.reduce((a, b) =>
-    Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-  );
+  // Filter contracts within 5% of current price -- prevents OTM garbage
+  const withinDistance = withStrike.filter(function(c) {
+    return Math.abs(c.strike - price) / price <= 0.05;
+  });
+
+  // If nothing within 5%, expand to 8% before giving up
+  const candidates = withinDistance.length > 0 ? withinDistance : withStrike.filter(function(c) {
+    return Math.abs(c.strike - price) / price <= 0.08;
+  });
+
+  if (!candidates.length) {
+    console.log('[DISTANCE] No contracts within 8% of price for ' + ticker + ' -- skipping');
+    return null;
+  }
+
+  const best = candidates.reduce(function(a, b) {
+    return Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b;
+  });
 
   const spreadWidth = best.ask - best.bid;
   const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;

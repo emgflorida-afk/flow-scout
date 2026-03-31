@@ -185,6 +185,77 @@ function gradeStratAlert(confluence, hasFlow) {
   return 'C';
 }
 
+// -- POSITION CONFLICT CHECK --------------------------------------
+// Before firing any card check if we already own the opposite side
+// Requires TS token to be valid -- silently skips if no token
+var cachedPositions = null;
+var positionCacheTime = 0;
+
+async function getOpenPositions() {
+  try {
+    const now = Date.now();
+    if (cachedPositions && (now - positionCacheTime) < 60000) return cachedPositions;
+
+    const tsBase = 'https://api.tradestation.com/v3';
+    const accountId = '11975462';
+
+    // Get fresh token
+    const tokenRes = await fetch('https://signin.tradestation.com/oauth/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'grant_type=refresh_token&client_id=' + process.env.TS_CLIENT_ID +
+            '&redirect_uri=http://localhost&refresh_token=' + process.env.TS_REFRESH_TOKEN,
+    });
+    if (!tokenRes.ok) return null;
+    const tokenData = await tokenRes.json();
+    const token = tokenData.access_token;
+    if (!token) return null;
+
+    const posRes = await fetch(tsBase + '/brokerage/accounts/' + accountId + '/positions', {
+      headers: { Authorization: 'Bearer ' + token },
+    });
+    if (!posRes.ok) return null;
+    const posData = await posRes.json();
+    const positions = posData.Positions || [];
+
+    // Build conflict map: ticker -> ['call', 'put']
+    const map = {};
+    positions.forEach(function(p) {
+      const sym = p.Symbol || '';
+      if (!sym.includes(' ')) return; // skip stocks
+      const parts = sym.split(' ');
+      const ticker = parts[0];
+      const isCall = sym.includes('C');
+      const isPut  = sym.includes('P');
+      if (!map[ticker]) map[ticker] = [];
+      if (isCall && !map[ticker].includes('call')) map[ticker].push('call');
+      if (isPut  && !map[ticker].includes('put'))  map[ticker].push('put');
+    });
+
+    cachedPositions = map;
+    positionCacheTime = now;
+    return map;
+  } catch(e) {
+    console.error('[CONFLICT] Position check error:', e.message);
+    return null;
+  }
+}
+
+async function checkPositionConflict(ticker, type) {
+  try {
+    const positions = await getOpenPositions();
+    if (!positions) return { conflict: false };
+    const existing = positions[ticker] || [];
+    const opposite = type === 'call' ? 'put' : 'call';
+    if (existing.includes(opposite)) {
+      console.log('[CONFLICT] ' + ticker + ' -- already have ' + opposite + ', new signal is ' + type);
+      return { conflict: true, existing: opposite, newSignal: type };
+    }
+    return { conflict: false };
+  } catch(e) { return { conflict: false }; }
+}
+
+
 
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
@@ -392,6 +463,23 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   if (calCheck.block) {
     await sendToChannel('strat', 'BLOCKED\n' + calCheck.reason);
     return false;
+  }
+
+  // -- POSITION CONFLICT CHECK ----------------------------------
+  const parsed0 = resolver.parseOPRA(opraSymbol);
+  if (parsed0) {
+    const conflict = await checkPositionConflict(parsed0.ticker, parsed0.type);
+    if (conflict.conflict) {
+      console.log('[CONFLICT] Blocking card -- already in ' + parsed0.ticker + ' ' + conflict.existing);
+      await sendToChannel('strat',
+        '\u26a0\ufe0f POSITION CONFLICT -- ' + parsed0.ticker + '\n' +
+        'New signal:  ' + conflict.newSignal.toUpperCase() + '\n' +
+        'Already in: ' + conflict.existing.toUpperCase() + '\n' +
+        'Skipping card -- close existing position first\n' +
+        'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET'
+      );
+      return false;
+    }
   }
 
   var ss = null;
