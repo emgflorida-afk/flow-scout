@@ -193,48 +193,18 @@ var positionCacheTime = 0;
 
 async function getOpenPositions() {
   try {
-    const now = Date.now();
-    if (cachedPositions && (now - positionCacheTime) < 60000) return cachedPositions;
+    // Read from Claude MCP positions webhook -- no TS token needed
+    var server = null;
+    try { server = require('./server'); } catch(e) {}
+    var livePos = server && server.getLivePositions ? server.getLivePositions() : {};
 
-    const tsBase = 'https://api.tradestation.com/v3';
-    const accountId = '11975462';
+    if (livePos && Object.keys(livePos).length > 0) {
+      console.log('[CONFLICT] Using Claude MCP positions -- ' + Object.keys(livePos).length + ' tickers');
+      return livePos;
+    }
 
-    // Get fresh token
-    const tokenRes = await fetch('https://signin.tradestation.com/oauth/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: 'grant_type=refresh_token&client_id=' + process.env.TS_CLIENT_ID +
-            '&redirect_uri=http://localhost&refresh_token=' + process.env.TS_REFRESH_TOKEN,
-    });
-    if (!tokenRes.ok) return null;
-    const tokenData = await tokenRes.json();
-    const token = tokenData.access_token;
-    if (!token) return null;
-
-    const posRes = await fetch(tsBase + '/brokerage/accounts/' + accountId + '/positions', {
-      headers: { Authorization: 'Bearer ' + token },
-    });
-    if (!posRes.ok) return null;
-    const posData = await posRes.json();
-    const positions = posData.Positions || [];
-
-    // Build conflict map: ticker -> ['call', 'put']
-    const map = {};
-    positions.forEach(function(p) {
-      const sym = p.Symbol || '';
-      if (!sym.includes(' ')) return; // skip stocks
-      const parts = sym.split(' ');
-      const ticker = parts[0];
-      const isCall = sym.includes('C');
-      const isPut  = sym.includes('P');
-      if (!map[ticker]) map[ticker] = [];
-      if (isCall && !map[ticker].includes('call')) map[ticker].push('call');
-      if (isPut  && !map[ticker].includes('put'))  map[ticker].push('put');
-    });
-
-    cachedPositions = map;
-    positionCacheTime = now;
-    return map;
+    console.log('[CONFLICT] No live positions from Claude MCP yet -- skipping conflict check');
+    return null;
   } catch(e) {
     console.error('[CONFLICT] Position check error:', e.message);
     return null;

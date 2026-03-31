@@ -124,6 +124,33 @@ app.post('/webhook/bullflow', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- CLAUDE MCP POSITIONS BRIDGE --------------------------------
+// Claude chat pushes live positions here via MCP every 5 minutes
+// alerter.js reads livePositions for conflict checking
+var livePositions = {};
+var livePositionsUpdated = null;
+
+app.post('/webhook/positions', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    livePositions = req.body.positions || {};
+    livePositionsUpdated = new Date().toISOString();
+    console.log('[POSITIONS] Updated from Claude MCP -- ' + Object.keys(livePositions).length + ' tickers');
+    res.json({ status: 'OK', tickers: Object.keys(livePositions), updated: livePositionsUpdated });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/webhook/positions', function(req, res) {
+  res.json({ positions: livePositions, updated: livePositionsUpdated, tickers: Object.keys(livePositions) });
+});
+
+// Export so alerter.js can read live positions
+module.exports.getLivePositions = function() { return livePositions; };
+module.exports.getLivePositionsUpdated = function() { return livePositionsUpdated; };
+
 app.get('/prices', async function(req, res) {
   var ticker = (req.query.ticker || '').toUpperCase().trim();
   if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
