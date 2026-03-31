@@ -1,5 +1,5 @@
 // finvizScreener.js - Stratum Flow Scout v7.2
-// Public.com quotes -- one ticker at a time, exact contractResolver pattern
+// Public.com for live price + TradeStation for prev close = accurate % change
 
 var fetch = require('node-fetch');
 
@@ -18,6 +18,7 @@ var WATCHLIST = [
   'PLTR','CRM','MRVL',
 ];
 
+// -- GET PUBLIC.COM TOKEN ------------------------------------
 async function getPublicToken() {
   try {
     var secret = getPublicKey();
@@ -33,8 +34,8 @@ async function getPublicToken() {
   } catch(e) { return null; }
 }
 
-// Exact same pattern as contractResolver getPrice -- one ticker at a time
-async function getPrice(ticker, token, accountId) {
+// -- GET LIVE PRICE FROM PUBLIC.COM --------------------------
+async function getLivePrice(ticker, token, accountId) {
   try {
     var res = await fetch(PUB_GATEWAY + '/marketdata/' + accountId + '/quotes', {
       method: 'POST',
@@ -42,27 +43,29 @@ async function getPrice(ticker, token, accountId) {
       body: JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] })
     });
     if (!res.ok) return null;
-    var data  = await res.json();
-    var q     = data && data.quotes && data.quotes[0] ? data.quotes[0] : null;
-    if (!q) return null;
-    // Log raw response for first ticker to debug field names
-    if (ticker === 'SPY') console.log('[FINVIZ] SPY raw:', JSON.stringify(q));
-    var price     = parseFloat(q.last || q.close || 0);
-    // prevDay may be null after hours -- fall back to previousClose or price
-    var prevClose = 0;
-    if (q.prevDay && q.prevDay.close && parseFloat(q.prevDay.close) > 0) {
-      prevClose = parseFloat(q.prevDay.close);
-    } else if (q.previousClose && parseFloat(q.previousClose) > 0) {
-      prevClose = parseFloat(q.previousClose);
-    } else if (q.open && parseFloat(q.open) > 0) {
-      prevClose = parseFloat(q.open);
-    } else {
-      prevClose = price;
-    }
-    var change    = parseFloat((price - prevClose).toFixed(2));
-    var changePct = prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
-    var volume    = parseInt(q.volume || 0);
-    return { ticker: ticker, price: price, change: change, changePct: changePct, volume: volume };
+    var data = await res.json();
+    var q    = data && data.quotes && data.quotes[0] ? data.quotes[0] : null;
+    if (!q || !q.last) return null;
+    return { price: parseFloat(q.last), volume: parseInt(q.volume || 0) };
+  } catch(e) { return null; }
+}
+
+// -- GET PREV CLOSE FROM TRADESTATION -----------------------
+async function getPrevClose(ticker) {
+  try {
+    var ts    = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return null;
+    var res = await fetch('https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=2&sessiontemplate=Default', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) return null;
+    var data = await res.json();
+    var bars = data && data.Bars ? data.Bars : [];
+    if (bars.length < 1) return null;
+    // Use second to last bar (yesterday) if market closed, else last bar
+    var bar = bars.length >= 2 ? bars[bars.length - 2] : bars[bars.length - 1];
+    return parseFloat(bar.Close);
   } catch(e) { return null; }
 }
 
@@ -76,24 +79,24 @@ async function postScreenerCard() {
   var webhook   = getWebhook();
   var accountId = getAccountId();
   if (!webhook)   { console.log('[FINVIZ] No webhook'); return; }
-  if (!accountId) { console.log('[FINVIZ] No PUBLIC_ACCOUNT_ID'); return; }
+  if (!accountId) { console.log('[FINVIZ] No accountId'); return; }
 
   var token = await getPublicToken();
   if (!token) { console.log('[FINVIZ] No token'); return; }
 
-  // Fetch one at a time -- same as contractResolver
   var quotes = [];
   for (var i = 0; i < WATCHLIST.length; i++) {
-    var q = await getPrice(WATCHLIST[i], token, accountId);
-    if (q && q.price > 0) quotes.push(q);
+    var ticker    = WATCHLIST[i];
+    var live      = await getLivePrice(ticker, token, accountId);
+    if (!live || !live.price) continue;
+    var prevClose = await getPrevClose(ticker);
+    var change    = prevClose ? parseFloat((live.price - prevClose).toFixed(2)) : 0;
+    var changePct = prevClose && prevClose > 0 ? parseFloat(((change / prevClose) * 100).toFixed(2)) : 0;
+    quotes.push({ ticker: ticker, price: live.price, change: change, changePct: changePct, volume: live.volume });
   }
 
   console.log('[FINVIZ] Got ' + quotes.length + ' quotes');
-
-  if (quotes.length === 0) {
-    console.log('[FINVIZ] No quotes -- check Railway log for SPY raw response');
-    return;
-  }
+  if (quotes.length === 0) return;
 
   var sorted  = quotes.slice().sort(function(a,b) { return Math.abs(b.changePct) - Math.abs(a.changePct); });
   var bullish = sorted.filter(function(q) { return q.changePct > 0; }).slice(0,5);
@@ -105,9 +108,10 @@ async function postScreenerCard() {
   var time = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
 
   var out = ['MORNING SCREENER -- ' + date, '==============================='];
-  if (spy) out.push('SPY  $' + spy.price + '  ' + (spy.changePct >= 0 ? '+' : '') + spy.changePct + '%  Vol: ' + fmtVol(spy.volume));
-  if (qqq) out.push('QQQ  $' + qqq.price + '  ' + (qqq.changePct >= 0 ? '+' : '') + qqq.changePct + '%  Vol: ' + fmtVol(qqq.volume));
+  if (spy) out.push('SPY   $' + spy.price + '  ' + (spy.changePct >= 0 ? '+' : '') + spy.changePct + '%  Vol: ' + fmtVol(spy.volume));
+  if (qqq) out.push('QQQ   $' + qqq.price + '  ' + (qqq.changePct >= 0 ? '+' : '') + qqq.changePct + '%  Vol: ' + fmtVol(qqq.volume));
   out.push('-------------------------------');
+
   if (bullish.length > 0) {
     out.push('BULLISH TOP MOVERS:');
     bullish.forEach(function(q) {
