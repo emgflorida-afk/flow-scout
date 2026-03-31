@@ -96,19 +96,6 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-
-// -- GRADE BASED CONTRACT SIZING ----------------------------------
-// A+ (8+ points) = 4 contracts -- max conviction
-// A  (6-7 points) = 3 contracts -- high conviction  
-// B  (4-5 points) = 2 contracts -- standard
-// C  (0-3 points) = 1 contract  -- minimum (should skip)
-function getContractsByGrade(grade) {
-  if (grade === 'A+') return 4;
-  if (grade === 'A')  return 3;
-  if (grade === 'B')  return 2;
-  return 1;
-}
-
 // -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
@@ -289,7 +276,7 @@ function buildSpreadCard(resolved, tvData) {
 }
 
 // -- BUILD STRAT CARD ---------------------------------------------
-function buildStratCard(opraSymbol, tvData, resolved) {
+async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   if (!tvData)    tvData    = {};
   if (!resolved)  resolved  = null;
 
@@ -308,8 +295,7 @@ function buildStratCard(opraSymbol, tvData, resolved) {
 
   const mode      = tvData.mode || 'SWING';
   const premium   = tvData.mid  || null;
-  var gradeContracts = grade ? getContractsByGrade(grade) : 1;
-  const sizing    = premium ? resolver.calculatePositionSize(premium, mode, 7000, null, gradeContracts) : null;
+  const sizing    = premium ? resolver.calculatePositionSize(premium, mode) : null;
   const s         = sizing && sizing.viable ? sizing : null;
   const modeLabel = mode === 'DAY' ? 'DAY TRADE' : 'SWING TRADE';
 
@@ -335,11 +321,27 @@ function buildStratCard(opraSymbol, tvData, resolved) {
     'Expiry  ' + expiryFmt + ' (' + dteLabel + ')',
     (tvData.bid && tvData.ask) ? 'Bid/Ask $' + parseFloat(tvData.bid).toFixed(2) + ' / $' + parseFloat(tvData.ask).toFixed(2) : null,
     '-------------------------------',
-    s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost + ' (' + (grade || 'C') + ' size)' : 'Check live premium before entry',
+    s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Check live premium before entry',
     s ? 'Stop    $' + s.stopPrice + ' (loss -$' + s.stopLoss + ')'      : 'Stop    ' + (mode === 'DAY' ? '35' : '40') + '% of premium',
     s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
     s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
     s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.stopLoss + ' max' : 'Risk    2% of $7K max',
+    '-------------------------------',
+    ss ? 'STRUCTURAL LEVELS:' : null,
+    ss ? 'Pivot      $' + ss.pivot + '  -- price ' + (ss.bias === 'BULL' ? 'ABOVE' : 'BELOW') + ' = ' + ss.bias : null,
+    ss ? 'Prev High  $' + ss.prevHigh : null,
+    ss ? 'Prev Low   $' + ss.prevLow : null,
+    ss ? 'R1         $' + ss.r1 : null,
+    ss ? 'S1         $' + ss.s1 : null,
+    ss ? '-------------------------------' : null,
+    ss ? 'SMART STOP:' : null,
+    ss ? 'Underlying $' + ss.underlyingStop + '  <-- if stock hits this = EXIT' : null,
+    ss ? 'Option     $' + ss.optionStop + '  <-- SET THIS AS YOUR STOP' : null,
+    ss ? 'Distance   $' + ss.distance + ' from current price' : null,
+    ss && !ss.approved ? 'WARNING  ' + (ss.skipReason || 'Risk too wide') : null,
+    ss && ss.pivotWarn ? 'PIVOT    ' + ss.pivotWarn : null,
+    ss && ss.approved ? 'Risk     $' + ss.dollarRisk + ' (' + ss.riskPct + '% of account)' : null,
+    ss && ss.approved ? 'Contracts ' + ss.maxContracts + ' max (fits 2% risk)' : null,
     technicalsLines.length > 0 ? '-------------------------------' : null,
   ].concat(technicalsLines).concat([
     edgeLines.length > 0 ? '-------------------------------' : null,
@@ -365,11 +367,19 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     return false;
   }
 
+  // Calculate smart stop using structural levels
+  var ss = null;
+  if (smartStops && parsed && s) {
+    try {
+      ss = await smartStops.getSmartStop(parsed.ticker, type, s.premium, s.delta || 0.45);
+    } catch(e) { console.error('[STOPS] getSmartStop error:', e.message); }
+  }
+
   let card;
   if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
     card = buildSpreadCard(resolved, tvData);
   } else {
-    card = buildStratCard(opraSymbol, tvData, resolved);
+    card = await buildStratCard(opraSymbol, tvData, resolved, ss);
   }
 
   if (!card) return false;
