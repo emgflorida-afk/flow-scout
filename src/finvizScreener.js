@@ -18,23 +18,23 @@ var WATCHLIST = [
 // -- GET PUBLIC.COM ACCESS TOKEN --------------------------------
 async function getPublicToken() {
   try {
-    var key = getPublicKey();
-    if (!key) return null;
-    var res = await fetch('https://api.public.com/userapigateway/account/access-tokens', {
+    var secret = getPublicKey();
+    if (!secret) return null;
+    var res = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + key },
-      body: JSON.stringify({})
+      headers: { 'Content-Type': 'application/json', 'User-Agent': 'stratum-flow-scout' },
+      body: JSON.stringify({ secret: secret, validityInMinutes: 30 })
     });
-    if (!res.ok) return null;
+    if (!res.ok) { console.error('[FINVIZ] Token error:', res.status); return null; }
     var data = await res.json();
-    return data && data.access_token ? data.access_token : null;
-  } catch(e) { return null; }
+    return data && data.accessToken ? data.accessToken : null;
+  } catch(e) { console.error('[FINVIZ] Token error:', e.message); return null; }
 }
 
 // -- GET QUOTE FOR ONE TICKER ----------------------------------
 async function getQuote(ticker, token) {
   try {
-    var res = await fetch('https://api.public.com/userapigateway/market/quote/' + ticker, {
+    var res = await fetch('https://api.public.com/userapigateway/market-data/tickers/' + ticker + '/quote', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     if (!res.ok) return null;
