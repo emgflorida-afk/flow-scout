@@ -1,5 +1,5 @@
 // server.js - Stratum Flow Scout v7.2
-// Complete final version with all modules + AYCE pre-market scanner
+// Complete final -- all modules + AYCE scanner + smart stops
 
 require('dotenv').config();
 var express  = require('express');
@@ -18,12 +18,16 @@ var finviz           = null;
 var capitol          = null;
 var ts               = null;
 var preMarketScanner = null;
+var smartStops       = null;
+var econCalendar     = null;
 
 try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
 try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
 try { capitol          = require('./capitolTrades');    console.log('[CAPITOL] Loaded OK'); } catch(e) { console.log('[CAPITOL] Skipped:', e.message); }
 try { ts               = require('./tradestation');     console.log('[TS] Loaded OK');      } catch(e) { console.log('[TS] Skipped:', e.message); }
 try { preMarketScanner = require('./preMarketScanner'); console.log('[SCANNER] Loaded OK'); } catch(e) { console.log('[SCANNER] Skipped:', e.message); }
+try { smartStops       = require('./smartStops');       console.log('[STOPS] Loaded OK');   } catch(e) { console.log('[STOPS] Skipped:', e.message); }
+try { econCalendar     = require('./economicCalendar'); console.log('[CAL] Loaded OK');     } catch(e) { console.log('[CAL] Skipped:', e.message); }
 
 var app  = express();
 var PORT = process.env.PORT || 3000;
@@ -36,8 +40,6 @@ app.use(function(req, res, next) {
   if (req.method === 'OPTIONS') return res.sendStatus(200);
   next();
 });
-
-// -- ROUTES -------------------------------------------------------
 
 app.get('/', function(req, res) {
   res.json({ status: 'Stratum Flow Scout OK', version: '7.2', time: new Date().toISOString() });
@@ -71,9 +73,9 @@ app.post('/webhook/idea', async function(req, res) {
 
 app.post('/webhook/tradingview', async function(req, res) {
   try {
-    var body      = req.body;
-    var ticker    = (body.ticker || '').toUpperCase().trim();
-    var type      = (body.type   || 'call').toLowerCase().trim();
+    var body       = req.body;
+    var ticker     = (body.ticker || '').toUpperCase().trim();
+    var type       = (body.type   || 'call').toLowerCase().trim();
     var confluence = body.confluence || '0/6';
     var tradeType  = body.tradeType  || 'SWING';
     if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
@@ -128,7 +130,7 @@ app.get('/prices', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// -- GOAL TRACKER -------------------------------------------------
+// -- GOAL TRACKER ------------------------------------------------
 app.get('/goal', function(req, res) {
   if (!goalTracker) return res.json({ status: 'Goal tracker not loaded' });
   res.json(goalTracker.getState());
@@ -143,45 +145,51 @@ app.post('/goal/trade', function(req, res) {
   res.json(goalTracker.getState());
 });
 
-// -- TRADESTATION AUTH --------------------------------------------
-app.get('/ts-auth', function(req, res) {
-  if (!ts) return res.send('<h2>TradeStation module not loaded. Upload tradestation.js to src/ folder.</h2>');
-  console.log('[TS AUTH] Redirecting to TradeStation login...');
-  res.redirect(ts.getLoginUrl());
+// -- SMART STOPS -------------------------------------------------
+app.get('/stops/:ticker', async function(req, res) {
+  if (!smartStops) return res.json({ status: 'Smart stops not loaded' });
+  var ticker  = req.params.ticker.toUpperCase();
+  var type    = (req.query.type    || 'call').toLowerCase();
+  var premium = parseFloat(req.query.premium || '2.00');
+  var delta   = parseFloat(req.query.delta   || '0.45');
+  try {
+    var result = await smartStops.getSmartStop(ticker, type, premium, delta);
+    res.json(result || { error: 'No data available' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- TRADESTATION AUTH ------------------------------------------
+app.get('/ts-auth', function(req, res) {
+  if (!ts) return res.send('<h2>TradeStation module not loaded</h2>');
+  res.redirect(ts.getLoginUrl());
+});
 app.get('/ts-callback', async function(req, res) {
   if (!ts) return res.send('<h2>TradeStation module not loaded</h2>');
   var code = req.query.code;
-  if (!code) return res.send('<h2>Error: No code received from TradeStation</h2>');
+  if (!code) return res.send('<h2>Error: No code received</h2>');
   try {
-    console.log('[TS AUTH] Exchanging code for tokens...');
     var data = await ts.exchangeCode(code);
     if (data.refresh_token) {
       ts.setRefreshToken(data.refresh_token);
-      console.log('[TS AUTH] Success - refresh token obtained');
-      res.send(
-        '<h2>TradeStation Connected!</h2>' +
-        '<p>Copy this refresh token and add to Railway as <strong>TS_REFRESH_TOKEN</strong>:</p>' +
-        '<textarea rows=4 cols=80 onclick=this.select()>' + data.refresh_token + '</textarea>' +
-        '<br><br><p>Done! Token auto-refreshes every 20 minutes.</p>'
-      );
+      res.send('<h2>TradeStation Connected!</h2><p>Add this as TS_REFRESH_TOKEN in Railway:</p><textarea rows=4 cols=80 onclick=this.select()>' + data.refresh_token + '</textarea>');
     } else {
       res.send('<h2>Auth Failed</h2><pre>' + JSON.stringify(data, null, 2) + '</pre>');
     }
   } catch(e) { res.send('<h2>Error: ' + e.message + '</h2>'); }
 });
 
-// -- TEST ROUTES --------------------------------------------------
+// -- TEST ROUTES ------------------------------------------------
 app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'Finviz not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/scanner',  async function(req, res) { if (!preMarketScanner) return res.json({ status: 'Scanner not loaded' }); try { await preMarketScanner.runPreMarketScan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/322',      async function(req, res) { if (!preMarketScanner) return res.json({ status: 'Scanner not loaded' }); try { await preMarketScanner.run322Scan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
-app.get('/test/bullflow', function(req, res) { res.json({ status: 'Bullflow running OK', version: '7.2' }); });
+app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/scanner',  async function(req, res) { if (!preMarketScanner) return res.json({ status: 'not loaded' }); try { await preMarketScanner.runPreMarketScan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/322',      async function(req, res) { if (!preMarketScanner) return res.json({ status: 'not loaded' }); try { await preMarketScanner.run322Scan(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/test/bullflow', function(req, res) { res.json({ status: 'OK', version: '7.2' }); });
+app.get('/test/calendar', async function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); try { await econCalendar.postDailyBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
+app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); res.json(econCalendar.getState()); });
 
-// -- CRONS --------------------------------------------------------
+// -- CRONS ------------------------------------------------------
 
-// 9:15AM ET -- morning brief + screener + goal + capitol + AYCE pre-market scan
+// 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan
 cron.schedule('15 13 * * 1-5', async function() {
   console.log('[CRON] 9:15AM -- morning brief + pre-market scan...');
   try { await alerter.sendMorningBrief(); } catch(e) { console.error('[BRIEF]', e.message); }
@@ -189,6 +197,7 @@ cron.schedule('15 13 * * 1-5', async function() {
   if (goalTracker)      { try { await goalTracker.postGoalUpdate();        } catch(e) { console.error('[GOAL]', e.message); } }
   if (capitol)          { try { await capitol.fetchCongressTrades();       } catch(e) { console.error('[CAPITOL]', e.message); } }
   if (preMarketScanner) { try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); } }
+  if (econCalendar)     { try { await econCalendar.postDailyBrief();          } catch(e) { console.error('[CAL]', e.message); } }
 });
 
 // 9:30AM ET -- market open goal post
@@ -196,7 +205,12 @@ cron.schedule('30 13 * * 1-5', function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
 });
 
-// 10:00AM ET -- 3-2-2 First Live scan (after 9AM candle closes)
+// Every 30 min during market hours -- check for breaking geopolitical news
+cron.schedule('*/30 13-20 * * 1-5', async function() {
+  if (econCalendar) { try { await econCalendar.checkBreakingNews(); } catch(e) { console.error('[CAL]', e.message); } }
+});
+
+// 10:00AM ET -- 3-2-2 First Live scan
 cron.schedule('0 14 * * 1-5', async function() {
   console.log('[CRON] 10:00AM -- 3-2-2 scan...');
   if (preMarketScanner) { try { await preMarketScanner.run322Scan(); } catch(e) { console.error('[322]', e.message); } }
@@ -207,7 +221,7 @@ cron.schedule('0 20 * * 1-5', function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
 });
 
-// -- START --------------------------------------------------------
+// -- START ------------------------------------------------------
 app.listen(PORT, function() {
   console.log('Flow Scout v7.2 running on port ' + PORT);
   bullflow.startBullflowStream();
