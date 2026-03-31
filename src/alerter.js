@@ -171,6 +171,17 @@ function scoreFlow(flowData) {
   return { score, flags, label, isHighConviction: score >= 4 };
 }
 
+// -- GRADE STRAT ALERT --------------------------------------------
+function gradeStratAlert(confluence, hasFlow) {
+  var score = parseInt((confluence || '0').split('/')[0]) || 0;
+  if (score >= 6) return 'A+';
+  if (score >= 5 && hasFlow) return 'A';
+  if (score >= 5) return 'A';
+  if (score >= 4) return 'B';
+  return 'C';
+}
+
+
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
@@ -312,11 +323,19 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   const edgeLines       = resolved ? buildEdgeSection(resolved) : [];
   const technicalsLines = buildTechnicalsSection(tvData);
 
+  const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
+  const grade = gradeStratAlert(tvData.confluence, false);
+  const gradeLabel = grade === 'A+' ? 'GRADE  A+ -- EXECUTE IMMEDIATELY'
+                   : grade === 'A'  ? 'GRADE  A  -- HIGH PRIORITY'
+                   : grade === 'B'  ? 'GRADE  B  -- WAIT FOR CONFIRMATION'
+                   : 'GRADE  C  -- MONITOR ONLY';
+
   const lines = [
-    modeLabel + ' -- ' + dteLabel,
+    modeLabel + ' -- ' + dteLabel + '  [' + grade + ']',
     ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
     '===============================',
     confluence ? 'Confluence  ' + confluence : null,
+    'Grade   ' + gradeLabel,
     tfLine     ? 'Bias    '     + tfLine     : null,
     '-------------------------------',
     'Strike  $' + strike + ' -- ATM via Public.com',
@@ -400,15 +419,23 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     const key = parsed.ticker + ':' + parsed.type;
     recentStratTickers.set(key, Date.now());
     setTimeout(function() { recentStratTickers.delete(key); }, 30 * 60 * 1000);
-    if (recentFlowTickers.has(key)) {
+
+    const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
+    const hasFlow = recentFlowTickers.has(key);
+    const isConviction = confluenceScore >= 5 || (confluenceScore >= 4 && hasFlow);
+
+    if (isConviction) {
+      var convLabel = confluenceScore >= 6 ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
+                    : hasFlow              ? 'A  CONVICTION TRADE -- FLOW CONFIRMED'
+                    : 'A  CONVICTION TRADE -- 5/6 STRAT';
       await sendToChannel('conviction',
         card.text
-          .replace('SPREAD TRADE',  'CONVICTION SPREAD')
-          .replace('SWING TRADE',   'CONVICTION TRADE')
-          .replace('DAY TRADE',     'CONVICTION TRADE'),
+          .replace('SWING TRADE',  convLabel)
+          .replace('DAY TRADE',    convLabel)
+          .replace('SPREAD TRADE', convLabel),
         card.ticker
       );
-      console.log('[CONVICTION] Both signals on ' + parsed.ticker + ' OK');
+      console.log('[CONVICTION] ' + parsed.ticker + ' ' + confluenceScore + '/6 grade fired to #conviction-trades');
     }
   }
   return true;
