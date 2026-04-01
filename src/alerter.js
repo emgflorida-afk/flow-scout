@@ -330,32 +330,33 @@ function buildSpreadCard(resolved, tvData) {
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
     (function() {
       var now = new Date();
-      var etHour = now.getUTCHours() - 4;
+      var etOffset = -4; // ET = UTC-4 (EDT)
+      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
       var etMin  = now.getUTCMinutes();
       var etTime = etHour * 60 + etMin;
-      var PRIME_END  = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;      // 12:00PM
-      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
-      var cancelBy;
-      if (etTime >= LATE_ENTRY) {
-        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      var PRIME_END   = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;       // 12:00PM
+      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
+      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
+
+      function formatTime(totalMin) {
+        var h = Math.floor(totalMin / 60) % 24;
+        var m = totalMin % 60;
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
+        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
+      }
+
+      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
+        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
       } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
       } else if (etTime >= PRIME_END) {
-        var cancelMin = etTime + 90;
-        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+        var cancelMin = Math.min(etTime + 60, CAUTION_END);
+        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
       } else {
         var cancelMin = Math.min(etTime + 90, PRIME_END);
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
       }
     })(),
   ]).filter(function(l) { return l !== null; });
@@ -450,32 +451,33 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
     (function() {
       var now = new Date();
-      var etHour = now.getUTCHours() - 4;
+      var etOffset = -4; // ET = UTC-4 (EDT)
+      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
       var etMin  = now.getUTCMinutes();
       var etTime = etHour * 60 + etMin;
-      var PRIME_END  = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;      // 12:00PM
-      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
-      var cancelBy;
-      if (etTime >= LATE_ENTRY) {
-        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      var PRIME_END   = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;       // 12:00PM
+      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
+      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
+
+      function formatTime(totalMin) {
+        var h = Math.floor(totalMin / 60) % 24;
+        var m = totalMin % 60;
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
+        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
+      }
+
+      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
+        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
       } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
       } else if (etTime >= PRIME_END) {
-        var cancelMin = etTime + 90;
-        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+        var cancelMin = Math.min(etTime + 60, CAUTION_END);
+        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
       } else {
         var cancelMin = Math.min(etTime + 90, PRIME_END);
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
       }
     })(),
   ]).filter(function(l) { return l !== null; });
@@ -609,32 +611,33 @@ async function sendFlowAlert(opraSymbol, flowData) {
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
     (function() {
       var now = new Date();
-      var etHour = now.getUTCHours() - 4;
+      var etOffset = -4; // ET = UTC-4 (EDT)
+      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
       var etMin  = now.getUTCMinutes();
       var etTime = etHour * 60 + etMin;
-      var PRIME_END  = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;      // 12:00PM
-      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
-      var cancelBy;
-      if (etTime >= LATE_ENTRY) {
-        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      var PRIME_END   = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;       // 12:00PM
+      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
+      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
+
+      function formatTime(totalMin) {
+        var h = Math.floor(totalMin / 60) % 24;
+        var m = totalMin % 60;
+        var ampm = h >= 12 ? 'PM' : 'AM';
+        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
+        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
+      }
+
+      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
+        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
       } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
       } else if (etTime >= PRIME_END) {
-        var cancelMin = etTime + 90;
-        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+        var cancelMin = Math.min(etTime + 60, CAUTION_END);
+        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
       } else {
         var cancelMin = Math.min(etTime + 90, PRIME_END);
-        var ch = Math.floor(cancelMin / 60);
-        var cm = cancelMin % 60;
-        var ampm = ch >= 12 ? 'PM' : 'AM';
-        var h12 = ch > 12 ? ch - 12 : ch;
-        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
       }
     })(),
   ]).filter(function(l) { return l !== null; });
