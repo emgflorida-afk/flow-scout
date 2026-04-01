@@ -328,6 +328,36 @@ function buildSpreadCard(resolved, tvData) {
     '-------------------------------',
     'Hold    1-3 days max',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
+    (function() {
+      var now = new Date();
+      var etHour = now.getUTCHours() - 4;
+      var etMin  = now.getUTCMinutes();
+      var etTime = etHour * 60 + etMin;
+      var PRIME_END  = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;      // 12:00PM
+      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
+      var cancelBy;
+      if (etTime >= LATE_ENTRY) {
+        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      } else if (etTime >= CAUTION_END) {
+        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+      } else if (etTime >= PRIME_END) {
+        var cancelMin = etTime + 90;
+        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+      } else {
+        var cancelMin = Math.min(etTime + 90, PRIME_END);
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+      }
+    })(),
   ]).filter(function(l) { return l !== null; });
 
   return { text: lines.join('\n'), ticker: ticker };
@@ -418,6 +448,36 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     mode === 'DAY' ? 'Hold    Exit same day by 3:30PM'     : 'Hold    1-3 days max',
     mode === 'DAY' ? 'Window  10AM-11:30AM | 3PM-3:30PM'  : 'Window  9:45AM-3:30PM ET',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
+    (function() {
+      var now = new Date();
+      var etHour = now.getUTCHours() - 4;
+      var etMin  = now.getUTCMinutes();
+      var etTime = etHour * 60 + etMin;
+      var PRIME_END  = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;      // 12:00PM
+      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
+      var cancelBy;
+      if (etTime >= LATE_ENTRY) {
+        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      } else if (etTime >= CAUTION_END) {
+        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+      } else if (etTime >= PRIME_END) {
+        var cancelMin = etTime + 90;
+        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+      } else {
+        var cancelMin = Math.min(etTime + 90, PRIME_END);
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+      }
+    })(),
   ]).filter(function(l) { return l !== null; });
 
   return { text: lines.join('\n'), ticker: ticker };
@@ -547,6 +607,36 @@ async function sendFlowAlert(opraSymbol, flowData) {
     '-------------------------------',
     'Watch for Strat confirmation',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
+    (function() {
+      var now = new Date();
+      var etHour = now.getUTCHours() - 4;
+      var etMin  = now.getUTCMinutes();
+      var etTime = etHour * 60 + etMin;
+      var PRIME_END  = 11 * 60;       // 11:00AM
+      var CAUTION_END = 12 * 60;      // 12:00PM
+      var LATE_ENTRY = 15 * 60 + 30; // 3:30PM
+      var cancelBy;
+      if (etTime >= LATE_ENTRY) {
+        return 'Cancel By  DO NOT ENTER -- after 3:30PM';
+      } else if (etTime >= CAUTION_END) {
+        return 'Cancel By  SKIP -- choppy hours, wait for tomorrow';
+      } else if (etTime >= PRIME_END) {
+        var cancelMin = etTime + 90;
+        if (cancelMin > CAUTION_END) cancelMin = CAUTION_END;
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET (CAUTION -- past prime time)';
+      } else {
+        var cancelMin = Math.min(etTime + 90, PRIME_END);
+        var ch = Math.floor(cancelMin / 60);
+        var cm = cancelMin % 60;
+        var ampm = ch >= 12 ? 'PM' : 'AM';
+        var h12 = ch > 12 ? ch - 12 : ch;
+        return 'Cancel By  ' + h12 + ':' + (cm < 10 ? '0' : '') + cm + ampm + ' ET -- PRIME TIME';
+      }
+    })(),
   ]).filter(function(l) { return l !== null; });
 
   await sendToChannel('flow', lines.join('\n'), parsed.ticker);
