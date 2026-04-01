@@ -45,34 +45,69 @@ async function getSPYPrice() {
   }
 }
 
-// Get 6HR candle direction
-// 6HR candles complete at: 4AM, 10AM, 4PM, 10PM ET
+// Get direction using Daily bars from TradeStation
+// TS MCP only supports 5-min intraday bars
+// So we use Daily close vs prev close + prev day range
+// Pine Script handles real 6HR/4HR on TradingView
+// This gives us the same directional bias for the agent
 async function get6HRBias(token) {
   try {
-    if (!token) return null;
-    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Minute&interval=360&barsback=3&sessiontemplate=Default';
+    if (!token) {
+      // Try getting token ourselves
+      var ts = require('./tradestation');
+      token  = await ts.getAccessToken();
+      if (!token) return null;
+    }
+
+    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.log('[MACRO] Daily bars failed:', res.status);
+      return null;
+    }
     var data = await res.json();
     var bars = data.Bars || data.bars || [];
     if (bars.length < 2) return null;
 
-    var current  = bars[bars.length - 1];
-    var previous = bars[bars.length - 2];
+    var curr = bars[bars.length - 1];
+    var prev = bars[bars.length - 2];
 
-    var currClose = parseFloat(current.Close  || current.close  || 0);
-    var currOpen  = parseFloat(current.Open   || current.open   || 0);
-    var prevHigh  = parseFloat(previous.High  || previous.high  || 0);
-    var prevLow   = parseFloat(previous.Low   || previous.low   || 0);
+    var currClose = parseFloat(curr.Close || 0);
+    var currOpen  = parseFloat(curr.Open  || 0);
+    var prevHigh  = parseFloat(prev.High  || 0);
+    var prevLow   = parseFloat(prev.Low   || 0);
+    var prevClose = parseFloat(prev.Close || 0);
 
-    // 6HR candle type
-    var is2U = currClose > prevHigh; // broke above prev 6HR high
-    var is2D = currClose < prevLow;  // broke below prev 6HR low
-    var bullishCandle = currClose > currOpen;
-    var bearishCandle = currClose < currOpen;
+    // Primary: 2UP or 2DOWN vs prev day
+    var is2U = currClose > prevHigh;    // above prev high = strong bullish
+    var is2D = currClose < prevLow;     // below prev low  = strong bearish
 
-    if (is2U || bullishCandle) return 'BULLISH';
-    if (is2D || bearishCandle) return 'BEARISH';
+    // Secondary: direction of current candle
+    var bullCandle = currClose > currOpen && currClose > prevClose;
+    var bearCandle = currClose < currOpen && currClose < prevClose;
+
+    // SPY $645 threshold -- hard rule
+    var spyAbove645 = currClose > 645;
+    var spyBelow630 = currClose < 630;
+
+    if (is2U || (spyAbove645 && bullCandle)) {
+      console.log('[MACRO] 6HR proxy: BULLISH -- SPY $' + currClose + ' close>prevHigh=$' + prevHigh);
+      return 'BULLISH';
+    }
+    if (is2D || (spyBelow630 && bearCandle)) {
+      console.log('[MACRO] 6HR proxy: BEARISH -- SPY $' + currClose + ' close<prevLow=$' + prevLow);
+      return 'BEARISH';
+    }
+    if (bullCandle) {
+      console.log('[MACRO] 6HR proxy: BULLISH -- bull candle $' + currClose);
+      return 'BULLISH';
+    }
+    if (bearCandle) {
+      console.log('[MACRO] 6HR proxy: BEARISH -- bear candle $' + currClose);
+      return 'BEARISH';
+    }
+
+    console.log('[MACRO] 6HR proxy: MIXED -- SPY $' + currClose);
     return 'MIXED';
   } catch(e) {
     console.log('[MACRO] 6HR bias error:', e.message);
