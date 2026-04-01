@@ -437,7 +437,8 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     ss ? 'S1         $' + ss.s1 : null,
     ss ? '-------------------------------' : null,
     ss ? 'SMART STOP:' : null,
-    ss ? 'Underlying $' + ss.underlyingStop + '  <-- if stock hits this = EXIT' : null,
+    ss ? 'Stop Type  ' + ss.stopType + ' (' + ss.why + ')' : null,
+    ss && ss.underlyingStop ? 'Underlying $' + ss.underlyingStop + '  <-- if stock hits this = EXIT' : null,
     ss ? 'Option     $' + ss.optionStop + '  <-- SET THIS AS YOUR STOP' : null,
     ss ? 'Distance   $' + ss.distance + ' from current price' : null,
     ss && !ss.approved ? 'WARNING  ' + (ss.skipReason || 'Risk too wide') : null,
@@ -526,7 +527,9 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
           parsedForStop.ticker,
           parsedForStop.type,
           tvData.mid,
-          tvData.delta || 0.45
+          tvData.delta || 0.45,
+          parseFloat(tvData.adx) || null,
+          parseFloat(tvData.atrPct) || null
         );
       }
     } catch(e) { console.error('[STOPS] getSmartStop error:', e.message); }
