@@ -11,11 +11,40 @@ var CONV_WEBHOOK  = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
 // -- SCAN TICKERS ------------------------------------------------
 // Core indices + tech + oil tickers
 var SCAN_TICKERS = [
-  'QQQ', 'SPY', 'IWM',
-  'NVDA', 'TSLA', 'META', 'AAPL', 'AMZN', 'MSFT', 'GOOGL',
-  'USO', 'XOM', 'OXY', 'CVX', 'COP', 'MRO',
-  'SCO', 'UCO', 'XLE', 'OIH',
+  // Indices -- 1HR entry
+  'SPY', 'QQQ', 'IWM',
+  // Tech -- always moving
+  'NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META', 'MRVL', 'AVGO', 'COIN',
+  // Finance
+  'JPM', 'GS', 'MS', 'WFC',
+  // Defense -- NATO news
+  'LMT', 'RTX', 'NOC', 'GD', 'LDOS', 'BAH',
+  // Airlines -- oil dropping
+  'DAL', 'UAL', 'LUV', 'AAL',
+  // Oil/Energy -- monitor direction
+  'XOM', 'CVX', 'OXY', 'XLE',
 ];
+
+// Pre-market flow threshold -- lower to catch setups early
+var PRE_MARKET_MIN_FLOW = 50000;
+
+// -- 6HR DIRECTION CHECK ----------------------------------------
+// 6HR candles complete at: 4AM, 10AM, 4PM, 10PM ET
+// Used to filter cards BEFORE they fire
+function get6HRDirection(bars6HR) {
+  if (!bars6HR || bars6HR.length < 2) return 'MIXED';
+  var curr = bars6HR[bars6HR.length - 1];
+  var prev = bars6HR[bars6HR.length - 2];
+  var close = parseFloat(curr.Close || 0);
+  var open  = parseFloat(curr.Open  || 0);
+  var prevH = parseFloat(prev.High  || 0);
+  var prevL = parseFloat(prev.Low   || 0);
+  if (close > open && close > prevH) return 'BULLISH';
+  if (close < open && close < prevL) return 'BEARISH';
+  if (close > open) return 'BULLISH';
+  if (close < open) return 'BEARISH';
+  return 'MIXED';
+}
 
 // -- CANDLE TYPE DETECTION ---------------------------------------
 function getCandleType(candle, prev) {

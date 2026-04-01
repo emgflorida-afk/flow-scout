@@ -36,6 +36,15 @@ try { positionOffset   = require('./positionOffset');   console.log('[OFFSET] Lo
 var tradingJournal = null;
 try { tradingJournal = require('./tradingJournal'); console.log('[JOURNAL] Loaded OK'); } catch(e) { console.log('[JOURNAL] Skipped:', e.message); }
 
+var macroFilter = null;
+try { macroFilter = require('./macroFilter'); console.log('[MACRO] Loaded OK'); } catch(e) { console.log('[MACRO] Skipped:', e.message); }
+
+var executeNow = null;
+try { executeNow = require('./executeNow'); console.log('[EXECUTE-NOW] Loaded OK'); } catch(e) { console.log('[EXECUTE-NOW] Skipped:', e.message); }
+
+var holdLock = null;
+try { holdLock = require('./holdLock'); console.log('[HOLD-LOCK] Loaded OK'); } catch(e) { console.log('[HOLD-LOCK] Skipped:', e.message); }
+
 var app  = express();
 var PORT = process.env.PORT || 3000;
 
@@ -256,6 +265,47 @@ app.get('/journal', function(req, res) {
   res.json(tradingJournal.getState());
 });
 
+// -- MACRO FILTER WEBHOOK ---------------------------------------
+app.post('/webhook/macro', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    var bias = req.body.bias;
+    if (macroFilter && bias) {
+      macroFilter.setManualBias(bias);
+      console.log('[MACRO] Manual bias set to:', bias);
+    }
+    res.json({ status: 'OK', bias: bias });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- HOLD LOCK WEBHOOK -------------------------------------------
+app.post('/webhook/hold', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    var { ticker, type, holdUntil, reason, override } = req.body;
+    if (override && holdLock) {
+      holdLock.overrideHold(ticker, type);
+      return res.json({ status: 'OK', action: 'override', ticker, type });
+    }
+    if (holdLock && ticker && type && holdUntil) {
+      holdLock.addHold(ticker, type, holdUntil, reason);
+    }
+    res.json({ status: 'OK', holds: holdLock ? holdLock.getActiveHolds() : [] });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- EXECUTE NOW RESET -------------------------------------------
+app.post('/webhook/reset-day', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (executeNow) executeNow.resetDailySetups();
+    res.json({ status: 'OK', message: 'Daily setups reset' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- TEST ROUTES ------------------------------------------------
 app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
@@ -267,6 +317,12 @@ app.get('/test/calendar', async function(req, res) { if (!econCalendar) return r
 app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); res.json(econCalendar.getState()); });
 
 // -- CRONS ------------------------------------------------------
+
+// 12:00AM ET -- reset daily execute-now counter
+cron.schedule('0 4 * * 1-5', function() {
+  if (executeNow) executeNow.resetDailySetups();
+  console.log('[EXECUTE-NOW] Daily reset at midnight');
+});
 
 // 4:00AM ET -- AYCE pre-market scan (catches overnight 12HR Miyagi setups)
 cron.schedule('0 8 * * 1-5', async function() {

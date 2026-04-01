@@ -8,8 +8,14 @@
 const fetch    = require('node-fetch');
 const resolver = require('./contractResolver');
 const calendar    = require('./economicCalendar');
-let smartStops = null;
-try { smartStops = require('./smartStop'); console.log('[ALERTER] smartStop loaded OK'); } catch(e) { console.log('[ALERTER] smartStop not loaded:', e.message); }
+let smartStops   = null;
+let macroFilter  = null;
+let executeNow   = null;
+let holdLock     = null;
+try { smartStops  = require('./smartStop');    console.log('[ALERTER] smartStop loaded OK');   } catch(e) { console.log('[ALERTER] smartStop not loaded:', e.message); }
+try { macroFilter = require('./macroFilter');  console.log('[ALERTER] macroFilter loaded OK'); } catch(e) { console.log('[ALERTER] macroFilter not loaded:', e.message); }
+try { executeNow  = require('./executeNow');   console.log('[ALERTER] executeNow loaded OK');  } catch(e) { console.log('[ALERTER] executeNow not loaded:', e.message); }
+try { holdLock    = require('./holdLock');     console.log('[ALERTER] holdLock loaded OK');    } catch(e) { console.log('[ALERTER] holdLock not loaded:', e.message); }
 
 const WEBHOOKS = {
   strat:      process.env.DISCORD_WEBHOOK_URL,
@@ -400,7 +406,8 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   const technicalsLines = buildTechnicalsSection(tvData);
 
   const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
-  const grade = gradeStratAlert(tvData.confluence, false);
+  const flowConfirmed = tvData.hasFlow || false;
+  const grade = gradeStratAlert(tvData.confluence, flowConfirmed);
   const gradeLabel = grade === 'A+' ? 'GRADE  A+ -- EXECUTE IMMEDIATELY'
                    : grade === 'A'  ? 'GRADE  A  -- HIGH PRIORITY'
                    : grade === 'B'  ? 'GRADE  B  -- WAIT FOR CONFIRMATION'
@@ -516,6 +523,18 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       );
       return false;
     }
+  }
+
+  // -- MACRO FILTER -- 6HR is the boss --
+  if (macroFilter) {
+    try {
+      var macro = await macroFilter.getMacroBias();
+      var blocked = macroFilter.shouldBlock(tvData.type || (opraSymbol.includes('C') ? 'call' : 'put'), macro);
+      if (blocked.block) {
+        console.log('[MACRO-FILTER] Blocked:', blocked.reason);
+        return false;
+      }
+    } catch(e) { console.error('[MACRO-FILTER]', e.message); }
   }
 
   var ss = null;
