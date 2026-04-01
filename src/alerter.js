@@ -9,7 +9,7 @@ const fetch    = require('node-fetch');
 const resolver = require('./contractResolver');
 const calendar    = require('./economicCalendar');
 let smartStops = null;
-try { smartStops = require('./smartStops'); } catch(e) { console.log('[ALERTER] smartStops not loaded:', e.message); }
+try { smartStops = require('./smartStop'); console.log('[ALERTER] smartStop loaded OK'); } catch(e) { console.log('[ALERTER] smartStop not loaded:', e.message); }
 
 const WEBHOOKS = {
   strat:      process.env.DISCORD_WEBHOOK_URL,
