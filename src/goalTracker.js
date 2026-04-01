@@ -58,4 +58,20 @@ async function postGoalUpdate() {
     console.log('[GOAL] Posted -- $' + state.totalPnL.toFixed(2));
   } catch(e) { console.error('[GOAL] Error:', e.message); }
 }
-module.exports = { recordTrade: recordTrade, getState: getState, postGoalUpdate: postGoalUpdate };
+// -- UPDATE FROM CLAUDE MCP BRIDGE ----------------------------
+// Called when Claude pushes realized P&L via webhook
+function updateFromMCP(realizedPnL, trades) {
+  resetIfNewDay();
+  state.totalPnL = parseFloat(realizedPnL) || 0;
+  if (trades && Array.isArray(trades)) {
+    state.trades = trades;
+  }
+  if (state.totalPnL >= GOAL)      { state.goalHit = true;  state.status = 'GOAL HIT'; }
+  else if (state.totalPnL <= MAX_LOSS) { state.stopHit = true; state.status = 'STOP TRADING'; }
+  else if (state.trades.length >= MAX_TRADES) { state.status = 'MAX TRADES'; }
+  else if (state.totalPnL > 0)    { state.status = 'IN PROFIT'; }
+  else                             { state.status = 'WAIT'; }
+  console.log('[GOAL] Updated from MCP -- $' + state.totalPnL.toFixed(2) + ' / $' + GOAL);
+}
+
+module.exports = { recordTrade: recordTrade, getState: getState, postGoalUpdate: postGoalUpdate, updateFromMCP: updateFromMCP };

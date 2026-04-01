@@ -176,6 +176,24 @@ app.post('/goal/trade', function(req, res) {
   res.json(goalTracker.getState());
 });
 
+// -- CLAUDE MCP GOAL BRIDGE ------------------------------------
+// Claude pushes realized P&L here via MCP after each trade closes
+app.post('/webhook/goal', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    var realizedPnL = req.body.realizedPnL || 0;
+    var trades      = req.body.trades || [];
+    if (!goalTracker) return res.json({ status: 'Goal tracker not loaded' });
+    goalTracker.updateFromMCP(realizedPnL, trades);
+    goalTracker.postGoalUpdate().catch(console.error);
+    console.log('[GOAL] Updated from Claude MCP -- $' + realizedPnL);
+    res.json({ status: 'OK', realizedPnL: realizedPnL, state: goalTracker.getState() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- SMART STOPS -------------------------------------------------
 app.get('/stops/:ticker', async function(req, res) {
   if (!smartStops) return res.json({ status: 'Smart stops not loaded' });
