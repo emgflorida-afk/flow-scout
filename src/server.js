@@ -45,6 +45,27 @@ try { executeNow = require('./executeNow'); console.log('[EXECUTE-NOW] Loaded OK
 var holdLock = null;
 try { holdLock = require('./holdLock'); console.log('[HOLD-LOCK] Loaded OK'); } catch(e) { console.log('[HOLD-LOCK] Skipped:', e.message); }
 
+var autoMorning = null;
+try { autoMorning = require('./autoMorning'); console.log('[AUTO-MORNING] Loaded OK'); } catch(e) { console.log('[AUTO-MORNING] Skipped:', e.message); }
+
+var autoJournal = null;
+try { autoJournal = require('./autoJournal'); console.log('[AUTO-JOURNAL] Loaded OK'); } catch(e) { console.log('[AUTO-JOURNAL] Skipped:', e.message); }
+
+var winTracker = null;
+try { winTracker = require('./winTracker'); console.log('[WIN-TRACKER] Loaded OK'); } catch(e) { console.log('[WIN-TRACKER] Skipped:', e.message); }
+
+var simMode = null;
+try { simMode = require('./simMode'); console.log('[SIM-MODE] Loaded OK'); } catch(e) { console.log('[SIM-MODE] Skipped:', e.message); }
+
+// MASTER AUTONOMOUS AGENT -- the brain of the system
+var stratumAgent = null;
+try {
+  stratumAgent = require('./stratumAgent');
+  stratumAgent.startCrons(); // start all autonomous crons
+  stratumAgent.refreshState(); // load initial state on startup
+  console.log('[AGENT] Stratum Agent LIVE -- Claude autonomous trading enabled');
+} catch(e) { console.log('[AGENT] Skipped:', e.message); }
+
 var app  = express();
 var PORT = process.env.PORT || 3000;
 
@@ -306,6 +327,90 @@ app.post('/webhook/reset-day', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- WIN RATE ENDPOINT
+app.get('/win-rate', async function(req, res) {
+  if (winTracker) {
+    res.json({ stats: winTracker.getStats(), winRate: winTracker.getWinRate(), report: winTracker.buildReport() });
+  } else {
+    res.json({ status: 'winTracker not loaded' });
+  }
+});
+
+// -- SIM MODE ENDPOINTS
+app.post('/sim/enable', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (simMode) {
+      var result = await simMode.enableSim();
+      if (stratumAgent) stratumAgent.setManualBias('MIXED');
+      res.json({ status: 'OK', message: 'SIM mode enabled -- trading on ' + simMode.SIM_ACCOUNT, result });
+    } else {
+      res.json({ status: 'simMode not loaded' });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/sim/disable', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (simMode) {
+      var result = await simMode.disableSim();
+      res.json({ status: 'OK', message: 'SIM mode disabled -- back to live account', result });
+    } else {
+      res.json({ status: 'simMode not loaded' });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/sim/status', async function(req, res) {
+  try {
+    if (simMode) {
+      var card = await simMode.buildSimStatus();
+      res.json({ status: 'OK', card });
+    } else {
+      res.json({ status: 'simMode not loaded' });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- AGENT STATE ENDPOINT
+app.get('/agent/state', function(req, res) {
+  if (stratumAgent) {
+    res.json(stratumAgent.getState());
+  } else {
+    res.json({ status: 'agent not loaded' });
+  }
+});
+
+// -- AUTONOMOUS TRIGGERS ----------------------------------------
+app.post('/trigger/morning', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (autoMorning) {
+      var result = await autoMorning.runAutoMorning();
+      res.json({ status: 'OK', result });
+    } else {
+      res.json({ status: 'autoMorning not loaded' });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/trigger/journal', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (autoJournal) {
+      var card = await autoJournal.writeAutoJournal();
+      res.json({ status: 'OK', card });
+    } else {
+      res.json({ status: 'autoJournal not loaded' });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- TEST ROUTES ------------------------------------------------
 app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
@@ -329,6 +434,16 @@ cron.schedule('0 8 * * 1-5', async function() {
   console.log('[CRON] 4:00AM -- AYCE pre-market scan...');
   if (preMarketScanner) {
     try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); }
+  }
+});
+
+// 7:30AM ET -- AUTONOMOUS MORNING ROUTINE
+// Pulls live positions, sets 6HR bias, resets goal, posts brief
+// Zero manual steps needed
+cron.schedule('30 11 * * 1-5', async function() {
+  console.log('[CRON] 7:30AM -- Auto morning routine...');
+  if (autoMorning) {
+    try { await autoMorning.runAutoMorning(); } catch(e) { console.error('[AUTO-MORNING]', e.message); }
   }
 });
 
@@ -367,10 +482,15 @@ cron.schedule('0 14 * * 1-5', async function() {
   if (preMarketScanner) { try { await preMarketScanner.run322Scan(); } catch(e) { console.error('[322]', e.message); } }
 });
 
-// 4:00PM ET -- end of day goal post + journal
+// 4:00PM ET -- AUTONOMOUS EOD JOURNAL
+// Pulls live P&L, positions, orders from TradeStation
+// Posts full journal to Discord -- zero manual steps
 cron.schedule('0 20 * * 1-5', async function() {
+  console.log('[CRON] 4:00PM -- Auto EOD journal...');
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
-  if (tradingJournal) {
+  if (autoJournal) {
+    try { await autoJournal.writeAutoJournal(); } catch(e) { console.error('[AUTO-JOURNAL]', e.message); }
+  } else if (tradingJournal) {
     try { await tradingJournal.writeJournal({}); } catch(e) { console.error('[JOURNAL]', e.message); }
   }
 });
