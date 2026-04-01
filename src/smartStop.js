@@ -7,35 +7,39 @@
 
 var fetch = require('node-fetch');
 
-var POLYGON_KEY = process.env.POLYGON_API_KEY;
 var PUBLIC_KEY  = process.env.PUBLIC_API_KEY;
 
 // ================================================================
-// STEP 1 -- Get prev day HIGH and LOW from Polygon
+// STEP 1 -- Get today's HIGH and LOW from Public.com snapshot
 // Used for structural stop level
-// Calls → stop = prev day LOW
-// Puts  → stop = prev day HIGH
+// Calls  stop = today's LOW
+// Puts   stop = today's HIGH
 // ================================================================
 async function getPrevDayOHLC(ticker) {
   try {
-    var url = 'https://api.polygon.io/v2/aggs/ticker/' + ticker + '/prev?adjusted=true&apiKey=' + POLYGON_KEY;
-    var res  = await fetch(url);
+    var token = await getPublicToken();
+    if (!token) return null;
+    var accountId = process.env.PUBLIC_ACCOUNT_ID || '5OF64813';
+    var url = 'https://api.public.com/userapigateway/market-data/' + accountId + '/quotes?symbols=' + ticker;
+    var res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
     if (!res.ok) {
-      console.log('[SMARTSTOP] Polygon prev day failed for ' + ticker + ': ' + res.status);
+      console.log('[SMARTSTOP] Public.com quote failed for ' + ticker + ': ' + res.status);
       return null;
     }
     var data = await res.json();
-    if (!data.results || data.results.length === 0) return null;
-    var bar = data.results[0];
+    var quote = data.quotes && data.quotes[0];
+    if (!quote) return null;
+    console.log('[SMARTSTOP] Public.com quote OK for ' + ticker + ' high=' + quote.high + ' low=' + quote.low);
     return {
-      open:  parseFloat(bar.o),
-      high:  parseFloat(bar.h),
-      low:   parseFloat(bar.l),
-      close: parseFloat(bar.c),
-      vol:   bar.v,
+      open:  parseFloat(quote.open  || quote.lastPrice || 0),
+      high:  parseFloat(quote.high  || quote.lastPrice || 0),
+      low:   parseFloat(quote.low   || quote.lastPrice || 0),
+      close: parseFloat(quote.lastPrice || 0),
     };
   } catch(e) {
-    console.log('[SMARTSTOP] Polygon error:', e.message);
+    console.log('[SMARTSTOP] Public.com OHLC error:', e.message);
     return null;
   }
 }
