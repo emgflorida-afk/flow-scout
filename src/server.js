@@ -54,6 +54,9 @@ try { autoJournal = require('./autoJournal'); console.log('[AUTO-JOURNAL] Loaded
 var winTracker = null;
 try { winTracker = require('./winTracker'); console.log('[WIN-TRACKER] Loaded OK'); } catch(e) { console.log('[WIN-TRACKER] Skipped:', e.message); }
 
+var ideaIngestor = null;
+try { ideaIngestor = require('./ideaIngestor'); console.log('[IDEA] Loaded OK'); } catch(e) { console.log('[IDEA] Skipped:', e.message); }
+
 var simMode = null;
 try { simMode = require('./simMode'); console.log('[SIM-MODE] Loaded OK'); } catch(e) { console.log('[SIM-MODE] Skipped:', e.message); }
 
@@ -324,6 +327,42 @@ app.post('/webhook/reset-day', function(req, res) {
     if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
     if (executeNow) executeNow.resetDailySetups();
     res.json({ status: 'OK', message: 'Daily setups reset' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- IDEA INGESTOR ENDPOINTS ------------------------------------
+// POST /webhook/idea -- submit a trade idea for validation
+// GET  /idea/watchlist -- see all ideas being monitored
+// DELETE /idea/remove -- remove an idea from watchlist
+app.post('/webhook/idea', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!ideaIngestor) return res.json({ status: 'ideaIngestor not loaded' });
+    var idea   = req.body;
+    var result = await ideaIngestor.ingestIdea(idea);
+    res.json({ status: 'OK', result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/idea/watchlist', function(req, res) {
+  if (ideaIngestor) {
+    res.json({ status: 'OK', watchlist: ideaIngestor.getWatchlist() });
+  } else {
+    res.json({ status: 'ideaIngestor not loaded' });
+  }
+});
+
+app.post('/idea/remove', function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (ideaIngestor) {
+      var removed = ideaIngestor.removeIdea(req.body.ticker, req.body.triggerPrice);
+      res.json({ status: 'OK', removed });
+    } else {
+      res.json({ status: 'ideaIngestor not loaded' });
+    }
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
