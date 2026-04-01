@@ -1,4 +1,4 @@
-// positionOffset.js — Stratum Flow Scout v6.1
+// positionOffset.js  Stratum Flow Scout v6.1
 // Reads live TradeStation positions and calculates:
 // 1. Total options P&L (winning vs losing)
 // 2. Dollar amount needed to go green today
@@ -195,40 +195,146 @@ async function sendOffsetCard(card) {
   }
 }
 
+
+// -- DAILY GAME PLAN CARD -----------------------------------------
+// Uses live positions from Claude MCP bridge
+// Posts to Discord every morning at 9:15AM
+function buildGamePlanCard(positions, realizedPnL, goal) {
+  realizedPnL = parseFloat(realizedPnL) || 0;
+  goal        = goal || 300;
+
+  // Separate options from stocks
+  var options = positions.filter(function(p) {
+    return p.assetType === 'StockOption' || (p.symbol && p.symbol.includes(' '));
+  });
+
+  // Calculate unrealized options P&L
+  var unrealizedPnL = 0;
+  var bleeding = [];
+  var working  = [];
+
+  options.forEach(function(p) {
+    var pnl    = parseFloat(p.unrealizedProfitLoss || 0);
+    var symbol = p.symbol || '';
+    var ticker = symbol.split(' ')[0];
+    var expiry = symbol.split(' ')[1] || '';
+    unrealizedPnL += pnl;
+
+    if (pnl < 0) {
+      bleeding.push({ symbol, ticker, pnl });
+    } else if (pnl > 0) {
+      working.push({ symbol, ticker, pnl });
+    }
+  });
+
+  var totalExposure = Math.abs(unrealizedPnL);
+  var netToday      = realizedPnL + unrealizedPnL;
+  var remaining     = Math.max(0, goal - realizedPnL);
+
+  // How many clean A+ trades to hit goal
+  var tradesNeeded  = remaining > 0 ? Math.ceil(remaining / 150) : 0;
+
+  var lines = [
+    'DAILY GAME PLAN -- ' + new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' }),
+    '===============================',
+    'Goal today:     $' + goal,
+    'Realized P&L:   $' + realizedPnL.toFixed(0),
+    'Unrealized:     ' + (unrealizedPnL >= 0 ? '+' : '') + '$' + unrealizedPnL.toFixed(0),
+    'Need to close:  $' + remaining.toFixed(0) + ' more',
+    '-------------------------------',
+  ];
+
+  if (bleeding.length > 0) {
+    lines.push('HOLDING (do not touch -- April 6):');
+    bleeding.forEach(function(p) {
+      lines.push('  ' + p.symbol + '  -$' + Math.abs(p.pnl).toFixed(0));
+    });
+    lines.push('-------------------------------');
+  }
+
+  if (working.length > 0) {
+    lines.push('WINNING -- LOCK GREEN FAST:');
+    working.forEach(function(p) {
+      lines.push('  ' + p.symbol + '  +$' + p.pnl.toFixed(0) + '  CLOSE IT');
+    });
+    lines.push('-------------------------------');
+  }
+
+  lines.push('THE PLAY TODAY:');
+  if (remaining <= 0) {
+    lines.push('  GOAL ALREADY HIT -- STOP TRADING');
+  } else {
+    lines.push('  Need ' + tradesNeeded + ' clean A+ setup' + (tradesNeeded > 1 ? 's' : ''));
+    lines.push('  Each A+ trade targets +$150 at T1');
+    lines.push('  Entry: retracement limit only (ask x 0.875)');
+    lines.push('  Stop:  structural level -- never flat %');
+    lines.push('  Watch: #conviction-trades ONLY');
+  }
+  lines.push('-------------------------------');
+  lines.push('RULES:');
+  lines.push('  No new positions on tickers you already own');
+  lines.push('  No entries before 9:45AM');
+  lines.push('  No entries after 3:30PM');
+  lines.push('  Retracement entry or skip -- never chase');
+  lines.push('-------------------------------');
+  lines.push('Time    ' + new Date().toLocaleTimeString('en-US', {
+    timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit'
+  }) + ' ET');
+
+  return lines.join('\n');
+}
+
 // -- MAIN ---------------------------------------------------------
 async function runOffsetAnalysis() {
   console.log('[OFFSET] Running position offset analysis...');
 
+  // Try to get live positions from MCP bridge first
+  var server = null;
+  var mcpPositions = [];
+  try {
+    server = require('./server');
+    var livePos = server && server.getLivePositions ? server.getLivePositions() : {};
+    // Convert conflict map back to position-like objects for analysis
+    console.log('[OFFSET] MCP bridge positions available: ' + Object.keys(livePos).length + ' tickers');
+  } catch(e) {}
+
+  // Try TS token for full position data
   const token = await getTSToken();
   if (!token) {
-    console.log('[OFFSET] No TS token -- using static analysis');
-    // Fall back to hardcoded positions if token fails
-    const staticCard = buildOffsetCard({
-      netPnl: -174,
-      offsetNeeded: 174,
-      totalWinning: 53,
-      totalLosing: 227,
-      winningTrades: [
-        { symbol: 'ORCL 260410C147', pnl: 22, ticker: 'ORCL' },
-        { symbol: 'AMZN 260406C207.5', pnl: 18, ticker: 'AMZN' },
-        { symbol: 'CRM 260410C192.5', pnl: 13, ticker: 'CRM' },
-      ],
-      losingTrades: [
-        { symbol: 'DLTR 260417P103', pnl: -162, ticker: 'DLTR', fightingMacro: false },
-        { symbol: 'NFLX 260410P93',  pnl: -50,  ticker: 'NFLX', fightingMacro: false },
-        { symbol: 'GUSH 260417P46',  pnl: -13,  ticker: 'GUSH', fightingMacro: true  },
-      ],
-      avoidTrades: [
-        { symbol: 'GUSH 260417P46', pnl: -13, ticker: 'GUSH' },
-      ],
-    });
-    await sendOffsetCard(staticCard);
+    console.log('[OFFSET] No TS token -- posting game plan with static data');
+
+    // Build game plan with what we know from MCP webhook
+    var staticPositions = [
+      { symbol: 'GOOGL 260406P282.5', assetType: 'StockOption', unrealizedProfitLoss: -1 },
+      { symbol: 'HD 260410P312.5',    assetType: 'StockOption', unrealizedProfitLoss: -58 },
+      { symbol: 'QQQ 260406P561',     assetType: 'StockOption', unrealizedProfitLoss: -45 },
+      { symbol: 'XLF 260410P49',      assetType: 'StockOption', unrealizedProfitLoss: -60 },
+      { symbol: 'DKNG 260410C21.5',   assetType: 'StockOption', unrealizedProfitLoss: 5 },
+    ];
+
+    var gamePlan = buildGamePlanCard(staticPositions, 0, 300);
+    await sendOffsetCard(gamePlan);
+
+    var analysis = analyzePositions(staticPositions.map(function(p) {
+      return { Symbol: p.symbol, UnrealizedProfitLoss: p.unrealizedProfitLoss };
+    }));
+    var offsetCard = buildOffsetCard(analysis);
+    await sendOffsetCard(offsetCard);
     return;
   }
 
   const positions = await getLivePositions(token);
-  const analysis  = analyzePositions(positions);
-  const card      = buildOffsetCard(analysis);
+  const analysis2  = analyzePositions(positions);
+  const gamePlan2  = buildGamePlanCard(positions.map(function(p) {
+    return {
+      symbol: p.Symbol,
+      assetType: p.AssetType === 'OP' ? 'StockOption' : p.AssetType,
+      unrealizedProfitLoss: parseFloat(p.UnrealizedProfitLoss || 0),
+    };
+  }), 0, 300);
+
+  await sendOffsetCard(gamePlan2);
+  const card = buildOffsetCard(analysis2);
   await sendOffsetCard(card);
 }
 

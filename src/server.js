@@ -33,6 +33,9 @@ try { econCalendar     = require('./economicCalendar'); console.log('[CAL] Loade
 try { preMarketReport  = require('./preMarketReport');  console.log('[PMR] Loaded OK');     } catch(e) { console.log('[PMR] Skipped:', e.message); }
 try { positionOffset   = require('./positionOffset');   console.log('[OFFSET] Loaded OK');  } catch(e) { console.log('[OFFSET] Skipped:', e.message); }
 
+var tradingJournal = null;
+try { tradingJournal = require('./tradingJournal'); console.log('[JOURNAL] Loaded OK'); } catch(e) { console.log('[JOURNAL] Skipped:', e.message); }
+
 var app  = express();
 var PORT = process.env.PORT || 3000;
 
@@ -234,6 +237,25 @@ app.get('/ts-callback', async function(req, res) {
   } catch(e) { res.send('<h2>Error: ' + e.message + '</h2>'); }
 });
 
+// -- TRADING JOURNAL --------------------------------------------
+app.post('/webhook/journal', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!tradingJournal) return res.json({ status: 'Journal not loaded' });
+    var data = req.body;
+    var state = await tradingJournal.writeJournal(data);
+    res.json({ status: 'OK', state });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/journal', function(req, res) {
+  if (!tradingJournal) return res.json({ status: 'Journal not loaded' });
+  res.json(tradingJournal.getState());
+});
+
 // -- TEST ROUTES ------------------------------------------------
 app.get('/test/brief',    async function(req, res) { try { await alerter.sendMorningBrief(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
 app.get('/test/screener', async function(req, res) { if (!finviz) return res.json({ status: 'not loaded' }); try { await finviz.postScreenerCard(); res.json({ status: 'OK' }); } catch(e) { res.status(500).json({ error: e.message }); } });
@@ -245,6 +267,14 @@ app.get('/test/calendar', async function(req, res) { if (!econCalendar) return r
 app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); res.json(econCalendar.getState()); });
 
 // -- CRONS ------------------------------------------------------
+
+// 4:00AM ET -- AYCE pre-market scan (catches overnight 12HR Miyagi setups)
+cron.schedule('0 8 * * 1-5', async function() {
+  console.log('[CRON] 4:00AM -- AYCE pre-market scan...');
+  if (preMarketScanner) {
+    try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); }
+  }
+});
 
 // 8:00AM ET -- pre-market report
 cron.schedule('0 12 * * 1-5', async function() {
@@ -281,9 +311,12 @@ cron.schedule('0 14 * * 1-5', async function() {
   if (preMarketScanner) { try { await preMarketScanner.run322Scan(); } catch(e) { console.error('[322]', e.message); } }
 });
 
-// 4:00PM ET -- end of day goal post
-cron.schedule('0 20 * * 1-5', function() {
+// 4:00PM ET -- end of day goal post + journal
+cron.schedule('0 20 * * 1-5', async function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
+  if (tradingJournal) {
+    try { await tradingJournal.writeJournal({}); } catch(e) { console.error('[JOURNAL]', e.message); }
+  }
 });
 
 // -- START ------------------------------------------------------
