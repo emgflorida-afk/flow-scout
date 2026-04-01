@@ -412,6 +412,7 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     '===============================',
     confluence ? 'Confluence  ' + confluence : null,
     'Grade   ' + gradeLabel,
+    hasFlow ? 'STRAT + FLOW MATCH -- EXECUTE NOW at retracement' : null,
     resolved && resolved.freshness ? 'Freshness ' + resolved.freshness.label + (resolved.freshness.pctFromLow > 0 ? ' (' + resolved.freshness.pctFromLow + '% from day low)' : '') : null,
     tfLine     ? 'Bias    '     + tfLine     : null,
     '-------------------------------',
@@ -560,9 +561,11 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       );
     }
 
+    const flowMatch = recentFlowTickers.has(key);
     if (isConviction) {
-      var convLabel = confluenceScore >= 6 ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
-                    : hasFlow              ? 'A  CONVICTION TRADE -- FLOW CONFIRMED'
+      var convLabel = confluenceScore >= 6 && flowMatch ? 'A+ CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
+                    : confluenceScore >= 6              ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
+                    : flowMatch                         ? 'A  CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
                     : 'A  CONVICTION TRADE -- 5/6 STRAT';
       await sendToChannel('conviction',
         card.text

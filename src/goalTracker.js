@@ -1,8 +1,8 @@
 // goalTracker.js - Stratum Flow Scout v7.2
 var fetch = require('node-fetch');
-var GOAL = 300;
+var GOAL = 400;
 var MAX_LOSS = -150;
-var MAX_TRADES = 4;
+var MAX_TRADES = 3;
 function getWebhook() { return process.env.DISCORD_GOAL_WEBHOOK; }
 var state = { date: '', trades: [], totalPnL: 0, status: 'WAIT', goalHit: false, stopHit: false };
 function resetIfNewDay() {
