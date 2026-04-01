@@ -305,28 +305,33 @@ async function ingestIdea(idea) {
 
   console.log('[IDEA] Ingesting:', idea.ticker, idea.triggerType, '$' + idea.triggerPrice);
 
-  // Pull live 5-min bars for intraday check
-  var bars5min = await getLiveBars(idea.ticker, 'Minute', '5', 12);
-  // Pull daily bars for context
-  var barsDaily = await getLiveBars(idea.ticker, 'Daily', '1', 5);
+  // ARM TO WATCHLIST IMMEDIATELY -- regardless of bar data
+  var watchKey = idea.ticker + '_' + idea.triggerPrice;
+  ideaWatchlist[watchKey] = {
+    idea:       idea,
+    addedAt:    new Date(),
+    checkCount: 0,
+  };
+  console.log('[IDEA] Armed to watchlist:', idea.ticker, '$' + idea.triggerPrice);
 
-  // Validate trigger on 5-min bars first (intraday)
-  var validation = validateTrigger(bars5min || barsDaily, idea.triggerPrice, idea.triggerType);
+  // Pull live bars for immediate trigger check
+  var bars5min  = await getLiveBars(idea.ticker, 'Minute', '5', 12);
+  var barsDaily = await getLiveBars(idea.ticker, 'Daily', '1', 5);
+  var bars      = bars5min || barsDaily;
+
+  // Validate trigger
+  var validation = validateTrigger(bars, idea.triggerPrice, idea.triggerType);
 
   // Build card
-  var card = buildIdeaCard(idea, validation, bars5min || barsDaily);
+  var card = buildIdeaCard(idea, validation, bars);
 
   // Post to Discord
   await postCard(card, validation.triggered);
 
-  // Add to watchlist if not triggered yet
-  if (!validation.triggered) {
-    ideaWatchlist[idea.ticker + '_' + idea.triggerPrice] = {
-      idea:        idea,
-      addedAt:     new Date(),
-      checkCount:  0,
-    };
-    console.log('[IDEA] Added to watchlist:', idea.ticker, '$' + idea.triggerPrice);
+  // Remove from watchlist if already triggered
+  if (validation.triggered) {
+    delete ideaWatchlist[watchKey];
+    console.log('[IDEA] Already triggered -- removed from watchlist:', idea.ticker);
   }
 
   return {
