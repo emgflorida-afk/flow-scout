@@ -406,6 +406,8 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
                    : grade === 'B'  ? 'GRADE  B  -- WAIT FOR CONFIRMATION'
                    : 'GRADE  C  -- MONITOR ONLY';
 
+  const hasFlow = tvData.hasFlow || false;
+
   const lines = [
     modeLabel + ' -- ' + dteLabel + '  [' + grade + ']',
     ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
