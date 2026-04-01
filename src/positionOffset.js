@@ -17,22 +17,23 @@ const STRAT_WEBHOOK = process.env.DISCORD_WEBHOOK_URL;
 // Updated manually or via future macro module
 // Current macro: Iran war, Hormuz blocked, oil surging, tariffs
 const MACRO = {
-  oilBullish:      true,   // Hormuz blocked, gas $4+
-  consumerBearish: true,   // tariffs + gas prices hurting retail
-  techBearish:     true,   // broad market sell-off
-  energyBullish:   true,   // war premium on oil
+  oilBullish:      false,  // oil bleeding -- peace deal + Hormuz opening
+  consumerBearish: false,  // market bullish -- SPY above 645
+  techBullish:     true,   // tech rallying -- peace deal risk-on
+  defenseBullish:  true,   // NATO exit threat -- Europe buys US weapons
+  airlinesBullish: true,   // oil dropping -- fuel costs falling
 };
 
 // Tickers that align with current macro
 const MACRO_ALIGNED = {
-  calls: ['OXY', 'XOM', 'CVX', 'COP', 'SLB', 'HAL', 'GUSH', 'USO', 'XLE', 'MRO'],
-  puts:  ['DLTR', 'DG', 'WMT', 'TGT', 'COST', 'AMZN', 'AAPL', 'QQQ', 'SPY', 'TQQQ'],
+  calls: ['LMT', 'RTX', 'NOC', 'GD', 'BA', 'NVDA', 'AAPL', 'MSFT', 'DAL', 'UAL', 'LUV', 'COIN', 'AMZN'],
+  puts:  ['XOM', 'CVX', 'OXY', 'GUSH', 'USO', 'XLE'],
 };
 
 // Tickers to AVOID (fighting macro)
 const MACRO_AVOID = {
-  calls: ['DLTR', 'DG', 'WMT', 'TGT', 'TQQQ', 'QQQ', 'SPY'],
-  puts:  ['OXY', 'XOM', 'CVX', 'GUSH', 'USO', 'XLE'],
+  calls: ['XOM', 'CVX', 'OXY', 'GUSH', 'USO', 'XLE'],
+  puts:  ['LMT', 'RTX', 'NVDA', 'AAPL', 'QQQ', 'SPY'],
 };
 
 // -- GET TS TOKEN -------------------------------------------------
@@ -149,11 +150,17 @@ function buildOffsetCard(analysis) {
 
   if (!isGreen) {
     lines.push('TO OFFSET -- BEST MACRO PLAYS:');
-    if (MACRO.energyBullish) {
-      lines.push('  CALLS: OXY, XOM, CVX, COP  (energy/oil war)');
+    if (MACRO.defenseBullish) {
+      lines.push('  CALLS: LMT, RTX, NOC, GD  (NATO exit -- Europe buys US weapons)');
     }
-    if (MACRO.consumerBearish) {
-      lines.push('  PUTS:  DLTR, DG, TGT, WMT  (tariffs + $4 gas)');
+    if (MACRO.techBullish) {
+      lines.push('  CALLS: NVDA, AAPL, COIN  (peace deal -- risk on)');
+    }
+    if (MACRO.airlinesBullish) {
+      lines.push('  CALLS: DAL, UAL, LUV  (oil dropping -- fuel costs fall)');
+    }
+    if (!MACRO.oilBullish) {
+      lines.push('  AVOID: XOM, CVX, OXY  (oil bleeding on peace deal)');
     }
     lines.push('  Wait for cluster or 5/6+ Strat confirmation');
     lines.push('  Max 1 contract, 2% risk = $' + Math.round(offsetNeeded * 0.5) + ' per trade');
