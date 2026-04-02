@@ -44,6 +44,16 @@ async function placeOrder(params) {
     var token = await ts.getAccessToken();
     if (!token) return { error: 'No TradeStation token' };
 
+    // Convert OPRA format to TradeStation format if needed
+    // OPRA: NVDA260406C00175000 --> TS: NVDA 260406C175
+    if (symbol && symbol.indexOf(' ') === -1 && /^[A-Z]+\d{6}[CP]/.test(symbol)) {
+      var m = symbol.match(/^([A-Z]+)(\d{6})([CP])0*(\d+(?:\.\d+)?)$/);
+      if (m) {
+        symbol = m[1] + ' ' + m[2] + m[3] + m[4];
+        console.log('[EXECUTOR] Converted symbol to TS format:', symbol);
+      }
+    }
+
     var base = getBaseUrl(account);
     console.log('[EXECUTOR] Placing order on', base, '-- account:', account);
     console.log('[EXECUTOR] Order:', symbol, action, qty, 'x @ $' + limit);

@@ -607,6 +607,17 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       console.log('[EXECUTE-NOW] ' + parsed.ticker + ' ' + stratGrade + ' routed to #' + stratChannel);
 
       // AUTO-EXECUTE in SIM for A+/A grades
+      // Convert OPRA symbol NVDA260406C00175000 to TS format NVDA 260406C175
+      function opraToTS(opra) {
+        if (!opra) return null;
+        // Already has space = already TS format
+        if (opra.indexOf(' ') > -1) return opra;
+        // Parse OPRA: TICKER + YYMMDD + C/P + 8-digit-strike
+        var m = opra.match(/^([A-Z]+)(\d{6})([CP])0*(\d+(?:\.\d+)?)$/);
+        if (!m) return opra;
+        return m[1] + ' ' + m[2] + m[3] + m[4];
+      }
+
       if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid) {
         try {
           var orderExecutor = require('./orderExecutor');
@@ -617,7 +628,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
           var qty = stratGrade === 'A+' ? 2 : 1;
           var er  = await orderExecutor.placeOrder({
             account: 'SIM3142118M',
-            symbol:  resolved.symbol,
+            symbol:  opraToTS(resolved.symbol),
             action:  'BUYTOOPEN',
             qty:     qty,
             limit:   lmt,
@@ -721,7 +732,7 @@ async function sendFlowAlert(opraSymbol, flowData) {
           var execQty     = (confluenceScore >= 5 && flowMatch) ? 2 : 1;
           var execResult  = await orderExecutor.placeOrder({
             account: 'SIM3142118M',
-            symbol:  resolved.symbol,
+            symbol:  opraToTS(resolved.symbol),
             action:  'BUYTOOPEN',
             qty:     execQty,
             limit:   execLimit,
