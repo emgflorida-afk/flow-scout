@@ -1,3 +1,32 @@
+// ideaIngestor.js
+var fs   = require('fs');
+var path = require('path');
+
+var WATCHLIST_FILE = path.join(__dirname, '..', 'data', 'watchlist.json');
+
+function saveWatchlist() {
+  try {
+    var dir = path.dirname(WATCHLIST_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(WATCHLIST_FILE, JSON.stringify(ideaWatchlist, null, 2), 'utf8');
+    console.log('[IDEA] Watchlist saved to disk --', Object.keys(ideaWatchlist).length, 'ideas');
+  } catch(e) {
+    console.error('[IDEA] Failed to save watchlist:', e.message);
+  }
+}
+
+function loadWatchlist() {
+  try {
+    if (fs.existsSync(WATCHLIST_FILE)) {
+      var data = JSON.parse(fs.readFileSync(WATCHLIST_FILE, 'utf8'));
+      Object.assign(ideaWatchlist, data);
+      console.log('[IDEA] Watchlist loaded from disk --', Object.keys(ideaWatchlist).length, 'ideas');
+    }
+  } catch(e) {
+    console.error('[IDEA] Failed to load watchlist:', e.message);
+  }
+}
+
 // ideaIngestor.js -- Stratum v7.4
 // TRADE IDEA VALIDATOR
 // Accepts trade ideas from John or any source
@@ -15,6 +44,7 @@ var STRAT_WEBHOOK    = process.env.DISCORD_WEBHOOK_URL;
 
 // Active idea watchlist -- monitored every 5 minutes
 var ideaWatchlist = {};
+loadWatchlist(); // Load persisted ideas on startup
 
 // ================================================================
 // CANDLE CLOSE VALIDATION
@@ -338,6 +368,7 @@ async function ingestIdea(idea) {
     checkCount: 0,
   };
   console.log('[IDEA] Armed to watchlist:', idea.ticker, '$' + idea.triggerPrice);
+  saveWatchlist(); // Persist to disk -- survives redeploys
 
   // Pull 5-min bars as PRIMARY -- intraday triggers only
   // 12 bars = last 60 minutes of price action
@@ -389,6 +420,7 @@ async function monitorWatchlist() {
     var age = (Date.now() - new Date(idea.addedAt).getTime()) / 1000 / 60 / 60;
     if (age > 48) {
       delete ideaWatchlist[keys[i]];
+      saveWatchlist(); // Persist removal to disk
       console.log('[IDEA] Expired:', idea.ticker);
       continue;
     }
@@ -460,6 +492,7 @@ async function monitorWatchlist() {
       }
 
       delete ideaWatchlist[keys[i]];
+      saveWatchlist(); // Persist removal to disk
     } else if (validation.wick) {
       console.log('[IDEA] WICK detected:', idea.ticker, '-- posting warning');
       var card = buildIdeaCard(idea, validation, bars);
