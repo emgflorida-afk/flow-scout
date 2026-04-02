@@ -58,6 +58,18 @@ async function placeOrder(params) {
       }
     }
 
+    // Round price to nearest valid increment (options use $0.05 above $3, $0.01 below)
+    function roundToIncrement(price) {
+      if (!price) return price;
+      var p = parseFloat(price);
+      if (p >= 3) return Math.round(p / 0.05) * 0.05;
+      return Math.round(p / 0.01) * 0.01;
+    }
+    limit = roundToIncrement(limit);
+    if (stop) stop = roundToIncrement(stop);
+    if (t1)   t1   = roundToIncrement(t1);
+    if (t2)   t2   = roundToIncrement(t2);
+
     var base = getBaseUrl(account);
     console.log('[EXECUTOR] Placing order on', base, '-- account:', account);
     console.log('[EXECUTOR] Order:', symbol, action, qty, 'x @ $' + limit);
