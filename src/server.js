@@ -524,6 +524,22 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
   } catch(e) { console.error('[CANCEL-MGR] Cron error:', e.message); }
 });
 
+// IDEA WATCHLIST CHECK -- every 5 min during RTH (9:30AM - 4PM ET)
+// THIS IS THE CRITICAL CRON -- checks if John's ideas have triggered
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    if (!ideaIngestor) return;
+    var now    = new Date();
+    var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+    var etMin  = now.getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    // Only check during market hours 9:30AM - 4:00PM ET
+    if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
+    console.log('[IDEA] Checking watchlist -- ' + Object.keys(ideaIngestor.getWatchlist()).length + ' ideas');
+    await ideaIngestor.checkWatchlist();
+  } catch(e) { console.error('[IDEA] Watchlist cron error:', e.message); }
+});
+
 // 12:00AM ET -- reset daily execute-now counter
 cron.schedule('0 4 * * 1-5', function() {
   if (executeNow) executeNow.resetDailySetups();

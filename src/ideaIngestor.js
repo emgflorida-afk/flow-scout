@@ -318,14 +318,18 @@ function buildIdeaCard(idea, validation, bars) {
 // POST TO DISCORD
 // ================================================================
 async function postCard(card, triggered) {
-  var webhook = triggered ? EXECUTE_NOW_WEBHOOK : STRAT_WEBHOOK;
+  // triggered=true -> #execute-now, triggered=false -> #strat-alerts
+  // triggered='gap' -> #execute-now with gap warning label
+  var isGap    = triggered === 'gap';
+  var webhook  = (triggered === true || isGap) ? EXECUTE_NOW_WEBHOOK : STRAT_WEBHOOK;
   if (!webhook) return;
   try {
-    var username = triggered ? 'Stratum Execute Now' : 'Stratum Idea Watch';
+    var username = (triggered === true || isGap) ? 'Stratum Execute Now' : 'Stratum Idea Watch';
+    var text     = Array.isArray(card) ? card.join('\n') : String(card);
     await fetch(webhook, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ content: '```\n' + card + '\n```', username: username }),
+      body:    JSON.stringify({ content: '```\n' + text + '\n```', username: username }),
     });
     console.log('[IDEA] Card posted -- triggered=' + triggered);
   } catch(e) {
@@ -459,7 +463,7 @@ async function monitorWatchlist() {
           'Trigger: $' + triggerPx + ' | Current: $' + lastClose,
           'NOT executing -- staying armed',
           'Will fire if 5-min candle closes below $' + triggerPx + ' before 11AM',
-        ].join('\n'), false);
+        ].join('\n'), 'gap');
         // Reset triggered state -- keep idea in watchlist
         validation.triggered = false;
         ideaWatchlist[keys[i]] = idea; // keep armed
@@ -478,7 +482,7 @@ async function monitorWatchlist() {
           'Trigger: $' + triggerPx + ' | Current: $' + lastClose,
           'NOT executing -- staying armed',
           'Will fire if 5-min candle closes above $' + triggerPx + ' before 11AM',
-        ].join('\n'), false);
+        ].join('\n'), 'gap');
         validation.triggered = false;
         ideaWatchlist[keys[i]] = idea;
         continue;
@@ -609,4 +613,4 @@ function isMarketOpen() {
   return etTime >= (9 * 60 + 30) && etTime <= (16 * 60);
 }
 
-module.exports = { ingestIdea, monitorWatchlist, getWatchlist, removeIdea, validateTrigger, isMarketOpen };
+module.exports = { ingestIdea, checkWatchlist: monitorWatchlist, monitorWatchlist, getWatchlist, removeIdea, validateTrigger, isMarketOpen };
