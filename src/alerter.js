@@ -669,11 +669,13 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         return om[1] + ' ' + om[2] + om[3] + strike2;
       }
 
-      // DEDUP CHECK -- only execute once per symbol per day
-      var dedupKey = resolved && resolved.symbol ? resolved.symbol : (tvData.ticker + ':' + (tvData.type||''));
+      // DEDUP CHECK -- ONE execution per ticker per direction per day
+      // Uses TICKER:DIRECTION as key (not full OPRA symbol)
+      // so all strikes/expiries for same ticker are blocked after first execution
+      var dedupKey = tvData.ticker + ':' + (tvData.type || 'call');
       if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid && !executedToday[dedupKey]) {
-        executedToday[dedupKey] = Date.now();
-        console.log('[DEDUP] Marking executed:', dedupKey);
+        executedToday[dedupKey] = Date.now(); // mark immediately -- blocks ALL subsequent signals for this ticker today
+        console.log('[DEDUP] Locking ticker for today:', dedupKey, '-- no more', tvData.type, 'orders on', tvData.ticker, 'until midnight');
         try {
           var orderExecutor  = require('./orderExecutor');
           var entryDecision  = getEntryMode(null, tvData, resolved);
