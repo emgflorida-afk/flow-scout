@@ -698,6 +698,11 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
           'spread:$' + bidAskSpread.toFixed(2));
       }
 
+      // NORMALIZE TICKER -- TradingView sends as ticker, symbol, or Ticker
+      // Must do this FIRST before any routing decisions
+      tvData.ticker = tvData.ticker || tvData.symbol || tvData.Ticker || tvData.TICKER || '';
+      tvData.type   = tvData.type   || tvData.action || tvData.direction || 'call';
+
       // AGENT MODE -- set AGENT_MODE=FULL in Railway to re-enable auto-execute
       // Default: CONVICTION_ONLY = Discord cards only, no auto-execute from Strat alerts
       // Only John's ideas (ideaIngestor) and conviction flow will execute trades
