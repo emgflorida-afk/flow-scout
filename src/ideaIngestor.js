@@ -211,16 +211,33 @@ function buildIdeaCard(idea, validation, bars) {
       '-------------------------------',
     ];
 
-    if (premium) {
-      lines.push('Entry   $' + premium + ' x' + (idea.contracts || 1));
-      lines.push('Limit   $' + limit + ' (12.5% retrace)');
-      lines.push('Stop    $' + stop + ' (structural)');
-      lines.push('T1      $' + t1 + ' close here');
-      lines.push('T2      $' + t2 + ' runner');
+    var contracts = idea.contracts || 1;
+    var stopNote  = idea.stopType === 'percent' ?
+      '(' + idea.stopPct + '% from entry)' :
+      '(structural -- John level)';
+
+    if (idea.entryPrice || premium) {
+      var ep = idea.entryPrice || premium;
+      lines.push('Entry   $' + ep + ' x' + contracts + ' = $' + (ep * contracts * 100).toFixed(0));
+      lines.push('Limit   $' + (idea.limit || limit) + ' (retracement -- SET THIS)');
+      lines.push('Stop    $' + (idea.stop || stop) + ' ' + stopNote + ' -- SET THIS');
+      lines.push('-------------------------------');
+      if (contracts >= 2) {
+        lines.push('T1  $' + (idea.t1 || t1) + ' -- CLOSE CONTRACT 1 HERE');
+        lines.push('    Lock green -- move stop to breakeven on contract 2');
+        lines.push('T2  $' + (idea.t2 || t2) + ' -- RIDE CONTRACT 2');
+        lines.push('    Trail stop to breakeven once T1 hit');
+        lines.push('    Never give back T1 profit');
+      } else {
+        lines.push('T1  $' + (idea.t1 || t1) + ' -- CLOSE FULL POSITION HERE');
+        lines.push('    1 contract = full exit at T1');
+        lines.push('T2  $' + (idea.t2 || t2) + ' -- optional if you add 2nd contract');
+      }
     } else {
       lines.push('Contract: pull ATM ' + (idea.direction || 'call'));
-      lines.push('Entry:    ask x 0.875 (retracement)');
-      lines.push('Stop:     40% of premium');
+      lines.push('Stop:     ' + (idea.stop ? '$' + idea.stop + ' ' + stopNote : '40% of premium'));
+      lines.push('T1:       $' + (idea.t1 || 'from John'));
+      lines.push('T2:       $' + (idea.t2 || 'from John'));
     }
 
     lines.push('-------------------------------');
@@ -302,6 +319,14 @@ async function ingestIdea(idea) {
   idea.direction    = idea.direction   || 'call';
   idea.source       = idea.source      || 'External';
   idea.addedAt      = new Date().toISOString();
+  idea.contracts    = idea.contracts   || 1;
+
+  // Parse stop type from note if John gives % or $ level
+  if (idea.note && idea.note.toLowerCase().includes('%')) {
+    idea.stopType = 'percent';
+  } else {
+    idea.stopType = 'structural';
+  }
 
   console.log('[IDEA] Ingesting:', idea.ticker, idea.triggerType, '$' + idea.triggerPrice);
 
@@ -314,10 +339,12 @@ async function ingestIdea(idea) {
   };
   console.log('[IDEA] Armed to watchlist:', idea.ticker, '$' + idea.triggerPrice);
 
-  // Pull live bars for immediate trigger check
+  // Pull 5-min bars as PRIMARY -- intraday triggers only
+  // 12 bars = last 60 minutes of price action
   var bars5min  = await getLiveBars(idea.ticker, 'Minute', '5', 12);
-  var barsDaily = await getLiveBars(idea.ticker, 'Daily', '1', 5);
-  var bars      = bars5min || barsDaily;
+  var barsDaily = await getLiveBars(idea.ticker, 'Daily', '1', 3);
+  var bars      = bars5min; // 5-min is the trigger timeframe
+  console.log('[IDEA] 5-min bars pulled for ' + idea.ticker + ': ' + (bars5min ? bars5min.length : 0) + ' bars');
 
   // Validate trigger
   var validation = validateTrigger(bars, idea.triggerPrice, idea.triggerType);
@@ -366,8 +393,13 @@ async function monitorWatchlist() {
       continue;
     }
 
+    // Always use 5-min bars for intraday trigger monitoring
     var bars = await getLiveBars(idea.ticker, 'Minute', '5', 12);
-    if (!bars) continue;
+    if (!bars || bars.length === 0) {
+      console.log('[IDEA] No 5-min bars for ' + idea.ticker + ' -- market may be closed');
+      continue;
+    }
+    console.log('[IDEA] Checking ' + idea.ticker + ' -- last 5-min close: $' + parseFloat(bars[bars.length-1].Close || 0).toFixed(2) + ' vs trigger $' + entry.idea.triggerPrice);
 
     var validation = validateTrigger(bars, idea.triggerPrice, idea.triggerType);
     entry.checkCount++;
@@ -415,4 +447,18 @@ function removeIdea(ticker, triggerPrice) {
   return false;
 }
 
-module.exports = { ingestIdea, monitorWatchlist, getWatchlist, removeIdea, validateTrigger };
+// ================================================================
+// IS MARKET OPEN -- only monitor during RTH 9:30AM-4PM ET
+// ================================================================
+function isMarketOpen() {
+  var now    = new Date();
+  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var etMin  = now.getUTCMinutes();
+  var etTime = etHour * 60 + etMin;
+  var day    = now.getUTCDay();
+  // Mon-Fri only, 9:30AM-4:00PM ET
+  if (day === 0 || day === 6) return false;
+  return etTime >= (9 * 60 + 30) && etTime <= (16 * 60);
+}
+
+module.exports = { ingestIdea, monitorWatchlist, getWatchlist, removeIdea, validateTrigger, isMarketOpen };
