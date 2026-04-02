@@ -42,6 +42,10 @@ if [ -z "$COMMAND" ] || [ "$COMMAND" = "help" ]; then
   echo "  morning         -- trigger morning brief manually"
   echo "  journal         -- trigger EOD journal manually"
   echo "  override        -- override daily loss limit (emergency only)"
+  echo "  agent-mode      -- check current AGENT_MODE (CONVICTION_ONLY or FULL)"
+  echo ""
+  echo "  FLOW"
+  echo "  conviction      -- check active conviction flow clusters"
   echo ""
   echo "  AGENT"
   echo "  agent           -- agent state"
@@ -342,6 +346,48 @@ if [ "$COMMAND" = "hold" ]; then
   DATE=${3:-2026-04-06}
   echo "Setting hold lock on $TICKER until $DATE..."
   curl -s -X POST "$RAILWAY_URL/hold/$TICKER/$DATE" -H "x-stratum-secret: $SECRET"
+  echo ""
+fi
+
+# ================================================================
+# AGENT MODE -- check current execution mode
+# ================================================================
+if [ "$COMMAND" = "agent-mode" ]; then
+  echo "Checking agent mode..."
+  curl -s "$RAILWAY_URL/agent/state" | python3 -c "
+import sys,json
+try:
+  d=json.load(sys.stdin)
+  mode = d.get('agentMode', 'CONVICTION_ONLY')
+  print('Agent Mode:  ' + mode)
+  if mode == 'CONVICTION_ONLY':
+    print('Status:      Discord cards only -- no auto-execute from Strat alerts')
+    print('Executing:   Johns ideas (live) + Conviction flow only')
+  else:
+    print('Status:      FULL auto-execute enabled')
+    print('Warning:     All A+/A grade signals will auto-execute')
+except: print('Could not parse agent state')
+"
+  echo ""
+fi
+
+# ================================================================
+# CONVICTION FLOW -- check active clusters
+# ================================================================
+if [ "$COMMAND" = "conviction" ]; then
+  echo "Checking conviction flow clusters..."
+  curl -s "$RAILWAY_URL/flow/clusters" | python3 -c "
+import sys,json
+try:
+  d=json.load(sys.stdin)
+  clusters=d.get('clusters',{})
+  if not clusters:
+    print('No active conviction clusters right now')
+  else:
+    for k,v in clusters.items():
+      print(k + ' -- sweeps:' + str(v.get('count',0)) + ' total:\$' + str(round(v.get('totalPremium',0)/1000)) + 'K')
+except: print('No active clusters or endpoint not available')
+"
   echo ""
 fi
 
