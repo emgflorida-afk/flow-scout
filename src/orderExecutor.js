@@ -70,6 +70,48 @@ async function placeOrder(params) {
     if (t1)   t1   = roundToIncrement(t1);
     if (t2)   t2   = roundToIncrement(t2);
 
+    // PORTFOLIO-AWARE POSITION SIZING
+    // Check buying power before placing order
+    // Never risk more than 2% of account on single trade
+    try {
+      var tsCheck    = require('./tradestation');
+      var tokenCheck = await tsCheck.getAccessToken();
+      if (tokenCheck) {
+        var baseCheck = getBaseUrl(account);
+        var balRes    = await fetch(baseCheck + '/brokerage/accounts/' + account + '/balances', {
+          headers: { 'Authorization': 'Bearer ' + tokenCheck }
+        });
+        var balData   = await balRes.json();
+        var balArr    = balData.Balances || balData.balances || [];
+        var bal       = balArr[0] || {};
+        var buyingPower = parseFloat(bal.BuyingPower || bal.CashBalance || 0);
+        var equity      = parseFloat(bal.Equity || buyingPower);
+
+        // Hard stops
+        var orderCost   = parseFloat(limit) * qty * 100;
+        var maxRisk     = equity * 0.02; // 2% of account
+        var minBP       = 300;           // minimum buying power gate
+
+        if (buyingPower < minBP) {
+          console.log('[EXECUTOR] BLOCKED -- buying power $' + buyingPower + ' below $' + minBP + ' gate');
+          return { error: 'Buying power gate -- $' + buyingPower + ' available, minimum $' + minBP + ' required' };
+        }
+
+        if (orderCost > maxRisk && equity > 1000) {
+          // Reduce qty to fit within 2% risk
+          var maxQty = Math.max(1, Math.floor(maxRisk / (parseFloat(limit) * 100)));
+          if (maxQty < qty) {
+            console.log('[EXECUTOR] Qty reduced from ' + qty + ' to ' + maxQty + ' -- 2% risk rule ($' + maxRisk.toFixed(0) + ' max)');
+            qty = maxQty;
+          }
+        }
+
+        console.log('[EXECUTOR] Portfolio check OK -- BP:$' + buyingPower + ' equity:$' + equity + ' orderCost:$' + orderCost.toFixed(0) + ' qty:' + qty);
+      }
+    } catch(e) {
+      console.log('[EXECUTOR] Portfolio check skipped:', e.message);
+    }
+
     var base = getBaseUrl(account);
     console.log('[EXECUTOR] Placing order on', base, '-- account:', account);
     console.log('[EXECUTOR] Order:', symbol, action, qty, 'x @ $' + limit);

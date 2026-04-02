@@ -505,6 +505,17 @@ async function monitorWatchlist() {
           contract = idea.ticker + ' ' + exp + type + idea.strike;
         }
 
+        // DEDUP CHECK -- only execute once per idea
+        var ideaKey = idea.ticker + ':' + idea.direction + ':' + idea.triggerPrice;
+        if (idea.executed) {
+          console.log('[DEDUP] Idea already executed:', ideaKey);
+          delete ideaWatchlist[keys[i]];
+          saveWatchlist();
+          continue;
+        }
+        idea.executed = true;
+        saveWatchlist();
+
         if (contract && idea.entryPrice) {
           var result = await orderExecutor.placeOrder({
             account:  account,

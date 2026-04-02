@@ -6,6 +6,14 @@
 // -----------------------------------------------------------------
 
 const fetch    = require('node-fetch');
+
+// DEDUP TRACKER -- prevents duplicate auto-executions same ticker same day
+var executedToday = {};
+setInterval(function() {
+  var now    = new Date();
+  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  if (etHour === 0) { executedToday = {}; console.log('[DEDUP] Reset for new day'); }
+}, 60 * 60 * 1000);
 const resolver = require('./contractResolver');
 const calendar    = require('./economicCalendar');
 let smartStops   = null;
@@ -661,7 +669,11 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         return om[1] + ' ' + om[2] + om[3] + strike2;
       }
 
-      if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid) {
+      // DEDUP CHECK -- only execute once per symbol per day
+      var dedupKey = resolved && resolved.symbol ? resolved.symbol : (tvData.ticker + ':' + (tvData.type||''));
+      if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid && !executedToday[dedupKey]) {
+        executedToday[dedupKey] = Date.now();
+        console.log('[DEDUP] Marking executed:', dedupKey);
         try {
           var orderExecutor  = require('./orderExecutor');
           var entryDecision  = getEntryMode(null, tvData, resolved);
