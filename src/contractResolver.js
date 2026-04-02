@@ -224,6 +224,19 @@ function parseChainContract(c) {
   const mid    = parseFloat(((bid + ask) / 2).toFixed(2));
   const volume = parseInt(c.volume || 0);
   const oi     = parseInt(c.openInterest || 0);
+  // SPREAD FILTER -- reject wide bid/ask before returning
+  if (bid !== null && ask !== null) {
+    var spreadVal = parseFloat(ask) - parseFloat(bid);
+    if (spreadVal > 0.20) {
+      console.log('[RESOLVER] SPREAD REJECTED:', sym, 'bid:$' + bid, 'ask:$' + ask, 'spread:$' + spreadVal.toFixed(2));
+      return null;
+    }
+    if (spreadVal > 0.10) {
+      console.log('[RESOLVER] SPREAD CAUTION:', sym, 'spread:$' + spreadVal.toFixed(2));
+    } else {
+      console.log('[RESOLVER] SPREAD OK:', sym, 'spread:$' + spreadVal.toFixed(2));
+    }
+  }
   return { ...c, strike, mid, bid, ask, symbol: sym, volume, openInterest: oi };
 }
 

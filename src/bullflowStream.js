@@ -9,7 +9,49 @@ const resolver = require('./contractResolver');
 const alerter  = require('./alerter');
 const { processFlow } = require('./flowCluster'); // CLUSTER ENGINE
 
-const FLOW_WEBHOOK = process.env.DISCORD_FLOW_WEBHOOK_URL;
+const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
+const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK ||
+  'https://discord.com/api/webhooks/1489313680641233107/WpeUmp4r4H5CmdpL3LFQ2FXaCcdeszpdKmp0P71Z1CdJjvbujz1NGd630ebQyHyXUH90';
+
+// CONVICTION CLUSTER TRACKER
+// Tracks repeat sweeps per ticker per direction within 60 min window
+// Only fires to #conviction-flow when ALL criteria met
+var convictionClusters = {};
+
+function updateCluster(ticker, direction, premium, dte, volGtOI) {
+  var key   = ticker + ':' + direction;
+  var now   = Date.now();
+  var win   = 60 * 60 * 1000; // 60 min window
+
+  if (!convictionClusters[key]) {
+    convictionClusters[key] = { count: 0, totalPremium: 0, firstSeen: now, lastSeen: now, dte: dte, volGtOI: false };
+  }
+
+  var cluster = convictionClusters[key];
+
+  // Reset if outside 60 min window
+  if (now - cluster.firstSeen > win) {
+    convictionClusters[key] = { count: 0, totalPremium: 0, firstSeen: now, lastSeen: now, dte: dte, volGtOI: false };
+    cluster = convictionClusters[key];
+  }
+
+  cluster.count        += 1;
+  cluster.totalPremium += (premium || 0);
+  cluster.lastSeen      = now;
+  cluster.dte           = dte;
+  if (volGtOI) cluster.volGtOI = true;
+
+  return cluster;
+}
+
+function isHighConviction(cluster, dte) {
+  return (
+    cluster.count        >= 3      &&  // 3+ repeat sweeps
+    cluster.totalPremium >= 500000 &&  // $500K+ combined
+    dte                  >= 3      &&  // not 0DTE lottery tickets
+    dte                  <= 14         // not far out LEAPS
+  );
+}
 
 const HIGH_CONVICTION_ALERTS = [
   'urgent repeater',
@@ -114,6 +156,37 @@ async function sendFlowToDiscord(message) {
     });
     console.log('[FLOW] Sent to #flow-alerts OK');
   } catch (err) { console.error('[FLOW] Discord error:', err.message); }
+
+async function sendConvictionAlert(ticker, direction, cluster, dte, tags) {
+  try {
+    var totalM   = (cluster.totalPremium / 1000000).toFixed(2);
+    var elapsed  = Math.round((Date.now() - cluster.firstSeen) / 60000);
+    var msg = [
+      'CONVICTION FLOW ALERT -- ' + ticker.toUpperCase() + ' ' + direction.toUpperCase(),
+      '========================================',
+      'Sweeps:    ' + cluster.count + 'x repeat in ' + elapsed + ' min',
+      'Total $:   $' + totalM + 'M combined premium',
+      'DTE:       ' + dte + ' days',
+      'Vol>OI:    ' + (cluster.volGtOI ? 'YES -- fresh conviction' : 'No'),
+      'Tags:      ' + (tags || 'unusual sweep'),
+      '----------------------------------------',
+      'ACTION: This is HIGH CONVICTION flow',
+      '        Check chart before entering',
+      '        Confirm Strat direction aligns',
+      'Time: ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
+    ].join('\n');
+
+    await fetch(CONVICTION_WEBHOOK, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ content: '```\n' + msg + '\n```', username: 'Stratum Conviction' }),
+    });
+    console.log('[CONVICTION] Alert fired for', ticker, direction, '$' + totalM + 'M', cluster.count + 'x sweeps');
+  } catch(e) {
+    console.error('[CONVICTION] Discord error:', e.message);
+  }
+}
+
 }
 
 // -- PARSE OPRA ---------------------------------------------------
@@ -177,6 +250,27 @@ async function processAlert(raw) {
       'Time       ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
     ];
     sendFlowToDiscord(wLines.join('\n')).catch(console.error);
+
+    // CONVICTION CLUSTER TRACKING
+    try {
+      var fTicker  = alert.ticker || alert.symbol || '';
+      var fDir     = (alert.put_call || alert.type || '').toLowerCase();
+      var fPrem    = parseFloat(alert.premium || alert.size || 0);
+      var fDTE     = parseInt(alert.dte || alert.days_to_expiry || 0);
+      var fVol     = parseInt(alert.volume || 0);
+      var fOI      = parseInt(alert.open_interest || alert.oi || 0);
+      var fVolGtOI = fVol > fOI && fOI > 0;
+      var fTags    = alert.tags || alert.alert_type || '';
+
+      if (fTicker && fDir && fPrem > 0) {
+        var cluster = updateCluster(fTicker, fDir, fPrem, fDTE, fVolGtOI);
+        if (isHighConviction(cluster, fDTE)) {
+          sendConvictionAlert(fTicker, fDir, cluster, fDTE, fTags).catch(console.error);
+          // Reset cluster after firing to avoid repeat alerts
+          delete convictionClusters[fTicker + ':' + fDir];
+        }
+      }
+    } catch(e) { console.error('[CONVICTION] Cluster error:', e.message); }
   }
 
   // -- FEED INTO CLUSTER ENGINE ---------------------------------

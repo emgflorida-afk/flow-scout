@@ -21,21 +21,26 @@ var TS_BASE    = 'https://api.tradestation.com/v3';
 // ================================================================
 var INDICES = ['SPY', 'QQQ', 'IWM', 'DIA', 'VXX', 'TQQQ', 'SQQQ', 'SPXL', 'SPXS', 'TNA', 'TZA'];
 
+// PRIMARY WATCHLIST -- always use STRUCTURAL stops
+// These are your 10 core tickers -- give them room to breathe
 var WIDE_RANGE = [
-  'NVDA', 'TSLA', 'MSTR', 'COIN', 'AMD', 'META', 'NFLX', 'SMCI',
-  'PLTR', 'HOOD', 'RIVN', 'LCID', 'GME', 'AMC', 'DKNG', 'RBLX',
-  'CRWD', 'SNOW', 'SHOP', 'SQ', 'ROKU', 'UBER', 'LYFT', 'ABNB',
-  'CVNA', 'AFRM', 'UPST', 'SOFI', 'RIOT', 'MARA', 'MRVL', 'AVGO',
-  'GOOGL', 'AAPL', 'MSFT', 'AMZN', 'JPM', 'GS', 'MS',
+  // Your core watchlist
+  'NVDA', 'AAPL', 'AMZN', 'MSFT', 'GOOGL',
+  'JPM', 'GS', 'TSLA', 'COIN', 'MRVL',
+  // Extended high-vol names
+  'TSLA', 'MSTR', 'AMD', 'META', 'NFLX', 'SMCI',
+  'PLTR', 'CRWD', 'SNOW', 'SHOP', 'AVGO',
   'LMT', 'RTX', 'NOC', 'GD', 'LDOS', 'DAL', 'UAL', 'LUV',
+  // Indices -- always structural
+  'SPY', 'QQQ', 'IWM', 'SQQQ', 'TQQQ', 'SPXL', 'SPXS', 'TNA',
 ];
 
+// TIGHT_RANGE -- slow movers only, never your core watchlist
+// Even these now get hybrid structural stops instead of flat 40%
 var TIGHT_RANGE = [
   'DLTR', 'DG', 'WMT', 'TGT', 'KO', 'PEP', 'JNJ', 'PG', 'MCD',
-  'XLF', 'XLE', 'XLU', 'XLV', 'XLK', 'XLB', 'XLRE', 'XLP',
-  'VZ', 'T', 'SO', 'DUK', 'NEE', 'D', 'WEC', 'AEP',
-  'LLY', 'ABBV', 'MRK', 'PFE', 'BMY', 'AMGN', 'GILD',
-  'WFC', 'BAC', 'C', 'USB', 'TFC',
+  'VZ', 'T', 'SO', 'DUK', 'NEE', 'D',
+  'LLY', 'ABBV', 'MRK', 'PFE', 'BMY',
 ];
 
 function classifyTicker(ticker, adx, atrPct) {
@@ -166,11 +171,29 @@ function calcStop(category, type, premium, delta, price, prevHigh, prevLow) {
   }
 
   if (category === 'TIGHT') {
+    // DYNAMIC: Use structural level if available -- flat 40% gets stopped out too early
+    if (prevHigh && prevLow && underlyingPrice) {
+      var structLevel  = direction === 'put' ? prevHigh : prevLow;
+      var structDist   = Math.abs(underlyingPrice - structLevel);
+      var structPct    = structDist / underlyingPrice;
+      var hybridStop   = parseFloat(Math.max(premium * 0.50, premium - (structPct * premium * 2)).toFixed(2));
+      hybridStop = Math.min(hybridStop, parseFloat((premium * 0.65).toFixed(2)));
+      return {
+        stopType: 'HYBRID', structuralLevel: structLevel.toFixed(2),
+        underlyingStop: structLevel.toFixed(2),
+        optionStop: hybridStop.toFixed(2), stopPrice: hybridStop.toFixed(2),
+        distance: structDist.toFixed(2),
+        label: 'hybrid -- tight range with structure (prev ' + (direction === 'put' ? 'high' : 'low') + ' $' + structLevel.toFixed(2) + ')',
+        why: 'TIGHT RANGE -- structural preferred, respects price structure',
+        source: 'TradeStation',
+      };
+    }
+    // Fallback flat stop if no structure data
     var optStop = premium * 0.60;
     return {
       stopType: 'FLAT', structuralLevel: null, underlyingStop: null,
       optionStop: optStop.toFixed(2), stopPrice: optStop.toFixed(2), distance: null,
-      label: 'flat 40% -- tight range', why: 'TIGHT RANGE -- exit fast',
+      label: 'flat 40% -- tight range fallback', why: 'TIGHT RANGE -- no structure data available',
     };
   }
 

@@ -54,15 +54,27 @@ async function checkMaxPositions(account) {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     var data      = await res.json();
-    var positions = (data.Positions || data.positions || []).filter(function(p) {
-      // Match both AssetType formats
-      var at = (p.AssetType || p.assetType || '');
-      return at === 'OP' || at === 'StockOption' || at === 'Option';
+    // Log raw keys to debug format
+    var rawKeys   = Object.keys(data || {});
+    console.log('[POS-MGR] Raw position response keys:', rawKeys.join(','));
+
+    // Handle all possible response formats
+    var allPos = data.Positions || data.positions || data.Position || [];
+    if (!Array.isArray(allPos)) allPos = [];
+
+    // Count ONLY option positions
+    var positions = allPos.filter(function(p) {
+      var at = (p.AssetType || p.assetType || p.Type || '');
+      return at === 'OP' || at === 'StockOption' || at === 'Option' ||
+             (p.Symbol || '').match(/\d{6}[CP]/); // fallback: symbol looks like option
     });
+
     var max = account === LIVE_ACCOUNT ? MAX_POSITIONS_LIVE : MAX_POSITIONS_SIM;
-    console.log('[POS-MGR] Position count:', positions.length, '/', max, 'on', account);
+    console.log('[POS-MGR] Position count:', positions.length, '/', max, 'on', account,
+      '(total:', allPos.length, ')');
+
     if (positions.length >= max) {
-      console.log('[POS-MGR] MAX POSITIONS HIT -- BLOCKING new order');
+      console.log('[POS-MGR] MAX POSITIONS HIT -- BLOCKING new order on', account);
       return { allowed: false, current: positions.length, max: max };
     }
     return { allowed: true, current: positions.length, max: max };

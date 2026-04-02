@@ -652,6 +652,8 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       // Route A+/A to #execute-now, B/C to #conviction-trades
       var stratGrade = (confluenceScore >= 5 || (confluenceScore >= 4 && flowMatch)) ? 'A' : 'B';
       if (confluenceScore >= 5 && flowMatch) stratGrade = 'A+';
+      // Normalize ticker -- TradingView sends as ticker, symbol, or Ticker
+      if (!tvData.ticker) tvData.ticker = tvData.symbol || tvData.Ticker || tvData.TICKER || '';
       // Route indices (SPY/QQQ/IWM) to #indices-bias, others to #execute-now
       var isIndexTicker = INDEX_TICKERS.indexOf(tvData.ticker) > -1;
       var stratChannel  = isIndexTicker ? 'indicesBias'
@@ -666,6 +668,11 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       console.log('[EXECUTE-NOW] ' + parsed.ticker + ' ' + stratGrade + ' routed to #' + stratChannel);
 
       // AUTO-EXECUTE in SIM for A+/A grades
+      // AGENT_MODE=CONVICTION_ONLY means skip auto-execute (Discord cards only)
+      if (AGENT_MODE === 'CONVICTION_ONLY') {
+        console.log('[AGENT] CONVICTION_ONLY mode -- Discord card sent, no auto-execute for:', normalTicker);
+      } else if (false) { // placeholder -- never reached
+      // AUTO-EXECUTE BLOCK BELOW
       // Convert OPRA symbol NVDA260406C00175000 to TS format NVDA 260406C175
       function opraToTS(opra) {
         if (!opra) return null;
@@ -678,10 +685,28 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         return om[1] + ' ' + om[2] + om[3] + strike2;
       }
 
+      // SPREAD QUALITY CHECK -- reject before dedup/execution
+      if (resolved && resolved.bid !== null && resolved.ask !== null) {
+        var bidAskSpread = parseFloat(resolved.ask) - parseFloat(resolved.bid);
+        if (bidAskSpread > 0.20) {
+          console.log('[ALERTER] SPREAD REJECTED:', resolved.symbol,
+            'bid:$' + resolved.bid, 'ask:$' + resolved.ask,
+            'spread:$' + bidAskSpread.toFixed(2), '-- too wide, skipping');
+          return; // skip this signal entirely
+        }
+        console.log('[ALERTER] SPREAD CHECK PASSED:', resolved.symbol,
+          'spread:$' + bidAskSpread.toFixed(2));
+      }
+
+      // AGENT MODE -- set AGENT_MODE=FULL in Railway to re-enable auto-execute
+      // Default: CONVICTION_ONLY = Discord cards only, no auto-execute from Strat alerts
+      // Only John's ideas (ideaIngestor) and conviction flow will execute trades
+      var AGENT_MODE = process.env.AGENT_MODE || 'CONVICTION_ONLY';
+
       // DEDUP CHECK -- ONE execution per ticker per direction per day
-      // Uses TICKER:DIRECTION as key (not full OPRA symbol)
-      // so all strikes/expiries for same ticker are blocked after first execution
-      var dedupKey = tvData.ticker + ':' + (tvData.type || 'call');
+      // Normalize ticker first to avoid undefined keys
+      var normalTicker = tvData.ticker || tvData.symbol || tvData.Ticker || '';
+      var dedupKey = normalTicker + ':' + (tvData.type || tvData.action || 'call');
       if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid && !executedToday[dedupKey]) {
         executedToday[dedupKey] = Date.now(); // mark immediately -- blocks ALL subsequent signals for this ticker today
         console.log('[DEDUP] Locking ticker for today:', dedupKey, '-- no more', tvData.type, 'orders on', tvData.ticker, 'until midnight');
@@ -888,5 +913,7 @@ async function sendMorningBrief() {
 async function sendSystemMessage(msg) {
   await sendToChannel('strat', 'STRATUM\n' + msg);
 }
+
+} // close placeholder if block
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
