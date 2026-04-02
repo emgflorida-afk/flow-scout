@@ -44,7 +44,46 @@ async function placeOrder(params) {
     note,        // for logging
   } = params;
 
-  // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
+  // DAILY EXPOSURE TRACKER
+// Tracks total risk deployed today across all trades
+// Resets at midnight ET
+var dailyRiskDeployed = 0;
+var dailyRiskDate     = '';
+
+function getTodayET() {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+}
+
+function resetDailyRiskIfNewDay() {
+  var today = getTodayET();
+  if (dailyRiskDate !== today) {
+    dailyRiskDeployed = 0;
+    dailyRiskDate     = today;
+    console.log('[RISK] Daily exposure reset for new day:', today);
+  }
+}
+
+function checkDailyExposure(riskAmount, accountEquity) {
+  resetDailyRiskIfNewDay();
+  var maxDailyRisk    = (accountEquity || 19268) * 0.02; // 2% of account
+  var projectedTotal  = dailyRiskDeployed + riskAmount;
+  if (projectedTotal > maxDailyRisk) {
+    console.log('[RISK] DAILY EXPOSURE BLOCKED -- deployed:$' + dailyRiskDeployed.toFixed(0) +
+      ' + this:$' + riskAmount.toFixed(0) + ' = $' + projectedTotal.toFixed(0) +
+      ' exceeds 2% limit of $' + maxDailyRisk.toFixed(0));
+    return { allowed: false, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+  }
+  return { allowed: true, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+}
+
+function recordTradeRisk(riskAmount) {
+  resetDailyRiskIfNewDay();
+  dailyRiskDeployed += riskAmount;
+  console.log('[RISK] Trade recorded -- risk:$' + riskAmount.toFixed(0) +
+    ' total today:$' + dailyRiskDeployed.toFixed(0));
+}
+
+// DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
   // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
   // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
   // Financials/others (JPM, GS) = 35% target
@@ -94,6 +133,21 @@ async function placeOrder(params) {
         qty = maxAllowed;
       }
     } catch(e) { /* sizing check skipped */ }
+
+    // DAILY EXPOSURE CHECK -- block if 2% daily risk limit hit
+    try {
+      var riskPerContract = stop ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100 : parseFloat(limit) * 0.40 * 100;
+      var totalRisk       = riskPerContract * (qty || 1);
+      var equityForCheck  = 19268; // approximate -- updated by portfolio check below
+      var exposureCheck   = checkDailyExposure(totalRisk, equityForCheck);
+      if (!exposureCheck.allowed) {
+        var msg = 'Daily 2% risk limit hit -- deployed:$' + exposureCheck.deployed.toFixed(0) +
+          ' + this trade:$' + totalRisk.toFixed(0) + ' = $' + exposureCheck.projected.toFixed(0) +
+          ' exceeds limit of $' + exposureCheck.limit.toFixed(0);
+        console.log('[EXECUTOR] BLOCKED --', msg);
+        return { error: msg };
+      }
+    } catch(e) { console.log('[RISK] Exposure check skipped:', e.message); }
 
     // MAX POSITIONS CHECK -- block if too many open positions
     try {
@@ -318,7 +372,46 @@ async function placeOrder(params) {
 // CLOSE POSITION
 // ================================================================
 async function closePosition(account, symbol, qty) {
-  // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
+  // DAILY EXPOSURE TRACKER
+// Tracks total risk deployed today across all trades
+// Resets at midnight ET
+var dailyRiskDeployed = 0;
+var dailyRiskDate     = '';
+
+function getTodayET() {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+}
+
+function resetDailyRiskIfNewDay() {
+  var today = getTodayET();
+  if (dailyRiskDate !== today) {
+    dailyRiskDeployed = 0;
+    dailyRiskDate     = today;
+    console.log('[RISK] Daily exposure reset for new day:', today);
+  }
+}
+
+function checkDailyExposure(riskAmount, accountEquity) {
+  resetDailyRiskIfNewDay();
+  var maxDailyRisk    = (accountEquity || 19268) * 0.02; // 2% of account
+  var projectedTotal  = dailyRiskDeployed + riskAmount;
+  if (projectedTotal > maxDailyRisk) {
+    console.log('[RISK] DAILY EXPOSURE BLOCKED -- deployed:$' + dailyRiskDeployed.toFixed(0) +
+      ' + this:$' + riskAmount.toFixed(0) + ' = $' + projectedTotal.toFixed(0) +
+      ' exceeds 2% limit of $' + maxDailyRisk.toFixed(0));
+    return { allowed: false, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+  }
+  return { allowed: true, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+}
+
+function recordTradeRisk(riskAmount) {
+  resetDailyRiskIfNewDay();
+  dailyRiskDeployed += riskAmount;
+  console.log('[RISK] Trade recorded -- risk:$' + riskAmount.toFixed(0) +
+    ' total today:$' + dailyRiskDeployed.toFixed(0));
+}
+
+// DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
   // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
   // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
   // Financials/others (JPM, GS) = 35% target
