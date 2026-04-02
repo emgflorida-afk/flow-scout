@@ -593,6 +593,48 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
                     : confluenceScore >= 6              ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
                     : flowMatch                         ? 'A  CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
                     : 'A  CONVICTION TRADE -- 5/6 STRAT';
+      // SMART ENTRY MODE DETECTION
+      // BREAKOUT: ORB/momentum/6-6/near day high -> entry at ask
+      // RETRACEMENT: mid-day pullback/retest -> entry at ask x 0.875
+      function getEntryMode(bars, tvData, resolved) {
+        if (!resolved || !resolved.mid) return { mode: 'RETRACEMENT', entry: null };
+        var ask = parseFloat(resolved.ask || resolved.mid);
+
+        // Get current ET hour
+        var now = new Date();
+        var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+        var etMin  = now.getUTCMinutes();
+        var etTime = etHour * 60 + etMin;
+        var isORBWindow = etTime <= (10 * 60);       // Before 10AM ET
+        var isPrimTime  = etTime <= (11 * 60);       // Before 11AM ET
+
+        // Get day high from bars
+        var dayHigh = bars && bars[0] ? parseFloat(bars[0].High || bars[0].high) : null;
+        var lastPrice = parseFloat(tvData.price || resolved.last || 0);
+        var pctFromHigh = dayHigh ? (dayHigh - lastPrice) / dayHigh : 1;
+
+        // BREAKOUT conditions
+        var is66          = parseInt((tvData.confluence||'0').split('/')[0]) >= 6;
+        var isNearHigh    = pctFromHigh < 0.02;   // within 2% of day high
+        var isMomentum    = isNearHigh && isORBWindow;
+        var isF2          = tvData.strategy && (tvData.strategy.includes('F2') || tvData.strategy.includes('ORB'));
+
+        if (is66 || (isMomentum && isPrimTime) || isF2) {
+          return {
+            mode:  'BREAKOUT',
+            entry: parseFloat(ask.toFixed(2)),
+            note:  is66 ? '6/6 -- entry at ask' : isF2 ? 'ORB/F2 -- entry at ask' : 'Momentum near day high -- entry at ask',
+          };
+        }
+
+        // RETRACEMENT: wait for pullback
+        return {
+          mode:  'RETRACEMENT',
+          entry: parseFloat((ask * 0.875).toFixed(2)),
+          note:  'Mid-day pullback -- retracement entry 12.5%',
+        };
+      }
+
       // Route A+/A to #execute-now, B/C to #conviction-trades
       var stratGrade = (confluenceScore >= 5 || (confluenceScore >= 4 && flowMatch)) ? 'A' : 'B';
       if (confluenceScore >= 5 && flowMatch) stratGrade = 'A+';
@@ -621,12 +663,14 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
 
       if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid) {
         try {
-          var orderExecutor = require('./orderExecutor');
+          var orderExecutor  = require('./orderExecutor');
+          var entryDecision  = getEntryMode(null, tvData, resolved);
           var ep  = parseFloat(resolved.mid);
-          var lmt = parseFloat((ep * 0.875).toFixed(2));
+          var lmt = entryDecision.entry || parseFloat((ep * 0.875).toFixed(2));
           var stp = parseFloat((ep * 0.60).toFixed(2));
           var t1v = parseFloat((ep * 1.60).toFixed(2));
           var qty = stratGrade === 'A+' ? 2 : 1;
+          console.log('[ENTRY-MODE] ' + entryDecision.mode + ' -- ' + entryDecision.note + ' -- limit $' + lmt);
           var er  = await orderExecutor.placeOrder({
             account: 'SIM3142118M',
             symbol:  opraToTS(resolved.symbol),
