@@ -438,6 +438,52 @@ async function monitorWatchlist() {
 
     if (validation.triggered) {
       console.log('[IDEA] TRIGGERED:', idea.ticker, '$' + idea.triggerPrice);
+
+      // PRE-EXECUTE CHECK: Did price gap far away from trigger?
+      // If current price is 2%+ above trigger = gap up scenario
+      // Do NOT open order -- stay armed and wait for dump back
+      var lastClose = bars && bars[0] ? parseFloat(bars[0].Close || bars[0].close) : null;
+      var triggerPx = parseFloat(idea.triggerPrice);
+      var gapPct    = lastClose ? Math.abs(lastClose - triggerPx) / triggerPx : 0;
+      var gappedAway = false;
+
+      if (idea.direction === 'put' && lastClose && lastClose > triggerPx * 1.02) {
+        // Price gapped UP = bad for put entry -- stay armed
+        gappedAway = true;
+        console.log('[IDEA] GAP UP DETECTED:', idea.ticker, 
+          'last=$' + lastClose + ' trigger=$' + triggerPx + 
+          ' gap=' + (gapPct * 100).toFixed(1) + '% -- staying armed, waiting for dump back');
+        await postCard([
+          'GAP WARNING -- ' + idea.ticker + ' put',
+          'Price gapped UP ' + (gapPct * 100).toFixed(1) + '% above trigger',
+          'Trigger: $' + triggerPx + ' | Current: $' + lastClose,
+          'NOT executing -- staying armed',
+          'Will fire if 5-min candle closes below $' + triggerPx + ' before 11AM',
+        ].join('\n'), false);
+        // Reset triggered state -- keep idea in watchlist
+        validation.triggered = false;
+        ideaWatchlist[keys[i]] = idea; // keep armed
+        continue;
+      }
+
+      if (idea.direction === 'call' && lastClose && lastClose < triggerPx * 0.98) {
+        // Price gapped DOWN = bad for call entry -- stay armed
+        gappedAway = true;
+        console.log('[IDEA] GAP DOWN DETECTED:', idea.ticker,
+          'last=$' + lastClose + ' trigger=$' + triggerPx +
+          ' gap=' + (gapPct * 100).toFixed(1) + '% -- staying armed, waiting for bounce back');
+        await postCard([
+          'GAP WARNING -- ' + idea.ticker + ' call',
+          'Price gapped DOWN ' + (gapPct * 100).toFixed(1) + '% below trigger',
+          'Trigger: $' + triggerPx + ' | Current: $' + lastClose,
+          'NOT executing -- staying armed',
+          'Will fire if 5-min candle closes above $' + triggerPx + ' before 11AM',
+        ].join('\n'), false);
+        validation.triggered = false;
+        ideaWatchlist[keys[i]] = idea;
+        continue;
+      }
+
       var card = buildIdeaCard(idea, validation, bars);
       await postCard(card, true);
 
@@ -469,6 +515,24 @@ async function monitorWatchlist() {
 
           if (result.success) {
             console.log('[IDEA] AUTO-EXECUTED:', idea.ticker, 'Order ID:', result.orderId);
+            // Store order for cancel tracking
+            idea.orderId      = result.orderId;
+            idea.orderFiredAt = Date.now();
+            idea.entryLimit   = idea.entryPrice || idea.limit;
+            saveWatchlist();
+
+            // Register with cancel manager
+            try {
+              var cancelManager = require('./cancelManager');
+              cancelManager.trackOrder({
+                orderId:    result.orderId,
+                symbol:     contract,
+                ticker:     idea.ticker,
+                account:    account,
+                entryLimit: idea.entryPrice || idea.limit,
+                direction:  idea.direction,
+              });
+            } catch(e) { console.error('[IDEA] Cancel track error:', e.message); }
             // Post execution confirmation to Discord
             var execCard = [
               'AUTO-EXECUTED -- ' + account,

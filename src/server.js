@@ -63,6 +63,9 @@ try { simMode = require('./simMode'); console.log('[SIM-MODE] Loaded OK'); } cat
 var orderExecutor = null;
 try { orderExecutor = require('./orderExecutor'); console.log('[EXECUTOR] Loaded OK'); } catch(e) { console.log('[EXECUTOR] Skipped:', e.message); }
 
+var cancelManager = null;
+try { cancelManager = require('./cancelManager'); console.log('[CANCEL-MGR] Loaded OK'); } catch(e) { console.log('[CANCEL-MGR] Skipped:', e.message); }
+
 // MASTER AUTONOMOUS AGENT -- the brain of the system
 var stratumAgent = null;
 try {
@@ -514,6 +517,12 @@ app.get('/test/calendar', async function(req, res) { if (!econCalendar) return r
 app.get('/cal/status', function(req, res) { if (!econCalendar) return res.json({ status: 'not loaded' }); res.json(econCalendar.getState()); });
 
 // -- CRONS ------------------------------------------------------
+// Cancel manager -- every 5 min during RTH
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    if (cancelManager) await cancelManager.checkPendingOrders();
+  } catch(e) { console.error('[CANCEL-MGR] Cron error:', e.message); }
+});
 
 // 12:00AM ET -- reset daily execute-now counter
 cron.schedule('0 4 * * 1-5', function() {
