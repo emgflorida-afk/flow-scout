@@ -44,12 +44,16 @@ async function placeOrder(params) {
     var token = await ts.getAccessToken();
     if (!token) return { error: 'No TradeStation token' };
 
-    // Convert OPRA format to TradeStation format if needed
-    // OPRA: NVDA260406C00175000 --> TS: NVDA 260406C175
-    if (symbol && symbol.indexOf(' ') === -1 && /^[A-Z]+\d{6}[CP]/.test(symbol)) {
-      var m = symbol.match(/^([A-Z]+)(\d{6})([CP])0*(\d+(?:\.\d+)?)$/);
-      if (m) {
-        symbol = m[1] + ' ' + m[2] + m[3] + m[4];
+    // Convert OPRA format to TradeStation format
+    // NVDA260406C00175000 -> NVDA 260406C175
+    // NVDA260406C00177500 -> NVDA 260406C177.5
+    if (symbol && symbol.indexOf(' ') === -1 && /^[A-Z]/.test(symbol)) {
+      var om = symbol.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+      if (om) {
+        var whole2  = parseInt(om[4].slice(0, 5), 10);
+        var dec2    = parseInt(om[4].slice(5), 10);
+        var strike2 = dec2 === 0 ? String(whole2) : String(whole2) + '.' + String(dec2).replace(/0+$/, '');
+        symbol = om[1] + ' ' + om[2] + om[3] + strike2;
         console.log('[EXECUTOR] Converted symbol to TS format:', symbol);
       }
     }

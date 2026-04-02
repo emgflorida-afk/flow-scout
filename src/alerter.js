@@ -610,12 +610,13 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       // Convert OPRA symbol NVDA260406C00175000 to TS format NVDA 260406C175
       function opraToTS(opra) {
         if (!opra) return null;
-        // Already has space = already TS format
         if (opra.indexOf(' ') > -1) return opra;
-        // Parse OPRA: TICKER + YYMMDD + C/P + 8-digit-strike
-        var m = opra.match(/^([A-Z]+)(\d{6})([CP])0*(\d+(?:\.\d+)?)$/);
-        if (!m) return opra;
-        return m[1] + ' ' + m[2] + m[3] + m[4];
+        var om = opra.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+        if (!om) return opra;
+        var whole2  = parseInt(om[4].slice(0, 5), 10);
+        var dec2    = parseInt(om[4].slice(5), 10);
+        var strike2 = dec2 === 0 ? String(whole2) : String(whole2) + '.' + String(dec2).replace(/0+$/, '');
+        return om[1] + ' ' + om[2] + om[3] + strike2;
       }
 
       if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid) {
