@@ -44,6 +44,80 @@ async function placeOrder(params) {
     var token = await ts.getAccessToken();
     if (!token) return { error: 'No TradeStation token' };
 
+    // SMART CONTRACT SIZING -- based on account size and premium
+    // Overrides qty if it exceeds safe sizing for account
+    try {
+      var premium    = parseFloat(limit);
+      var orderCost  = premium * 100; // cost per contract
+      var acctSize   = 19268;         // approximate live account size
+      var maxRisk2pct = acctSize * 0.02; // $385 max risk
+
+      // Premium-based sizing rules for $19K account:
+      // Under $1.00 = max 3 contracts
+      // $1.00-$2.00 = max 2 contracts
+      // $2.00-$4.00 = max 1 contract
+      // Over $4.00  = max 1 contract
+      var premiumLimit;
+      if      (premium < 1.00) premiumLimit = 3;
+      else if (premium < 2.00) premiumLimit = 2;
+      else                     premiumLimit = 1;
+
+      // Also cap by 2% risk rule
+      var riskLimit = Math.max(1, Math.floor(maxRisk2pct / orderCost));
+
+      // Take the more conservative of the two
+      var maxAllowed = Math.min(premiumLimit, riskLimit);
+      if (qty > maxAllowed) {
+        console.log('[EXECUTOR] Qty reduced from ' + qty + ' to ' + maxAllowed +
+          ' -- premium $' + premium + ' risk limit $' + maxRisk2pct.toFixed(0));
+        qty = maxAllowed;
+      }
+    } catch(e) { /* sizing check skipped */ }
+
+    // MAX POSITIONS CHECK -- block if too many open positions
+    try {
+      var posMgr = require('./positionManager');
+      var maxCheck = await posMgr.checkMaxPositions(account);
+      if (!maxCheck.allowed) {
+        console.log('[EXECUTOR] BLOCKED -- max positions hit:', maxCheck.current, '/', maxCheck.max);
+        return { error: 'Max positions hit -- ' + maxCheck.current + '/' + maxCheck.max + ' open. Close a position first.' };
+      }
+    } catch(e) { /* position manager not loaded -- continue */ }
+
+    // CONFLICT CHECK -- no opposite side same ticker
+    try {
+      var posMgr2  = require('./positionManager');
+      var ticker2  = symbol.split(' ')[0].replace(/[0-9]/g, '').toUpperCase();
+      var dir2     = symbol.includes('C') ? 'call' : 'put';
+      var conflict = await posMgr2.checkConflict(account, ticker2, dir2);
+      if (!conflict.allowed) {
+        console.log('[EXECUTOR] BLOCKED -- conflict:', ticker2, 'already have', conflict.conflict, 'cannot open', dir2);
+        return { error: 'Conflict block -- already have ' + conflict.conflict + ' on ' + ticker2 + '. Cannot open ' + dir2 };
+      }
+    } catch(e) { /* position manager not loaded -- continue */ }
+
+    // DYNAMIC BIAS CHECK -- block if trading against current bias
+    try {
+      var dynamicBias = require('./dynamicBias');
+      var direction   = (action === 'BUYTOOPEN') 
+        ? (symbol.includes('C') ? 'call' : 'put')
+        : null;
+      if (direction && !dynamicBias.isAllowed(direction)) {
+        var bias = dynamicBias.getBias();
+        console.log('[EXECUTOR] BLOCKED -- trading against bias:', bias.bias, bias.strength, 'direction:', direction);
+        return { error: 'Bias block -- current bias is ' + bias.bias + ' (' + bias.strength + '), cannot open ' + direction };
+      }
+    } catch(e) { /* dynamic bias not loaded -- continue */ }
+
+    // DAILY LOSS LIMIT CHECK -- block if limit hit
+    try {
+      var lossLimit = require('./dailyLossLimit');
+      if (lossLimit.isBlocked(account)) {
+        console.log('[EXECUTOR] BLOCKED -- daily loss limit hit for account:', account);
+        return { error: 'Daily loss limit hit -- no new positions allowed today' };
+      }
+    } catch(e) { /* loss limit module not loaded -- continue */ }
+
     // Convert OPRA format to TradeStation format
     // NVDA260406C00175000 -> NVDA 260406C175
     // NVDA260406C00177500 -> NVDA 260406C177.5

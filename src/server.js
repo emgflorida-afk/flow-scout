@@ -66,6 +66,15 @@ try { orderExecutor = require('./orderExecutor'); console.log('[EXECUTOR] Loaded
 var cancelManager = null;
 try { cancelManager = require('./cancelManager'); console.log('[CANCEL-MGR] Loaded OK'); } catch(e) { console.log('[CANCEL-MGR] Skipped:', e.message); }
 
+var dailyLossLimit = null;
+try { dailyLossLimit = require('./dailyLossLimit'); console.log('[LOSS-LIMIT] Loaded OK'); } catch(e) { console.log('[LOSS-LIMIT] Skipped:', e.message); }
+
+var dynamicBias = null;
+try { dynamicBias = require('./dynamicBias'); console.log('[DYNAMIC-BIAS] Loaded OK'); } catch(e) { console.log('[DYNAMIC-BIAS] Skipped:', e.message); }
+
+var positionManager = null;
+try { positionManager = require('./positionManager'); console.log('[POS-MGR] Loaded OK'); } catch(e) { console.log('[POS-MGR] Skipped:', e.message); }
+
 // MASTER AUTONOMOUS AGENT -- the brain of the system
 var stratumAgent = null;
 try {
@@ -431,6 +440,30 @@ app.post('/webhook/close', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// GET /bias -- current dynamic bias
+app.get('/bias', function(req, res) {
+  if (!dynamicBias) return res.json({ status: 'not loaded' });
+  res.json({ status: 'OK', bias: dynamicBias.getBias() });
+});
+
+// GET /loss-limit/status -- check if loss limit is triggered
+app.get('/loss-limit/status', function(req, res) {
+  if (!dailyLossLimit) return res.json({ status: 'not loaded' });
+  res.json({
+    live: { blocked: dailyLossLimit.isBlocked('11975462') },
+    sim:  { blocked: dailyLossLimit.isBlocked('SIM3142118M') },
+  });
+});
+
+// POST /loss-limit/override -- emergency override
+app.post('/loss-limit/override', function(req, res) {
+  var secret = req.headers['x-stratum-secret'];
+  if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  if (!dailyLossLimit) return res.json({ status: 'not loaded' });
+  dailyLossLimit.override(req.body.account || '11975462');
+  res.json({ status: 'OK', message: 'Loss limit override applied' });
+});
+
 // -- SIM MODE ENDPOINTS
 app.post('/sim/enable', async function(req, res) {
   try {
@@ -522,6 +555,103 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {
     if (cancelManager) await cancelManager.checkPendingOrders();
   } catch(e) { console.error('[CANCEL-MGR] Cron error:', e.message); }
+});
+
+// MORNING BIAS RESET -- 9:30AM ET every trading day
+// Pulls fresh SPY bar and resets bias before first trade fires
+cron.schedule('30 9 * * 1-5', async function() {
+  try {
+    if (!dynamicBias) return;
+    console.log('[DYNAMIC-BIAS] 9:30AM reset -- pulling fresh SPY bias');
+    await dynamicBias.updateBias();
+    var state = dynamicBias.getBias();
+    console.log('[DYNAMIC-BIAS] Morning bias set:', state.bias, state.strength, 'SPY $' + state.spyPrice);
+    // Post morning bias to Discord
+    var webhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+      'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+    var fetch = require('node-fetch');
+    var msg = [
+      'MORNING BIAS RESET -- 9:30AM',
+      '==============================',
+      'Bias:    ' + (state.bias || 'DETECTING...'),
+      'Strength: ' + (state.strength || 'WEAK'),
+      'SPY:     $' + (state.spyPrice || 'loading...'),
+      'VWAP:    $' + (state.spyVwap || 'loading...'),
+      'Bar:     ' + (state.barType || 'loading...'),
+      state.bias === 'BEARISH' ? 'ACTION:  PUTS ONLY -- calls blocked' : 
+      state.bias === 'BULLISH' ? 'ACTION:  CALLS ONLY -- puts blocked' : 
+      'ACTION:  NEUTRAL -- watching',
+    ].join('\n');
+    await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '```\n' + msg + '\n```', username: 'Stratum Morning Bias' }),
+    });
+  } catch(e) { console.error('[DYNAMIC-BIAS] Morning reset error:', e.message); }
+});
+
+// MOVE STOPS TO BREAKEVEN -- every 5 min during RTH
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    if (!positionManager) return;
+    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
+    var etMin  = new Date().getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    if (etTime < (9 * 60 + 45) || etTime > (15 * 60 + 30)) return;
+    await positionManager.checkAndMoveStops('11975462');
+  } catch(e) { console.error('[POS-MGR] Stop monitor error:', e.message); }
+});
+
+// SIM PROMOTION CHECK -- every day at 4:30PM ET
+cron.schedule('30 16 * * 1-5', async function() {
+  try {
+    if (!positionManager) return;
+    await positionManager.checkSimPromotion();
+  } catch(e) { console.error('[POS-MGR] SIM promotion error:', e.message); }
+});
+
+// EOD CLOSE ALL -- 3:45PM ET: try limit orders first
+cron.schedule('45 15 * * 1-5', async function() {
+  try {
+    if (!positionManager) return;
+    console.log('[POS-MGR] 3:45PM ET -- EOD limit close attempt');
+    await positionManager.eodCloseAll('11975462');
+  } catch(e) { console.error('[POS-MGR] EOD cron error:', e.message); }
+});
+
+// EOD BACKUP -- 3:55PM ET: market orders for anything not filled
+cron.schedule('55 15 * * 1-5', async function() {
+  try {
+    if (!positionManager) return;
+    console.log('[POS-MGR] 3:55PM ET -- EOD market close backup');
+    await positionManager.eodCloseAll('11975462');
+  } catch(e) { console.error('[POS-MGR] EOD backup cron error:', e.message); }
+});
+
+// DYNAMIC BIAS UPDATE -- every 5 min during RTH
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    if (!dynamicBias) return;
+    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
+    var etMin  = new Date().getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
+    await dynamicBias.updateBias();
+  } catch(e) { console.error('[DYNAMIC-BIAS] Cron error:', e.message); }
+});
+
+// DAILY LOSS LIMIT CHECK -- every 5 min during RTH
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    if (!dailyLossLimit) return;
+    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
+    var etMin  = new Date().getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
+    // Check both accounts
+    await dailyLossLimit.checkDailyLoss('11975462');
+    await dailyLossLimit.checkDailyLoss('SIM3142118M');
+  } catch(e) { console.error('[LOSS-LIMIT] Cron error:', e.message); }
 });
 
 // IDEA WATCHLIST CHECK -- every 5 min during RTH (9:30AM - 4PM ET)
