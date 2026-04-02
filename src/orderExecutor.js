@@ -135,10 +135,12 @@ function recordTradeRisk(riskAmount) {
     } catch(e) { /* sizing check skipped */ }
 
     // DAILY EXPOSURE CHECK -- block if 2% daily risk limit hit
+    // Uses ACCOUNT-SPECIFIC equity -- live account gets $19K limit, SIM gets $1M limit
     try {
       var riskPerContract = stop ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100 : parseFloat(limit) * 0.40 * 100;
       var totalRisk       = riskPerContract * (qty || 1);
-      var equityForCheck  = 19268; // approximate -- updated by portfolio check below
+      // Hard-coded per account -- prevents SIM $1M from inflating the limit
+      var equityForCheck  = (account === '11975462') ? 19268 : 50000; // live=real equity, SIM=capped at $50K equivalent
       var exposureCheck   = checkDailyExposure(totalRisk, equityForCheck);
       if (!exposureCheck.allowed) {
         var msg = 'Daily 2% risk limit hit -- deployed:$' + exposureCheck.deployed.toFixed(0) +
