@@ -13,7 +13,12 @@ var TS_SIM  = 'https://sim-api.tradestation.com/v3';
 // ================================================================
 // GET BASE URL -- live vs sim
 // ================================================================
-function getBaseUrl(account) {
+function getBaseUrl(account, liveBypass) {
+  // liveBypass=true means ALWAYS use live API (John's ideas bypass simMode)
+  if (liveBypass === true) {
+    console.log('[EXECUTOR] liveBypass -- forcing LIVE API for:', account);
+    return TS_LIVE;
+  }
   // SIM accounts start with SIM
   if (account && account.toUpperCase().startsWith('SIM')) {
     return TS_SIM;
@@ -186,7 +191,7 @@ async function placeOrder(params) {
       console.log('[EXECUTOR] Portfolio check skipped:', e.message);
     }
 
-    var base = getBaseUrl(account);
+    var base = getBaseUrl(account, params.liveBypass || false);
     console.log('[EXECUTOR] Placing order on', base, '-- account:', account);
     console.log('[EXECUTOR] Order:', symbol, action, qty, 'x @ $' + limit);
 
@@ -302,7 +307,7 @@ async function closePosition(account, symbol, qty) {
     var token = await ts.getAccessToken();
     if (!token) return { error: 'No TradeStation token' };
 
-    var base = getBaseUrl(account);
+    var base = getBaseUrl(account, params.liveBypass || false);
 
     var orderBody = {
       AccountID:   account,

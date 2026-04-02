@@ -671,7 +671,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       // AGENT_MODE=CONVICTION_ONLY means skip auto-execute (Discord cards only)
       if (AGENT_MODE === 'CONVICTION_ONLY') {
         console.log('[AGENT] CONVICTION_ONLY mode -- Discord card sent, no auto-execute for:', normalTicker);
-      } else if (false) { // placeholder -- never reached
+      } else {
       // AUTO-EXECUTE BLOCK BELOW
       // Convert OPRA symbol NVDA260406C00175000 to TS format NVDA 260406C175
       function opraToTS(opra) {
@@ -735,6 +735,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
           }
         } catch(e) { console.error('[AUTO-EXEC]', e.message); }
       }
+      } // close CONVICTION_ONLY else block
     }
   }
   return true;
@@ -913,7 +914,5 @@ async function sendMorningBrief() {
 async function sendSystemMessage(msg) {
   await sendToChannel('strat', 'STRATUM\n' + msg);
 }
-
-} // close placeholder if block
 
 module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };

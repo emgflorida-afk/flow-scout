@@ -628,6 +628,21 @@ cron.schedule('55 15 * * 1-5', async function() {
   } catch(e) { console.error('[POS-MGR] EOD backup cron error:', e.message); }
 });
 
+// ORPHAN ORDER SWEEP -- every 30 min during RTH
+// Cancels ALL unfilled BUYTOOPEN orders older than 90 min
+// Catches orders never tracked by cancelManager
+cron.schedule('*/30 9-16 * * 1-5', async function() {
+  try {
+    if (!cancelManager || !cancelManager.sweepOrphanOrders) return;
+    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
+    var etMin  = new Date().getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
+    await cancelManager.sweepOrphanOrders('SIM3142118M');
+    await cancelManager.sweepOrphanOrders('11975462');
+  } catch(e) { console.error('[CANCEL-MGR] Orphan sweep cron error:', e.message); }
+});
+
 // DYNAMIC BIAS UPDATE -- every 5 min during RTH
 cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {

@@ -494,7 +494,9 @@ async function monitorWatchlist() {
       // AUTO-EXECUTE -- place order immediately on trigger
       try {
         var orderExecutor = require('./orderExecutor');
-        var account = idea.live ? '11975462' : 'SIM3142118M';
+        // BYPASS simMode -- John's ideas always use the correct API directly
+        var account   = idea.live === true ? '11975462' : 'SIM3142118M';
+        var liveBypass = idea.live === true; // tells orderExecutor to use live API
         var action   = idea.direction === 'put' ? 'BUYTOOPEN' : 'BUYTOOPEN';
         var contract = idea.contract || (idea.ticker + ' ' + idea.contractSymbol);
 
@@ -516,9 +518,16 @@ async function monitorWatchlist() {
         idea.executed = true;
         saveWatchlist();
 
+        // CRITICAL FIX: John's ideas with live:true ALWAYS use live API
+        // They BYPASS simMode flag entirely -- simMode only affects Strat alerts
+        var ideaAccount = idea.live === true ? '11975462' : 'SIM3142118M';
+        var ideaIsLive  = idea.live === true;
+        console.log('[IDEA] Routing order -- live:', idea.live, 'account:', ideaAccount, '(bypasses simMode)');
+
         if (contract && idea.entryPrice) {
           var result = await orderExecutor.placeOrder({
-            account:  account,
+            account:     account,
+            liveBypass:  liveBypass, // bypasses simMode flag for John's ideas
             symbol:   contract,
             action:   action,
             qty:      idea.contracts || 1,

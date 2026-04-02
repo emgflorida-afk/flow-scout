@@ -42,6 +42,69 @@ function trackOrder(params) {
   console.log('[CANCEL-MGR] Tracking order:', orderId, ticker, 'limit $' + entryLimit);
 }
 
+// ================================================================
+// ORPHAN ORDER SWEEP -- cancels ALL unfilled BTO orders
+// not just tracked ones -- catches orders placed before cancel
+// manager was deployed or orders that were never tracked
+// ================================================================
+async function sweepOrphanOrders(account) {
+  try {
+    var ts    = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return;
+
+    var isSim = account && account.toUpperCase().startsWith('SIM');
+    var base  = isSim
+      ? 'https://sim-api.tradestation.com/v3'
+      : 'https://api.tradestation.com/v3';
+
+    // Get all open orders for account
+    var res  = await fetch(base + '/brokerage/accounts/' + account + '/orders?status=Open', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var data   = await res.json();
+    var orders = data.Orders || data.orders || [];
+
+    var now    = Date.now();
+    var cutoff = 90 * 60 * 1000; // 90 min
+
+    var canceled = 0;
+    for (var i = 0; i < orders.length; i++) {
+      var o          = orders[i];
+      var action     = (o.TradeAction || o.tradeAction || '');
+      var orderTime  = new Date(o.OpenedDateTime || o.Timestamp || 0).getTime();
+      var age        = now - orderTime;
+      var orderId    = o.OrderID || o.orderId;
+      var sym        = o.Symbol || o.symbol;
+      var status     = o.Status || o.status;
+
+      // Only cancel BUYTOOPEN limit orders older than 90 min
+      if (action === 'BUYTOOPEN' && age > cutoff && orderId) {
+        try {
+          var cancelRes = await fetch(base + '/orderexecution/orders/' + orderId, {
+            method:  'DELETE',
+            headers: { 'Authorization': 'Bearer ' + token },
+          });
+          var ageMin = Math.round(age / 60000);
+          console.log('[CANCEL-MGR] Orphan canceled:', sym, 'order:', orderId, 'age:', ageMin + 'min');
+          canceled++;
+        } catch(e) {
+          console.error('[CANCEL-MGR] Orphan cancel error for', orderId, ':', e.message);
+        }
+      }
+    }
+
+    if (canceled > 0) {
+      console.log('[CANCEL-MGR] Orphan sweep complete -- canceled', canceled, 'unfilled orders on', account);
+    } else {
+      console.log('[CANCEL-MGR] Orphan sweep -- no stale orders found on', account);
+    }
+
+  } catch(e) {
+    console.error('[CANCEL-MGR] Orphan sweep error:', e.message);
+  }
+}
+
 // Check all pending orders -- cancel if rules triggered
 async function checkPendingOrders() {
   var keys = Object.keys(pendingOrders);
@@ -146,4 +209,4 @@ function orderFilled(orderId) {
   }
 }
 
-module.exports = { trackOrder, checkPendingOrders, orderFilled };
+module.exports = { trackOrder, checkPendingOrders, orderFilled, sweepOrphanOrders };
