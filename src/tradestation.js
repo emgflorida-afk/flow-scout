@@ -45,6 +45,10 @@ async function getAccessToken() {
         return _accessToken;
       }
       console.error('[TS] Refresh failed:', data.error_description || data.error);
+      // Only alert during market hours (9AM-4:30PM ET) to avoid false alarms
+      var etHourNow = ((new Date().getUTCHours() - 4) + 24) % 24;
+      var isDuringMarketHours = etHourNow >= 9 && etHourNow < 17;
+      if (isDuringMarketHours) {
       // Post to Discord that token needs re-auth
       try {
         var webhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
@@ -58,6 +62,7 @@ async function getAccessToken() {
           }),
         });
       } catch(de) { /* discord alert failed -- not critical */ }
+      } // end isDuringMarketHours check
     } catch(e) { console.error('[TS] Refresh error:', e.message); }
   }
   console.log('[TS] No token -- visit /ts-auth to authenticate');

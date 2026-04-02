@@ -658,13 +658,41 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       var isIndexTicker = INDEX_TICKERS.indexOf(tvData.ticker) > -1;
       var stratChannel  = isIndexTicker ? 'indicesBias'
         : ((stratGrade === 'A+' || stratGrade === 'A') ? 'executeNow' : 'conviction');
-      await sendToChannel(stratChannel,
-        card.text
-          .replace('SWING TRADE',  convLabel)
-          .replace('DAY TRADE',    convLabel)
-          .replace('SPREAD TRADE', convLabel),
-        card.ticker
-      );
+      // Send FULL card to #strat-alerts (reference)
+      // Send COMPACT card to #execute-now and #indices-bias (action)
+      var isActionChannel = (stratChannel === 'executeNow' || stratChannel === 'indicesBias');
+
+      if (isActionChannel) {
+        // COMPACT 3-LINE CARD for action channels
+        var cType    = (tvData.type || 'call').toUpperCase();
+        var cPrice   = tvData.price || '?';
+        var cDTE     = resolved && resolved.dte ? resolved.dte + 'DTE' : '?';
+        var cEntry   = resolved && resolved.mid ? parseFloat(resolved.mid * 0.875).toFixed(2) : '?';
+        var cStop    = resolved && resolved.stop ? resolved.stop : '?';
+        var cT1      = resolved && resolved.t1 ? resolved.t1 : '?';
+        var cScore   = [];
+        if (flowMatch) cScore.push('Flow');
+        if (tvData.h6bias) cScore.push('Bias');
+        if (confluenceScore >= 5) cScore.push('5/6+');
+        var cTime    = new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'});
+        // EMOJI COMPACT CARD -- scannable in 2 seconds
+        var gradeEmoji = stratGrade === 'A+' ? '\uD83D\uDD25' : stratGrade === 'A' ? '\u2B50' : '\uD83D\uDFE1';
+        var dirEmoji   = cType === 'CALL' ? '\uD83D\uDCC8' : '\uD83D\uDCC9';
+        var scoreEmoji = cScore.length >= 3 ? '\uD83C\uDFAF' : cScore.length >= 2 ? '\u2705' : '\uD83D\uDFE1';
+        var cLine1   = gradeEmoji + ' ' + stratGrade + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
+        var cLine2   = '\uD83D\uDCB0 Entry $' + cEntry + '  \uD83D\uDED1 Stop $' + cStop + '  \uD83C\uDFAF T1 $' + cT1;
+        var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET';
+        var compact  = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+        await sendToChannel(stratChannel, compact, parsed.ticker);
+      } else {
+        await sendToChannel(stratChannel,
+          card.text
+            .replace('SWING TRADE',  convLabel)
+            .replace('DAY TRADE',    convLabel)
+            .replace('SPREAD TRADE', convLabel),
+          card.ticker
+        );
+      }
       console.log('[EXECUTE-NOW] ' + parsed.ticker + ' ' + stratGrade + ' routed to #' + stratChannel);
 
       // AUTO-EXECUTE in SIM for A+/A grades
