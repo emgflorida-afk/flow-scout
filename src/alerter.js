@@ -21,6 +21,8 @@ const WEBHOOKS = {
   strat:      process.env.DISCORD_WEBHOOK_URL,
   flow:       process.env.DISCORD_FLOW_WEBHOOK_URL,
   conviction: process.env.DISCORD_CONVICTION_WEBHOOK_URL,
+  executeNow:  process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+    'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx',
 };
 
 // -- FINVIZ CHART -------------------------------------------------
@@ -591,14 +593,44 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
                     : confluenceScore >= 6              ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
                     : flowMatch                         ? 'A  CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
                     : 'A  CONVICTION TRADE -- 5/6 STRAT';
-      await sendToChannel('conviction',
+      // Route A+/A to #execute-now, B/C to #conviction-trades
+      var stratGrade = (confluenceScore >= 5 || (confluenceScore >= 4 && flowMatch)) ? 'A' : 'B';
+      if (confluenceScore >= 5 && flowMatch) stratGrade = 'A+';
+      var stratChannel = (stratGrade === 'A+' || stratGrade === 'A') ? 'executeNow' : 'conviction';
+      await sendToChannel(stratChannel,
         card.text
           .replace('SWING TRADE',  convLabel)
           .replace('DAY TRADE',    convLabel)
           .replace('SPREAD TRADE', convLabel),
         card.ticker
       );
-      console.log('[CONVICTION] ' + parsed.ticker + ' ' + confluenceScore + '/6 grade fired to #conviction-trades');
+      console.log('[EXECUTE-NOW] ' + parsed.ticker + ' ' + stratGrade + ' routed to #' + stratChannel);
+
+      // AUTO-EXECUTE in SIM for A+/A grades
+      if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid) {
+        try {
+          var orderExecutor = require('./orderExecutor');
+          var ep  = parseFloat(resolved.mid);
+          var lmt = parseFloat((ep * 0.875).toFixed(2));
+          var stp = parseFloat((ep * 0.60).toFixed(2));
+          var t1v = parseFloat((ep * 1.60).toFixed(2));
+          var qty = stratGrade === 'A+' ? 2 : 1;
+          var er  = await orderExecutor.placeOrder({
+            account: 'SIM3142118M',
+            symbol:  resolved.symbol,
+            action:  'BUYTOOPEN',
+            qty:     qty,
+            limit:   lmt,
+            stop:    stp,
+            t1:      t1v,
+          });
+          if (er && er.success) {
+            console.log('[AUTO-EXEC] SIM order placed:', resolved.symbol, 'ID:', er.orderId);
+          } else {
+            console.log('[AUTO-EXEC] Failed:', er && er.error);
+          }
+        } catch(e) { console.error('[AUTO-EXEC]', e.message); }
+      }
     }
   }
   return true;
@@ -704,7 +736,9 @@ async function sendFlowAlert(opraSymbol, flowData) {
         } catch(e) { console.error('[AUTO-EXEC]', e.message); }
       }
 
-      await sendToChannel('conviction',
+      // Route A+/A to #execute-now, everything else to #conviction-trades
+      var targetChannel = (grade === 'A+' || grade === 'A') ? 'executeNow' : 'conviction';
+      await sendToChannel(targetChannel,
           card.text.replace('SWING TRADE', 'CONVICTION TRADE'),
           card.ticker
         );
