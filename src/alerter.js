@@ -678,7 +678,33 @@ async function sendFlowAlert(opraSymbol, flowData) {
         ? buildSpreadCard(res2, {})
         : buildStratCard(res2.symbol, { mid: res2.mid, bid: res2.bid, ask: res2.ask, mode: res2.mode, dte: res2.dte }, res2);
       if (card) {
-        await sendToChannel('conviction',
+        // AUTO-EXECUTE in SIM -- fires after conviction card posts
+      if (resolved && resolved.mid && (grade === 'A+' || grade === 'A')) {
+        try {
+          var orderExecutor = require('./orderExecutor');
+          var execPremium = parseFloat(resolved.mid);
+          var execLimit   = parseFloat((execPremium * 0.875).toFixed(2));
+          var execStop    = parseFloat((execPremium * 0.60).toFixed(2));
+          var execT1      = parseFloat((execPremium * 1.60).toFixed(2));
+          var execQty     = (confluenceScore >= 5 && flowMatch) ? 2 : 1;
+          var execResult  = await orderExecutor.placeOrder({
+            account: 'SIM3142118M',
+            symbol:  resolved.symbol,
+            action:  'BUYTOOPEN',
+            qty:     execQty,
+            limit:   execLimit,
+            stop:    execStop,
+            t1:      execT1,
+          });
+          if (execResult && execResult.success) {
+            console.log('[AUTO-EXEC] SIM order placed:', resolved.symbol, 'ID:', execResult.orderId);
+          } else {
+            console.log('[AUTO-EXEC] Failed:', execResult && execResult.error);
+          }
+        } catch(e) { console.error('[AUTO-EXEC]', e.message); }
+      }
+
+      await sendToChannel('conviction',
           card.text.replace('SWING TRADE', 'CONVICTION TRADE'),
           card.ticker
         );

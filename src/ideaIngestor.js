@@ -408,6 +408,57 @@ async function monitorWatchlist() {
       console.log('[IDEA] TRIGGERED:', idea.ticker, '$' + idea.triggerPrice);
       var card = buildIdeaCard(idea, validation, bars);
       await postCard(card, true);
+
+      // AUTO-EXECUTE -- place order immediately on trigger
+      try {
+        var orderExecutor = require('./orderExecutor');
+        var account = idea.live ? '11975462' : 'SIM3142118M';
+        var action   = idea.direction === 'put' ? 'BUYTOOPEN' : 'BUYTOOPEN';
+        var contract = idea.contract || (idea.ticker + ' ' + idea.contractSymbol);
+
+        // Build contract symbol if not provided
+        if (!idea.contract && idea.expiry && idea.strike) {
+          var exp = idea.expiry.replace(/-/g, '').slice(2); // YYMMDD
+          var type = idea.direction === 'put' ? 'P' : 'C';
+          contract = idea.ticker + ' ' + exp + type + idea.strike;
+        }
+
+        if (contract && idea.entryPrice) {
+          var result = await orderExecutor.placeOrder({
+            account:  account,
+            symbol:   contract,
+            action:   action,
+            qty:      idea.contracts || 1,
+            limit:    idea.entryPrice || idea.limit,
+            stop:     idea.stop,
+            t1:       idea.t1,
+            t2:       idea.t2,
+          });
+
+          if (result.success) {
+            console.log('[IDEA] AUTO-EXECUTED:', idea.ticker, 'Order ID:', result.orderId);
+            // Post execution confirmation to Discord
+            var execCard = [
+              'AUTO-EXECUTED -- ' + account,
+              idea.ticker + ' ' + (idea.direction || 'put').toUpperCase() + ' -- ' + (idea.source || 'John'),
+              '===============================',
+              'Contract:  ' + contract,
+              'Entry:     $' + (idea.entryPrice || idea.limit) + ' x' + (idea.contracts || 1),
+              'Stop:      $' + idea.stop,
+              'T1:        $' + idea.t1,
+              'Order ID:  ' + result.orderId,
+              'Bracket:   ' + (result.bracketSet ? 'SET' : 'PENDING'),
+              'Account:   ' + account,
+            ].join('\n');
+            await postCard(execCard, true);
+          } else {
+            console.error('[IDEA] Auto-execute failed:', result.error);
+          }
+        }
+      } catch(e) {
+        console.error('[IDEA] Auto-execute error:', e.message);
+      }
+
       delete ideaWatchlist[keys[i]];
     } else if (validation.wick) {
       console.log('[IDEA] WICK detected:', idea.ticker, '-- posting warning');
