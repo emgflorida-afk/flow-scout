@@ -44,6 +44,22 @@ async function placeOrder(params) {
     note,        // for logging
   } = params;
 
+  // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
+  // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
+  // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
+  // Financials/others (JPM, GS) = 35% target
+  if (!t1 && limit) {
+    var HIGH_VOL_T = ['TSLA', 'COIN', 'MRVL', 'NVDA'];
+    var MED_VOL_T  = ['AAPL', 'AMZN', 'MSFT', 'GOOGL', 'META'];
+    var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
+    var t1Mult;
+    if (HIGH_VOL_T.indexOf(baseTicker) > -1)    t1Mult = 1.50;
+    else if (MED_VOL_T.indexOf(baseTicker) > -1) t1Mult = 1.40;
+    else                                          t1Mult = 1.35;
+    t1 = parseFloat((parseFloat(limit) * t1Mult).toFixed(2));
+    console.log('[EXECUTOR] Dynamic T1:', baseTicker, 'mult:', t1Mult, 'entry:$' + limit, 'T1:$' + t1);
+  }
+
   try {
     var ts    = require('./tradestation');
     var token = await ts.getAccessToken();
@@ -302,6 +318,22 @@ async function placeOrder(params) {
 // CLOSE POSITION
 // ================================================================
 async function closePosition(account, symbol, qty) {
+  // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
+  // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
+  // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
+  // Financials/others (JPM, GS) = 35% target
+  if (!t1 && limit) {
+    var HIGH_VOL_T = ['TSLA', 'COIN', 'MRVL', 'NVDA'];
+    var MED_VOL_T  = ['AAPL', 'AMZN', 'MSFT', 'GOOGL', 'META'];
+    var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
+    var t1Mult;
+    if (HIGH_VOL_T.indexOf(baseTicker) > -1)    t1Mult = 1.50;
+    else if (MED_VOL_T.indexOf(baseTicker) > -1) t1Mult = 1.40;
+    else                                          t1Mult = 1.35;
+    t1 = parseFloat((parseFloat(limit) * t1Mult).toFixed(2));
+    console.log('[EXECUTOR] Dynamic T1:', baseTicker, 'mult:', t1Mult, 'entry:$' + limit, 'T1:$' + t1);
+  }
+
   try {
     var ts    = require('./tradestation');
     var token = await ts.getAccessToken();
