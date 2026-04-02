@@ -103,8 +103,16 @@ app.post('/interactions', async function(req, res) {
 
 app.post('/webhook/idea', async function(req, res) {
   try {
+    var secret = req.headers['x-stratum-secret'];
+    // John's trade ideas -- route to ideaIngestor
+    if (ideaIngestor && req.body.ticker && secret === process.env.STRATUM_SECRET) {
+      var idea   = req.body;
+      var result = await ideaIngestor.ingestIdea(idea);
+      return res.json({ status: 'OK', result });
+    }
+    // Fallback -- old text based validator
     var text = req.body.text || req.body.content || req.body.idea || '';
-    if (!text) return res.status(400).json({ error: 'Missing text' });
+    if (!text) return res.status(400).json({ error: 'Missing text or ticker' });
     var webhookUrl = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
     ideaValidator.validateAndPost(text, webhookUrl).catch(console.error);
     res.json({ status: 'processing', text: text });
