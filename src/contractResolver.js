@@ -742,6 +742,23 @@ async function findBestContract(opraSymbol) {
       const premium = snap.mid || snap.ask;
       if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
       const score = scoreContract(snap, price);
+
+      // HARD BLOCKS -- skip contracts that fail critical checks
+      if (score.alreadyMoved) {
+        console.log('[RESOLVER] Skipping', c.ticker, '-- move already happened');
+        continue;
+      }
+      if ((snap.volume || 0) < 50) {
+        console.log('[RESOLVER] Skipping', c.ticker, '-- volume too low:', snap.volume);
+        continue;
+      }
+      const spreadAbs = (snap.ask || 0) - (snap.bid || 0);
+      if (spreadAbs > 0.20) {
+        console.log('[RESOLVER] Skipping', c.ticker, '-- spread too wide: $' + spreadAbs.toFixed(2));
+        continue;
+      }
+
+      // Pick highest scoring contract across the full chain
       if (!best || score.total > best.score.total) {
         best = {
           ticker, optionTicker: c.ticker, strike: snap.strike, expiry: snap.expiry,
@@ -749,7 +766,14 @@ async function findBestContract(opraSymbol) {
           volume: snap.volume, openInterest: snap.openInterest,
           delta: snap.delta, gamma: snap.gamma, theta: snap.theta, vega: snap.vega,
           iv: snap.iv, price, score, isLive: true,
+          // Extra fields for compact card display
+          dayHigh: snap.dayHigh, dayOpen: snap.dayOpen,
+          probITM: score.profitProb,
+          grade: score.grade,
+          warnings: score.warnings,
+          bonuses: score.bonuses,
         };
+        console.log('[RESOLVER] New best:', c.ticker, 'score:', score.total + '/11', 'grade:', score.grade);
       }
     }
     if (!best) return { error: 'No contracts in range' };
@@ -759,6 +783,88 @@ async function findBestContract(opraSymbol) {
 
 // -- SCORE CONTRACT ------------------------------------------------
 function scoreContract(snap, underlyingPrice) {
+  let total = 0; const warnings = []; const bonuses = [];
+  const premium   = snap.mid || snap.ask;
+  const bid       = snap.bid || 0;
+  const ask       = snap.ask || 0;
+  const spreadAbs = ask - bid;
+  const spreadPct = ask > 0 ? (spreadAbs / ask * 100) : 100;
+  const absDelta  = Math.abs(snap.delta || 0);
+  const distPct   = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
+  const volume    = snap.volume || 0;
+  const oi        = snap.openInterest || snap.open_interest || 0;
+  const dayHigh   = snap.dayHigh || snap.day_high || 0;
+  const dayOpen   = snap.dayOpen || snap.day_open || 0;
+  const probITM   = snap.probabilityITM || snap.prob_itm || absDelta;
+
+  // CORE SCORING (1-11 points)
+  // Premium in sweet spot $0.50-$2.40
+  if (premium >= 0.50 && premium <= MAX_PREMIUM) { total += 2; }
+  else if (premium > MAX_PREMIUM) { warnings.push('Premium over $2.40 -- skip'); }
+  else { warnings.push('Premium under $0.50 -- too cheap'); }
+
+  // Spread tight -- absolute $0.10 max (not just %)
+  if (spreadAbs <= 0.10)      { total += 2; bonuses.push('Tight spread'); }
+  else if (spreadAbs <= 0.20) { total += 1; }
+  else { warnings.push('Wide spread $' + spreadAbs.toFixed(2) + ' -- slippage risk'); }
+
+  // Volume > OI = fresh activity (most important signal)
+  if (volume > oi && oi > 0)  { total += 2; bonuses.push('Vol>OI fresh conviction'); }
+  else if (volume >= 500)     { total += 1; bonuses.push('High volume'); }
+  else if (volume < 100)      { warnings.push('Low volume ' + volume + ' -- no liquidity'); }
+
+  // Delta sweet spot 0.30-0.50 (not too far OTM)
+  if (absDelta >= 0.30 && absDelta <= 0.50)      { total += 2; bonuses.push('Delta sweet spot'); }
+  else if (absDelta >= 0.20 && absDelta < 0.30)  { total += 1; warnings.push('Delta low -- OTM risk'); }
+  else { warnings.push('Delta ' + absDelta.toFixed(2) + ' -- skip'); }
+
+  // Theta manageable
+  if (snap.theta >= -0.05)      { total += 1; }
+  else if (snap.theta < -0.10)  { warnings.push('High theta decay'); }
+
+  // Strike within 3% of price (not 10%)
+  if (distPct <= 3)       { total += 2; bonuses.push('ATM strike'); }
+  else if (distPct <= 7)  { total += 1; }
+  else { warnings.push('Strike ' + distPct.toFixed(1) + '% from price -- too far OTM'); }
+
+  // OI at least 500 (liquid contract)
+  if (oi >= 1000)      { total += 1; bonuses.push('High OI liquid'); }
+  else if (oi >= 500)  { total += 1; }
+  else { warnings.push('Low OI ' + oi + ' -- thin market'); }
+
+  // PREVIOUS HIGH CHECK -- is contract at a discount?
+  // If contract already ran 40%+ from open = move already happened = SKIP
+  var alreadyMoved = false;
+  if (dayHigh > 0 && dayOpen > 0 && premium > 0) {
+    var runPct = (dayHigh - dayOpen) / dayOpen * 100;
+    var fromHigh = (dayHigh - premium) / dayHigh * 100;
+    if (runPct > 40 && fromHigh < 10) {
+      // Contract already ran 40%+ and price is still near the high
+      warnings.push('Move already happened -- up ' + runPct.toFixed(0) + '% from open');
+      alreadyMoved = true;
+      total = Math.max(0, total - 2); // penalize
+    } else if (fromHigh >= 20) {
+      // Contract pulled back 20%+ from high = discount entry
+      bonuses.push('Discount ' + fromHigh.toFixed(0) + '% from day high');
+      total += 1;
+    }
+  }
+
+  // PROBABILITY CHECK -- minimum 30% prob ITM
+  if (probITM >= 0.40)      { bonuses.push('Prob ITM ' + Math.round(probITM * 100) + '%'); }
+  else if (probITM < 0.25)  { warnings.push('Low prob ITM ' + Math.round(probITM * 100) + '%'); total = Math.max(0, total - 1); }
+
+  var grade = total >= 9 ? 'A+' : total >= 7 ? 'A' : total >= 5 ? 'B' : 'C';
+
+  console.log('[SCORE] ' + (snap.symbol || '') + ' score:' + total + '/11 grade:' + grade +
+    (bonuses.length ? ' GOOD:' + bonuses.join(',') : '') +
+    (warnings.length ? ' WARN:' + warnings.join(',') : ''));
+
+  return { total, max: 11, grade, warnings, bonuses, profitProb: Math.round(probITM * 100), alreadyMoved };
+}
+
+// LEGACY scoreContract wrapper -- kept for backward compat
+function scoreContract_OLD(snap, underlyingPrice) {
   let total = 0; const warnings = [];
   const premium   = snap.mid || snap.ask;
   const spreadPct = snap.ask > 0 ? ((snap.ask - snap.bid) / snap.ask * 100) : 100;

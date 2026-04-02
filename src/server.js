@@ -557,6 +557,22 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
   } catch(e) { console.error('[CANCEL-MGR] Cron error:', e.message); }
 });
 
+// TS TOKEN HEALTH CHECK -- every 30 min 24/7
+// Proactively tests token before market opens
+// If token fails = Discord alert fires immediately
+cron.schedule('*/30 * * * *', async function() {
+  try {
+    var ts    = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) {
+      console.error('[TS-HEALTH] Token check FAILED -- no token available');
+      // Alert already sent by tradestation.js
+    } else {
+      console.log('[TS-HEALTH] Token check OK');
+    }
+  } catch(e) { console.error('[TS-HEALTH] Health check error:', e.message); }
+});
+
 // MORNING BIAS RESET -- 9:30AM ET every trading day
 // Pulls fresh SPY bar and resets bias before first trade fires
 cron.schedule('30 9 * * 1-5', async function() {

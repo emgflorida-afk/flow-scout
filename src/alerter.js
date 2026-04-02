@@ -5,7 +5,8 @@
 // THREE MODE SYSTEM: DAY / SWING / SPREAD
 // -----------------------------------------------------------------
 
-const fetch    = require('node-fetch');
+const fetch             = require('node-fetch');
+const optionChartReader = require('./optionChartReader');
 
 // DISCORD CHANNELS
 var INDICES_WEBHOOK = process.env.DISCORD_INDICES_WEBHOOK ||
@@ -679,11 +680,75 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         var gradeEmoji = stratGrade === 'A+' ? '\uD83D\uDD25' : stratGrade === 'A' ? '\u2B50' : '\uD83D\uDFE1';
         var dirEmoji   = cType === 'CALL' ? '\uD83D\uDCC8' : '\uD83D\uDCC9';
         var scoreEmoji = cScore.length >= 3 ? '\uD83C\uDFAF' : cScore.length >= 2 ? '\u2705' : '\uD83D\uDFE1';
-        var cLine1   = gradeEmoji + ' ' + stratGrade + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
-        var cLine2   = '\uD83D\uDCB0 Entry $' + cEntry + '  \uD83D\uDED1 Stop $' + cStop + '  \uD83C\uDFAF T1 $' + cT1;
-        var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET';
+        // Add contract score and prob ITM if available from resolver
+        var contractGrade = resolved && resolved.grade ? resolved.grade : '';
+        var probITM       = resolved && resolved.probITM ? resolved.probITM + '% ITM' : '';
+        var contractWarn  = resolved && resolved.warnings && resolved.warnings.length
+          ? '\u26A0\uFE0F ' + resolved.warnings[0] : '';
+        var cLine1   = gradeEmoji + ' ' + stratGrade + (contractGrade ? '|' + contractGrade : '') + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
+        var cLine2   = '\uD83D\uDCB0 Entry $' + cEntry + '  \uD83D\uDED1 Stop $' + cStop + '  \uD83C\uDFAF T1 $' + cT1 + (probITM ? '  ' + probITM : '');
+        var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
         var compact  = cLine1 + '\n' + cLine2 + '\n' + cLine3;
-        await sendToChannel(stratChannel, compact, parsed.ticker);
+
+        // PHASE 2 -- OPTION CHART EXECUTION GATE
+        // Read option bar data from TradeStation directly
+        // EXTENDED = blocked, recheck every 10 min
+        // DISCOUNT or LOWER HALF = proceed
+        var chartAnalysis = null;
+        if (resolved && resolved.optionTicker && isActionChannel) {
+          try {
+            chartAnalysis = await optionChartReader.analyzeOptionChart(
+              resolved.optionTicker,
+              parsed.ticker,
+              tvData.type || 'call',
+              resolved.mid ? parseFloat((resolved.mid * 0.875).toFixed(2)) : null
+            );
+            if (chartAnalysis) {
+              var rangeTag = chartAnalysis.extended   ? ' \uD83D\uDD34 EXTENDED'
+                           : chartAnalysis.favorable  ? ' \uD83D\uDFE2 DISCOUNT'
+                           :                            ' \uD83D\uDFE1 MID-RANGE';
+              cLine3  = cLine3 + rangeTag;
+              compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+            }
+          } catch(ce) { console.error('[OPTION-CHART] Phase 2 error:', ce.message); }
+        }
+
+        // If contract is DEAD -- hard block, no recheck
+        if (chartAnalysis && chartAnalysis.dead) {
+          console.log('[OPTION-CHART] DEAD contract -- hard block:', chartAnalysis.deadReason);
+          var deadCard = cLine1 + '\n' + cLine2 + '\n\u26D4 DEAD CONTRACT -- ' + chartAnalysis.deadReason + ' | ' + cTime + ' ET';
+          await sendToChannel(stratChannel, deadCard, parsed.ticker);
+          return true; // hard block -- no recheck, no execute
+        }
+
+        // If contract is EXTENDED -- post blocked card + arm recheck
+        if (chartAnalysis && chartAnalysis.extended) {
+          console.log('[OPTION-CHART] BLOCKED -- contract at', chartAnalysis.posInRange + '% of range');
+          var blockedCard = cLine1 + '\n' + cLine2 + '\n\uD83D\uDD34 EXTENDED -- waiting for pullback | ' + cTime + ' ET';
+          await sendToChannel(stratChannel, blockedCard, parsed.ticker);
+
+          // Recheck every 10 min for up to 60 min
+          var recheckSym   = resolved && resolved.optionTicker ? resolved.optionTicker : null;
+          var recheckCount = 0;
+          if (recheckSym) {
+            var recheckTimer = setInterval(async function() {
+              recheckCount++;
+              if (recheckCount >= 6) { clearInterval(recheckTimer); return; }
+              try {
+                var recheck = await optionChartReader.analyzeOptionChart(recheckSym, parsed.ticker, tvData.type || 'call', null);
+                if (recheck && recheck.favorable) {
+                  clearInterval(recheckTimer);
+                  var freshCard = cLine1 + '\n' + cLine2 + '\n\uD83D\uDFE2 Pulled back -- NOW FAVORABLE | ' +
+                    new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET';
+                  await sendToChannel(stratChannel, freshCard, parsed.ticker);
+                  console.log('[OPTION-CHART] Recheck -- now favorable, fresh card posted');
+                }
+              } catch(re) { console.error('[OPTION-CHART] Recheck error:', re.message); }
+            }, 10 * 60 * 1000);
+          }
+        } else {
+          await sendToChannel(stratChannel, compact, parsed.ticker);
+        }
       } else {
         await sendToChannel(stratChannel,
           card.text
