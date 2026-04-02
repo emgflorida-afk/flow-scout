@@ -60,6 +60,9 @@ try { ideaIngestor = require('./ideaIngestor'); console.log('[IDEA] Loaded OK');
 var simMode = null;
 try { simMode = require('./simMode'); console.log('[SIM-MODE] Loaded OK'); } catch(e) { console.log('[SIM-MODE] Skipped:', e.message); }
 
+var orderExecutor = null;
+try { orderExecutor = require('./orderExecutor'); console.log('[EXECUTOR] Loaded OK'); } catch(e) { console.log('[EXECUTOR] Skipped:', e.message); }
+
 // MASTER AUTONOMOUS AGENT -- the brain of the system
 var stratumAgent = null;
 try {
@@ -381,6 +384,48 @@ app.get('/win-rate', async function(req, res) {
   } else {
     res.json({ status: 'winTracker not loaded' });
   }
+});
+
+// -- ORDER EXECUTION ENDPOINT -----------------------------------
+// POST /webhook/execute -- place order directly via TS API
+// Supports SIM and LIVE accounts
+// Full bracket: entry + stop + T1 in one order
+app.post('/webhook/execute', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!orderExecutor) return res.json({ status: 'orderExecutor not loaded' });
+
+    var params = req.body;
+    // Default to SIM unless live explicitly specified
+    if (!params.account) {
+      params.account = params.live ? '11975462' : 'SIM3142118M';
+    }
+
+    console.log('[EXECUTE] Incoming order:', JSON.stringify(params));
+    var result = await orderExecutor.placeOrder(params);
+
+    if (result.error) {
+      console.error('[EXECUTE] Order failed:', result.error);
+      return res.status(400).json({ status: 'ERROR', error: result.error });
+    }
+
+    res.json({ status: 'OK', result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /webhook/close -- close a position
+app.post('/webhook/close', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!orderExecutor) return res.json({ status: 'orderExecutor not loaded' });
+
+    var { account, symbol, qty } = req.body;
+    if (!account) account = 'SIM3142118M';
+    var result = await orderExecutor.closePosition(account, symbol, qty || 1);
+    res.json({ status: 'OK', result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // -- SIM MODE ENDPOINTS
