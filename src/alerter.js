@@ -7,6 +7,11 @@
 
 const fetch    = require('node-fetch');
 
+// DISCORD CHANNELS
+var INDICES_WEBHOOK = process.env.DISCORD_INDICES_WEBHOOK ||
+  'https://discord.com/api/webhooks/1489297759248056513/U9w2yLf7qr3skwZuu6-mwMpVcB5Y1HQtLx5ulNQvugcWARG1HGagsoxUhrnX_f_GHsk5';
+var INDEX_TICKERS = ['SPY', 'QQQ', 'IWM'];
+
 // DEDUP TRACKER -- prevents duplicate auto-executions same ticker same day
 var executedToday = {};
 setInterval(function() {
@@ -31,6 +36,7 @@ const WEBHOOKS = {
   conviction: process.env.DISCORD_CONVICTION_WEBHOOK_URL,
   executeNow:  process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
     'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx',
+  indicesBias: INDICES_WEBHOOK,
 };
 
 // -- FINVIZ CHART -------------------------------------------------
@@ -646,7 +652,10 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
       // Route A+/A to #execute-now, B/C to #conviction-trades
       var stratGrade = (confluenceScore >= 5 || (confluenceScore >= 4 && flowMatch)) ? 'A' : 'B';
       if (confluenceScore >= 5 && flowMatch) stratGrade = 'A+';
-      var stratChannel = (stratGrade === 'A+' || stratGrade === 'A') ? 'executeNow' : 'conviction';
+      // Route indices (SPY/QQQ/IWM) to #indices-bias, others to #execute-now
+      var isIndexTicker = INDEX_TICKERS.indexOf(tvData.ticker) > -1;
+      var stratChannel  = isIndexTicker ? 'indicesBias'
+        : ((stratGrade === 'A+' || stratGrade === 'A') ? 'executeNow' : 'conviction');
       await sendToChannel(stratChannel,
         card.text
           .replace('SWING TRADE',  convLabel)
@@ -807,7 +816,9 @@ async function sendFlowAlert(opraSymbol, flowData) {
       }
 
       // Route A+/A to #execute-now, everything else to #conviction-trades
-      var targetChannel = (grade === 'A+' || grade === 'A') ? 'executeNow' : 'conviction';
+      var isIdxTicker    = INDEX_TICKERS.indexOf(parsed.ticker) > -1;
+      var targetChannel  = isIdxTicker ? 'indicesBias'
+        : ((grade === 'A+' || grade === 'A') ? 'executeNow' : 'conviction');
       await sendToChannel(targetChannel,
           card.text.replace('SWING TRADE', 'CONVICTION TRADE'),
           card.ticker

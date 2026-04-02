@@ -53,13 +53,16 @@ async function checkMaxPositions(account) {
     var res   = await fetch(base + '/brokerage/accounts/' + account + '/positions', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    var data     = await res.json();
-    var positions = (data.Positions || []).filter(function(p) {
-      return p.AssetType === 'OP' || p.AssetType === 'StockOption';
+    var data      = await res.json();
+    var positions = (data.Positions || data.positions || []).filter(function(p) {
+      // Match both AssetType formats
+      var at = (p.AssetType || p.assetType || '');
+      return at === 'OP' || at === 'StockOption' || at === 'Option';
     });
     var max = account === LIVE_ACCOUNT ? MAX_POSITIONS_LIVE : MAX_POSITIONS_SIM;
+    console.log('[POS-MGR] Position count:', positions.length, '/', max, 'on', account);
     if (positions.length >= max) {
-      console.log('[POS-MGR] MAX POSITIONS HIT:', positions.length, '/', max, 'on', account);
+      console.log('[POS-MGR] MAX POSITIONS HIT -- BLOCKING new order');
       return { allowed: false, current: positions.length, max: max };
     }
     return { allowed: true, current: positions.length, max: max };
@@ -137,17 +140,49 @@ async function eodCloseAll(account) {
       var qty          = Math.abs(parseFloat(p.Quantity));
       var unrealizedPL = parseFloat(p.UnrealizedProfitLoss || 0);
       var avgPrice     = parseFloat(p.AveragePrice || 0);
+      var lastPrice    = parseFloat(p.Last || p.Bid || 0);
+      var sym          = p.Symbol || '';
 
-      // SMART EOD CLOSE:
-      // Try limit at mid price first (better fill)
-      // Fall back to market if not filled by 3:55PM
+      // SMART EOD LOGIC:
+      // Check if this is a 0DTE (expires today)
+      // 0DTE = MUST close (expires worthless at 4PM)
+      // Multi-day = only close if IN PROFIT -- let stops work naturally if at loss
+      var today      = new Date();
+      var todayStr   = today.toISOString().slice(2,8).replace(/-/g,''); // YYMMDD
+      var is0DTE     = sym.indexOf(todayStr) > -1;
+      var isInProfit = unrealizedPL > 0;
+      var t1Price    = avgPrice * 1.60; // T1 = 60% gain
+      var atOrPastT1 = lastPrice >= t1Price && avgPrice > 0;
+
       var etNow  = new Date();
       var etMins = ((etNow.getUTCHours() - 4 + 24) % 24) * 60 + etNow.getUTCMinutes();
-      var useMarket = etMins >= (15 * 60 + 55); // after 3:55PM = market order
+      var isFinalClose = etMins >= (15 * 60 + 55); // after 3:55PM
 
+      // DECISION:
+      // 0DTE = always close (must close before expiry)
+      // Multi-day + in profit + past T1 = close and lock in gains
+      // Multi-day + in profit + not T1 = move stop to breakeven, let it run
+      // Multi-day + at a loss = do NOT close, let stop work naturally
+
+      if (!is0DTE && unrealizedPL < 0) {
+        console.log('[POS-MGR] EOD SKIP:', sym, 'at loss $' + unrealizedPL.toFixed(2), '-- letting stop work naturally');
+        closed.push(sym + ' SKIPPED -- at loss $' + unrealizedPL.toFixed(2) + ' -- stop working naturally');
+        continue;
+      }
+
+      if (!is0DTE && isInProfit && !atOrPastT1 && !isFinalClose) {
+        // In profit but not at T1 -- move stop to breakeven instead of closing
+        console.log('[POS-MGR] EOD:', sym, 'in profit $' + unrealizedPL.toFixed(2), '-- moving stop to breakeven');
+        closed.push(sym + ' BREAKEVEN STOP SET -- in profit $' + unrealizedPL.toFixed(2) + ' -- let it run');
+        // Note: actual stop move is handled by checkAndMoveStops
+        continue;
+      }
+
+      // Close position: either 0DTE, past T1, or final backup close at 3:55PM
+      var useMarket = isFinalClose || is0DTE;
       var orderBody = {
         AccountID:   account,
-        Symbol:      p.Symbol,
+        Symbol:      sym,
         Quantity:    String(qty),
         OrderType:   useMarket ? 'Market' : 'Limit',
         TradeAction: 'SELLTOCLOSE',
@@ -155,19 +190,17 @@ async function eodCloseAll(account) {
         Route:       'Intelligent',
       };
 
-      // For limit orders use mid price (bid + ask / 2 from position data)
-      if (!useMarket && p.Last) {
-        var midPrice = parseFloat(p.Last);
-        // Round to valid increment
-        var limitPx = midPrice >= 3
-          ? Math.round(midPrice / 0.05) * 0.05
-          : Math.round(midPrice / 0.01) * 0.01;
+      if (!useMarket && lastPrice > 0) {
+        var limitPx = lastPrice >= 3
+          ? Math.round(lastPrice / 0.05) * 0.05
+          : Math.round(lastPrice / 0.01) * 0.01;
         orderBody.LimitPrice = String(limitPx.toFixed(2));
       }
 
+      var reason    = is0DTE ? '0DTE-MUST-CLOSE' : (atOrPastT1 ? 'T1-HIT' : 'FINAL-BACKUP');
       var closeType = useMarket ? 'MARKET' : 'LIMIT @ $' + (orderBody.LimitPrice || 'mid');
-      console.log('[POS-MGR] EOD closing:', p.Symbol, 'qty:', qty, 'type:', closeType,
-        'unrealizedPL: $' + unrealizedPL.toFixed(2));
+      var plStr     = unrealizedPL >= 0 ? '+$' + unrealizedPL.toFixed(2) : '-$' + Math.abs(unrealizedPL).toFixed(2);
+      console.log('[POS-MGR] EOD closing:', sym, 'reason:', reason, 'type:', closeType, 'P&L:', plStr);
 
       try {
         var orderRes = await fetch(base + '/orderexecution/orders', {
@@ -180,11 +213,10 @@ async function eodCloseAll(account) {
         });
         var orderData = await orderRes.json();
         var orderId   = orderData.Orders && orderData.Orders[0] && orderData.Orders[0].OrderID;
-        var plStr     = unrealizedPL >= 0 ? '+$' + unrealizedPL.toFixed(2) : '-$' + Math.abs(unrealizedPL).toFixed(2);
-        closed.push(p.Symbol + ' x' + qty + ' ' + closeType + ' P&L:' + plStr + ' (ID: ' + orderId + ')');
-        console.log('[POS-MGR] EOD order placed:', p.Symbol, 'orderId:', orderId);
+        closed.push(sym + ' x' + qty + ' ' + reason + ' ' + closeType + ' P&L:' + plStr + ' (ID: ' + orderId + ')');
+        console.log('[POS-MGR] EOD order placed:', sym, 'orderId:', orderId);
       } catch(e) {
-        console.error('[POS-MGR] EOD close error for', p.Symbol, ':', e.message);
+        console.error('[POS-MGR] EOD close error for', sym, ':', e.message);
       }
     }
 
