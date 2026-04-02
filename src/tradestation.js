@@ -45,6 +45,19 @@ async function getAccessToken() {
         return _accessToken;
       }
       console.error('[TS] Refresh failed:', data.error_description || data.error);
+      // Post to Discord that token needs re-auth
+      try {
+        var webhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+          'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+        await fetch(webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            content: '```\nTS TOKEN EXPIRED -- ACTION REQUIRED\n==============================\nThe TradeStation API token has expired\nAll order execution is currently BLOCKED\n\nFix: Open this URL in your browser:\nhttps://flow-scout-production.up.railway.app/ts-auth\n\nComplete the TradeStation login\nSystem will auto-recover immediately\n```',
+            username: 'Stratum Token Monitor',
+          }),
+        });
+      } catch(de) { /* discord alert failed -- not critical */ }
     } catch(e) { console.error('[TS] Refresh error:', e.message); }
   }
   console.log('[TS] No token -- visit /ts-auth to authenticate');
