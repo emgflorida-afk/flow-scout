@@ -40,14 +40,19 @@ function parseJohnCard(text) {
 
   // TICKER -- look for common patterns
   // "BG CALL", "NVDA PUT", "$BG", "Ticker: BG"
-  var tickerMatch = text.match(/(?:ticker[:\s]+)?([A-Z]{1,5})\s+(CALL|PUT|CALLS|PUTS)/i) ||
+  var tickerMatch = text.match(/Ticker[: ]+\$?([A-Z]{1,5})/i) ||
                     text.match(/\$([A-Z]{1,5})\b/) ||
-                    text.match(/^([A-Z]{1,5})\s/m);
-  if (tickerMatch) result.ticker = tickerMatch[1].toUpperCase();
+                    text.match(/([A-Z]{1,5}) (CALL|PUT|CALLS|PUTS)/i) ||
+                    text.match(/^([A-Z]{1,5}) /m);
+  if (tickerMatch) result.ticker = (tickerMatch[1] || tickerMatch[2] || '').replace(/[^A-Za-z]/g,'').toUpperCase();
 
   // DIRECTION
   if (/\b(call|calls|bullish|long)\b/i.test(text)) result.direction = 'call';
   if (/\b(put|puts|bearish|short)\b/i.test(text))  result.direction = 'put';
+
+  // JOHN FORMAT: 'CALL Entry: 129.55' = trigger price
+  var callEntryMatch = text.match(/(?:call|put) entry[: ]+\$?([\d.]+)/i);
+  if (callEntryMatch) result.triggerPrice = parseFloat(callEntryMatch[1]);
 
   // TRIGGER PRICE -- "trigger: 129.55", "above 129.55", "entry trigger 129.55"
   var trigMatch = text.match(/trigger[:\s]+\$?([\d.]+)/i) ||
@@ -68,6 +73,10 @@ function parseJohnCard(text) {
                   text.match(/stop\s+at\s+\$?([\d.]+)/i);
   if (stopMatch) result.stopPrice = parseFloat(stopMatch[1]);
 
+  // JOHN FORMAT: 'Target: 135, 139'
+  var johnTargetMatch = text.match(/Target[: ]+\$?([\d.]+)[, ]+\$?([\d.]+)/i);
+  if (johnTargetMatch) { result.t1 = parseFloat(johnTargetMatch[1]); result.t2 = parseFloat(johnTargetMatch[2]); }
+
   // T1 -- "T1: 135.22", "target 1: 135.22", "target: 135.22"
   var t1Match = text.match(/(?:t1|target\s*1|tp1|target)[:\s]+\$?([\d.]+)/i) ||
                 text.match(/(?:first\s+target)[:\s]+\$?([\d.]+)/i);
@@ -77,6 +86,13 @@ function parseJohnCard(text) {
   var t2Match = text.match(/(?:t2|target\s*2|tp2)[:\s]+\$?([\d.]+)/i) ||
                 text.match(/(?:second\s+target)[:\s]+\$?([\d.]+)/i);
   if (t2Match) result.t2 = parseFloat(t2Match[1]);
+
+  // JOHN FORMAT: 'Contracts: 130 Calls 4/17 Exp'
+  var jcm = text.match(/Contracts?[: ]+([\d.]+) (Calls?|Puts?) ([\d]+)\/([\d]+)/i);
+  if (jcm) {
+    var jt = jcm[2].toLowerCase().startsWith('c') ? 'C' : 'P';
+    result.contract = (result.ticker||'') + ' 26' + jcm[3].padStart(2,'0') + jcm[4].padStart(2,'0') + jt + jcm[1];
+  }
 
   // CONTRACT -- "260417C130", "BG 260417C130"
   var contractMatch = text.match(/([A-Z]{1,5}\s+\d{6}[CP][\d.]+)/i) ||

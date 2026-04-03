@@ -223,7 +223,10 @@ function buildIdeaCard(idea, validation, bars) {
 
   // Calculate smart levels
   var premium  = idea.premium || null;
-  var limit    = premium ? (premium * 0.875).toFixed(2) : 'TBD';
+  // John's ideas use 5% retracement (ask x 0.95) not 12.5%
+  // This prevents missing entries on strong momentum moves
+  // System signals use 12.5% (ask x 0.875) -- more selective
+  var limit    = premium ? (premium * 0.95).toFixed(2) : 'TBD';
   var stop     = premium ? (premium * 0.60).toFixed(2)  : 'TBD';
   var t1       = premium ? (premium * 1.60).toFixed(2)  : 'TBD';
   var t2       = premium ? (premium * 2.20).toFixed(2)  : 'TBD';
