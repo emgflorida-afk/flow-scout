@@ -7,6 +7,7 @@
 
 const fetch             = require('node-fetch');
 const optionChartReader = require('./optionChartReader');
+const lvlFramework      = require('./lvlFramework');
 
 // DISCORD CHANNELS
 var INDICES_WEBHOOK = process.env.DISCORD_INDICES_WEBHOOK ||
@@ -689,6 +690,39 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         var cLine2   = '\uD83D\uDCB0 Entry $' + cEntry + '  \uD83D\uDED1 Stop $' + cStop + '  \uD83C\uDFAF T1 $' + cT1 + (probITM ? '  ' + probITM : '');
         var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
         var compact  = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+
+        // LVL FRAMEWORK ANALYSIS -- system signals only
+        // NOT applied to John's ideas (those go through ideaIngestor)
+        // Adds PDH/PDL detection + MTF momentum score to signal grade
+        var lvlAnalysis = null;
+        try {
+          var ts2    = require('./tradestation');
+          var tok2   = await ts2.getAccessToken();
+          var isSim2 = process.env.SIM_MODE === 'true';
+          if (tok2) {
+            lvlAnalysis = await lvlFramework.analyzeLVL(
+              parsed.ticker, tvData.type || 'call',
+              parseFloat(tvData.price || 0), tok2, isSim2
+            );
+            if (lvlAnalysis) {
+              // Add LVL grade to compact card
+              var lvlTag = lvlAnalysis.lvlGrade === 'A+' ? ' \uD83D\uDFE2 LVL A+' :
+                           lvlAnalysis.lvlGrade === 'A'  ? ' \uD83D\uDFE1 LVL A'  :
+                           lvlAnalysis.lvlGrade === 'B'  ? ' \uD83D\uDFE0 LVL B'  : '';
+              if (lvlTag) cLine3 = cLine3 + lvlTag;
+              compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+
+              // Post heads up if price approaching key level
+              var executeWebhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+                'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+              if (lvlAnalysis.approaching && !lvlAnalysis.touched) {
+                var pdhlObj = { pdHigh: lvlAnalysis.pdHigh, pdLow: lvlAnalysis.pdLow };
+                lvlFramework.postHeadsUp(parsed.ticker, tvData.type || 'call',
+                  parseFloat(tvData.price || 0), pdhlObj, executeWebhook).catch(console.error);
+              }
+            }
+          }
+        } catch(le) { console.error('[LVL] Wire error:', le.message); }
 
         // PHASE 2 -- OPTION CHART EXECUTION GATE
         // Read option bar data from TradeStation directly
