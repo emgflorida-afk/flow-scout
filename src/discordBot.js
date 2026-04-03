@@ -1,219 +1,110 @@
-// discordBot.js — Stratum Flow Scout v6.1
+// discordBot.js  Stratum Flow Scout v6.1
 // Discord slash command: /validate <idea>
-// Uses Discord REST API directly -- no discord.js package required
-// Includes proper Ed25519 signature verification for Discord endpoint validation
-// Env vars read at runtime to avoid Railway timing issues
+// Paste any trade idea  Stratum scores it  posts to #conviction-trades
+// -----------------------------------------------------------------
+// SETUP REQUIRED (one time):
+// 1. Go to https://discord.com/developers/applications
+// 2. Create new application  Bot  copy token  DISCORD_BOT_TOKEN env var
+// 3. OAuth2  URL Generator  scopes: bot, applications.commands
+// 4. Bot permissions: Send Messages, Use Slash Commands
+// 5. Add bot to your server via generated URL
+// 6. Copy your server ID  DISCORD_GUILD_ID env var
 // -----------------------------------------------------------------
 
-const fetch         = require('node-fetch');
-const crypto        = require('crypto');
-const ideaValidator = require('./ideaValidator');
+const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const ideaValidator     = require('./ideaValidator');
+const validateListener  = require('./validateListener');
 
-const DISCORD_API = 'https://discord.com/api/v10';
+const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
+const BOT_TOKEN           = process.env.DISCORD_BOT_TOKEN;
+const GUILD_ID            = process.env.DISCORD_GUILD_ID;
+const CLIENT_ID           = process.env.DISCORD_CLIENT_ID;
 
-// Read env vars at runtime inside functions -- avoids Railway load order issues
-function getBotToken()          { return process.env.DISCORD_BOT_TOKEN; }
-function getClientId()          { return process.env.DISCORD_CLIENT_ID; }
-function getGuildId()           { return process.env.DISCORD_GUILD_ID; }
-function getPublicKey()         { return process.env.DISCORD_PUBLIC_KEY; }
-function getConvictionWebhook() { return process.env.DISCORD_CONVICTION_WEBHOOK_URL; }
-
-// -- VERIFY DISCORD SIGNATURE -------------------------------------
-function verifyDiscordSignature(rawBody, signature, timestamp) {
-  try {
-    const publicKey = getPublicKey();
-    if (!publicKey) {
-      console.log('[BOT] No DISCORD_PUBLIC_KEY -- skipping verification');
-      return true;
-    }
-    const message = Buffer.from(timestamp + rawBody);
-    const sig     = Buffer.from(signature, 'hex');
-    const key     = Buffer.from(publicKey, 'hex');
-    const keyObj  = crypto.createPublicKey({
-      key:    Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), key]),
-      format: 'der',
-      type:   'spki',
-    });
-    return crypto.verify(null, message, keyObj, sig);
-  } catch (err) {
-    console.error('[BOT] Signature verification error:', err.message);
-    return false;
-  }
-}
-
-// -- REGISTER SLASH COMMANDS --------------------------------------
+// -- REGISTER SLASH COMMAND ---------------------------------------
 async function registerCommands() {
-  const botToken = getBotToken();
-  const clientId = getClientId();
-  const guildId  = getGuildId();
-
-  if (!botToken || !clientId || !guildId) {
-    console.log('[BOT] Missing env vars -- skipping slash command registration');
-    console.log('[BOT] BOT_TOKEN:', botToken ? 'set' : 'MISSING');
-    console.log('[BOT] CLIENT_ID:', clientId ? 'set' : 'MISSING');
-    console.log('[BOT] GUILD_ID:',  guildId  ? 'set' : 'MISSING');
+  if (!BOT_TOKEN || !CLIENT_ID || !GUILD_ID) {
+    console.log('[BOT] Missing DISCORD_BOT_TOKEN, DISCORD_CLIENT_ID or DISCORD_GUILD_ID  skipping slash command registration');
     return;
   }
 
   const commands = [
-    {
-      name:        'validate',
-      description: 'Validate a trade idea through Stratum scoring',
-      options: [
-        {
-          type:        3,
-          name:        'idea',
-          description: 'e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"',
-          required:    true,
-        },
-      ],
-    },
+    new SlashCommandBuilder()
+      .setName('validate')
+      .setDescription('Validate a trade idea through Stratum scoring')
+      .addStringOption(function(opt) {
+        return opt
+          .setName('idea')
+          .setDescription('Paste the trade idea e.g. "MSTR 136P 3/27 bearish stop 138.72 target 127.45"')
+          .setRequired(true);
+      })
+      .toJSON(),
   ];
 
   try {
-    const res = await fetch(
-      DISCORD_API + '/applications/' + clientId + '/guilds/' + guildId + '/commands',
-      {
-        method:  'PUT',
-        headers: {
-          'Authorization': 'Bot ' + botToken,
-          'Content-Type':  'application/json',
-        },
-        body: JSON.stringify(commands),
-      }
-    );
-    if (res.ok) {
-      console.log('[BOT] Slash commands registered OK');
-    } else {
-      const err = await res.text();
-      console.error('[BOT] Command registration failed:', err);
-    }
+    const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
+    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
+    console.log('[BOT] Slash commands registered OK');
   } catch (err) {
-    console.error('[BOT] Registration error:', err.message);
+    console.error('[BOT] Command registration error:', err.message);
   }
 }
 
-// -- RESPOND TO INTERACTION ---------------------------------------
-async function respondToInteraction(interactionId, interactionToken, content) {
-  try {
-    await fetch(
-      DISCORD_API + '/interactions/' + interactionId + '/' + interactionToken + '/callback',
-      {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ type: 4, data: { content } }),
-      }
-    );
-  } catch (err) {
-    console.error('[BOT] Respond error:', err.message);
-  }
-}
-
-// -- EDIT INTERACTION RESPONSE ------------------------------------
-async function editInteractionResponse(interactionToken, content) {
-  const clientId = getClientId();
-  try {
-    await fetch(
-      DISCORD_API + '/webhooks/' + clientId + '/' + interactionToken + '/messages/@original',
-      {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ content }),
-      }
-    );
-  } catch (err) {
-    console.error('[BOT] Edit response error:', err.message);
-  }
-}
-
-// -- HANDLE VALIDATE COMMAND --------------------------------------
-async function handleValidateCommand(interaction) {
-  const idea = interaction.data && interaction.data.options
-    ? (interaction.data.options.find(function(o) { return o.name === 'idea'; }) || {}).value || ''
-    : '';
-
-  if (!idea) {
-    await respondToInteraction(interaction.id, interaction.token, 'Please provide a trade idea.');
-    return;
-  }
-
-  console.log('[BOT] /validate received:', idea);
-
-  await respondToInteraction(
-    interaction.id,
-    interaction.token,
-    'Validating: *' + idea + '*\nRunning Stratum scoring...'
-  );
-
-  try {
-    const result = await ideaValidator.validateAndPost(idea, getConvictionWebhook());
-
-    if (!result || result.error) {
-      await editInteractionResponse(
-        interaction.token,
-        'Could not parse trade idea. Try: `TICKER STRIKE P/C EXPIRY` e.g. `MSTR 136P 3/27 bearish`'
-      );
-      return;
-    }
-
-    await editInteractionResponse(
-      interaction.token,
-      'Validation complete for **' + result.ticker + '** ' + (result.direction || '').toUpperCase() + '\n' +
-      'Score: **' + result.score + '/5** -- ' + result.verdict + '\n' +
-      'Full card posted to #conviction-trades'
-    );
-  } catch (err) {
-    console.error('[BOT] Validation error:', err.message);
-    await editInteractionResponse(interaction.token, 'Validation failed -- check Railway logs');
-  }
-}
-
-// -- HANDLE INCOMING INTERACTION ----------------------------------
-async function handleInteraction(req, res) {
-  const signature = req.headers['x-signature-ed25519'];
-  const timestamp = req.headers['x-signature-timestamp'];
-  const rawBody   = JSON.stringify(req.body);
-
-  if (signature && timestamp) {
-    const valid = verifyDiscordSignature(rawBody, signature, timestamp);
-    if (!valid) {
-      console.log('[BOT] Invalid signature -- rejected');
-      return res.status(401).send('Invalid signature');
-    }
-  }
-
-  const body = req.body;
-
-  if (body.type === 1) {
-    console.log('[BOT] Discord ping verified OK');
-    return res.json({ type: 1 });
-  }
-
-  if (body.type === 2 && body.data && body.data.name === 'validate') {
-    res.json({ type: 5 });
-    handleValidateCommand(body).catch(console.error);
-    return;
-  }
-
-  return res.json({ type: 1 });
-}
-
-// -- STARTUP ------------------------------------------------------
+// -- START BOT ----------------------------------------------------
 function startDiscordBot() {
-  const botToken = getBotToken();
-  const clientId = getClientId();
-  const guildId  = getGuildId();
-
-  if (!botToken || !clientId || !guildId) {
-    console.log('[BOT] Discord env vars not set -- bot not started');
-    console.log('[BOT] BOT_TOKEN:', botToken ? 'set' : 'MISSING');
-    console.log('[BOT] CLIENT_ID:', clientId ? 'set' : 'MISSING');
-    console.log('[BOT] GUILD_ID:',  guildId  ? 'set' : 'MISSING');
+  if (!BOT_TOKEN) {
+    console.log('[BOT] No DISCORD_BOT_TOKEN  bot not started');
     return;
   }
 
-  registerCommands();
-  console.log('[BOT] Discord bot initialized OK -- /interactions endpoint ready');
+  const client = new Client({
+    intents: [
+      GatewayIntentBits.Guilds,
+      GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.MessageContent, // Required to read message content
+    ]
+  });
+
+  client.once('ready', function() {
+    console.log('[BOT] Discord bot online as ' + client.user.tag + ' OK');
+    registerCommands();
+    // Start listening to #validate channel for John's forwarded cards
+    validateListener.setupValidateListener(client);
+  });
+
+  client.on('interactionCreate', async function(interaction) {
+    if (!interaction.isChatInputCommand()) return;
+    if (interaction.commandName !== 'validate') return;
+
+    const idea = interaction.options.getString('idea');
+    console.log('[BOT] /validate received:', idea);
+
+    // Acknowledge immediately  validation takes a few seconds
+    await interaction.reply({ content: 'Validating: *' + idea + '*\nRunning Stratum scoring...', ephemeral: false });
+
+    try {
+      const result = await ideaValidator.validateAndPost(idea, CONVICTION_WEBHOOK);
+
+      if (result.error) {
+        await interaction.editReply('Could not parse trade idea. Try format: `TICKER STRIKE P/C EXPIRY` e.g. `MSTR 136P 3/27 bearish`');
+        return;
+      }
+
+      await interaction.editReply(
+        'Validation complete for **' + result.ticker + '** ' + result.direction.toUpperCase() + '\n' +
+        'Score: **' + result.score + '/5**  ' + result.verdict + '\n' +
+        'Full card posted to #conviction-trades'
+      );
+    } catch (err) {
+      console.error('[BOT] Validation error:', err.message);
+      await interaction.editReply('Validation failed  check Railway logs');
+    }
+  });
+
+  client.login(BOT_TOKEN).catch(function(err) {
+    console.error('[BOT] Login error:', err.message);
+  });
+
+  return client;
 }
 
-module.exports = { startDiscordBot, handleInteraction };
+module.exports = { startDiscordBot };
