@@ -700,7 +700,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
           var tok2   = await ts2.getAccessToken();
           var isSim2 = process.env.SIM_MODE === 'true';
           if (tok2) {
-            lvlAnalysis = await lvlFramework.analyzeLVL(
+            lvlAnalysis = await lvlFramework.analyze25sense(
               parsed.ticker, tvData.type || 'call',
               parseFloat(tvData.price || 0), tok2, isSim2
             );

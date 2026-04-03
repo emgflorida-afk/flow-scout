@@ -1,234 +1,294 @@
 // lvlFramework.js -- Stratum v7.4
-// LVL Framework concepts added to system signal scoring
-// DOES NOT affect John's ideas (ideaIngestor.js) at all
-// Used by contractResolver.js and alerter.js for system signals only
+// TRUE 25sense Model -- LVL Framework implementation
+// Based on: Enter at 25% retrace of prior HTF candle
+// Stop at 12.5% of range, TP1 = 50% midpoint, TP2 = opposite extreme
 // ---------------------------------------------------------------
-// LVL CONCEPTS IMPLEMENTED:
-// 1. PDH/PDL Detection -- is price approaching a key level?
-// 2. 25% Pullback Entry -- wait for retracement from PDH/PDL
-// 3. Multi-TF Momentum Score -- D + W + M alignment
-// 4. Sweep + Structure Confirmation -- HH after sweep = highest prob
+// DOES NOT affect John's ideas (ideaIngestor.js) at all
+// Used by alerter.js for SYSTEM signals only
+// ---------------------------------------------------------------
+// 3 CHECKPOINTS:
+// 1. LIQUIDITY  -- price tags prior swing/gap/session level
+// 2. VALIDATION -- micro-trend + multi-TF candle color align
+// 3. LOCK-ON    -- targets next opposing liquidity pool
 // ---------------------------------------------------------------
 
 const fetch = require('node-fetch');
 
+const EXECUTE_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+  'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+
 // ---------------------------------------------------------------
-// GET PDH/PDL (Previous Day High/Low) for underlying
-// Uses TradeStation API daily bars
+// GET HTF CANDLE (Daily by default for intraday plays)
+// Returns the prior completed HTF candle OHLC
+// This is the FOUNDATION of 25sense -- everything is derived from it
 // ---------------------------------------------------------------
-async function getPDHL(ticker, token, isSim) {
+async function getHTFCandle(ticker, token, isSim, htfUnit) {
   try {
     var base = isSim
       ? 'https://sim-api.tradestation.com/v3'
       : 'https://api.tradestation.com/v3';
 
+    var unit = htfUnit || 'Daily';
     var res  = await fetch(base + '/marketdata/barcharts/' + ticker +
-      '?interval=1&unit=Daily&barsback=5&sessiontemplate=Default', {
+      '?interval=1&unit=' + unit + '&barsback=5&sessiontemplate=Default', {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     var data = await res.json();
     var bars = data.Bars || data.bars || [];
     if (bars.length < 2) return null;
 
-    // Previous day = second to last bar (last bar = today)
-    var prevDay = bars[bars.length - 2];
-    var today   = bars[bars.length - 1];
+    // Prior HTF candle = second to last (last = current incomplete)
+    var prior   = bars[bars.length - 2];
+    var current = bars[bars.length - 1];
+
+    var priorOpen  = parseFloat(prior.Open  || prior.open  || 0);
+    var priorHigh  = parseFloat(prior.High  || prior.high  || 0);
+    var priorLow   = parseFloat(prior.Low   || prior.low   || 0);
+    var priorClose = parseFloat(prior.Close || prior.close || 0);
+    var range      = priorHigh - priorLow;
+
+    // 25sense key levels derived from prior HTF candle range
+    var level25    = parseFloat((priorLow  + (range * 0.25)).toFixed(2)); // 25% from low = LONG entry
+    var level50    = parseFloat((priorLow  + (range * 0.50)).toFixed(2)); // 50% midpoint = TP1
+    var level75    = parseFloat((priorLow  + (range * 0.75)).toFixed(2)); // 75% from low = SHORT entry
+    var level125   = parseFloat((priorLow  + (range * 0.125)).toFixed(2)); // 12.5% = stop for longs
+    var level875   = parseFloat((priorLow  + (range * 0.875)).toFixed(2)); // 87.5% = stop for shorts
+
+    var priorBull  = priorClose > priorOpen; // Prior candle bullish or bearish
 
     return {
-      pdHigh:    parseFloat(prevDay.High  || prevDay.high  || 0),
-      pdLow:     parseFloat(prevDay.Low   || prevDay.low   || 0),
-      pdClose:   parseFloat(prevDay.Close || prevDay.close || 0),
-      pdOpen:    parseFloat(prevDay.Open  || prevDay.open  || 0),
-      todayOpen: parseFloat(today.Open    || today.open    || 0),
-      todayHigh: parseFloat(today.High    || today.high    || 0),
-      todayLow:  parseFloat(today.Low     || today.low     || 0),
+      priorOpen, priorHigh, priorLow, priorClose,
+      currentOpen:  parseFloat(current.Open  || current.open  || 0),
+      currentHigh:  parseFloat(current.High  || current.high  || 0),
+      currentLow:   parseFloat(current.Low   || current.low   || 0),
+      currentClose: parseFloat(current.Close || current.close || 0),
+      range,
+      // 25sense levels
+      level25,   // LONG entry zone (25% of HTF range from low)
+      level50,   // TP1 for both long and short (midpoint)
+      level75,   // SHORT entry zone (75% = 25% from high)
+      level125,  // LONG stop (12.5% from low)
+      level875,  // SHORT stop (12.5% from high)
+      priorHigh, // TP2 for longs (opposite extreme)
+      priorLow,  // TP2 for shorts (opposite extreme)
+      priorBull,
+      htfUnit: unit,
     };
   } catch(e) {
-    console.error('[LVL] PDH/PDL error:', e.message);
+    console.error('[LVL] HTF candle error:', e.message);
     return null;
   }
 }
 
 // ---------------------------------------------------------------
-// MULTI-TIMEFRAME MOMENTUM SCORE
-// Checks Daily + Weekly + Monthly bar direction
-// Returns score 0-3 and alignment status
+// CHECKPOINT 1: LIQUIDITY
+// Has price tagged the prior HTF candle level?
+// Long: price needs to reach the 25% level
+// Short: price needs to reach the 75% level
 // ---------------------------------------------------------------
-async function getMTFMomentum(ticker, token, isSim, direction) {
+function checkLiquidity(htf, currentPrice, direction) {
+  var isBull    = direction === 'call';
+  var target    = isBull ? htf.level25 : htf.level75;
+  var tolerance = htf.range * 0.02; // 2% tolerance
+
+  var tagged    = isBull
+    ? currentPrice <= target + tolerance
+    : currentPrice >= target - tolerance;
+
+  var approaching = isBull
+    ? currentPrice <= target + (htf.range * 0.10) && currentPrice > target
+    : currentPrice >= target - (htf.range * 0.10) && currentPrice < target;
+
+  return {
+    passed:     tagged,
+    approaching,
+    target,
+    note: tagged
+      ? 'Price at 25sense entry level $' + target
+      : approaching
+      ? 'Approaching 25sense level $' + target
+      : 'Not yet at 25sense level $' + target,
+  };
+}
+
+// ---------------------------------------------------------------
+// CHECKPOINT 2: VALIDATION
+// Multi-TF candle color alignment
+// Daily + Weekly + Monthly must agree with direction
+// ---------------------------------------------------------------
+async function checkValidation(ticker, token, isSim, direction) {
   try {
     var base = isSim
       ? 'https://sim-api.tradestation.com/v3'
       : 'https://api.tradestation.com/v3';
 
-    // Fetch daily, weekly, monthly bars
-    var [dailyRes, weeklyRes, monthlyRes] = await Promise.all([
-      fetch(base + '/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=5', { headers: { 'Authorization': 'Bearer ' + token } }),
-      fetch(base + '/marketdata/barcharts/' + ticker + '?interval=1&unit=Weekly&barsback=5', { headers: { 'Authorization': 'Bearer ' + token } }),
+    var [dRes, wRes, mRes] = await Promise.all([
+      fetch(base + '/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=3', { headers: { 'Authorization': 'Bearer ' + token } }),
+      fetch(base + '/marketdata/barcharts/' + ticker + '?interval=1&unit=Weekly&barsback=3', { headers: { 'Authorization': 'Bearer ' + token } }),
       fetch(base + '/marketdata/barcharts/' + ticker + '?interval=1&unit=Monthly&barsback=3', { headers: { 'Authorization': 'Bearer ' + token } }),
     ]);
 
-    var [dailyData, weeklyData, monthlyData] = await Promise.all([
-      dailyRes.json(), weeklyRes.json(), monthlyRes.json()
-    ]);
+    var [dData, wData, mData] = await Promise.all([dRes.json(), wRes.json(), mRes.json()]);
 
-    var dailyBars   = dailyData.Bars   || dailyData.bars   || [];
-    var weeklyBars  = weeklyData.Bars  || weeklyData.bars  || [];
-    var monthlyBars = monthlyData.Bars || monthlyData.bars || [];
-
-    // Get last completed bar direction for each timeframe
-    function barDirection(bars) {
-      if (bars.length < 2) return 'NEUTRAL';
-      var bar   = bars[bars.length - 2]; // last completed bar
-      var open  = parseFloat(bar.Open  || bar.open  || 0);
-      var close = parseFloat(bar.Close || bar.close || 0);
-      return close > open ? 'BULLISH' : close < open ? 'BEARISH' : 'NEUTRAL';
+    function isBullBar(bars) {
+      if (!bars || bars.length < 2) return null;
+      var b = bars[bars.length - 2];
+      return parseFloat(b.Close || b.close) > parseFloat(b.Open || b.open);
     }
 
-    var dailyDir   = barDirection(dailyBars);
-    var weeklyDir  = barDirection(weeklyBars);
-    var monthlyDir = barDirection(monthlyBars);
+    var dailyBull   = isBullBar(dData.Bars || dData.bars);
+    var weeklyBull  = isBullBar(wData.Bars || wData.bars);
+    var monthlyBull = isBullBar(mData.Bars || mData.bars);
 
-    // Score alignment with trade direction
-    var isBull  = direction === 'call';
-    var target  = isBull ? 'BULLISH' : 'BEARISH';
-    var score   = 0;
-    if (dailyDir   === target) score++;
-    if (weeklyDir  === target) score++;
-    if (monthlyDir === target) score++;
+    var isBull = direction === 'call';
+    var score  = 0;
+    var colors = [];
 
-    var alignment = score === 3 ? 'STRONG'
-                  : score === 2 ? 'MODERATE'
-                  : score === 1 ? 'WEAK'
-                  : 'AGAINST';
+    if (dailyBull   === isBull)  { score++; colors.push('D:✅'); } else { colors.push('D:❌'); }
+    if (weeklyBull  === isBull)  { score++; colors.push('W:✅'); } else { colors.push('W:❌'); }
+    if (monthlyBull === isBull)  { score++; colors.push('M:✅'); } else { colors.push('M:❌'); }
 
-    console.log('[LVL] MTF Momentum:', ticker, direction.toUpperCase(),
-      'D:' + dailyDir, 'W:' + weeklyDir, 'M:' + monthlyDir,
-      'Score:' + score + '/3', alignment);
+    var passed    = score >= 2; // At least 2 of 3 TF aligned
+    var alignment = score === 3 ? 'STRONG' : score === 2 ? 'MODERATE' : 'WEAK';
 
-    return { score, alignment, dailyDir, weeklyDir, monthlyDir };
+    return {
+      passed,
+      score,
+      alignment,
+      colors: colors.join(' '),
+      note: alignment + ' -- ' + score + '/3 TF aligned ' + colors.join(' '),
+    };
   } catch(e) {
-    console.error('[LVL] MTF Momentum error:', e.message);
-    return null;
+    console.error('[LVL] Validation error:', e.message);
+    return { passed: false, score: 0, alignment: 'UNKNOWN', note: 'Could not check TF alignment' };
   }
 }
 
 // ---------------------------------------------------------------
-// LVL ENTRY ANALYSIS
-// Main function called by alerter.js for system signals
-// Returns full LVL analysis object
+// CHECKPOINT 3: LOCK-ON
+// Calculate precise targets based on 25sense model
+// TP1 = 50% midpoint of prior HTF candle
+// TP2 = opposite extreme of prior HTF candle
+// Stop = 12.5% of range from entry
 // ---------------------------------------------------------------
-async function analyzeLVL(ticker, direction, currentPrice, token, isSim) {
+function getLockOnTargets(htf, direction) {
+  var isBull = direction === 'call';
+
+  return {
+    entry: isBull ? htf.level25  : htf.level75,   // 25sense entry
+    stop:  isBull ? htf.level125 : htf.level875,  // 12.5% stop
+    tp1:   htf.level50,                            // 50% midpoint always
+    tp2:   isBull ? htf.priorHigh : htf.priorLow, // opposite extreme
+    note:  'Entry: $' + (isBull ? htf.level25 : htf.level75) +
+           ' | Stop: $' + (isBull ? htf.level125 : htf.level875) +
+           ' | TP1: $' + htf.level50 +
+           ' | TP2: $' + (isBull ? htf.priorHigh : htf.priorLow),
+  };
+}
+
+// ---------------------------------------------------------------
+// MAIN: analyze25sense
+// Runs all 3 checkpoints and returns full LVL analysis
+// Called by alerter.js for system signals only
+// ---------------------------------------------------------------
+async function analyze25sense(ticker, direction, currentPrice, token, isSim) {
   try {
-    var pdhl = await getPDHL(ticker, token, isSim);
-    var mtf  = await getMTFMomentum(ticker, token, isSim, direction);
+    // Get prior HTF candle (Daily for intraday plays)
+    var htf = await getHTFCandle(ticker, token, isSim, 'Daily');
+    if (!htf) return null;
 
-    if (!pdhl) return null;
+    // Run 3 checkpoints
+    var liquidity  = checkLiquidity(htf, currentPrice, direction);
+    var validation = await checkValidation(ticker, token, isSim, direction);
+    var lockOn     = getLockOnTargets(htf, direction);
 
-    var isBull      = direction === 'call';
-    var keyLevel    = isBull ? pdhl.pdHigh : pdhl.pdLow;
-    var range       = pdhl.pdHigh - pdhl.pdLow;
+    // Overall LVL score
+    var score = 0;
+    if (liquidity.passed)    score += 2; // Liquidity = most important
+    if (liquidity.approaching) score += 1; // Approaching = heads up
+    if (validation.passed)   score += 2; // Validation = important
+    if (validation.score === 3) score += 1; // All 3 TF = bonus
 
-    // Is price approaching the key level?
-    var distFromLevel = Math.abs(currentPrice - keyLevel);
-    var distPct       = range > 0 ? (distFromLevel / range * 100) : 100;
-    var approaching   = distPct <= 10; // within 10% of range from key level
+    var grade = score >= 5 ? 'A+' : score >= 4 ? 'A' : score >= 3 ? 'B' : 'C';
 
-    // Has price touched/swept the level?
-    var touched = isBull
-      ? pdhl.todayHigh >= keyLevel
-      : pdhl.todayLow  <= keyLevel;
+    console.log('[LVL] 25sense analysis:', ticker, direction,
+      'Score:' + score, 'Grade:' + grade,
+      'Liquidity:' + liquidity.passed, 'Validation:' + validation.alignment,
+      'Entry:$' + lockOn.entry, 'TP1:$' + lockOn.tp1, 'TP2:$' + lockOn.tp2);
 
-    // 25% pullback entry zone (LVL concept)
-    // After touching PDH/PDL, wait for 25% pullback from that extreme
-    var pullbackZone = null;
-    if (touched) {
-      var pullback25 = isBull
-        ? keyLevel - (range * 0.25)  // 25% below PDH
-        : keyLevel + (range * 0.25); // 25% above PDL
-      var nearPullback = isBull
-        ? currentPrice <= pullbackZone && currentPrice >= pullbackZone - (range * 0.10)
-        : currentPrice >= pullbackZone && currentPrice <= pullbackZone + (range * 0.10);
-      pullbackZone = parseFloat(pullback25.toFixed(2));
+    // Post heads up if approaching but not yet at level
+    if (liquidity.approaching && !liquidity.passed) {
+      postHeadsUp(ticker, direction, currentPrice, htf, lockOn).catch(console.error);
     }
-
-    // LVL Signal strength
-    var lvlScore  = 0;
-    var lvlNotes  = [];
-
-    if (approaching)  { lvlScore++; lvlNotes.push('Approaching PDH/PDL'); }
-    if (touched)      { lvlScore++; lvlNotes.push('Level touched/swept'); }
-    if (pullbackZone) { lvlScore++; lvlNotes.push('25% pullback zone active'); }
-    if (mtf && mtf.score >= 2) { lvlScore++; lvlNotes.push('MTF aligned ' + mtf.alignment); }
-    if (mtf && mtf.score === 3) { lvlScore++; lvlNotes.push('All 3 TF confirmed'); }
-
-    var lvlGrade = lvlScore >= 4 ? 'A+' : lvlScore >= 3 ? 'A' : lvlScore >= 2 ? 'B' : 'C';
-
-    console.log('[LVL] Analysis:', ticker, direction, 'Score:' + lvlScore, lvlGrade,
-      'PDH:' + pdhl.pdHigh, 'PDL:' + pdhl.pdLow,
-      'Approaching:' + approaching, 'Touched:' + touched);
 
     return {
       ticker,
       direction,
-      pdHigh:       pdhl.pdHigh,
-      pdLow:        pdhl.pdLow,
-      keyLevel,
-      approaching,
-      touched,
-      pullbackZone,
-      mtf,
-      lvlScore,
-      lvlGrade,
-      lvlNotes,
-      // For Discord card
-      summary: lvlGrade + ' LVL | ' + lvlNotes.join(' + '),
+      currentPrice,
+      htf,
+      liquidity,
+      validation,
+      lockOn,
+      score,
+      grade,
+      // Structural targets for orderExecutor (replaces premium % targets)
+      structuralEntry: lockOn.entry,
+      structuralStop:  lockOn.stop,
+      structuralTP1:   lockOn.tp1,
+      structuralTP2:   lockOn.tp2,
+      // For compact card display
+      summary: grade + ' LVL | ' + liquidity.note + ' | ' + validation.note,
+      tag: grade === 'A+' ? ' \uD83D\uDFE2 25sense A+' :
+           grade === 'A'  ? ' \uD83D\uDFE1 25sense A'  :
+           grade === 'B'  ? ' \uD83D\uDFE0 25sense B'  : '',
     };
 
   } catch(e) {
-    console.error('[LVL] Analysis error:', e.message);
+    console.error('[LVL] 25sense error:', e.message);
     return null;
   }
 }
 
 // ---------------------------------------------------------------
-// PDH/PDL HEADS UP ALERT
-// Posts to Discord when price is approaching a key level
-// Gives you 5-10 min prep time before trigger fires
+// HEADS UP ALERT
+// Fires when price is approaching the 25sense entry zone
+// Gives 5-10 min prep time before trigger fires
 // ---------------------------------------------------------------
-async function postHeadsUp(ticker, direction, currentPrice, pdhl, webhook) {
+async function postHeadsUp(ticker, direction, currentPrice, htf, lockOn) {
   try {
-    var isBull    = direction === 'call';
-    var keyLevel  = isBull ? pdhl.pdHigh : pdhl.pdLow;
-    var dist      = Math.abs(currentPrice - keyLevel).toFixed(2);
-    var distPct   = ((Math.abs(currentPrice - keyLevel) / keyLevel) * 100).toFixed(1);
+    var isBull   = direction === 'call';
+    var target   = isBull ? htf.level25 : htf.level75;
+    var dist     = Math.abs(currentPrice - target).toFixed(2);
 
     var lines = [
-      '\u26A0\uFE0F HEADS UP -- ' + ticker.toUpperCase() + ' approaching key level',
+      '\u26A0\uFE0F 25SENSE HEADS UP -- ' + ticker.toUpperCase() + ' ' + direction.toUpperCase(),
       '========================================',
-      'Ticker:      ' + ticker.toUpperCase(),
-      'Direction:   ' + direction.toUpperCase(),
-      'Key Level:   $' + keyLevel + ' (prev day ' + (isBull ? 'HIGH' : 'LOW') + ')',
-      'Current:     $' + currentPrice,
-      'Distance:    $' + dist + ' (' + distPct + '% away)',
+      'Approaching 25sense entry zone',
+      'Current:  $' + currentPrice,
+      'Target:   $' + target + ' (25% of prior daily range)',
+      'Distance: $' + dist + ' away',
       '----------------------------------------',
-      '\uD83C\uDFAF Get ready -- trigger may fire soon',
-      '\uD83D\uDCCB Check GEXR zone before entering',
-      '\uD83D\uDCB0 25% pullback entry zone will activate on touch',
+      'When price tags $' + target + ':',
+      '\uD83D\uDCB0 Entry:  $' + lockOn.entry,
+      '\uD83D\uDED1 Stop:   $' + lockOn.stop + ' (12.5% of range)',
+      '\uD83C\uDFAF TP1:    $' + lockOn.tp1 + ' (50% midpoint)',
+      '\uD83C\uDFAF TP2:    $' + lockOn.tp2 + ' (opposite extreme)',
       '========================================',
+      'Get ready -- check GEXR zone before entry',
     ].join('\n');
 
-    await fetch(webhook, {
+    await fetch(EXECUTE_WEBHOOK, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({
         content:  '```\n' + lines + '\n```',
-        username: 'Stratum LVL Monitor',
+        username: 'Stratum 25sense',
       }),
     });
-    console.log('[LVL] Heads up alert posted for', ticker);
+    console.log('[LVL] Heads up posted for', ticker, direction);
   } catch(e) {
     console.error('[LVL] Heads up error:', e.message);
   }
 }
 
-module.exports = { analyzeLVL, getPDHL, getMTFMomentum, postHeadsUp };
+module.exports = { analyze25sense, getHTFCandle, checkLiquidity, checkValidation, getLockOnTargets, postHeadsUp };
