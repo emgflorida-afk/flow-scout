@@ -191,15 +191,20 @@ function setupValidateListener(client) {
   // Add GuildMessages intent handling
   client.on('messageCreate', async function(message) {
     try {
+      // Debug -- log ALL messages so we can see what's coming in
+      console.log('[VALIDATE-DEBUG] Message received in channel:', message.channel ? message.channel.name : 'unknown', '| author bot:', message.author ? message.author.bot : 'unknown');
+
       // Only listen to #validate channel
-      if (!message.channel || message.channel.name !== VALIDATE_CHANNEL_NAME) return;
+      var channelName = message.channel ? (message.channel.name || '').toLowerCase().trim() : '';
+      if (channelName !== VALIDATE_CHANNEL_NAME.toLowerCase()) return;
       // Ignore bot messages
-      if (message.author.bot) return;
+      if (message.author && message.author.bot) return;
 
       var text = message.content || '';
+      console.log('[VALIDATE-DEBUG] Text length:', text.length, '| Preview:', text.substring(0, 50));
 
       // Must have some content to parse
-      if (text.length < 10) return;
+      if (text.length < 5) return;
 
       console.log('[VALIDATE] Message received in #validate channel -- parsing...');
 
