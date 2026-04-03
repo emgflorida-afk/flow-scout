@@ -832,6 +832,22 @@ function scoreContract(snap, underlyingPrice) {
   else if (oi >= 500)  { total += 1; }
   else { warnings.push('Low OI ' + oi + ' -- thin market'); }
 
+  // BID SIZE vs ASK SIZE -- order book pressure
+  // More buyers than sellers = bullish pressure on this contract
+  if (bidSize > 0 && askSize > 0) {
+    var bidAskRatio = bidSize / askSize;
+    if (bidAskRatio >= 5) {
+      total += 2;
+      bonuses.push('Bid pressure ' + bidSize + 'x vs ' + askSize + ' ask -- strong demand');
+    } else if (bidAskRatio >= 2) {
+      total += 1;
+      bonuses.push('Bid > ask (' + bidSize + ' vs ' + askSize + ')');
+    } else if (bidAskRatio < 0.5) {
+      warnings.push('Ask pressure ' + askSize + 'x vs ' + bidSize + ' bid -- sellers dominating');
+      total = Math.max(0, total - 1);
+    }
+  }
+
   // PREVIOUS HIGH CHECK -- is contract at a discount?
   // If contract already ran 40%+ from open = move already happened = SKIP
   var alreadyMoved = false;

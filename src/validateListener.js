@@ -189,6 +189,9 @@ async function postConfirmation(parsed, armed, channelId, botToken) {
 // ---------------------------------------------------------------
 function setupValidateListener(client) {
   // Add GuildMessages intent handling
+  // Log that we registered the messageCreate listener
+  console.log('[VALIDATE] messageCreate listener registered OK');
+
   client.on('messageCreate', async function(message) {
     try {
       // Debug -- log ALL messages so we can see what's coming in
