@@ -199,11 +199,29 @@ function setupValidateListener(client) {
 
       // Only listen to #validate channel
       var channelName = message.channel ? (message.channel.name || '').toLowerCase().trim() : '';
-      if (channelName !== VALIDATE_CHANNEL_NAME.toLowerCase()) return;
+      // Handle emoji prefix in channel name (e.g. "validate" or "validate")
+      var channelMatch = channelName === VALIDATE_CHANNEL_NAME.toLowerCase() ||
+                         channelName.endsWith(VALIDATE_CHANNEL_NAME.toLowerCase()) ||
+                         channelName.includes(VALIDATE_CHANNEL_NAME.toLowerCase());
+      if (!channelMatch) return;
       // Ignore bot messages
       if (message.author && message.author.bot) return;
 
+      // Get text from message content OR embeds (forwarded messages use embeds)
       var text = message.content || '';
+
+      // If content is empty check embeds (Discord forwards cards as embeds)
+      if (text.length < 5 && message.embeds && message.embeds.length > 0) {
+        var embedParts = [];
+        message.embeds.forEach(function(embed) {
+          if (embed.title)       embedParts.push(embed.title);
+          if (embed.description) embedParts.push(embed.description);
+          if (embed.fields)      embed.fields.forEach(function(f) { embedParts.push(f.name + ' ' + f.value); });
+        });
+        text = embedParts.join(' ');
+        console.log('[VALIDATE-DEBUG] Content from embeds:', text.substring(0, 100));
+      }
+
       console.log('[VALIDATE-DEBUG] Text length:', text.length, '| Preview:', text.substring(0, 50));
 
       // Must have some content to parse
