@@ -691,6 +691,27 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
         var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
         var compact  = cLine1 + '\n' + cLine2 + '\n' + cLine3;
 
+        // GEXR DIRECTION GATE -- system signals only
+        // Checks global GEXR direction set by /webhook/gexr
+        // Above GEXR = calls only | Below GEXR = puts only
+        var gexrDir    = global.gexrDirection || null;
+        var signalType = (tvData.type || '').toLowerCase();
+        if (gexrDir) {
+          var gexrBlock = false;
+          if (gexrDir === 'above' && signalType === 'put')  gexrBlock = true;
+          if (gexrDir === 'below' && signalType === 'call') gexrBlock = true;
+          if (gexrBlock) {
+            console.log('[GEXR] BLOCKED', parsed.ticker, signalType.toUpperCase(),
+              '-- GEXR is', gexrDir.toUpperCase(), '-- only', gexrDir === 'above' ? 'CALLS' : 'PUTS', 'allowed');
+            return res.json({ status: 'skipped', reason: 'GEXR direction mismatch -- ' +
+              (gexrDir === 'above' ? 'CALLS ONLY' : 'PUTS ONLY') });
+          }
+          console.log('[GEXR] PASSED', parsed.ticker, signalType.toUpperCase(),
+            '-- GEXR', gexrDir.toUpperCase(), 'aligns with signal');
+        } else {
+          console.log('[GEXR] No GEXR direction set yet -- signal allowed through');
+        }
+
         // LVL FRAMEWORK ANALYSIS -- system signals only
         // NOT applied to John's ideas (those go through ideaIngestor)
         // Adds PDH/PDL detection + MTF momentum score to signal grade

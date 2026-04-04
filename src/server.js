@@ -427,6 +427,113 @@ app.post('/webhook/execute', async function(req, res) {
 });
 
 // POST /webhook/close -- close a position
+
+// ---------------------------------------------------------------
+// GEXR WEBHOOK -- receives ATR Long/Short from TradingView
+// GEXR Matrix indicator fires this when direction changes
+// Stores direction for all signal filtering
+// ---------------------------------------------------------------
+app.post('/webhook/gexr', function(req, res) {
+  try {
+    var body = req.body || {};
+    var text = typeof body === 'string' ? body : JSON.stringify(body);
+
+    // Parse direction from multiple possible formats
+    var direction = null;
+    var level     = null;
+    var ticker    = body.ticker || body.symbol || 'SPY';
+
+    // Format 1: {"type":"gexr","direction":"above","ticker":"SPY"}
+    if (body.direction) {
+      direction = body.direction.toLowerCase();
+    }
+    // Format 2: {"action":"ATR Long"} or {"action":"ATR Short"}
+    if (!direction && body.action) {
+      if (/long/i.test(body.action))  direction = 'above';
+      if (/short/i.test(body.action)) direction = 'below';
+    }
+    // Format 3: plain text "ATR Long" or "ATR Short"
+    if (!direction && typeof body === 'string') {
+      if (/long/i.test(body))  direction = 'above';
+      if (/short/i.test(body)) direction = 'below';
+    }
+    // Format 4: message field
+    if (!direction && body.message) {
+      if (/long/i.test(body.message))  direction = 'above';
+      if (/short/i.test(body.message)) direction = 'below';
+    }
+
+    if (!direction) {
+      console.log('[GEXR] Could not parse direction from payload:', JSON.stringify(body));
+      return res.json({ status: 'error', reason: 'Could not parse GEXR direction' });
+    }
+
+    level = body.level || body.price || null;
+
+    // Store globally for all signal filtering
+    global.gexrDirection = direction; // 'above' or 'below'
+    global.gexrLevel     = level;
+    global.gexrTicker    = ticker;
+    global.gexrUpdatedAt = new Date().toISOString();
+
+    console.log('[GEXR] Direction updated:', direction.toUpperCase(),
+      level ? '| Level: $' + level : '',
+      '| Ticker:', ticker);
+
+    // Post to Discord indices-bias channel
+    var indicesWebhook = process.env.DISCORD_INDICES_WEBHOOK;
+    if (indicesWebhook) {
+      var emoji     = direction === 'above' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+      var sentiment = direction === 'above' ? 'BULLISH' : 'BEARISH';
+      var callPut   = direction === 'above' ? 'CALLS ONLY' : 'PUTS ONLY';
+      var lines = [
+        emoji + ' GEXR UPDATE -- ' + sentiment,
+        '========================================',
+        'Direction:  ' + direction.toUpperCase() + ' GEXR line',
+        'Bias:       ' + sentiment,
+        'Trade:      ' + callPut,
+        level ? 'Level:      $' + level : '',
+        'Time:       ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
+        '========================================',
+        'All signals now filtered for ' + callPut,
+      ].filter(Boolean).join('\n');
+
+      fetch(indicesWebhook, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          content:  '```\n' + lines + '\n```',
+          username: 'Stratum GEXR',
+        }),
+      }).catch(function(e) { console.error('[GEXR] Discord error:', e.message); });
+    }
+
+    res.json({
+      status:    'ok',
+      direction: direction,
+      level:     level,
+      ticker:    ticker,
+      message:   'GEXR direction updated: ' + direction.toUpperCase() + ' -- ' + (direction === 'above' ? 'CALLS ONLY' : 'PUTS ONLY'),
+    });
+
+  } catch(e) {
+    console.error('[GEXR] Error:', e.message);
+    res.json({ status: 'error', reason: e.message });
+  }
+});
+
+// GEXR status check
+app.get('/webhook/gexr', function(req, res) {
+  res.json({
+    direction:   global.gexrDirection || 'unknown',
+    level:       global.gexrLevel     || null,
+    ticker:      global.gexrTicker    || 'SPY',
+    updatedAt:   global.gexrUpdatedAt || null,
+    callPut:     global.gexrDirection === 'above' ? 'CALLS ONLY' :
+                 global.gexrDirection === 'below' ? 'PUTS ONLY'  : 'UNKNOWN',
+  });
+});
+
 app.post('/webhook/close', async function(req, res) {
   try {
     var secret = req.headers['x-stratum-secret'];
