@@ -1,67 +1,27 @@
-// contractResolver.js - Stratum Flow Scout v6.1
-// FULL EDGE: Real Greeks, GEX, Max Pain, High OI nodes, IV context
-// THREE MODE SYSTEM: DAY / SWING / SPREAD
+// contractResolver.js - Stratum Flow Scout v7.1
+// TRADESTATION ONLY -- no Public.com, no Polygon
+// LVL Framework -- PDH/PDL structural levels
+// Dynamic Stop -- underlying price based
+// Smart Entry -- ORB/breakout vs retracement
+// Smart Take Profit -- base hits over home runs
 // -----------------------------------------------------------------
 
 const fetch = require('node-fetch');
 
-const POLY_BASE   = 'https://api.polygon.io';
-const PUB_AUTH    = 'https://api.public.com/userapiauthservice/personal/access-tokens';
-const PUB_GATEWAY = 'https://api.public.com/userapigateway';
-
-function polyKey() { return process.env.POLYGON_API_KEY; }
-
-// -- TRADE MODE CONFIGS --------------------------------------------
+// -- TRADE MODE CONFIGS -------------------------------------------
 const MODES = {
   DAY: {
-    label:      'DAY TRADE',
-    minPremium: 0.30,
-    maxPremium: 1.50,
-    minDTE:     0,
-    maxDTE:     1,
-    stopPct:    0.35,
-    t1Pct:      0.35,
-    t2Pct:      0.70,
-    maxRisk:    120,
-    spread:     false,
+    label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
+    minDTE: 0, maxDTE: 2, stopPct: 0.35, t1Pct: 0.25, maxRisk: 120,
   },
   SWING: {
-    label:      'SWING TRADE',
-    minPremium: 0.50,
-    maxPremium: 3.00,
-    minDTE:     4,
-    maxDTE:     14,
-    stopPct:    0.40,
-    t1Pct:      0.60,
-    t2Pct:      1.20,
-    maxRisk:    140,
-    spread:     false,
-  },
-  SPREAD: {
-    label:      'SPREAD TRADE',
-    minPremium: 0.50,
-    maxPremium: 1.50,
-    minDTE:     4,
-    maxDTE:     14,
-    stopPct:    0.50,
-    t1Pct:      1.00,
-    t2Pct:      2.00,
-    maxRisk:    150,
-    spread:     true,
-    spreadWidth: 5,
+    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
+    minDTE: 4, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
   },
 };
 
 const MIN_PREMIUM = 0.30;
-const MAX_PREMIUM = 3.00;
-
-const SPREAD_WIDTHS = {
-  SPY: 5, QQQ: 5, IWM: 3, NVDA: 10, TSLA: 10,
-  META: 10, GOOGL: 10, AMZN: 10, MSFT: 10, AMD: 5,
-  JPM: 5, GS: 10, BAC: 2, WFC: 3,
-};
-
-function getSpreadWidth(ticker) { return SPREAD_WIDTHS[ticker] || 5; }
+const MAX_PREMIUM = 2.40;
 
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
@@ -69,892 +29,584 @@ const WATCHLIST = new Set([
   'MRNA','MRVL','GUSH','UVXY','KO','PEP'
 ]);
 
-// -- TOKEN ---------------------------------------------------------
-async function getPublicToken() {
-  try {
-    const secret = process.env.PUBLIC_API_KEY;
-    if (!secret) return null;
-    const res  = await fetch(PUB_AUTH, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'stratum-flow-scout' },
-      body:    JSON.stringify({ secret, validityInMinutes: 30 }),
-    });
-    const data  = await res.json();
-    const token = data?.accessToken || null;
-    if (token) console.log('[PUBLIC] Token obtained ');
-    else       console.log('[PUBLIC] Token failed:', JSON.stringify(data));
-    return token;
-  } catch (err) { console.error('[PUBLIC] Token error:', err.message); return null; }
+// T1 targets by ticker volatility (% gain)
+const T1_TARGETS = {
+  TSLA: 0.50, COIN: 0.50, NVDA: 0.50, MRVL: 0.50,
+  AAPL: 0.40, AMZN: 0.40, MSFT: 0.40, GOOGL: 0.40,
+};
+function getT1Target(ticker) {
+  return T1_TARGETS[ticker] || 0.30; // 30% default = base hit
 }
 
-// -- GET STOCK PRICE -----------------------------------------------
-async function getPrice(ticker) {
-  const accountId = process.env.PUBLIC_ACCOUNT_ID;
+// -- TRADESTATION TOKEN -------------------------------------------
+async function getTSToken() {
   try {
-    const token = await getPublicToken();
-    if (token && accountId) {
-      const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/quotes`, {
-        method:  'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
-        body:    JSON.stringify({ instruments: [{ symbol: ticker, type: 'EQUITY' }] }),
-      });
-      const data  = await res.json();
-      const quote = data?.quotes?.[0];
-      if (quote?.last) {
-        console.log(`[PRICE] ${ticker} $${quote.last} - Public.com `);
-        return parseFloat(quote.last);
-      }
-    }
-  } catch (err) { console.error(`[PUBLIC] Price error:`, err.message); }
-
-  try {
-    const res  = await fetch(`${POLY_BASE}/v2/snapshot/locale/us/markets/stocks/tickers/${ticker}?apiKey=${polyKey()}`);
-    const data = await res.json();
-    const price = data?.ticker?.lastTrade?.p || data?.ticker?.prevDay?.c || null;
-    if (price) { console.log(`[PRICE] ${ticker} $${price} - Polygon `); return price; }
-  } catch { }
-
-  console.error(`[PRICE] No price for ${ticker}`);
-  return null;
-}
-
-// -- GET OPTION EXPIRATIONS ----------------------------------------
-async function getPublicExpirations(ticker, token, accountId) {
-  try {
-    const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-expirations`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
-      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' } }),
-    });
-    const data        = await res.json();
-    const expirations = data?.expirations || [];
-    if (expirations.length) console.log(`[PUBLIC] ${ticker} expirations: ${expirations.slice(0,4).join(', ')} `);
-    return expirations;
-  } catch (err) { console.error(`[PUBLIC EXPIRY] Error:`, err.message); return []; }
-}
-
-// -- GET OPTION CHAIN ----------------------------------------------
-async function getPublicOptionChain(ticker, expDate, type, token, accountId) {
-  try {
-    const res  = await fetch(`${PUB_GATEWAY}/marketdata/${accountId}/option-chain`, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}`, 'User-Agent': 'stratum-flow-scout' },
-      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' }, expirationDate: expDate }),
-    });
-    const data  = await res.json();
-    const calls = data?.calls || [];
-    const puts  = data?.puts  || [];
-    const chain = type === 'call' ? calls : puts;
-    console.log(`[PUBLIC CHAIN] ${ticker} ${type} ${expDate} - ${chain.length} contracts `);
-    return { chain, calls, puts };
-  } catch (err) { console.error(`[PUBLIC CHAIN] Error:`, err.message); return { chain: [], calls: [], puts: [] }; }
-}
-
-// -- GET REAL GREEKS FROM PUBLIC.COM -------------------------------
-// GET /userapigateway/option-details/{accountId}/greeks
-// Returns: delta, gamma, theta, vega, rho, impliedVolatility per osiSymbol
-async function getPublicGreeks(osiSymbols, token, accountId) {
-  try {
-    if (!osiSymbols?.length) return {};
-    const params = osiSymbols.map(s => `osiSymbols=${encodeURIComponent(s)}`).join('&');
-    const res = await fetch(
-      `${PUB_GATEWAY}/option-details/${accountId}/greeks?${params}`,
-      {
-        method:  'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'User-Agent':    'stratum-flow-scout',
-        },
-      }
-    );
-    const data = await res.json();
-    // Key by osiSymbol for O(1) lookup in calculateGEX
-    // Handle non-array response from Public.com gracefully
-    const items = Array.isArray(data) ? data : (data?.greeks || data?.data || []);
-    const map = {};
-    for (const item of items) {
-      if (item.osiSymbol) {
-        map[item.osiSymbol] = {
-          delta:             parseFloat(item.delta             || 0),
-          gamma:             parseFloat(item.gamma             || 0),
-          theta:             parseFloat(item.theta             || 0),
-          vega:              parseFloat(item.vega              || 0),
-          rho:               parseFloat(item.rho               || 0),
-          impliedVolatility: parseFloat(item.impliedVolatility || 0),
-        };
-      }
-    }
-    console.log(`[GREEKS] Real greeks fetched for ${Object.keys(map).length} contracts `);
-    return map;
-  } catch (err) {
-    console.error('[GREEKS] Error:', err.message);
-    return {};
+    var ts = require('./tradestation');
+    return await ts.getAccessToken();
+  } catch(e) {
+    console.error('[TS] Token error:', e.message);
+    return null;
   }
 }
 
-// -- CALCULATE DTE -------------------------------------------------
-function calcDTE(expDateStr) {
-  const expiry = new Date(expDateStr + 'T16:00:00-04:00');
-  return Math.ceil((expiry - new Date()) / (1000 * 60 * 60 * 24));
+function getTSBase() {
+  return process.env.SIM_MODE === 'true'
+    ? 'https://sim-api.tradestation.com/v3'
+    : 'https://api.tradestation.com/v3';
 }
 
-// -- SELECT EXPIRY FOR MODE ----------------------------------------
+// -- GET STOCK PRICE ----------------------------------------------
+async function getPrice(ticker) {
+  try {
+    var token = await getTSToken();
+    if (!token) return null;
+    var res = await fetch(getTSBase() + '/marketdata/quotes/' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var data = await res.json();
+    var quotes = data.Quotes || data.quotes || (Array.isArray(data) ? data : [data]);
+    var q = quotes[0];
+    if (!q) return null;
+    var price = parseFloat(q.Last || q.Bid || q.Ask || 0);
+    if (price > 0) {
+      console.log('[PRICE] ' + ticker + ' $' + price + ' - TradeStation');
+      return price;
+    }
+    return null;
+  } catch(e) { console.error('[PRICE] Error:', e.message); return null; }
+}
+
+// -- GET PDH/PDL (Previous Day High/Low) --------------------------
+// This is the LVL Framework core
+// PDH = resistance for calls, PDL = support for puts
+async function getLVLs(ticker) {
+  try {
+    var token = await getTSToken();
+    if (!token) return null;
+    var res = await fetch(
+      getTSBase() + '/marketdata/barcharts/' + ticker +
+      '?unit=Daily&interval=1&barsback=3&sessiontemplate=Default',
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    var data = await res.json();
+    var bars = data.Bars || data.bars || [];
+    if (bars.length < 2) return null;
+
+    // Sort ascending by timestamp
+    bars.sort(function(a, b) {
+      return new Date(a.TimeStamp) - new Date(b.TimeStamp);
+    });
+
+    // Previous completed day = second to last bar
+    var prev = bars[bars.length - 2];
+    var curr = bars[bars.length - 1];
+
+    var pdh = parseFloat(prev.High);
+    var pdl = parseFloat(prev.Low);
+    var pdc = parseFloat(prev.Close);
+    var todayOpen = parseFloat(curr.Open);
+
+    console.log('[LVL] ' + ticker + ' PDH:$' + pdh + ' PDL:$' + pdl + ' PDC:$' + pdc);
+
+    return {
+      pdh,     // Previous Day High -- key resistance / call target
+      pdl,     // Previous Day Low  -- key support / put target
+      pdc,     // Previous Day Close
+      todayOpen,
+      // Structural zones
+      callEntry: pdh,  // Calls: enter near/above PDH breakout
+      putEntry: pdl,   // Puts: enter near/below PDL breakdown
+      // Dynamic stops based on underlying price
+      callStop: pdl,   // Calls: exit if stock breaks back below PDL
+      putStop: pdh,    // Puts: exit if stock breaks back above PDH
+    };
+  } catch(e) {
+    console.error('[LVL] Error for', ticker, ':', e.message);
+    return null;
+  }
+}
+
+// -- GET EXPIRATIONS ----------------------------------------------
+async function getExpirations(ticker) {
+  try {
+    var token = await getTSToken();
+    if (!token) return [];
+    var res = await fetch(
+      getTSBase() + '/marketdata/options/expirations/' + ticker,
+      { headers: { 'Authorization': 'Bearer ' + token } }
+    );
+    var data = await res.json();
+    var exps = data.Expirations || data.expirations || [];
+    return exps.map(function(e) {
+      return {
+        date: (e.Date || e.date || '').slice(0, 10),
+        dte:  parseInt(e.DaysToExpiration || 0),
+        type: e.Type || 'Weekly',
+      };
+    }).filter(function(e) { return e.date && e.dte >= 0; });
+  } catch(e) { console.error('[EXPIRY] Error:', e.message); return []; }
+}
+
+// -- SELECT EXPIRY ------------------------------------------------
 function selectExpiry(expirations, mode) {
-  const today  = new Date().toISOString().slice(0, 10);
-  const config = MODES[mode];
-  const valid  = expirations.filter(e => {
-    const dte = calcDTE(e);
-    return dte >= config.minDTE && dte <= config.maxDTE;
+  var config = MODES[mode] || MODES.SWING;
+  var valid = expirations.filter(function(e) {
+    return e.dte >= config.minDTE && e.dte <= config.maxDTE;
   });
   if (valid.length > 0) {
-    console.log(`[EXPIRY] ${mode} - using ${valid[0]} (${calcDTE(valid[0])}DTE) `);
+    console.log('[EXPIRY] ' + mode + ' - ' + valid[0].date + ' (' + valid[0].dte + 'DTE)');
     return valid[0];
   }
-  const future = expirations.filter(e => e > today);
+  var future = expirations.filter(function(e) { return e.dte > 0; });
   return future.length > 0 ? future[0] : null;
 }
 
-// -- PARSE CHAIN CONTRACT ------------------------------------------
-function parseChainContract(c) {
-  const sym    = c.instrument?.symbol || '';
-  const match  = sym.match(/(\d{6})([CP])(\d{8})$/);
-  const strike = match ? parseInt(match[3]) / 1000 : 0;
-  const bid    = parseFloat(c.bid || 0);
-  const ask    = parseFloat(c.ask || 0);
-  const mid    = parseFloat(((bid + ask) / 2).toFixed(2));
-  const volume = parseInt(c.volume || 0);
-  const oi     = parseInt(c.openInterest || 0);
-  // SPREAD FILTER -- percentage-based, not dollar-based
-  // Prevents wide bid/ask from eating premium on entry/exit
-  if (bid !== null && ask !== null && parseFloat(ask) > 0) {
-    var spreadAbs = parseFloat(ask) - parseFloat(bid);
-    var askVal    = parseFloat(ask);
-    var spreadPct = spreadAbs / askVal;
-    // Threshold: 35% for cheap contracts, 25% for mid, 20% for expensive
-    var threshold = askVal < 0.50 ? 0.40 : askVal < 1.50 ? 0.30 : 0.25;
-    if (spreadPct > threshold) {
-      console.log('[RESOLVER] SPREAD REJECTED:', sym, 'bid:$' + bid, 'ask:$' + ask, 'spread:$' + spreadAbs.toFixed(2));
-      return null;
-    }
-    if (spreadPct > 0.15) {
-      console.log('[RESOLVER] SPREAD CAUTION:', sym, 'spread:$' + spreadAbs.toFixed(2));
-    } else {
-      console.log('[RESOLVER] SPREAD OK:', sym, 'spread:$' + spreadAbs.toFixed(2));
-    }
-  }
-  return { ...c, strike, mid, bid, ask, symbol: sym, volume, openInterest: oi };
+// -- FORMAT DATE FOR TS API (MM-DD-YYYY) --------------------------
+function formatExpiry(dateStr) {
+  if (!dateStr) return null;
+  var p = dateStr.split('-');
+  if (p.length !== 3) return dateStr;
+  return p[1] + '-' + p[2] + '-' + p[0];
 }
 
-// -- CALCULATE MAX PAIN --------------------------------------------
-// Max pain = strike where total option value (calls + puts) is minimized
-// This is where market makers profit most - price tends to gravitate here into expiry
-function calculateMaxPain(calls, puts) {
+// -- GET OPTION CHAIN ---------------------------------------------
+async function getOptionChain(ticker, expiry, type, price) {
   try {
-    const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0);
-    const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0);
-    const strikes     = [...new Set([...parsedCalls.map(c => c.strike), ...parsedPuts.map(c => c.strike)])].sort((a,b) => a-b);
-
-    let minPain = Infinity;
-    let maxPain = null;
-
-    for (const testStrike of strikes) {
-      const callPain = parsedCalls
-        .filter(c => c.strike > testStrike)
-        .reduce((sum, c) => sum + (c.strike - testStrike) * c.openInterest, 0);
-      const putPain = parsedPuts
-        .filter(c => c.strike < testStrike)
-        .reduce((sum, c) => sum + (testStrike - c.strike) * c.openInterest, 0);
-      const totalPain = callPain + putPain;
-      if (totalPain < minPain) { minPain = totalPain; maxPain = testStrike; }
-    }
-
-    console.log(`[MAX PAIN] $${maxPain} `);
-    return maxPain;
-  } catch (err) { console.error('[MAX PAIN] Error:', err.message); return null; }
+    var token = await getTSToken();
+    if (!token) return [];
+    var optType = type === 'call' ? 'Call' : 'Put';
+    var url = getTSBase() + '/marketdata/options/chains/' + ticker
+      + '?expiration=' + formatExpiry(expiry)
+      + '&optionType=' + optType
+      + '&strikeProximity=6'
+      + '&enableGreeks=true';
+    if (price) url += '&priceCenter=' + Math.round(price);
+    var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    var data = await res.json();
+    var chain = data.ChainData || data.chainData || [];
+    console.log('[CHAIN] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts');
+    return chain;
+  } catch(e) { console.error('[CHAIN] Error:', e.message); return []; }
 }
 
-// -- CALCULATE GEX -------------------------------------------------
-// Uses real gamma from Public.com greeks endpoint when available
-// Falls back to estimation if greeksMap is empty or symbol not found
-// Positive GEX = dealers long gamma = price stays in range
-// Negative GEX = dealers short gamma = price moves fast and far
-function calculateGEX(calls, puts, price, greeksMap = {}) {
+// -- PARSE CONTRACT -----------------------------------------------
+function parseContract(c, expiry, type) {
   try {
-    const parsedCalls   = calls.map(parseChainContract).filter(c => c.strike > 0);
-    const parsedPuts    = puts.map(parseChainContract).filter(c => c.strike > 0);
-    const hasRealGreeks = Object.keys(greeksMap).length > 0;
+    var legs   = c.Legs || c.legs || [];
+    var leg    = legs[0] || {};
+    var symbol = leg.Symbol || leg.symbol || '';
+    var strike = parseFloat(leg.StrikePrice || leg.strikePrice || 0);
+    var bid    = parseFloat(c.Bid  || c.bid  || 0);
+    var ask    = parseFloat(c.Ask  || c.ask  || 0);
+    var mid    = parseFloat(c.Mid  || c.mid  || ((bid + ask) / 2));
+    var volume = parseInt(c.Volume || c.volume || 0);
+    var oi     = parseInt(c.DailyOpenInterest || 0);
+    var delta  = parseFloat(c.Delta  || c.delta  || 0);
+    var theta  = parseFloat(c.Theta  || c.theta  || 0);
+    var iv     = parseFloat(c.ImpliedVolatility || 0);
+    var probITM = parseFloat(c.ProbabilityITM || 0);
 
-    const gexByStrike = {};
+    if (!symbol || strike <= 0 || mid <= 0) return null;
 
-    for (const c of parsedCalls) {
-      const realGreeks = greeksMap[c.symbol];
-      const gamma = realGreeks
-        ? realGreeks.gamma
-        : Math.max(0, 0.05 - (Math.abs(c.strike - price) / price) * 0.5); // fallback estimate
-      const gex = gamma * c.openInterest * 100 * price * price * 0.01;
-      gexByStrike[c.strike] = (gexByStrike[c.strike] || 0) + gex;
+    // Spread filter -- percentage based
+    if (ask > 0) {
+      var spreadAbs = ask - bid;
+      var spreadPct = spreadAbs / ask;
+      var threshold = ask < 0.50 ? 0.40 : ask < 1.50 ? 0.30 : 0.25;
+      if (spreadPct > threshold) return null;
     }
-
-    for (const p of parsedPuts) {
-      const realGreeks = greeksMap[p.symbol];
-      const gamma = realGreeks
-        ? realGreeks.gamma
-        : Math.max(0, 0.05 - (Math.abs(p.strike - price) / price) * 0.5); // fallback estimate
-      const gex = gamma * p.openInterest * 100 * price * price * 0.01 * -1; // puts = negative GEX
-      gexByStrike[p.strike] = (gexByStrike[p.strike] || 0) + gex;
-    }
-
-    const netGEX        = Object.values(gexByStrike).reduce((a, b) => a + b, 0);
-    const sortedStrikes = Object.entries(gexByStrike).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-    const topGEXStrike  = sortedStrikes[0] ? parseFloat(sortedStrikes[0][0]) : null;
-    const gexRegime     = netGEX > 0
-      ? 'POSITIVE - price likely to stay in range'
-      : 'NEGATIVE - price likely to move fast and far';
-    const source = hasRealGreeks ? 'real greeks ' : 'estimated ';
-
-    console.log(`[GEX] Net: ${netGEX > 0 ? '+' : ''}${(netGEX/1000000).toFixed(1)}M | Top: $${topGEXStrike} | ${gexRegime} | ${source}`);
-
-    return { netGEX, topGEXStrike, gexRegime, gexByStrike, isPositive: netGEX > 0, source };
-  } catch (err) { console.error('[GEX] Error:', err.message); return null; }
-}
-
-// -- HIGH OI NODES -------------------------------------------------
-// Strikes with highest open interest act as magnets or walls
-function getHighOINodes(calls, puts, price, topN = 3) {
-  try {
-    const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0 && c.openInterest > 0);
-    const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0 && c.openInterest > 0);
-
-    const oiByStrike = {};
-    for (const c of parsedCalls) {
-      oiByStrike[c.strike] = (oiByStrike[c.strike] || { call: 0, put: 0 });
-      oiByStrike[c.strike].call += c.openInterest;
-    }
-    for (const p of parsedPuts) {
-      oiByStrike[p.strike] = (oiByStrike[p.strike] || { call: 0, put: 0 });
-      oiByStrike[p.strike].put += p.openInterest;
-    }
-
-    const sorted = Object.entries(oiByStrike)
-      .map(([strike, oi]) => ({
-        strike:  parseFloat(strike),
-        totalOI: oi.call + oi.put,
-        callOI:  oi.call,
-        putOI:   oi.put,
-        bias:    oi.call > oi.put ? ' CALL WALL' : ' PUT WALL',
-      }))
-      .sort((a, b) => b.totalOI - a.totalOI)
-      .slice(0, topN);
-
-    console.log(`[OI NODES] Top strikes: ${sorted.map(s => `$${s.strike}(${(s.totalOI/1000).toFixed(0)}K)`).join(', ')}`);
-    return sorted;
-  } catch (err) { console.error('[OI NODES] Error:', err.message); return []; }
-}
-
-// -- IV CONTEXT ----------------------------------------------------
-// High IV = favor spreads | Low IV = favor naked options
-function getIVContext(calls, puts, price, dte) {
-  try {
-    const parsedCalls = calls.map(parseChainContract).filter(c => c.strike > 0);
-    const parsedPuts  = puts.map(parseChainContract).filter(c => c.strike > 0);
-
-    const atmCall = parsedCalls.reduce((a, b) =>
-      Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-    );
-    const atmPut = parsedPuts.reduce((a, b) =>
-      Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-    );
-
-    const straddle    = (atmCall?.mid || 0) + (atmPut?.mid || 0);
-    const impliedMove = parseFloat((straddle / price * 100).toFixed(1));
-    const dailyMove   = dte > 0 ? parseFloat((impliedMove / Math.sqrt(dte)).toFixed(1)) : impliedMove;
-
-    const ivRegime = dailyMove > 2.5 ? 'HIGH - favor spreads'
-                   : dailyMove > 1.5 ? 'ELEVATED - spreads or naked'
-                   : 'LOW - favor naked options';
-
-    console.log(`[IV] Implied move: ${impliedMove}% | Daily: ${dailyMove}% | ${ivRegime}`);
 
     return {
-      straddle, impliedMove, dailyMove, ivRegime,
-      isHighIV:          dailyMove > 2.0,
-      recommendSpreads:  dailyMove > 2.5,
+      symbol, strike, bid, ask, mid,
+      volume, openInterest: oi,
+      delta, theta, iv, probITM, expiry, type,
+      high: parseFloat(c.High || 0),
+      low:  parseFloat(c.Low  || 0),
+      open: parseFloat(c.Open || 0),
     };
-  } catch (err) { console.error('[IV] Error:', err.message); return null; }
+  } catch(e) { return null; }
 }
 
-// -- TIME CONTEXT --------------------------------------------------
-function getTimeContext() {
-  const now    = new Date();
-  const etHour = now.getUTCHours() - 4;
-  const etMin  = now.getUTCMinutes();
-  const etTime = etHour * 60 + etMin;
-
-  const OPEN        = 9  * 60 + 30;
-  const EARLY_END   = 9  * 60 + 45;
-  const POWER_START = 15 * 60 + 0;
-  const POWER_END   = 15 * 60 + 30;
-  const LATE_ENTRY  = 15 * 60 + 30;
-  const CLOSE       = 16 * 60 + 0;
-
-  if (etTime < OPEN)        return { window: 'PREMARKET',   ok: false, warning: ' PRE-MARKET - wait for 9:30AM open' };
-  if (etTime < EARLY_END)   return { window: 'EARLY',       ok: false, warning: ' EARLY - wait for market to settle (9:45AM)' };
-  if (etTime >= LATE_ENTRY && etTime < CLOSE) return { window: 'LATE', ok: false, warning: ' LATE ENTRY - too close to close, wait for tomorrow' };
-  if (etTime >= POWER_START && etTime < POWER_END) return { window: 'POWER_HOUR', ok: true, warning: ' POWER HOUR - strong entry window' };
-  if (etTime >= CLOSE)      return { window: 'CLOSED',      ok: false, warning: ' MARKET CLOSED' };
-
-  return { window: 'OPEN', ok: true, warning: null };
+// -- DETERMINE ENTRY MODE -----------------------------------------
+// Returns 'BREAKOUT' or 'RETRACEMENT' based on signal strength
+function getEntryMode(confluence, strategy) {
+  var score = parseInt((confluence || '0').split('/')[0]) || 0;
+  var isORB = (strategy || '').toUpperCase().includes('ORB')
+           || (strategy || '').toUpperCase().includes('3-2-2')
+           || (strategy || '').toUpperCase().includes('322');
+  // Strong breakout signal = enter at ask immediately
+  if (score >= 5 || isORB) return 'BREAKOUT';
+  // Mid-confidence = wait for retracement to structural level
+  return 'RETRACEMENT';
 }
 
-// -- CONTRACT FRESHNESS CHECK -------------------------------------
-// Checks if a contract has already made its big move today
-// If contract is up >50% from day low -- move already happened -- BLOCK
-// If up 25-50% -- CAUTION -- extended
-// If <25% -- FRESH -- good entry timing
-async function checkContractFreshness(opraSymbol, currentMid) {
-  try {
-    const token     = await getPublicToken();
-    const accountId = process.env.PUBLIC_ACCOUNT_ID;
-    if (!token || !accountId || !currentMid) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
+// -- SELECT BEST CONTRACT -----------------------------------------
+function selectBestContract(contracts, price, config, lvls, type) {
+  if (!contracts || !contracts.length) return null;
 
-    // Use Public.com option chain to get day low via bid/ask history
-    // Parse the OPRA symbol to get underlying ticker, expiry, type
-    const raw   = (opraSymbol || '').replace(/^O:/, '');
-    const match = raw.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
-    if (!match) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
-
-    const ticker   = match[1];
-    const dateStr  = match[2];
-    const typeChar = match[3];
-    const expiry   = '20' + dateStr.slice(0,2) + '-' + dateStr.slice(2,4) + '-' + dateStr.slice(4,6);
-    const type     = typeChar === 'C' ? 'call' : 'put';
-    const strike   = parseInt(match[4]) / 1000;
-
-    // Get option chain from Public.com for this expiry
-    const chainRes = await fetch(PUB_GATEWAY + '/marketdata/' + accountId + '/option-chain', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'User-Agent': 'stratum-flow-scout' },
-      body:    JSON.stringify({ instrument: { symbol: ticker, type: 'EQUITY' }, expirationDate: expiry }),
-    });
-    const chainData = await chainRes.json();
-    const contracts = type === 'call' ? (chainData?.calls || []) : (chainData?.puts || []);
-
-    // Find this specific contract
-    const thisContract = contracts.find(function(c) {
-      const sym = c.instrument?.symbol || '';
-      const m = sym.match(/(\d{8})$/);
-      if (!m) return false;
-      return Math.abs(parseInt(m[1]) / 1000 - strike) < 0.01;
-    });
-
-    if (!thisContract) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
-
-    // Use today's low from the contract data
-    const dayLow = parseFloat(thisContract.low || thisContract.bid || 0);
-    if (!dayLow || dayLow <= 0) return { fresh: true, label: 'FRESH', pctFromLow: 0 };
-
-    const pctFromLow = parseFloat(((currentMid - dayLow) / dayLow * 100).toFixed(1));
-
-    var label, block;
-    if (pctFromLow > 50) {
-      label = 'MOVE ALREADY HAPPENED';
-      block = true;
-      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low $' + dayLow + ' -- BLOCKING');
-    } else if (pctFromLow > 25) {
-      label = 'EXTENDED';
-      block = false;
-      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low -- CAUTION');
-    } else {
-      label = 'FRESH';
-      block = false;
-      console.log('[FRESHNESS] ' + ticker + ' ' + type + ' $' + strike + ' up ' + pctFromLow + '% from day low -- FRESH SETUP');
-    }
-
-    return { fresh: !block, label, pctFromLow, dayLow, block };
-  } catch (err) {
-    console.error('[FRESHNESS] Error:', err.message);
-    return { fresh: true, label: 'FRESH', pctFromLow: 0 };
-  }
-}
-
-
-// -- FIND SPREAD LEGS ----------------------------------------------
-function findSpreadLegs(chain, price, type, ticker) {
-  const width  = getSpreadWidth(ticker);
-  const parsed = chain.map(parseChainContract).filter(c => c.strike > 0);
-
-  const buyLeg = parsed.reduce((a, b) =>
-    Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-  );
-  if (!buyLeg) return null;
-
-  const sellStrike = type === 'call' ? buyLeg.strike + width : buyLeg.strike - width;
-  const sellLeg    = parsed.reduce((a, b) =>
-    Math.abs(a.strike - sellStrike) < Math.abs(b.strike - sellStrike) ? a : b
-  );
-  if (!sellLeg) return null;
-
-  const debit     = parseFloat((buyLeg.mid - sellLeg.mid).toFixed(2));
-  const maxProfit = parseFloat((width - debit).toFixed(2));
-  const breakeven = type === 'call'
-    ? parseFloat((buyLeg.strike + debit).toFixed(2))
-    : parseFloat((buyLeg.strike - debit).toFixed(2));
-
-  if (debit <= 0) return null;
-
-  return { buyLeg, sellLeg, debit, maxProfit, breakeven, spreadWidth: width, type };
-}
-
-// -- RESOLVE CONTRACT ----------------------------------------------
-async function resolveContract(ticker, type = 'call', tradeType = 'SWING') {
-  const mode   = (tradeType || '').toUpperCase().includes('DAY')    ? 'DAY'
-               : (tradeType || '').toUpperCase().includes('SPREAD') ? 'SPREAD'
-               : 'SWING';
-  const config = MODES[mode];
-
-  console.log(`[MODE] ${ticker} - ${mode} (${config.minDTE}-${config.maxDTE}DTE)`);
-
-  const price = await getPrice(ticker);
-  if (!price) return null;
-
-  const accountId = process.env.PUBLIC_ACCOUNT_ID;
-  const token     = await getPublicToken();
-  if (!token || !accountId) return null;
-
-  const expirations = await getPublicExpirations(ticker, token, accountId);
-  const expDate     = selectExpiry(expirations, mode);
-  if (!expDate) return null;
-
-  const dte       = calcDTE(expDate);
-  const chainData = await getPublicOptionChain(ticker, expDate, type, token, accountId);
-  const { chain, calls, puts } = chainData;
-  if (!chain.length) return null;
-
-  const allCalls = calls.length > 0 ? calls : chain;
-  const allPuts  = puts.length  > 0 ? puts  : chain;
-
-  // -- FETCH REAL GREEKS -----------------------------------------
-  // Pull ATM contracts within 10% of price for greeks call
-  // Capped at 20 symbols to stay within rate limits
-  const atmCalls = allCalls.map(parseChainContract)
-    .filter(c => Math.abs(c.strike - price) / price < 0.10 && c.symbol)
-    .map(c => c.symbol);
-  const atmPuts = allPuts.map(parseChainContract)
-    .filter(c => Math.abs(c.strike - price) / price < 0.10 && c.symbol)
-    .map(c => c.symbol);
-  const osiSymbols = [...new Set([...atmCalls, ...atmPuts])].slice(0, 20);
-  const greeksMap  = osiSymbols.length > 0
-    ? await getPublicGreeks(osiSymbols, token, accountId)
-    : {};
-
-  // -- EDGE CALCULATIONS -----------------------------------------
-  const maxPain = calculateMaxPain(allCalls, allPuts);
-  const gex     = calculateGEX(allCalls, allPuts, price, greeksMap); // real greeks passed in
-  const oiNodes = getHighOINodes(allCalls, allPuts, price);
-  const ivCtx   = getIVContext(allCalls, allPuts, price, dte);
-  const timeCtx = getTimeContext();
-
-  // -- SPREAD MODE -----------------------------------------------
-  if (mode === 'SPREAD') {
-    const legs = findSpreadLegs(chain, price, type, ticker);
-    if (!legs || legs.debit < config.minPremium || legs.debit > config.maxPremium) {
-      console.log(`[SPREAD] No valid spread for ${ticker} - falling back to SWING`);
-      return resolveContract(ticker, type, 'SWING');
-    }
-    return {
-      symbol:      legs.buyLeg.symbol,
-      sellSymbol:  legs.sellLeg.symbol,
-      mid:         legs.debit,
-      bid:         legs.buyLeg.bid,
-      ask:         legs.buyLeg.ask,
-      strike:      legs.buyLeg.strike,
-      sellStrike:  legs.sellLeg.strike,
-      expiry:      expDate,
-      mode:        'SPREAD',
-      dte, debit:  legs.debit,
-      maxProfit:   legs.maxProfit,
-      breakeven:   legs.breakeven,
-      spreadWidth: legs.spreadWidth,
-      maxPain, gex, oiNodes, ivCtx, timeCtx, price,
-    };
-  }
-
-  // -- DAY / SWING MODE ------------------------------------------
-  const withStrike = chain.map(parseChainContract).filter(c =>
-    c.mid >= config.minPremium && c.mid <= config.maxPremium && c.strike > 0
-  );
-
-  if (!withStrike.length) {
-    const fallback       = mode === 'DAY' ? 'SWING' : 'DAY';
-    const fallbackConfig = MODES[fallback];
-    const fallbackExp    = selectExpiry(expirations, fallback);
-    if (fallbackExp) {
-      const fb = await getPublicOptionChain(ticker, fallbackExp, type, token, accountId);
-      const fbContracts = fb.chain.map(parseChainContract).filter(c =>
-        c.mid >= fallbackConfig.minPremium && c.mid <= fallbackConfig.maxPremium && c.strike > 0
-      );
-      if (fbContracts.length) {
-        const best = fbContracts.reduce((a, b) =>
-          Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-        );
-        return {
-          symbol: best.symbol, mid: best.mid, bid: best.bid, ask: best.ask,
-          strike: best.strike, expiry: fallbackExp, mode: fallback,
-          dte: calcDTE(fallbackExp),
-          maxPain, gex, oiNodes, ivCtx, timeCtx, price,
-        };
-      }
-    }
-    return null;
-  }
-
-  // Filter contracts within 5% of current price -- prevents OTM garbage
-  const withinDistance = withStrike.filter(function(c) {
-    return Math.abs(c.strike - price) / price <= 0.05;
-  });
-
-  // If nothing within 5%, expand to 8% before giving up
-  const candidates = withinDistance.length > 0 ? withinDistance : withStrike.filter(function(c) {
-    return Math.abs(c.strike - price) / price <= 0.08;
+  // Filter by premium range
+  var candidates = contracts.filter(function(c) {
+    if (!c) return false;
+    if (c.mid < config.minPremium || c.mid > config.maxPremium) return false;
+    if (Math.abs(c.delta) < 0.15) return false; // too far OTM
+    return true;
   });
 
   if (!candidates.length) {
-    console.log('[DISTANCE] No contracts within 8% of price for ' + ticker + ' -- skipping');
-    return null;
+    candidates = contracts.filter(function(c) {
+      return c && c.mid >= config.minPremium && c.mid <= config.maxPremium;
+    });
   }
 
-  const best = candidates.reduce(function(a, b) {
-    return Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b;
+  if (!candidates.length) return null;
+
+  // Score each contract
+  var scored = candidates.map(function(c) {
+    var score = 0;
+    var absDelta = Math.abs(c.delta);
+    var distPct  = Math.abs(c.strike - price) / price;
+
+    // Delta sweet spot
+    if (absDelta >= 0.35 && absDelta <= 0.55) score += 3;
+    else if (absDelta >= 0.25) score += 1;
+
+    // ATM proximity
+    if (distPct < 0.01) score += 3;
+    else if (distPct < 0.03) score += 2;
+    else if (distPct < 0.05) score += 1;
+
+    // Liquidity
+    if (c.volume > 1000) score += 2;
+    else if (c.volume > 500) score += 1;
+    if (c.openInterest > 5000) score += 2;
+    else if (c.openInterest > 1000) score += 1;
+
+    // Tight spread
+    if (c.ask > 0) {
+      var sp = (c.ask - c.bid) / c.ask;
+      if (sp < 0.05) score += 2;
+      else if (sp < 0.10) score += 1;
+    }
+
+    // LVL alignment bonus
+    // Calls: prefer strike at or just above PDH (breakout level)
+    // Puts:  prefer strike at or just below PDL (breakdown level)
+    if (lvls) {
+      if (type === 'call' && Math.abs(c.strike - lvls.pdh) / lvls.pdh < 0.02) score += 2;
+      if (type === 'put'  && Math.abs(c.strike - lvls.pdl) / lvls.pdl < 0.02) score += 2;
+    }
+
+    return { contract: c, score };
   });
 
-  const spreadWidth = best.ask - best.bid;
-  const spreadPct   = best.ask > 0 ? spreadWidth / best.ask : 1;
-  const wideSpread  = spreadPct > 0.15;
+  scored.sort(function(a, b) { return b.score - a.score; });
+  var best = scored[0].contract;
+  console.log('[SELECT] ' + best.symbol + ' strike:$' + best.strike
+    + ' mid:$' + best.mid + ' delta:' + best.delta.toFixed(2)
+    + ' score:' + scored[0].score);
+  return best;
+}
 
-  console.log(`[OPRA] ${ticker}  ${best.symbol} strike $${best.strike} mid $${best.mid} ${dte}DTE [${mode}]`);
+// -- CALCULATE DTE ------------------------------------------------
+function calcDTE(dateStr) {
+  if (!dateStr) return 0;
+  return Math.max(0, Math.ceil(
+    (new Date(dateStr + 'T16:00:00-04:00') - new Date()) / (1000 * 60 * 60 * 24)
+  ));
+}
 
-  // -- FRESHNESS CHECK ------------------------------------------
-  var freshness = null;
-  try {
-    freshness = await checkContractFreshness(best.symbol, best.mid);
-  } catch(e) { console.error('[FRESHNESS] check error:', e.message); }
+// -- TIME CONTEXT -------------------------------------------------
+function getTimeContext() {
+  var now    = new Date();
+  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var etMin  = now.getUTCMinutes();
+  var etTime = etHour * 60 + etMin;
+  if (etTime < 9*60+30)  return { window: 'PREMARKET',   ok: false };
+  if (etTime < 9*60+45)  return { window: 'EARLY',       ok: false };
+  if (etTime >= 15*60+30) return { window: 'LATE',       ok: false };
+  if (etTime >= 16*60)   return { window: 'CLOSED',      ok: false };
+  return { window: 'OPEN', ok: true };
+}
+
+// -- RESOLVE CONTRACT (MAIN) --------------------------------------
+async function resolveContract(ticker, type, tradeType, signalMeta) {
+  type      = (type      || 'call').toLowerCase();
+  tradeType = (tradeType || 'SWING').toUpperCase();
+  signalMeta = signalMeta || {};
+
+  var mode   = tradeType.includes('DAY') ? 'DAY' : 'SWING';
+  var config = MODES[mode];
+
+  console.log('[RESOLVE] ' + ticker + ' ' + type + ' ' + mode);
+
+  // 1. Get live price
+  var price = await getPrice(ticker);
+  if (!price) { console.error('[RESOLVE] No price for', ticker); return null; }
+
+  // 2. Get PDH/PDL levels (LVL Framework)
+  var lvls = await getLVLs(ticker);
+
+  // 3. Determine entry mode from signal strength
+  var entryMode = getEntryMode(signalMeta.confluence, signalMeta.strategy);
+  console.log('[ENTRY MODE] ' + entryMode + ' | confluence:' + (signalMeta.confluence || 'N/A'));
+
+  // 4. LVL filter -- check if price is at actionable level
+  var lvlValid = true;
+  var lvlReason = '';
+  if (lvls) {
+    if (type === 'call') {
+      // For calls: price should be at or above PDH (breakout) OR near PDH (retracement)
+      var distFromPDH = (price - lvls.pdh) / lvls.pdh;
+      if (distFromPDH < -0.03) {
+        // Price more than 3% below PDH -- no breakout yet
+        if (entryMode === 'BREAKOUT') {
+          lvlValid = false;
+          lvlReason = 'Price $' + price + ' is ' + (Math.abs(distFromPDH)*100).toFixed(1) + '% below PDH $' + lvls.pdh + ' -- no breakout yet';
+        }
+      }
+      console.log('[LVL] CALL | Price:$' + price + ' PDH:$' + lvls.pdh + ' dist:' + (distFromPDH*100).toFixed(1) + '%');
+    } else {
+      // For puts: price should be at or below PDL (breakdown)
+      var distFromPDL = (lvls.pdl - price) / lvls.pdl;
+      if (distFromPDL < -0.03) {
+        if (entryMode === 'BREAKOUT') {
+          lvlValid = false;
+          lvlReason = 'Price $' + price + ' is above PDL $' + lvls.pdl + ' -- no breakdown yet';
+        }
+      }
+      console.log('[LVL] PUT | Price:$' + price + ' PDL:$' + lvls.pdl + ' dist:' + (distFromPDL*100).toFixed(1) + '%');
+    }
+  }
+
+  if (!lvlValid) {
+    console.log('[LVL] BLOCKED --', lvlReason);
+    return { blocked: true, reason: lvlReason, lvls };
+  }
+
+  // 5. Get expirations and select
+  var expirations = await getExpirations(ticker);
+  if (!expirations.length) return null;
+  var expiryObj = selectExpiry(expirations, mode);
+  if (!expiryObj) {
+    expiryObj = selectExpiry(expirations, 'SWING');
+    if (!expiryObj) return null;
+    mode = 'SWING'; config = MODES.SWING;
+  }
+
+  var expiry = expiryObj.date;
+  var dte    = expiryObj.dte;
+
+  // 6. Get option chain
+  var rawChain = await getOptionChain(ticker, expiry, type, price);
+  if (!rawChain.length) return null;
+
+  // 7. Parse contracts
+  var contracts = rawChain.map(function(c) {
+    return parseContract(c, expiry, type);
+  }).filter(Boolean);
+  if (!contracts.length) return null;
+
+  // 8. Select best contract (LVL-aware)
+  var best = selectBestContract(contracts, price, config, lvls, type);
+  if (!best) return null;
+
+  // 9. Calculate entry prices
+  var t1Pct     = getT1Target(ticker);  // smart T1 per ticker volatility
+  var stopPct   = config.stopPct;
+
+  // ENTRY PRICE based on mode
+  var entryPrice;
+  if (entryMode === 'BREAKOUT') {
+    // Strong signal -- enter at ask (market-ish)
+    entryPrice = best.ask;
+  } else {
+    // Retracement -- wait for 12.5% pullback from ask
+    entryPrice = parseFloat((best.ask * 0.875).toFixed(2));
+  }
+
+  // STOPS -- dynamic based on underlying price levels
+  // optionStop = premium loss based on structural invalidation distance
+  var underlyingStop = null;
+  var optionStopPct  = stopPct; // fallback to % if no LVL
+
+  if (lvls) {
+    underlyingStop = type === 'call' ? lvls.callStop : lvls.putStop;
+    // Estimate option stop: if underlying breaks structure,
+    // option loses ~delta × (underlying distance) per $1
+    var structuralDist = Math.abs(price - underlyingStop);
+    var estimatedLoss  = structuralDist * Math.abs(best.delta);
+    var dynamicStopPct = estimatedLoss / best.mid;
+    // Use dynamic stop but cap at 50% max, floor at 20%
+    optionStopPct = Math.min(0.50, Math.max(0.20, dynamicStopPct));
+    console.log('[DYNAMIC STOP] dist:$' + structuralDist.toFixed(2)
+      + ' delta:' + best.delta.toFixed(2)
+      + ' estLoss:$' + estimatedLoss.toFixed(2)
+      + ' stopPct:' + (optionStopPct*100).toFixed(0) + '%');
+  }
+
+  var optionStop = parseFloat((best.mid * (1 - optionStopPct)).toFixed(2));
+  var t1Price    = parseFloat((best.mid * (1 + t1Pct)).toFixed(2));
+
+  // 10. Position sizing
+  var qty = best.mid <= 1.20 ? 2 : 1;
+
+  var timeCtx = getTimeContext();
+
+  console.log('[OPRA] ' + ticker + ' ' + best.symbol
+    + ' $' + best.strike + ' mid:$' + best.mid + ' ' + dte + 'DTE'
+    + ' entry:' + entryMode + ' T1:+' + (t1Pct*100).toFixed(0) + '%');
 
   return {
-    symbol: best.symbol, mid: best.mid,
-    bid: best.bid, ask: best.ask,
-    strike: best.strike, expiry: expDate,
-    mode, dte, wideSpread, spreadWidth,
-    volume:       best.volume || 0,
-    openInterest: best.openInterest || 0,
-    maxPain, gex, oiNodes, ivCtx, timeCtx, price,
-    freshness,
+    symbol:        best.symbol,
+    mid:           best.mid,
+    bid:           best.bid,
+    ask:           best.ask,
+    strike:        best.strike,
+    expiry,
+    mode,
+    dte,
+    price,
+    // Greeks
+    delta:         best.delta,
+    theta:         best.theta,
+    iv:            best.iv,
+    probITM:       Math.round(best.probITM * 100),
+    volume:        best.volume,
+    openInterest:  best.openInterest,
+    // LVL Framework
+    lvls,
+    underlyingStop,
+    // Entry
+    entryMode,
+    entryPrice,
+    // Exit
+    optionStop,
+    optionStopPct: Math.round(optionStopPct * 100),
+    t1Price,
+    t1Pct:         Math.round(t1Pct * 100),
+    // Sizing
+    qty,
+    // Meta
+    timeCtx,
+    wideSpread: (best.ask - best.bid) / best.ask > 0.15,
   };
 }
 
-// -- RESOLVE CONTRACT WITH SPECIFIC EXPIRY (for Card A flow expiry) -
+// -- RESOLVE WITH SPECIFIC EXPIRY ---------------------------------
 async function resolveContractWithExpiry(ticker, type, expiry) {
   try {
-    const price = await getPrice(ticker);
+    var price = await getPrice(ticker);
     if (!price) return null;
-
-    const token     = await getPublicToken();
-    const accountId = process.env.PUBLIC_ACCOUNT_ID;
-    if (!token || !accountId) return null;
-
-    const { chain } = await getPublicOptionChain(ticker, expiry, type, token, accountId);
-    if (!chain || !chain.length) return null;
-
-    const contracts = chain.map(parseChainContract).filter(c => c.strike > 0 && c.mid > 0);
+    var rawChain = await getOptionChain(ticker, expiry, type, price);
+    if (!rawChain.length) return null;
+    var contracts = rawChain.map(function(c) {
+      return parseContract(c, expiry, type);
+    }).filter(Boolean);
     if (!contracts.length) return null;
-
-    const best = contracts.reduce((a, b) =>
-      Math.abs(a.strike - price) < Math.abs(b.strike - price) ? a : b
-    );
-
-    const dte = calcDTE(expiry);
-    console.log('[OPRA FLOW EXPIRY] ' + ticker + '  ' + best.symbol + ' strike $' + best.strike + ' mid $' + best.mid + ' ' + dte + 'DTE');
-
+    var best = selectBestContract(contracts, price, MODES.SWING, null, type);
+    if (!best) return null;
     return {
-      symbol: best.symbol, mid: best.mid,
-      bid: best.bid, ask: best.ask,
-      strike: best.strike, expiry,
-      mode: 'SWING', dte, price,
+      symbol: best.symbol, mid: best.mid, bid: best.bid, ask: best.ask,
+      strike: best.strike, expiry, mode: 'SWING', dte: calcDTE(expiry),
+      price, delta: best.delta, probITM: Math.round(best.probITM * 100),
     };
-  } catch (err) {
-    console.error('[RESOLVE FLOW EXPIRY] Error:', err.message);
-    return null;
-  }
+  } catch(e) { console.error('[RESOLVE EXPIRY] Error:', e.message); return null; }
 }
 
-// -- PARSE OPRA ----------------------------------------------------
+// -- PARSE OPRA ---------------------------------------------------
 function parseOPRA(opraSymbol) {
   try {
-    const raw   = (opraSymbol || '').replace(/^O:/, '');
-    const match = raw.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
-    if (!match) return null;
-    const [, ticker, dateStr, type, strikeRaw] = match;
-    const expiry = `20${dateStr.slice(0,2)}-${dateStr.slice(2,4)}-${dateStr.slice(4,6)}`;
-    return { ticker, expiry, type: type === 'C' ? 'call' : 'put', strike: parseInt(strikeRaw) / 1000 };
-  } catch { return null; }
-}
-
-// -- GET OPTION SNAPSHOT -------------------------------------------
-async function getOptionSnapshot(optionTicker) {
-  try {
-    const res    = await fetch(`${POLY_BASE}/v3/snapshot/options/${optionTicker}?apiKey=${polyKey()}`);
-    const data   = await res.json();
-    const result = data?.results;
-    if (!result) return null;
-    const details = result.details    || {};
-    const greeks  = result.greeks     || {};
-    const day     = result.day        || {};
-    const quote   = result.last_quote || {};
-    const bid = quote.bid  || day.close || 0;
-    const ask = quote.ask  || day.close || 0;
-    const mid = bid && ask ? parseFloat(((bid + ask) / 2).toFixed(2)) : 0;
-    return {
-      ticker: optionTicker, bid: parseFloat(bid.toFixed(2)),
-      ask: parseFloat(ask.toFixed(2)), mid,
-      volume: day.volume || 0, openInterest: result.open_interest || 0,
-      delta: parseFloat((greeks.delta || 0).toFixed(4)),
-      gamma: parseFloat((greeks.gamma || 0).toFixed(4)),
-      theta: parseFloat((greeks.theta || 0).toFixed(4)),
-      vega:  parseFloat((greeks.vega  || 0).toFixed(4)),
-      iv:    parseFloat(((result.implied_volatility || 0) * 100).toFixed(1)),
-      strike: details.strike_price || 0, expiry: details.expiration_date || '',
-    };
-  } catch { return null; }
-}
-
-// -- FIND BEST CONTRACT --------------------------------------------
-async function findBestContract(opraSymbol) {
-  const parsed = parseOPRA(opraSymbol);
-  if (!parsed) return { error: 'Could not parse OPRA' };
-  const { ticker, expiry, type } = parsed;
-  const price = await getPrice(ticker);
-  if (!price) return { error: `No price for ${ticker}` };
-  const lo = (price * 0.90).toFixed(0);
-  const hi = (price * 1.10).toFixed(0);
-  try {
-    const res  = await fetch(`${POLY_BASE}/v3/reference/options/contracts?underlying_ticker=${ticker}&contract_type=${type}&expiration_date=${expiry}&strike_price_gte=${lo}&strike_price_lte=${hi}&limit=50&apiKey=${polyKey()}`);
-    const data = await res.json();
-    const contracts = data?.results || [];
-    if (!contracts.length) return { error: `No contracts for ${ticker}` };
-    let best = null;
-    for (const c of contracts) {
-      const snap = await getOptionSnapshot(c.ticker);
-      if (!snap) continue;
-      const premium = snap.mid || snap.ask;
-      if (premium < MIN_PREMIUM || premium > MAX_PREMIUM) continue;
-      const score = scoreContract(snap, price);
-
-      // HARD BLOCKS -- skip contracts that fail critical checks
-      if (score.alreadyMoved) {
-        console.log('[RESOLVER] Skipping', c.ticker, '-- move already happened');
-        continue;
-      }
-      if ((snap.volume || 0) < 50) {
-        console.log('[RESOLVER] Skipping', c.ticker, '-- volume too low:', snap.volume);
-        continue;
-      }
-      const spreadAbs = (snap.ask || 0) - (snap.bid || 0);
-      const spreadPctCheck = (snap.ask || 0) > 0 ? spreadAbs / (snap.ask || 1) : 1;
-      const spreadThresh = (snap.ask || 0) < 0.50 ? 0.40 : (snap.ask || 0) < 1.50 ? 0.30 : 0.25;
-      if (spreadPctCheck > spreadThresh) {
-        console.log('[RESOLVER] Skipping', c.ticker, '-- spread too wide: $' + spreadAbs.toFixed(2));
-        continue;
-      }
-
-      // Pick highest scoring contract across the full chain
-      if (!best || score.total > best.score.total) {
-        best = {
-          ticker, optionTicker: c.ticker, strike: snap.strike, expiry: snap.expiry,
-          type, premium, bid: snap.bid, ask: snap.ask, mid: snap.mid,
-          volume: snap.volume, openInterest: snap.openInterest,
-          delta: snap.delta, gamma: snap.gamma, theta: snap.theta, vega: snap.vega,
-          iv: snap.iv, price, score, isLive: true,
-          // Extra fields for compact card display
-          dayHigh: snap.dayHigh, dayOpen: snap.dayOpen,
-          probITM: score.profitProb,
-          grade: score.grade,
-          warnings: score.warnings,
-          bonuses: score.bonuses,
-        };
-        console.log('[RESOLVER] New best:', c.ticker, 'score:', score.total + '/11', 'grade:', score.grade);
-      }
+    var raw = (opraSymbol || '').trim().replace(/^O:/, '');
+    // TS format: "NVDA 260410C177.5"
+    var tsMatch = raw.match(/^([A-Z]+)\s+(\d{6})([CP])(\d+(?:\.\d+)?)$/);
+    if (tsMatch) {
+      var ds = tsMatch[2];
+      return {
+        ticker: tsMatch[1],
+        expiry: '20' + ds.slice(0,2) + '-' + ds.slice(2,4) + '-' + ds.slice(4,6),
+        type:   tsMatch[3] === 'C' ? 'call' : 'put',
+        strike: parseFloat(tsMatch[4]),
+        symbol: raw,
+      };
     }
-    if (!best) return { error: 'No contracts in range' };
-    return best;
-  } catch (err) { return { error: err.message }; }
-}
-
-// -- SCORE CONTRACT ------------------------------------------------
-function scoreContract(snap, underlyingPrice) {
-  let total = 0; const warnings = []; const bonuses = [];
-  const premium   = snap.mid || snap.ask;
-  const bid       = snap.bid || 0;
-  const ask       = snap.ask || 0;
-  const spreadAbs = ask - bid;
-  const spreadPct = ask > 0 ? (spreadAbs / ask * 100) : 100;
-  const absDelta  = Math.abs(snap.delta || 0);
-  const distPct   = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
-  const volume    = snap.volume || 0;
-  const oi        = snap.openInterest || snap.open_interest || 0;
-  const dayHigh   = snap.dayHigh || snap.day_high || 0;
-  const dayOpen   = snap.dayOpen || snap.day_open || 0;
-  const probITM   = snap.probabilityITM || snap.prob_itm || absDelta;
-
-  // CORE SCORING (1-11 points)
-  // Premium in sweet spot $0.50-$2.40
-  if (premium >= 0.50 && premium <= MAX_PREMIUM) { total += 2; }
-  else if (premium > MAX_PREMIUM) { warnings.push('Premium over $2.40 -- skip'); }
-  else { warnings.push('Premium under $0.50 -- too cheap'); }
-
-  // Spread tight -- absolute $0.10 max (not just %)
-  if (spreadAbs <= 0.10)      { total += 2; bonuses.push('Tight spread'); }
-  else if (spreadAbs <= 0.20) { total += 1; }
-  else { warnings.push('Wide spread $' + spreadAbs.toFixed(2) + ' -- slippage risk'); }
-
-  // Volume > OI = fresh activity (most important signal)
-  if (volume > oi && oi > 0)  { total += 2; bonuses.push('Vol>OI fresh conviction'); }
-  else if (volume >= 500)     { total += 1; bonuses.push('High volume'); }
-  else if (volume < 100)      { warnings.push('Low volume ' + volume + ' -- no liquidity'); }
-
-  // Delta sweet spot 0.30-0.50 (not too far OTM)
-  if (absDelta >= 0.30 && absDelta <= 0.50)      { total += 2; bonuses.push('Delta sweet spot'); }
-  else if (absDelta >= 0.20 && absDelta < 0.30)  { total += 1; warnings.push('Delta low -- OTM risk'); }
-  else { warnings.push('Delta ' + absDelta.toFixed(2) + ' -- skip'); }
-
-  // Theta manageable
-  if (snap.theta >= -0.05)      { total += 1; }
-  else if (snap.theta < -0.10)  { warnings.push('High theta decay'); }
-
-  // Strike within 3% of price (not 10%)
-  if (distPct <= 3)       { total += 2; bonuses.push('ATM strike'); }
-  else if (distPct <= 7)  { total += 1; }
-  else { warnings.push('Strike ' + distPct.toFixed(1) + '% from price -- too far OTM'); }
-
-  // OI at least 500 (liquid contract)
-  if (oi >= 1000)      { total += 1; bonuses.push('High OI liquid'); }
-  else if (oi >= 500)  { total += 1; }
-  else { warnings.push('Low OI ' + oi + ' -- thin market'); }
-
-  // BID SIZE vs ASK SIZE -- order book pressure
-  // More buyers than sellers = bullish pressure on this contract
-  if (bidSize > 0 && askSize > 0) {
-    var bidAskRatio = bidSize / askSize;
-    if (bidAskRatio >= 5) {
-      total += 2;
-      bonuses.push('Bid pressure ' + bidSize + 'x vs ' + askSize + ' ask -- strong demand');
-    } else if (bidAskRatio >= 2) {
-      total += 1;
-      bonuses.push('Bid > ask (' + bidSize + ' vs ' + askSize + ')');
-    } else if (bidAskRatio < 0.5) {
-      warnings.push('Ask pressure ' + askSize + 'x vs ' + bidSize + ' bid -- sellers dominating');
-      total = Math.max(0, total - 1);
+    // OPRA format: "NVDA260410C00177500"
+    var opraMatch = raw.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+    if (opraMatch) {
+      var ds2    = opraMatch[2];
+      var whole  = parseInt(opraMatch[4].slice(0, 5), 10);
+      var dec    = parseInt(opraMatch[4].slice(5), 10);
+      var strike = dec === 0 ? whole : parseFloat(whole + '.' + String(dec).replace(/0+$/, ''));
+      return {
+        ticker: opraMatch[1],
+        expiry: '20' + ds2.slice(0,2) + '-' + ds2.slice(2,4) + '-' + ds2.slice(4,6),
+        type:   opraMatch[3] === 'C' ? 'call' : 'put',
+        strike,
+        symbol: opraMatch[1] + ' ' + ds2 + opraMatch[3] + strike,
+      };
     }
-  }
-
-  // PREVIOUS HIGH CHECK -- is contract at a discount?
-  // If contract already ran 40%+ from open = move already happened = SKIP
-  var alreadyMoved = false;
-  if (dayHigh > 0 && dayOpen > 0 && premium > 0) {
-    var runPct = (dayHigh - dayOpen) / dayOpen * 100;
-    var fromHigh = (dayHigh - premium) / dayHigh * 100;
-    if (runPct > 40 && fromHigh < 10) {
-      // Contract already ran 40%+ and price is still near the high
-      warnings.push('Move already happened -- up ' + runPct.toFixed(0) + '% from open');
-      alreadyMoved = true;
-      total = Math.max(0, total - 2); // penalize
-    } else if (fromHigh >= 20) {
-      // Contract pulled back 20%+ from high = discount entry
-      bonuses.push('Discount ' + fromHigh.toFixed(0) + '% from day high');
-      total += 1;
-    }
-  }
-
-  // PROBABILITY CHECK -- minimum 30% prob ITM
-  if (probITM >= 0.40)      { bonuses.push('Prob ITM ' + Math.round(probITM * 100) + '%'); }
-  else if (probITM < 0.25)  { warnings.push('Low prob ITM ' + Math.round(probITM * 100) + '%'); total = Math.max(0, total - 1); }
-
-  var grade = total >= 9 ? 'A+' : total >= 7 ? 'A' : total >= 5 ? 'B' : 'C';
-
-  console.log('[SCORE] ' + (snap.symbol || '') + ' score:' + total + '/11 grade:' + grade +
-    (bonuses.length ? ' GOOD:' + bonuses.join(',') : '') +
-    (warnings.length ? ' WARN:' + warnings.join(',') : ''));
-
-  return { total, max: 11, grade, warnings, bonuses, profitProb: Math.round(probITM * 100), alreadyMoved };
+    return null;
+  } catch(e) { return null; }
 }
 
-// LEGACY scoreContract wrapper -- kept for backward compat
-function scoreContract_OLD(snap, underlyingPrice) {
-  let total = 0; const warnings = [];
-  const premium   = snap.mid || snap.ask;
-  const spreadPct = snap.ask > 0 ? ((snap.ask - snap.bid) / snap.ask * 100) : 100;
-  const absDelta  = Math.abs(snap.delta);
-  const distPct   = Math.abs(snap.strike - underlyingPrice) / underlyingPrice * 100;
-  if (premium <= MAX_PREMIUM)               { total += 2; } else { warnings.push('Premium over max'); }
-  if (spreadPct < 10)                       { total += 1; } else { warnings.push('Wide spread'); }
-  if (snap.volume >= 100)                   { total += 2; } else { warnings.push('Low volume'); }
-  if (absDelta >= 0.20 && absDelta <= 0.60) { total += 2; } else { warnings.push('Delta off'); }
-  if (snap.theta >= -0.10)                  { total += 1; } else { warnings.push('High theta'); }
-  if (distPct <= 10)                        { total += 2; } else { warnings.push('Strike far'); }
-  if (snap.openInterest >= 100)             { total += 1; } else { warnings.push('Low OI'); }
-  return { total, max: 11, warnings, profitProb: Math.round(absDelta * 100) };
-}
-
-// -- POSITION SIZING -----------------------------------------------
-function calculatePositionSize(premium, mode, accountSize, spreadData, contractsOverride) {
-  if (!mode) mode = 'SWING';
-  if (!accountSize) accountSize = 7000;
-  if (!spreadData) spreadData = null;
-  const config = MODES[mode] || MODES.SWING;
+// -- POSITION SIZING ----------------------------------------------
+function calculatePositionSize(premium, mode, accountSize) {
+  if (!mode)        mode        = 'SWING';
+  if (!accountSize) accountSize = 6400;
+  var config = MODES[mode] || MODES.SWING;
   if (!premium || premium <= 0) return { viable: false, reason: 'No premium' };
+  if (premium > MAX_PREMIUM)    return { viable: false, reason: 'Over $2.40 max' };
+  if (premium < config.minPremium) return { viable: false, reason: 'Under min' };
 
-  if (mode === 'SPREAD' && spreadData) {
-    const debit        = spreadData.debit;
-    const maxProfit    = spreadData.maxProfit;
-    const stopPrice    = parseFloat((debit * 0.50).toFixed(2));
-    const t1Price      = parseFloat((debit * 2.00).toFixed(2));
-    const maxContracts = Math.floor(config.maxRisk / (debit * 100));
-    const contracts    = Math.max(1, Math.min(maxContracts, 3));
-    const totalCost    = parseFloat((debit * 100 * contracts).toFixed(0));
-    const maxGain      = parseFloat((maxProfit * 100 * contracts).toFixed(0));
-    const riskPct      = parseFloat((totalCost / accountSize * 100).toFixed(1));
-    return {
-      viable: true, mode: 'SPREAD', contracts, debit, maxProfit,
-      stopPrice, t1Price, totalCost, maxLoss: totalCost, maxGain, riskPct,
-      breakeven: spreadData.breakeven,
-    };
-  }
-
-  if (premium > config.maxPremium) return { viable: false, reason: `Premium $${premium} over max` };
-  if (premium < config.minPremium) return { viable: false, reason: `Premium $${premium} under min` };
-
-  const costPerContract = premium * 100;
-  const stopPrice       = parseFloat((premium * (1 - config.stopPct)).toFixed(2));
-  const t1Price         = parseFloat((premium * (1 + config.t1Pct)).toFixed(2));
-  const t2Price         = parseFloat((premium * (1 + config.t2Pct)).toFixed(2));
-  const stopLossOne     = parseFloat((premium * config.stopPct * 100).toFixed(0));
-  const maxContracts    = Math.floor(config.maxRisk / stopLossOne);
-  const contracts       = Math.max(1, Math.min(maxContracts, premium <= 1.20 ? 2 : 1));
-  const totalStop       = stopLossOne * contracts;
-  const t1Profit        = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
-  const riskPct         = parseFloat((totalStop / accountSize * 100).toFixed(1));
+  var contracts = premium <= 1.20 ? 2 : 1;
+  var t1Pct     = config.t1Pct;
+  var stopPct   = config.stopPct;
+  var stopPrice = parseFloat((premium * (1 - stopPct)).toFixed(2));
+  var t1Price   = parseFloat((premium * (1 + t1Pct)).toFixed(2));
+  var stopLoss  = parseFloat((premium * stopPct * 100 * contracts).toFixed(0));
+  var t1Profit  = parseFloat(((t1Price - premium) * 100 * contracts).toFixed(0));
+  var totalCost = parseFloat((premium * 100 * contracts).toFixed(0));
+  var riskPct   = parseFloat((stopLoss / accountSize * 100).toFixed(1));
 
   return {
-    viable: true, mode, contracts, premium,
-    totalCost: parseFloat((costPerContract * contracts).toFixed(0)),
-    stopPrice, t1Price, t2Price, stopLoss: totalStop, t1Profit, riskPct,
+    viable: true, mode, contracts, premium, totalCost,
+    stopPrice, t1Price, stopLoss, t1Profit, riskPct,
   };
+}
+
+// -- GET OPTION SNAPSHOT ------------------------------------------
+async function getOptionSnapshot(tsSymbol) {
+  try {
+    var token = await getTSToken();
+    if (!token) return null;
+    var encoded = encodeURIComponent(tsSymbol);
+    var res = await fetch(getTSBase() + '/marketdata/quotes/' + encoded, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var data  = await res.json();
+    var quotes = data.Quotes || data.quotes || (Array.isArray(data) ? data : [data]);
+    var q = quotes[0];
+    if (!q) return null;
+    return {
+      symbol: tsSymbol,
+      bid: parseFloat(q.Bid || 0),
+      ask: parseFloat(q.Ask || 0),
+      mid: parseFloat(q.Last || ((parseFloat(q.Bid||0) + parseFloat(q.Ask||0)) / 2)),
+      volume: parseInt(q.Volume || 0),
+      openInterest: parseInt(q.DailyOpenInterest || 0),
+    };
+  } catch(e) { return null; }
 }
 
 module.exports = {
-  parseOPRA, resolveContract, resolveContractWithExpiry, findBestContract,
-  getOptionSnapshot, getPrice, scoreContract,
-  calculatePositionSize, findSpreadLegs,
-  calculateMaxPain, calculateGEX, getHighOINodes,
-  getIVContext, getTimeContext, getPublicGreeks,
-  checkContractFreshness,
+  parseOPRA,
+  resolveContract,
+  resolveContractWithExpiry,
+  getOptionSnapshot,
+  getPrice,
+  getLVLs,
+  getEntryMode,
+  calculatePositionSize,
+  getTimeContext,
+  getT1Target,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };
