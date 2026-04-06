@@ -253,14 +253,14 @@ async function processAlert(raw) {
 
     // CONVICTION CLUSTER TRACKING
     try {
-      var fTicker  = alert.ticker || alert.symbol || '';
-      var fDir     = (alert.put_call || alert.type || '').toLowerCase();
-      var fPrem    = parseFloat(alert.premium || alert.size || 0);
-      var fDTE     = parseInt(alert.dte || alert.days_to_expiry || 0);
-      var fVol     = parseInt(alert.volume || 0);
-      var fOI      = parseInt(alert.open_interest || alert.oi || 0);
+      var fTicker  = ticker || raw.ticker || raw.symbol || '';
+      var fDir     = type || (raw.put_call || raw.type || '').toLowerCase();
+      var fPrem    = premium || parseFloat(raw.premium || raw.size || 0);
+      var fDTE     = parseInt(raw.dte || raw.days_to_expiry || 0);
+      var fVol     = parseInt(raw.volume || 0);
+      var fOI      = parseInt(raw.open_interest || raw.oi || 0);
       var fVolGtOI = fVol > fOI && fOI > 0;
-      var fTags    = alert.tags || alert.alert_type || '';
+      var fTags    = raw.tags || raw.alert_type || '';
 
       if (fTicker && fDir && fPrem > 0) {
         var cluster = updateCluster(fTicker, fDir, fPrem, fDTE, fVolGtOI);
