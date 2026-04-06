@@ -12,6 +12,8 @@ const { processFlow } = require('./flowCluster'); // CLUSTER ENGINE
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489313680641233107/WpeUmp4r4H5CmdpL3LFQ2FXaCcdeszpdKmp0P71Z1CdJjvbujz1NGd630ebQyHyXUH90';
+const EXECUTE_NOW_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+  'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
 
 // CONVICTION CLUSTER TRACKER
 // Tracks repeat sweeps per ticker per direction within 60 min window
@@ -364,6 +366,46 @@ async function processAlert(raw) {
         }
         swingCard.push('-------------------------------', 'Hold    1-3 days max');
         await sendFlowToDiscord(swingCard.join('\n'));
+
+        // -- COMPACT EMOJI CARD to #execute-now ------------------
+        // This is the 2-second read card for fast execution
+        try {
+          var dirEmoji  = type === 'call' ? 'CALLS' : 'PUTS';
+          var emo       = type === 'call' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
+          var expFmt    = swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--';
+          var execLines = [
+            emo + ' ' + ticker + ' $' + swingResolved.strike + typeLabel + ' ' + expFmt + ' -- ' + dirEmoji,
+            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+          ];
+          if (sizing && sizing.viable) {
+            execLines.push(
+              '\uD83D\uDCB0 Entry  $' + sizing.premium.toFixed(2) + ' (' + sizing.contracts + ' contract' + (sizing.contracts > 1 ? 's' : '') + ' = $' + sizing.totalCost + ')',
+              '\uD83D\uDED1 Stop   $' + sizing.stopPrice + ' (lose -$' + sizing.stopLoss + ')',
+              '\uD83C\uDFAF T1     $' + sizing.t1Price + ' (+$' + sizing.t1Profit + ')',
+              '\uD83D\uDE80 T2     $' + sizing.t2Price + ' (runner)',
+              '\u26A0\uFE0F Risk   $' + sizing.stopLoss + ' max'
+            );
+          } else {
+            execLines.push('\uD83D\uDCB0 Check live premium before entry');
+          }
+          execLines.push(
+            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
+            '\uD83C\uDF0A Flow   ' + premiumFmt + ' | ' + alertName,
+            '\uD83D\uDD25 HIGH CONVICTION -- execute on next candle close',
+            '\uD83D\uDD50 ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET'
+          );
+          await fetch(EXECUTE_NOW_WEBHOOK, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({
+              content:  '```\n' + execLines.join('\n') + '\n```',
+              username: 'Stratum Execute',
+            }),
+          });
+          console.log('[EXECUTE-NOW] Compact card sent for ' + ticker + ' OK');
+        } catch(execErr) {
+          console.error('[EXECUTE-NOW] Card error:', execErr.message);
+        }
 
         // Spread card
         const spreadResolved = await resolver.resolveContract(ticker, type, 'SPREAD');
