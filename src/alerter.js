@@ -1,8 +1,6 @@
-// alerter.js - Stratum Flow Scout v6.1
-// FULL EDGE: Time guardrails, spread warning, GEX, Max Pain, OI nodes, IV context
-// TECHNICALS: RSI(14) + VWAP from TradingView webhook payload
-// CHART: Finviz daily chart auto-attached to every alert
-// THREE MODE SYSTEM: DAY / SWING / SPREAD
+// alerter.js - Stratum Flow Scout v6.2
+// STRAT ALERTS NOW AUTO-EXECUTE IN SIM -- no flow confirmation needed
+// Flow alerts remain independent track
 // -----------------------------------------------------------------
 
 const fetch             = require('node-fetch');
@@ -21,12 +19,13 @@ setInterval(function() {
   var etHour = ((now.getUTCHours() - 4) + 24) % 24;
   if (etHour === 0) { executedToday = {}; console.log('[DEDUP] Reset for new day'); }
 }, 60 * 60 * 1000);
-const resolver = require('./contractResolver');
-const calendar    = require('./economicCalendar');
-let smartStops   = null;
-let macroFilter  = null;
-let executeNow   = null;
-let holdLock     = null;
+
+const resolver  = require('./contractResolver');
+const calendar  = require('./economicCalendar');
+let smartStops  = null;
+let macroFilter = null;
+let executeNow  = null;
+let holdLock    = null;
 try { smartStops  = require('./smartStop');    console.log('[ALERTER] smartStop loaded OK');   } catch(e) { console.log('[ALERTER] smartStop not loaded:', e.message); }
 try { macroFilter = require('./macroFilter');  console.log('[ALERTER] macroFilter loaded OK'); } catch(e) { console.log('[ALERTER] macroFilter not loaded:', e.message); }
 try { executeNow  = require('./executeNow');   console.log('[ALERTER] executeNow loaded OK');  } catch(e) { console.log('[ALERTER] executeNow not loaded:', e.message); }
@@ -62,12 +61,10 @@ async function getFinvizChart(ticker) {
 }
 
 // -- SEND CHART VIA MULTIPART -------------------------------------
-// Uses raw multipart/form-data boundary - no FormData dependency
 async function sendChartToDiscord(webhookUrl, ticker, chartBuffer) {
   try {
     const boundary = '----StratumBoundary' + Date.now();
     const filename  = ticker + '_chart.png';
-
     const head = Buffer.from(
       '--' + boundary + '\r\n' +
       'Content-Disposition: form-data; name="file"; filename="' + filename + '"\r\n' +
@@ -75,7 +72,6 @@ async function sendChartToDiscord(webhookUrl, ticker, chartBuffer) {
     );
     const tail = Buffer.from('\r\n--' + boundary + '--\r\n');
     const body = Buffer.concat([head, chartBuffer, tail]);
-
     const res = await fetch(webhookUrl, {
       method:  'POST',
       headers: {
@@ -103,7 +99,6 @@ async function sendToChannel(channel, message, ticker) {
     });
     if (!res.ok) return false;
     console.log('[DISCORD] Sent to #' + channel + ' OK');
-
     if (ticker) {
       const chart = await getFinvizChart(ticker);
       if (chart) await sendChartToDiscord(url, ticker, chart);
@@ -122,17 +117,15 @@ function calcDTE(expiryDateStr) {
   return Math.max(0, diff);
 }
 
-// -- RSI LABEL ----------------------------------------------------
 function getRsiLabel(rsi) {
   if (rsi == null || isNaN(rsi)) return '--';
-  if (rsi > 70) return 'overbought \u26a0\ufe0f';
-  if (rsi < 30) return 'oversold \u26a0\ufe0f';
+  if (rsi > 70) return 'overbought ⚠️';
+  if (rsi < 30) return 'oversold ⚠️';
   if (rsi > 55) return 'bullish momentum';
-  if (rsi < 45) return 'room to fall \u2705';
+  if (rsi < 45) return 'room to fall ✅';
   return 'neutral';
 }
 
-// -- BUILD TECHNICALS SECTION -------------------------------------
 function buildTechnicalsSection(tvData) {
   if (!tvData) return [];
   const rsi           = tvData.rsi           != null ? parseFloat(tvData.rsi)           : null;
@@ -142,11 +135,8 @@ function buildTechnicalsSection(tvData) {
   const bearFVGBottom = tvData.bearFVGBottom != null ? parseFloat(tvData.bearFVGBottom) : null;
   const bullFVGTop    = tvData.bullFVGTop    != null ? parseFloat(tvData.bullFVGTop)    : null;
   const bullFVGBottom = tvData.bullFVGBottom != null ? parseFloat(tvData.bullFVGBottom) : null;
-
   if (rsi == null && vwap == null && bearFVGTop == null && bullFVGTop == null) return [];
-
   const lines = [];
-
   if (rsi != null && !isNaN(rsi) && rsi >= 0 && rsi <= 100) {
     lines.push('RSI (14)    ' + rsi.toFixed(0) + ' -- ' + getRsiLabel(rsi));
   }
@@ -162,9 +152,8 @@ function buildTechnicalsSection(tvData) {
     lines.push('FVG Above   $' + bearFVGBottom.toFixed(2) + '-$' + bearFVGTop.toFixed(2) + ' -- resistance gap');
   }
   if (bullFVGTop != null && bullFVGBottom != null && bullFVGTop > 0 && bullFVGBottom > 0) {
-    lines.push('FVG Below   $' + bullFVGBottom.toFixed(2) + '-$' + bullFVGTop.toFixed(2) + ' -- target magnet \u2705');
+    lines.push('FVG Below   $' + bullFVGBottom.toFixed(2) + '-$' + bullFVGTop.toFixed(2) + ' -- target magnet ✅');
   }
-
   return lines;
 }
 
@@ -176,26 +165,21 @@ function scoreFlow(flowData) {
   const orderType = (flowData.orderType || '').toUpperCase();
   const premium   = parseFloat(flowData.totalPremium || 0);
   const alertName = (flowData.alertName || '').toLowerCase();
-
   if (orderType === 'SWEEP')      { score += 2; flags.push('SWEEP'); }
   else if (orderType === 'BLOCK') { score += 1; flags.push('BLOCK'); }
-
   if (premium >= 1000000)     { score += 4; flags.push('$' + (premium/1000000).toFixed(1) + 'M -- WHALE'); }
   else if (premium >= 500000) { score += 3; flags.push('$' + (premium/1000).toFixed(0) + 'K -- LARGE'); }
   else if (premium >= 100000) { score += 2; flags.push('$' + (premium/1000).toFixed(0) + 'K'); }
   else if (premium >= 25000)  { score += 1; flags.push('$' + (premium/1000).toFixed(0) + 'K'); }
-
   if (alertName.includes('urgent') || alertName.includes('whale') || alertName.includes('giant') || alertName.includes('grenade')) {
     score += 2; flags.push(flowData.alertName);
   } else if (alertName.includes('sweep') || alertName.includes('sizable')) {
     score += 1; flags.push(flowData.alertName);
   }
-
   const label = score >= 6 ? 'MAXIMUM CONVICTION'
                : score >= 4 ? 'HIGH CONVICTION'
                : score >= 2 ? 'NOTABLE FLOW'
                : 'FLOW DETECTED';
-
   return { score, flags, label, isHighConviction: score >= 4 };
 }
 
@@ -203,30 +187,24 @@ function scoreFlow(flowData) {
 function gradeStratAlert(confluence, hasFlow) {
   var score = parseInt((confluence || '0').split('/')[0]) || 0;
   if (score >= 6) return 'A+';
-  if (score >= 5 && hasFlow) return 'A';
   if (score >= 5) return 'A';
   if (score >= 4) return 'B';
   return 'C';
 }
 
 // -- POSITION CONFLICT CHECK --------------------------------------
-// Before firing any card check if we already own the opposite side
-// Requires TS token to be valid -- silently skips if no token
-var cachedPositions = null;
-var positionCacheTime = 0;
+var cachedPositions    = null;
+var positionCacheTime  = 0;
 
 async function getOpenPositions() {
   try {
-    // Read from Claude MCP positions webhook -- no TS token needed
     var server = null;
     try { server = require('./server'); } catch(e) {}
     var livePos = server && server.getLivePositions ? server.getLivePositions() : {};
-
     if (livePos && Object.keys(livePos).length > 0) {
       console.log('[CONFLICT] Using Claude MCP positions -- ' + Object.keys(livePos).length + ' tickers');
       return livePos;
     }
-
     console.log('[CONFLICT] No live positions from Claude MCP yet -- skipping conflict check');
     return null;
   } catch(e) {
@@ -249,8 +227,6 @@ async function checkPositionConflict(ticker, type) {
   } catch(e) { return { conflict: false }; }
 }
 
-
-
 const recentFlowTickers  = new Map();
 const recentStratTickers = new Map();
 
@@ -258,44 +234,87 @@ const recentStratTickers = new Map();
 function buildEdgeSection(resolved) {
   const lines = [];
   if (!resolved) return lines;
-
   const { maxPain, gex, oiNodes, ivCtx, timeCtx, wideSpread, bid, ask } = resolved;
-
   if (timeCtx && timeCtx.warning) lines.push(timeCtx.warning);
-
   if (wideSpread && bid && ask) {
     const sw = parseFloat((ask - bid).toFixed(2));
-    lines.push('\u26a0\ufe0f WIDE SPREAD -- $' + sw + ' wide -- risky fill, limit at mid only');
+    lines.push('⚠️ WIDE SPREAD -- $' + sw + ' wide -- risky fill, limit at mid only');
   }
-
   if (resolved.dte === 0) {
     const now    = new Date();
     const etHour = now.getUTCHours() - 4;
-    if (etHour >= 14) lines.push('\ud83d\udeab 0DTE after 2PM -- DO NOT ENTER');
+    if (etHour >= 14) lines.push('🚫 0DTE after 2PM -- DO NOT ENTER');
   }
-
   if (lines.length > 0) lines.push('-------------------------------');
-
   if (maxPain) lines.push('Max Pain    $' + maxPain + ' -- price magnet into expiry');
-
   if (gex) {
     const gexM = (gex.netGEX / 1000000).toFixed(0);
     lines.push('GEX         ' + (gex.netGEX > 0 ? '+' : '') + '$' + gexM + 'M -- ' + (gex.isPositive ? 'POSITIVE (range bound)' : 'NEGATIVE (trending)') + ' ' + (gex.source || ''));
     if (gex.topGEXStrike) lines.push('GEX Pin     $' + gex.topGEXStrike + ' -- highest dealer hedge zone');
   }
-
   if (oiNodes && oiNodes.length > 0) {
     const top = oiNodes.slice(0, 2).map(function(n) { return '$' + n.strike + '(' + n.bias + ')'; }).join(' | ');
     lines.push('OI Walls    ' + top);
   }
-
   if (ivCtx) {
     lines.push('IV Regime   ' + ivCtx.ivRegime);
     lines.push('Impl Move   +-' + ivCtx.impliedMove + '% | Daily +-' + ivCtx.dailyMove + '%');
-    if (ivCtx.recommendSpreads) lines.push('\ud83d\udca1 High IV -- consider spread instead of naked');
+    if (ivCtx.recommendSpreads) lines.push('💡 High IV -- consider spread instead of naked');
   }
-
   return lines;
+}
+
+// -- OPRA TO TS FORMAT --------------------------------------------
+function opraToTS(opra) {
+  if (!opra) return null;
+  if (opra.indexOf(' ') > -1) return opra;
+  var om = opra.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
+  if (!om) return opra;
+  var whole2  = parseInt(om[4].slice(0, 5), 10);
+  var dec2    = parseInt(om[4].slice(5), 10);
+  var strike2 = dec2 === 0 ? String(whole2) : String(whole2) + '.' + String(dec2).replace(/0+$/, '');
+  return om[1] + ' ' + om[2] + om[3] + strike2;
+}
+
+// -- FORMAT TIME HELPER -------------------------------------------
+function formatTime(totalMin) {
+  var h = Math.floor(totalMin / 60) % 24;
+  var m = totalMin % 60;
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
+  return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
+}
+
+// -- CANCEL BY LINE -----------------------------------------------
+function buildCancelByLine() {
+  var now = new Date();
+  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var etMin  = now.getUTCMinutes();
+  var etTime = etHour * 60 + etMin;
+  var PRIME_END   = 11 * 60;
+  var CAUTION_END = 12 * 60;
+  var LATE_ENTRY  = 15 * 60 + 30;
+  var MARKET_OPEN =  9 * 60 + 45;
+  if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
+    return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
+  } else if (etTime >= CAUTION_END) {
+    return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
+  } else if (etTime >= PRIME_END) {
+    var cancelMin = Math.min(etTime + 60, CAUTION_END);
+    return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
+  } else {
+    var cancelMin = Math.min(etTime + 90, PRIME_END);
+    return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
+  }
+}
+
+// -- IS WITHIN TRADING HOURS --------------------------------------
+function isWithinTradingHours() {
+  var now = new Date();
+  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var etMin  = now.getUTCMinutes();
+  var etTime = etHour * 60 + etMin;
+  return etTime >= (9 * 60 + 45) && etTime <= (15 * 60 + 30);
 }
 
 // -- BUILD SPREAD CARD --------------------------------------------
@@ -303,7 +322,6 @@ function buildSpreadCard(resolved, tvData) {
   if (!tvData) tvData = {};
   const parsed = resolver.parseOPRA(resolved.symbol);
   if (!parsed) return null;
-
   const ticker    = parsed.ticker;
   const expiry    = parsed.expiry;
   const type      = parsed.type;
@@ -312,20 +330,16 @@ function buildSpreadCard(resolved, tvData) {
   const expiryFmt = expiry.slice(5).replace('-', '/');
   const direction = type === 'put' ? 'BEARISH' : 'BULLISH';
   const typeLabel = type === 'put' ? 'P' : 'C';
-
   const sizing = resolver.calculatePositionSize(resolved.debit, 'SPREAD', 7000, resolved);
   const s      = sizing && sizing.viable ? sizing : null;
-
   const confluence = tvData.confluence || '';
   const tfParts = [];
   if (tvData.weekly) tfParts.push('WEEKLY:' + tvData.weekly);
   if (tvData.daily)  tfParts.push('DAILY:'  + tvData.daily);
   if (tvData.h4)     tfParts.push('H4:'     + tvData.h4);
   const tfLine = tfParts.join('  ');
-
   const edgeLines       = buildEdgeSection(resolved);
   const technicalsLines = buildTechnicalsSection(tvData);
-
   const lines = [
     'SPREAD TRADE -- ' + dteLabel,
     ticker + ' $' + resolved.strike + '/$' + resolved.sellStrike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
@@ -352,50 +366,17 @@ function buildSpreadCard(resolved, tvData) {
     '-------------------------------',
     'Hold    1-3 days max',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
-    (function() {
-      var now = new Date();
-      var etOffset = -4; // ET = UTC-4 (EDT)
-      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
-      var etMin  = now.getUTCMinutes();
-      var etTime = etHour * 60 + etMin;
-      var PRIME_END   = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;       // 12:00PM
-      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
-      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
-
-      function formatTime(totalMin) {
-        var h = Math.floor(totalMin / 60) % 24;
-        var m = totalMin % 60;
-        var ampm = h >= 12 ? 'PM' : 'AM';
-        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
-        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
-      }
-
-      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
-        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
-      } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
-      } else if (etTime >= PRIME_END) {
-        var cancelMin = Math.min(etTime + 60, CAUTION_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
-      } else {
-        var cancelMin = Math.min(etTime + 90, PRIME_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
-      }
-    })(),
+    buildCancelByLine(),
   ]).filter(function(l) { return l !== null; });
-
   return { text: lines.join('\n'), ticker: ticker };
 }
 
 // -- BUILD STRAT CARD ---------------------------------------------
 async function buildStratCard(opraSymbol, tvData, resolved, ss) {
-  if (!tvData)    tvData    = {};
-  if (!resolved)  resolved  = null;
-
+  if (!tvData)   tvData   = {};
+  if (!resolved) resolved = null;
   const parsed = resolver.parseOPRA(opraSymbol);
   if (!parsed) return null;
-
   const ticker    = parsed.ticker;
   const expiry    = parsed.expiry;
   const type      = parsed.type;
@@ -405,13 +386,11 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   const typeLabel = type === 'put' ? 'P' : 'C';
   const expiryFmt = expiry.slice(5).replace('-', '/');
   const dteLabel  = dte === 0 ? '0DTE' : dte === 1 ? '1DTE' : dte + 'DTE';
-
   const mode      = tvData.mode || 'SWING';
   const premium   = tvData.mid  || null;
   const sizing    = premium ? resolver.calculatePositionSize(premium, mode) : null;
   const s         = sizing && sizing.viable ? sizing : null;
   const modeLabel = mode === 'DAY' ? 'DAY TRADE' : 'SWING TRADE';
-
   const confluence = tvData.confluence || '';
   const tfParts = [];
   if (tvData.weekly) tfParts.push('WEEKLY:' + tvData.weekly);
@@ -419,20 +398,16 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   if (tvData.h4)     tfParts.push('H4:'     + tvData.h4);
   if (tvData.h1)     tfParts.push('H1:'     + tvData.h1);
   const tfLine = tfParts.join('  ');
-
   const edgeLines       = resolved ? buildEdgeSection(resolved) : [];
   const technicalsLines = buildTechnicalsSection(tvData);
-
   const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
-  const flowConfirmed = tvData.hasFlow || false;
-  const grade = gradeStratAlert(tvData.confluence, flowConfirmed);
+  const flowConfirmed   = tvData.hasFlow || false;
+  const grade           = gradeStratAlert(tvData.confluence, flowConfirmed);
   const gradeLabel = grade === 'A+' ? 'GRADE  A+ -- EXECUTE IMMEDIATELY'
                    : grade === 'A'  ? 'GRADE  A  -- HIGH PRIORITY'
                    : grade === 'B'  ? 'GRADE  B  -- WAIT FOR CONFIRMATION'
                    : 'GRADE  C  -- MONITOR ONLY';
-
   const hasFlow = tvData.hasFlow || false;
-
   const lines = [
     modeLabel + ' -- ' + dteLabel + '  [' + grade + ']',
     ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + ' -- ' + direction,
@@ -449,9 +424,9 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     '-------------------------------',
     s ? 'Entry   $' + s.premium.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Check live premium before entry',
     s ? 'Limit   $' + (s.premium * 0.875).toFixed(2) + ' (12.5% retrace -- SET THIS AS LIMIT)' : null,
-    s ? 'Stop    $' + s.stopPrice + ' (loss -$' + s.stopLoss + ')'      : 'Stop    ' + (mode === 'DAY' ? '35' : '40') + '% of premium',
-    s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')'   : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
-    s ? 'T2      $' + s.t2Price   + ' (runner)'                        : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
+    s ? 'Stop    $' + s.stopPrice + ' (loss -$' + s.stopLoss + ')'    : 'Stop    ' + (mode === 'DAY' ? '35' : '40') + '% of premium',
+    s ? 'T1      $' + s.t1Price   + ' (profit +$' + s.t1Profit + ')' : 'T1      +' + (mode === 'DAY' ? '35' : '60') + '% of premium',
+    s ? 'T2      $' + s.t2Price   + ' (runner)'                      : 'T2      +' + (mode === 'DAY' ? '70' : '120') + '% of premium',
     s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.stopLoss + ' max' : 'Risk    2% of $7K max',
     '-------------------------------',
     ss ? 'STRUCTURAL LEVELS:' : null,
@@ -478,62 +453,34 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
     mode === 'DAY' ? 'Hold    Exit same day by 3:30PM'     : 'Hold    1-3 days max',
     mode === 'DAY' ? 'Window  10AM-11:30AM | 3PM-3:30PM'  : 'Window  9:45AM-3:30PM ET',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
-    (function() {
-      var now = new Date();
-      var etOffset = -4; // ET = UTC-4 (EDT)
-      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
-      var etMin  = now.getUTCMinutes();
-      var etTime = etHour * 60 + etMin;
-      var PRIME_END   = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;       // 12:00PM
-      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
-      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
-
-      function formatTime(totalMin) {
-        var h = Math.floor(totalMin / 60) % 24;
-        var m = totalMin % 60;
-        var ampm = h >= 12 ? 'PM' : 'AM';
-        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
-        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
-      }
-
-      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
-        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
-      } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
-      } else if (etTime >= PRIME_END) {
-        var cancelMin = Math.min(etTime + 60, CAUTION_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
-      } else {
-        var cancelMin = Math.min(etTime + 90, PRIME_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
-      }
-    })(),
+    buildCancelByLine(),
   ]).filter(function(l) { return l !== null; });
-
   return { text: lines.join('\n'), ticker: ticker };
 }
 
-// -- STRAT ALERT --------------------------------------------------
+// ================================================================
+// -- STRAT ALERT -- PURE TA FROM TRADINGVIEW -- EXECUTES IN SIM --
+// ================================================================
 async function sendStratAlert(opraSymbol, tvData, resolved) {
   if (!tvData)   tvData   = {};
   if (!resolved) resolved = null;
   console.log('[STRAT] Processing:', opraSymbol);
 
+  // CALENDAR CHECK
   const calCheck = await calendar.shouldBlockAlert();
   if (calCheck.block) {
     await sendToChannel('strat', 'BLOCKED\n' + calCheck.reason);
     return false;
   }
 
-  // -- POSITION CONFLICT CHECK ----------------------------------
+  // POSITION CONFLICT CHECK
   const parsed0 = resolver.parseOPRA(opraSymbol);
   if (parsed0) {
     const conflict = await checkPositionConflict(parsed0.ticker, parsed0.type);
     if (conflict.conflict) {
       console.log('[CONFLICT] Blocking card -- already in ' + parsed0.ticker + ' ' + conflict.existing);
       await sendToChannel('strat',
-        '\u26a0\ufe0f POSITION CONFLICT -- ' + parsed0.ticker + '\n' +
+        '⚠️ POSITION CONFLICT -- ' + parsed0.ticker + '\n' +
         'New signal:  ' + conflict.newSignal.toUpperCase() + '\n' +
         'Already in: ' + conflict.existing.toUpperCase() + '\n' +
         'Skipping card -- close existing position first\n' +
@@ -543,10 +490,10 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     }
   }
 
-  // -- MACRO FILTER -- 6HR is the boss --
+  // MACRO FILTER
   if (macroFilter) {
     try {
-      var macro = await macroFilter.getMacroBias();
+      var macro   = await macroFilter.getMacroBias();
       var blocked = macroFilter.shouldBlock(tvData.type || (opraSymbol.includes('C') ? 'call' : 'put'), macro);
       if (blocked.block) {
         console.log('[MACRO-FILTER] Blocked:', blocked.reason);
@@ -555,6 +502,13 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     } catch(e) { console.error('[MACRO-FILTER]', e.message); }
   }
 
+  // TRADING HOURS CHECK
+  if (!isWithinTradingHours()) {
+    console.log('[STRAT] Outside trading hours -- skipping execution');
+    return false;
+  }
+
+  // SMART STOPS
   var ss = null;
   if (smartStops) {
     try {
@@ -572,329 +526,228 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     } catch(e) { console.error('[STOPS] getSmartStop error:', e.message); }
   }
 
+  // BUILD CARD
   let card;
   if (tvData.mode === 'SPREAD' && resolved && resolved.debit) {
     card = buildSpreadCard(resolved, tvData);
   } else {
     card = await buildStratCard(opraSymbol, tvData, resolved, ss);
   }
-
   if (!card) return false;
+
+  // POST FULL CARD TO #strat-alerts
   await sendToChannel('strat', card.text, card.ticker);
 
   const parsed = resolver.parseOPRA(opraSymbol);
-  if (parsed) {
-    const key = parsed.ticker + ':' + parsed.type;
-    recentStratTickers.set(key, Date.now());
-    setTimeout(function() { recentStratTickers.delete(key); }, 30 * 60 * 1000);
+  if (!parsed) return true;
 
-    const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
-    const hasFlow = recentFlowTickers.has(key);
-    const freshnessBlocked = resolved && resolved.freshness && resolved.freshness.block;
-    const isConviction = !freshnessBlocked && (confluenceScore >= 5 || (confluenceScore >= 4 && hasFlow));
+  const key = parsed.ticker + ':' + parsed.type;
+  recentStratTickers.set(key, Date.now());
+  setTimeout(function() { recentStratTickers.delete(key); }, 30 * 60 * 1000);
 
-    if (freshnessBlocked) {
-      console.log('[FRESHNESS] ' + parsed.ticker + ' blocked -- move already happened (' + resolved.freshness.pctFromLow + '% from low)');
-      await sendToChannel('strat',
-        '\u26a0\ufe0f MOVE ALREADY HAPPENED -- ' + parsed.ticker + '\n' +
-        'Contract up ' + resolved.freshness.pctFromLow + '% from day low $' + resolved.freshness.dayLow + '\n' +
-        'Skip this card -- wait for reset or next day\n' +
-        'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET'
-      );
-    }
+  const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
+  const flowMatch       = recentFlowTickers.has(key);
 
-    const flowMatch = recentFlowTickers.has(key);
-    if (isConviction) {
-      var convLabel = confluenceScore >= 6 && flowMatch ? 'A+ CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
-                    : confluenceScore >= 6              ? 'A+ CONVICTION TRADE -- EXECUTE NOW'
-                    : flowMatch                         ? 'A  CONVICTION TRADE -- STRAT + FLOW MATCH -- EXECUTE NOW'
-                    : 'A  CONVICTION TRADE -- 5/6 STRAT';
-      // SMART ENTRY MODE DETECTION
-      // BREAKOUT: ORB/momentum/6-6/near day high -> entry at ask
-      // RETRACEMENT: mid-day pullback/retest -> entry at ask x 0.875
-      function getEntryMode(bars, tvData, resolved) {
-        if (!resolved || !resolved.mid) return { mode: 'RETRACEMENT', entry: null };
-        var ask = parseFloat(resolved.ask || resolved.mid);
-
-        // Get current ET hour
-        var now = new Date();
-        var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-        var etMin  = now.getUTCMinutes();
-        var etTime = etHour * 60 + etMin;
-        var isORBWindow = etTime <= (10 * 60);       // Before 10AM ET
-        var isPrimTime  = etTime <= (11 * 60);       // Before 11AM ET
-
-        // Get day high from bars
-        var dayHigh = bars && bars[0] ? parseFloat(bars[0].High || bars[0].high) : null;
-        var lastPrice = parseFloat(tvData.price || resolved.last || 0);
-        var pctFromHigh = dayHigh ? (dayHigh - lastPrice) / dayHigh : 1;
-
-        // BREAKOUT conditions
-        var is66          = parseInt((tvData.confluence||'0').split('/')[0]) >= 6;
-        var isNearHigh    = pctFromHigh < 0.02;   // within 2% of day high
-        var isMomentum    = isNearHigh && isORBWindow;
-        var isF2          = tvData.strategy && (tvData.strategy.includes('F2') || tvData.strategy.includes('ORB'));
-
-        if (is66 || (isMomentum && isPrimTime) || isF2) {
-          return {
-            mode:  'BREAKOUT',
-            entry: parseFloat(ask.toFixed(2)),
-            note:  is66 ? '6/6 -- entry at ask' : isF2 ? 'ORB/F2 -- entry at ask' : 'Momentum near day high -- entry at ask',
-          };
-        }
-
-        // RETRACEMENT: wait for pullback
-        return {
-          mode:  'RETRACEMENT',
-          entry: parseFloat((ask * 0.875).toFixed(2)),
-          note:  'Mid-day pullback -- retracement entry 12.5%',
-        };
-      }
-
-      // Route A+/A to #execute-now, B/C to #conviction-trades
-      var stratGrade = (confluenceScore >= 5 || (confluenceScore >= 4 && flowMatch)) ? 'A' : 'B';
-      if (confluenceScore >= 5 && flowMatch) stratGrade = 'A+';
-      // Normalize ticker -- TradingView sends as ticker, symbol, or Ticker
-      if (!tvData.ticker) tvData.ticker = tvData.symbol || tvData.Ticker || tvData.TICKER || '';
-      // Route indices (SPY/QQQ/IWM) to #indices-bias, others to #execute-now
-      var isIndexTicker = INDEX_TICKERS.indexOf(tvData.ticker) > -1;
-      var stratChannel  = isIndexTicker ? 'indicesBias'
-        : ((stratGrade === 'A+' || stratGrade === 'A') ? 'executeNow' : 'conviction');
-      // Send FULL card to #strat-alerts (reference)
-      // Send COMPACT card to #execute-now and #indices-bias (action)
-      var isActionChannel = (stratChannel === 'executeNow' || stratChannel === 'indicesBias');
-
-      if (isActionChannel) {
-        // COMPACT 3-LINE CARD for action channels
-        var cType    = (tvData.type || 'call').toUpperCase();
-        var cPrice   = tvData.price || '?';
-        var cDTE     = resolved && resolved.dte ? resolved.dte + 'DTE' : '?';
-        var cEntry   = resolved && resolved.mid ? parseFloat(resolved.mid * 0.875).toFixed(2) : '?';
-        var cStop    = resolved && resolved.stop ? resolved.stop : '?';
-        var cT1      = resolved && resolved.t1 ? resolved.t1 : '?';
-        var cScore   = [];
-        if (flowMatch) cScore.push('Flow');
-        if (tvData.h6bias) cScore.push('Bias');
-        if (confluenceScore >= 5) cScore.push('5/6+');
-        var cTime    = new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'});
-        // EMOJI COMPACT CARD -- scannable in 2 seconds
-        var gradeEmoji = stratGrade === 'A+' ? '\uD83D\uDD25' : stratGrade === 'A' ? '\u2B50' : '\uD83D\uDFE1';
-        var dirEmoji   = cType === 'CALL' ? '\uD83D\uDCC8' : '\uD83D\uDCC9';
-        var scoreEmoji = cScore.length >= 3 ? '\uD83C\uDFAF' : cScore.length >= 2 ? '\u2705' : '\uD83D\uDFE1';
-        // Add contract score and prob ITM if available from resolver
-        var contractGrade = resolved && resolved.grade ? resolved.grade : '';
-        var probITM       = resolved && resolved.probITM ? resolved.probITM + '% ITM' : '';
-        var contractWarn  = resolved && resolved.warnings && resolved.warnings.length
-          ? '\u26A0\uFE0F ' + resolved.warnings[0] : '';
-        var cLine1   = gradeEmoji + ' ' + stratGrade + (contractGrade ? '|' + contractGrade : '') + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
-        var cLine2   = '\uD83D\uDCB0 Entry $' + cEntry + '  \uD83D\uDED1 Stop $' + cStop + '  \uD83C\uDFAF T1 $' + cT1 + (probITM ? '  ' + probITM : '');
-        var cLine3   = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Strat only') + ' | \uD83D\uDD50 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
-        var compact  = cLine1 + '\n' + cLine2 + '\n' + cLine3;
-
-        // GEXR DIRECTION GATE -- system signals only
-        // Checks global GEXR direction set by /webhook/gexr
-        // Above GEXR = calls only | Below GEXR = puts only
-        var gexrDir    = global.gexrDirection || null;
-        var signalType = (tvData.type || '').toLowerCase();
-        if (gexrDir) {
-          var gexrBlock = false;
-          if (gexrDir === 'above' && signalType === 'put')  gexrBlock = true;
-          if (gexrDir === 'below' && signalType === 'call') gexrBlock = true;
-          if (gexrBlock) {
-            console.log('[GEXR] BLOCKED', parsed.ticker, signalType.toUpperCase(),
-              '-- GEXR is', gexrDir.toUpperCase(), '-- only', gexrDir === 'above' ? 'CALLS' : 'PUTS', 'allowed');
-            return res.json({ status: 'skipped', reason: 'GEXR direction mismatch -- ' +
-              (gexrDir === 'above' ? 'CALLS ONLY' : 'PUTS ONLY') });
-          }
-          console.log('[GEXR] PASSED', parsed.ticker, signalType.toUpperCase(),
-            '-- GEXR', gexrDir.toUpperCase(), 'aligns with signal');
-        } else {
-          console.log('[GEXR] No GEXR direction set yet -- signal allowed through');
-        }
-
-        // LVL FRAMEWORK ANALYSIS -- system signals only
-        // NOT applied to John's ideas (those go through ideaIngestor)
-        // Adds PDH/PDL detection + MTF momentum score to signal grade
-        var lvlAnalysis = null;
-        try {
-          var ts2    = require('./tradestation');
-          var tok2   = await ts2.getAccessToken();
-          var isSim2 = process.env.SIM_MODE === 'true';
-          if (tok2) {
-            lvlAnalysis = await lvlFramework.analyze25sense(
-              parsed.ticker, tvData.type || 'call',
-              parseFloat(tvData.price || 0), tok2, isSim2
-            );
-            if (lvlAnalysis) {
-              // Add LVL grade to compact card
-              var lvlTag = lvlAnalysis.lvlGrade === 'A+' ? ' \uD83D\uDFE2 LVL A+' :
-                           lvlAnalysis.lvlGrade === 'A'  ? ' \uD83D\uDFE1 LVL A'  :
-                           lvlAnalysis.lvlGrade === 'B'  ? ' \uD83D\uDFE0 LVL B'  : '';
-              if (lvlTag) cLine3 = cLine3 + lvlTag;
-              compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
-
-              // Post heads up if price approaching key level
-              var executeWebhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
-                'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
-              if (lvlAnalysis.approaching && !lvlAnalysis.touched) {
-                var pdhlObj = { pdHigh: lvlAnalysis.pdHigh, pdLow: lvlAnalysis.pdLow };
-                lvlFramework.postHeadsUp(parsed.ticker, tvData.type || 'call',
-                  parseFloat(tvData.price || 0), pdhlObj, executeWebhook).catch(console.error);
-              }
-            }
-          }
-        } catch(le) { console.error('[LVL] Wire error:', le.message); }
-
-        // PHASE 2 -- OPTION CHART EXECUTION GATE
-        // Read option bar data from TradeStation directly
-        // EXTENDED = blocked, recheck every 10 min
-        // DISCOUNT or LOWER HALF = proceed
-        var chartAnalysis = null;
-        if (resolved && resolved.optionTicker && isActionChannel) {
-          try {
-            chartAnalysis = await optionChartReader.analyzeOptionChart(
-              resolved.optionTicker,
-              parsed.ticker,
-              tvData.type || 'call',
-              resolved.mid ? parseFloat((resolved.mid * 0.875).toFixed(2)) : null
-            );
-            if (chartAnalysis) {
-              var rangeTag = chartAnalysis.extended   ? ' \uD83D\uDD34 EXTENDED'
-                           : chartAnalysis.favorable  ? ' \uD83D\uDFE2 DISCOUNT'
-                           :                            ' \uD83D\uDFE1 MID-RANGE';
-              cLine3  = cLine3 + rangeTag;
-              compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
-            }
-          } catch(ce) { console.error('[OPTION-CHART] Phase 2 error:', ce.message); }
-        }
-
-        // If contract is DEAD -- hard block, no recheck
-        if (chartAnalysis && chartAnalysis.dead) {
-          console.log('[OPTION-CHART] DEAD contract -- hard block:', chartAnalysis.deadReason);
-          var deadCard = cLine1 + '\n' + cLine2 + '\n\u26D4 DEAD CONTRACT -- ' + chartAnalysis.deadReason + ' | ' + cTime + ' ET';
-          await sendToChannel(stratChannel, deadCard, parsed.ticker);
-          return true; // hard block -- no recheck, no execute
-        }
-
-        // If contract is EXTENDED -- post blocked card + arm recheck
-        if (chartAnalysis && chartAnalysis.extended) {
-          console.log('[OPTION-CHART] BLOCKED -- contract at', chartAnalysis.posInRange + '% of range');
-          var blockedCard = cLine1 + '\n' + cLine2 + '\n\uD83D\uDD34 EXTENDED -- waiting for pullback | ' + cTime + ' ET';
-          await sendToChannel(stratChannel, blockedCard, parsed.ticker);
-
-          // Recheck every 10 min for up to 60 min
-          var recheckSym   = resolved && resolved.optionTicker ? resolved.optionTicker : null;
-          var recheckCount = 0;
-          if (recheckSym) {
-            var recheckTimer = setInterval(async function() {
-              recheckCount++;
-              if (recheckCount >= 6) { clearInterval(recheckTimer); return; }
-              try {
-                var recheck = await optionChartReader.analyzeOptionChart(recheckSym, parsed.ticker, tvData.type || 'call', null);
-                if (recheck && recheck.favorable) {
-                  clearInterval(recheckTimer);
-                  var freshCard = cLine1 + '\n' + cLine2 + '\n\uD83D\uDFE2 Pulled back -- NOW FAVORABLE | ' +
-                    new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET';
-                  await sendToChannel(stratChannel, freshCard, parsed.ticker);
-                  console.log('[OPTION-CHART] Recheck -- now favorable, fresh card posted');
-                }
-              } catch(re) { console.error('[OPTION-CHART] Recheck error:', re.message); }
-            }, 10 * 60 * 1000);
-          }
-        } else {
-          await sendToChannel(stratChannel, compact, parsed.ticker);
-        }
-      } else {
-        await sendToChannel(stratChannel,
-          card.text
-            .replace('SWING TRADE',  convLabel)
-            .replace('DAY TRADE',    convLabel)
-            .replace('SPREAD TRADE', convLabel),
-          card.ticker
-        );
-      }
-      console.log('[EXECUTE-NOW] ' + parsed.ticker + ' ' + stratGrade + ' routed to #' + stratChannel);
-
-      // AUTO-EXECUTE in SIM for A+/A grades
-      // AGENT_MODE=CONVICTION_ONLY means skip auto-execute (Discord cards only)
-      if (AGENT_MODE === 'CONVICTION_ONLY') {
-        console.log('[AGENT] CONVICTION_ONLY mode -- Discord card sent, no auto-execute for:', normalTicker);
-      } else {
-      // AUTO-EXECUTE BLOCK BELOW
-      // Convert OPRA symbol NVDA260406C00175000 to TS format NVDA 260406C175
-      function opraToTS(opra) {
-        if (!opra) return null;
-        if (opra.indexOf(' ') > -1) return opra;
-        var om = opra.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
-        if (!om) return opra;
-        var whole2  = parseInt(om[4].slice(0, 5), 10);
-        var dec2    = parseInt(om[4].slice(5), 10);
-        var strike2 = dec2 === 0 ? String(whole2) : String(whole2) + '.' + String(dec2).replace(/0+$/, '');
-        return om[1] + ' ' + om[2] + om[3] + strike2;
-      }
-
-      // SPREAD QUALITY CHECK -- reject before dedup/execution
-      if (resolved && resolved.bid !== null && resolved.ask !== null) {
-        var bidAskSpread = parseFloat(resolved.ask) - parseFloat(resolved.bid);
-        if (bidAskSpread > 0.20) {
-          console.log('[ALERTER] SPREAD REJECTED:', resolved.symbol,
-            'bid:$' + resolved.bid, 'ask:$' + resolved.ask,
-            'spread:$' + bidAskSpread.toFixed(2), '-- too wide, skipping');
-          return; // skip this signal entirely
-        }
-        console.log('[ALERTER] SPREAD CHECK PASSED:', resolved.symbol,
-          'spread:$' + bidAskSpread.toFixed(2));
-      }
-
-      // NORMALIZE TICKER -- TradingView sends as ticker, symbol, or Ticker
-      // Must do this FIRST before any routing decisions
-      tvData.ticker = tvData.ticker || tvData.symbol || tvData.Ticker || tvData.TICKER || '';
-      tvData.type   = tvData.type   || tvData.action || tvData.direction || 'call';
-
-      // AGENT MODE -- set AGENT_MODE=FULL in Railway to re-enable auto-execute
-      // Default: CONVICTION_ONLY = Discord cards only, no auto-execute from Strat alerts
-      // Only John's ideas (ideaIngestor) and conviction flow will execute trades
-      var AGENT_MODE = process.env.AGENT_MODE || 'CONVICTION_ONLY';
-
-      // DEDUP CHECK -- ONE execution per ticker per direction per day
-      // Normalize ticker first to avoid undefined keys
-      var normalTicker = tvData.ticker || tvData.symbol || tvData.Ticker || '';
-      var dedupKey = normalTicker + ':' + (tvData.type || tvData.action || 'call');
-      if ((stratGrade === 'A+' || stratGrade === 'A') && resolved && resolved.mid && !executedToday[dedupKey]) {
-        executedToday[dedupKey] = Date.now(); // mark immediately -- blocks ALL subsequent signals for this ticker today
-        console.log('[DEDUP] Locking ticker for today:', dedupKey, '-- no more', tvData.type, 'orders on', tvData.ticker, 'until midnight');
-        try {
-          var orderExecutor  = require('./orderExecutor');
-          var entryDecision  = getEntryMode(null, tvData, resolved);
-          var ep  = parseFloat(resolved.mid);
-          var lmt = entryDecision.entry || parseFloat((ep * 0.875).toFixed(2));
-          var stp = parseFloat((ep * 0.60).toFixed(2));
-          var t1v = parseFloat((ep * 1.60).toFixed(2));
-          var qty = stratGrade === 'A+' ? 2 : 1;
-          console.log('[ENTRY-MODE] ' + entryDecision.mode + ' -- ' + entryDecision.note + ' -- limit $' + lmt);
-          var er  = await orderExecutor.placeOrder({
-            account: 'SIM3142118M',
-            symbol:  opraToTS(resolved.symbol),
-            action:  'BUYTOOPEN',
-            qty:     qty,
-            limit:   lmt,
-            stop:    stp,
-            t1:      t1v,
-          });
-          if (er && er.success) {
-            console.log('[AUTO-EXEC] SIM order placed:', resolved.symbol, 'ID:', er.orderId);
-          } else {
-            console.log('[AUTO-EXEC] Failed:', er && er.error);
-          }
-        } catch(e) { console.error('[AUTO-EXEC]', e.message); }
-      }
-      } // close CONVICTION_ONLY else block
-    }
+  // FRESHNESS CHECK
+  const freshnessBlocked = resolved && resolved.freshness && resolved.freshness.block;
+  if (freshnessBlocked) {
+    console.log('[FRESHNESS] ' + parsed.ticker + ' blocked -- move already happened');
+    await sendToChannel('strat',
+      '⚠️ MOVE ALREADY HAPPENED -- ' + parsed.ticker + '\n' +
+      'Contract up ' + resolved.freshness.pctFromLow + '% from day low $' + resolved.freshness.dayLow + '\n' +
+      'Skip this card -- wait for reset or next day\n' +
+      'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET'
+    );
+    return true;
   }
+
+  // GEXR DIRECTION GATE
+  var gexrDir    = global.gexrDirection || null;
+  var signalType = (tvData.type || parsed.type || '').toLowerCase();
+  if (gexrDir) {
+    var gexrBlock = false;
+    if (gexrDir === 'above' && signalType === 'put')  gexrBlock = true;
+    if (gexrDir === 'below' && signalType === 'call') gexrBlock = true;
+    if (gexrBlock) {
+      console.log('[GEXR] BLOCKED', parsed.ticker, signalType.toUpperCase(), '-- GEXR is', gexrDir.toUpperCase());
+      return true;
+    }
+    console.log('[GEXR] PASSED', parsed.ticker, signalType.toUpperCase());
+  }
+
+  // NORMALIZE
+  tvData.ticker = tvData.ticker || tvData.symbol || tvData.Ticker || tvData.TICKER || parsed.ticker;
+  tvData.type   = tvData.type   || tvData.action || tvData.direction || parsed.type || 'call';
+
+  // DEDUP CHECK
+  var dedupKey = tvData.ticker + ':' + tvData.type;
+  if (executedToday[dedupKey]) {
+    console.log('[DEDUP] Already executed today:', dedupKey, '-- skipping');
+    return true;
+  }
+
+  // GRADE
+  var stratGrade = 'C';
+  if (confluenceScore >= 6 && flowMatch) stratGrade = 'A+';
+  else if (confluenceScore >= 6)         stratGrade = 'A+';
+  else if (confluenceScore >= 5)         stratGrade = 'A';
+  else if (confluenceScore >= 4)         stratGrade = 'B';
+
+  // BUILD COMPACT EMOJI CARD
+  var cType   = tvData.type.toUpperCase();
+  var cPrice  = tvData.price || '?';
+  var cDTE    = resolved && resolved.dte ? resolved.dte + 'DTE' : '?';
+  var cMid    = resolved && resolved.mid ? parseFloat(resolved.mid) : null;
+  var cEntry  = cMid ? parseFloat((cMid * 0.875).toFixed(2)) : '?';
+  var cStop   = cMid ? parseFloat((cMid * 0.60).toFixed(2))  : '?';
+  var cT1     = cMid ? parseFloat((cMid * 1.60).toFixed(2))  : '?';
+  var cScore  = [];
+  if (flowMatch)          cScore.push('Flow');
+  if (tvData.h6bias)      cScore.push('Bias');
+  if (confluenceScore >= 5) cScore.push(confluenceScore + '/6');
+  var cTime   = new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+
+  var gradeEmoji = stratGrade === 'A+' ? '🔥' : stratGrade === 'A' ? '⭐' : '🟡';
+  var dirEmoji   = cType === 'CALL' ? '📈' : '📉';
+  var scoreEmoji = cScore.length >= 2 ? '🎯' : '✅';
+
+  var contractGrade = resolved && resolved.grade   ? resolved.grade   : '';
+  var probITM       = resolved && resolved.probITM ? resolved.probITM + '% ITM' : '';
+  var contractWarn  = resolved && resolved.warnings && resolved.warnings.length ? '⚠️ ' + resolved.warnings[0] : '';
+
+  var cLine1 = gradeEmoji + ' ' + stratGrade + (contractGrade ? '|' + contractGrade : '') + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
+  var cLine2 = '💰 Entry $' + cEntry + '  🛑 Stop $' + cStop + '  🎯 T1 $' + cT1 + (probITM ? '  ' + probITM : '');
+  var cLine3 = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Pure Strat TA') + ' | 🕐 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
+  var compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+
+  // ROUTE: indices to #indices-bias, all others to #execute-now
+  var isIndexTicker = INDEX_TICKERS.indexOf(parsed.ticker) > -1;
+  var stratChannel  = isIndexTicker ? 'indicesBias' : 'executeNow';
+
+  // OPTION CHART CHECK (EXTENDED / DEAD / DISCOUNT)
+  var chartAnalysis = null;
+  if (resolved && resolved.optionTicker) {
+    try {
+      chartAnalysis = await optionChartReader.analyzeOptionChart(
+        resolved.optionTicker,
+        parsed.ticker,
+        tvData.type || 'call',
+        cEntry || null
+      );
+      if (chartAnalysis) {
+        var rangeTag = chartAnalysis.extended  ? ' 🔴 EXTENDED'
+                     : chartAnalysis.favorable ? ' 🟢 DISCOUNT'
+                     :                           ' 🟡 MID-RANGE';
+        cLine3  = cLine3 + rangeTag;
+        compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+      }
+    } catch(ce) { console.error('[OPTION-CHART] Phase 2 error:', ce.message); }
+  }
+
+  // DEAD CONTRACT -- hard block
+  if (chartAnalysis && chartAnalysis.dead) {
+    console.log('[OPTION-CHART] DEAD contract -- hard block:', chartAnalysis.deadReason);
+    var deadCard = cLine1 + '\n' + cLine2 + '\n⛔ DEAD CONTRACT -- ' + chartAnalysis.deadReason + ' | ' + cTime + ' ET';
+    await sendToChannel(stratChannel, deadCard, parsed.ticker);
+    return true;
+  }
+
+  // EXTENDED -- post blocked card + recheck
+  if (chartAnalysis && chartAnalysis.extended) {
+    console.log('[OPTION-CHART] BLOCKED -- contract at', chartAnalysis.posInRange + '% of range');
+    var blockedCard = cLine1 + '\n' + cLine2 + '\n🔴 EXTENDED -- waiting for pullback | ' + cTime + ' ET';
+    await sendToChannel(stratChannel, blockedCard, parsed.ticker);
+    var recheckSym   = resolved && resolved.optionTicker ? resolved.optionTicker : null;
+    var recheckCount = 0;
+    if (recheckSym) {
+      var recheckTimer = setInterval(async function() {
+        recheckCount++;
+        if (recheckCount >= 6) { clearInterval(recheckTimer); return; }
+        try {
+          var recheck = await optionChartReader.analyzeOptionChart(recheckSym, parsed.ticker, tvData.type || 'call', null);
+          if (recheck && recheck.favorable) {
+            clearInterval(recheckTimer);
+            var freshCard = cLine1 + '\n' + cLine2 + '\n🟢 Pulled back -- NOW FAVORABLE | ' +
+              new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET';
+            await sendToChannel(stratChannel, freshCard, parsed.ticker);
+            // AUTO-EXECUTE after pullback confirmation
+            await autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKey);
+          }
+        } catch(re) { console.error('[OPTION-CHART] Recheck error:', re.message); }
+      }, 10 * 60 * 1000);
+    }
+    return true;
+  }
+
+  // ✅ ALL CHECKS PASSED -- POST COMPACT CARD TO #execute-now
+  await sendToChannel(stratChannel, compact, parsed.ticker);
+  console.log('[STRAT] Card posted to #' + stratChannel + ' -- ' + parsed.ticker + ' ' + stratGrade);
+
+  // ✅ AUTO-EXECUTE IN SIM -- STRAT ALERTS ARE PURE TA, NO FLOW NEEDED
+  await autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKey);
+
   return true;
 }
 
-// -- FLOW ALERT ---------------------------------------------------
+// -- AUTO EXECUTE STRAT IN SIM ------------------------------------
+async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKey) {
+  if (!resolved || !resolved.mid) {
+    console.log('[AUTO-EXEC] No resolved contract/mid -- skipping SIM order for', parsed.ticker);
+    return;
+  }
+
+  // Lock dedup immediately
+  executedToday[dedupKey] = Date.now();
+  console.log('[DEDUP] Locking ticker for today:', dedupKey);
+
+  try {
+    var orderExecutor = require('./orderExecutor');
+    var ep   = parseFloat(resolved.mid);
+    var lmt  = parseFloat((ep * 0.875).toFixed(2));
+    var stp  = parseFloat((ep * 0.60).toFixed(2));
+    var t1v  = parseFloat((ep * 1.60).toFixed(2));
+    var qty  = stratGrade === 'A+' ? 2 : 1;
+
+    // Respect max premium rule
+    if (ep > 2.40) {
+      console.log('[AUTO-EXEC] Premium $' + ep + ' over $2.40 max -- skipping SIM order for', parsed.ticker);
+      return;
+    }
+
+    var er = await orderExecutor.placeOrder({
+      account: 'SIM3142118M',
+      symbol:  opraToTS(resolved.symbol),
+      action:  'BUYTOOPEN',
+      qty:     qty,
+      limit:   lmt,
+      stop:    stp,
+      t1:      t1v,
+    });
+
+    if (er && er.success) {
+      console.log('[AUTO-EXEC] ✅ SIM order placed:', resolved.symbol, 'ID:', er.orderId, 'qty:', qty, 'limit:$' + lmt);
+      // Post execution confirmation to #execute-now
+      var execWebhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+        'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+      var execCard = '✅ SIM ORDER PLACED -- ' + parsed.ticker + '\n' +
+        parsed.ticker + ' ' + parsed.type.toUpperCase() + ' x' + qty + ' @ $' + lmt + ' limit\n' +
+        '🛑 Stop $' + stp + '  🎯 T1 $' + t1v + '\n' +
+        'Order ID: ' + er.orderId + ' | Pure Strat TA | ' +
+        new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET';
+      await fetch(execWebhook, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: '```\n' + execCard + '\n```', username: 'Stratum' }),
+      }).catch(function(e) { console.error('[AUTO-EXEC] Discord post error:', e.message); });
+    } else {
+      console.log('[AUTO-EXEC] ❌ Failed:', er && er.error);
+    }
+  } catch(e) {
+    console.error('[AUTO-EXEC] Error:', e.message);
+  }
+}
+
+// -- FLOW ALERT -- INDEPENDENT TRACK ------------------------------
 async function sendFlowAlert(opraSymbol, flowData) {
   if (!flowData) flowData = {};
   console.log('[FLOW] Processing:', opraSymbol);
@@ -926,82 +779,29 @@ async function sendFlowAlert(opraSymbol, flowData) {
     '-------------------------------',
     'Watch for Strat confirmation',
     'Time    ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET',
-    (function() {
-      var now = new Date();
-      var etOffset = -4; // ET = UTC-4 (EDT)
-      var etHour = ((now.getUTCHours() + etOffset) % 24 + 24) % 24;
-      var etMin  = now.getUTCMinutes();
-      var etTime = etHour * 60 + etMin;
-      var PRIME_END   = 11 * 60;       // 11:00AM
-      var CAUTION_END = 12 * 60;       // 12:00PM
-      var LATE_ENTRY  = 15 * 60 + 30; // 3:30PM
-      var MARKET_OPEN =  9 * 60 + 45; // 9:45AM
-
-      function formatTime(totalMin) {
-        var h = Math.floor(totalMin / 60) % 24;
-        var m = totalMin % 60;
-        var ampm = h >= 12 ? 'PM' : 'AM';
-        var h12 = h === 0 ? 12 : (h > 12 ? h - 12 : h);
-        return h12 + ':' + (m < 10 ? '0' : '') + m + ampm + ' ET';
-      }
-
-      if (etTime >= LATE_ENTRY || etTime < MARKET_OPEN) {
-        return 'Cancel By  DO NOT ENTER -- wait for 9:45AM';
-      } else if (etTime >= CAUTION_END) {
-        return 'Cancel By  SKIP -- choppy afternoon, wait for tomorrow';
-      } else if (etTime >= PRIME_END) {
-        var cancelMin = Math.min(etTime + 60, CAUTION_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' (CAUTION -- past prime time)';
-      } else {
-        var cancelMin = Math.min(etTime + 90, PRIME_END);
-        return 'Cancel By  ' + formatTime(cancelMin) + ' -- PRIME TIME';
-      }
-    })(),
+    buildCancelByLine(),
   ]).filter(function(l) { return l !== null; });
 
   await sendToChannel('flow', lines.join('\n'), parsed.ticker);
 
+  // If high conviction flow AND strat already fired for same ticker = conviction trade
   if (flowConviction.isHighConviction && recentStratTickers.has(key)) {
+    console.log('[FLOW] HIGH CONVICTION + Strat match for', parsed.ticker, '-- routing to #conviction-trades');
     const res2 = await resolver.resolveContract(parsed.ticker, parsed.type, 'SWING');
     if (res2) {
-      const card = (res2.mode === 'SPREAD' && res2.debit)
+      const card2 = (res2.mode === 'SPREAD' && res2.debit)
         ? buildSpreadCard(res2, {})
-        : buildStratCard(res2.symbol, { mid: res2.mid, bid: res2.bid, ask: res2.ask, mode: res2.mode, dte: res2.dte }, res2);
-      if (card) {
-        // AUTO-EXECUTE in SIM -- fires after conviction card posts
-      if (resolved && resolved.mid && (grade === 'A+' || grade === 'A')) {
-        try {
-          var orderExecutor = require('./orderExecutor');
-          var execPremium = parseFloat(resolved.mid);
-          var execLimit   = parseFloat((execPremium * 0.875).toFixed(2));
-          var execStop    = parseFloat((execPremium * 0.60).toFixed(2));
-          var execT1      = parseFloat((execPremium * 1.60).toFixed(2));
-          var execQty     = (confluenceScore >= 5 && flowMatch) ? 2 : 1;
-          var execResult  = await orderExecutor.placeOrder({
-            account: 'SIM3142118M',
-            symbol:  opraToTS(resolved.symbol),
-            action:  'BUYTOOPEN',
-            qty:     execQty,
-            limit:   execLimit,
-            stop:    execStop,
-            t1:      execT1,
-          });
-          if (execResult && execResult.success) {
-            console.log('[AUTO-EXEC] SIM order placed:', resolved.symbol, 'ID:', execResult.orderId);
-          } else {
-            console.log('[AUTO-EXEC] Failed:', execResult && execResult.error);
-          }
-        } catch(e) { console.error('[AUTO-EXEC]', e.message); }
-      }
-
-      // Route A+/A to #execute-now, everything else to #conviction-trades
-      var isIdxTicker    = INDEX_TICKERS.indexOf(parsed.ticker) > -1;
-      var targetChannel  = isIdxTicker ? 'indicesBias'
-        : ((grade === 'A+' || grade === 'A') ? 'executeNow' : 'conviction');
-      await sendToChannel(targetChannel,
-          card.text.replace('SWING TRADE', 'CONVICTION TRADE'),
-          card.ticker
+        : await buildStratCard(res2.symbol, { mid: res2.mid, bid: res2.bid, ask: res2.ask, mode: res2.mode, dte: res2.dte }, res2, null);
+      if (card2) {
+        await sendToChannel('conviction',
+          card2.text.replace('SWING TRADE', 'CONVICTION TRADE -- FLOW + STRAT MATCH'),
+          card2.ticker
         );
+        // Also execute in SIM for conviction-grade flow+strat combo
+        var convDedupKey = parsed.ticker + ':' + parsed.type + ':flow';
+        if (!executedToday[convDedupKey] && res2.mid && parseFloat(res2.mid) <= 2.40) {
+          await autoExecuteStratSIM(parsed, res2, {}, 'A+', convDedupKey);
+        }
       }
     }
   }
@@ -1030,35 +830,33 @@ async function sendMorningBrief() {
     : parseFloat(uvxyPrice) >= 20 ? 'ELEVATED -- be careful'
     : 'NORMAL' : '';
   const vixLine = uvxyPrice ? 'UVXY $' + uvxyPrice + ' ' + vixLevel : 'VIX  -- unavailable';
-
   const lines = [
-    '\ud83d\udcca STRATUM MORNING BRIEF v6.1',
+    '📊 STRATUM MORNING BRIEF v6.2',
     dateStr,
     '===============================',
-    '\ud83d\udcc8 ' + spyLine,
-    '   \u27a1\ufe0f  Wait for 9:45AM to settle',
+    '📈 ' + spyLine,
+    '   ➡️  Wait for 9:45AM to settle',
     '-------------------------------',
-    '\ud83d\ude28 ' + vixLine,
+    '😨 ' + vixLine,
     '-------------------------------',
-    '\u26a1 DAY    0-1DTE  $0.30-$1.50  T1:+35%  risk $120',
-    '\ud83d\udcc8 SWING  5-7DTE  $0.50-$3.00  T1:+60%  risk $140',
-    '\ud83d\udcca SPREAD 5-7DTE  $0.50-$1.50  T1:+100% risk $150',
+    '⚡ STRAT ALERTS -- Auto-execute in SIM (pure TA)',
+    '🌊 FLOW ALERTS  -- Posts to #flow-alerts',
+    '👑 CONVICTION   -- Flow + Strat same ticker',
     '-------------------------------',
     'RULES:',
-    '6/6 confluence -- execute immediately',
-    '5/6 confluence -- wait for flow confirmation',
-    'Flow high conviction -- execute swing or spread card',
-    'Flow + Strat same ticker -- conviction trade',
+    'Any Strat alert (3-2-2, ORB, etc) -- SIM auto-executes',
+    'Flow high conviction -- posts to #flow-alerts',
+    'Flow + Strat match -- conviction trade',
     '-------------------------------',
-    '\u23f0 Entry window: 9:45AM - 3:30PM ET',
-    '\ud83d\udeab No entries after 3:30PM',
-    '\ud83d\udeab No 0DTE entries after 2PM',
+    '⏰ Entry window: 9:45AM - 3:30PM ET',
+    '🚫 No entries after 3:30PM',
+    '🚫 No 0DTE entries after 2PM',
     '-------------------------------',
-    '\ud83d\udcca #strat-alerts      -- Chart setups',
-    '\ud83c\udf0a #flow-alerts       -- Unusual flow',
-    '\ud83d\udc51 #conviction-trades -- Execute',
+    '📊 #strat-alerts      -- Chart setups + auto-SIM',
+    '🌊 #flow-alerts       -- Unusual flow',
+    '👑 #conviction-trades -- Flow + Strat match',
+    '⚡ #execute-now       -- Compact action cards',
   ];
-
   await sendToChannel('strat', lines.join('\n'));
   console.log('[BRIEF] Sent OK');
   return true;
