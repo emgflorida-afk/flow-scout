@@ -224,17 +224,22 @@ function parseChainContract(c) {
   const mid    = parseFloat(((bid + ask) / 2).toFixed(2));
   const volume = parseInt(c.volume || 0);
   const oi     = parseInt(c.openInterest || 0);
-  // SPREAD FILTER -- reject wide bid/ask before returning
-  if (bid !== null && ask !== null) {
-    var spreadVal = parseFloat(ask) - parseFloat(bid);
-    if (spreadVal > 0.20) {
-      console.log('[RESOLVER] SPREAD REJECTED:', sym, 'bid:$' + bid, 'ask:$' + ask, 'spread:$' + spreadVal.toFixed(2));
+  // SPREAD FILTER -- percentage-based, not dollar-based
+  // Prevents wide bid/ask from eating premium on entry/exit
+  if (bid !== null && ask !== null && parseFloat(ask) > 0) {
+    var spreadAbs = parseFloat(ask) - parseFloat(bid);
+    var askVal    = parseFloat(ask);
+    var spreadPct = spreadAbs / askVal;
+    // Threshold: 35% for cheap contracts, 25% for mid, 20% for expensive
+    var threshold = askVal < 0.50 ? 0.40 : askVal < 1.50 ? 0.30 : 0.25;
+    if (spreadPct > threshold) {
+      console.log('[RESOLVER] SPREAD REJECTED:', sym, 'bid:$' + bid, 'ask:$' + ask, 'spread:$' + spreadAbs.toFixed(2));
       return null;
     }
-    if (spreadVal > 0.10) {
-      console.log('[RESOLVER] SPREAD CAUTION:', sym, 'spread:$' + spreadVal.toFixed(2));
+    if (spreadPct > 0.15) {
+      console.log('[RESOLVER] SPREAD CAUTION:', sym, 'spread:$' + spreadAbs.toFixed(2));
     } else {
-      console.log('[RESOLVER] SPREAD OK:', sym, 'spread:$' + spreadVal.toFixed(2));
+      console.log('[RESOLVER] SPREAD OK:', sym, 'spread:$' + spreadAbs.toFixed(2));
     }
   }
   return { ...c, strike, mid, bid, ask, symbol: sym, volume, openInterest: oi };
@@ -753,7 +758,9 @@ async function findBestContract(opraSymbol) {
         continue;
       }
       const spreadAbs = (snap.ask || 0) - (snap.bid || 0);
-      if (spreadAbs > 0.20) {
+      const spreadPctCheck = (snap.ask || 0) > 0 ? spreadAbs / (snap.ask || 1) : 1;
+      const spreadThresh = (snap.ask || 0) < 0.50 ? 0.40 : (snap.ask || 0) < 1.50 ? 0.30 : 0.25;
+      if (spreadPctCheck > spreadThresh) {
         console.log('[RESOLVER] Skipping', c.ticker, '-- spread too wide: $' + spreadAbs.toFixed(2));
         continue;
       }
