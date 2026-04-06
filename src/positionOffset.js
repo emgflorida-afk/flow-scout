@@ -308,25 +308,8 @@ async function runOffsetAnalysis() {
   // Try TS token for full position data
   const token = await getTSToken();
   if (!token) {
-    console.log('[OFFSET] No TS token -- posting game plan with static data');
-
-    // Build game plan with what we know from MCP webhook
-    var staticPositions = [
-      { symbol: 'GOOGL 260406P282.5', assetType: 'StockOption', unrealizedProfitLoss: -1 },
-      { symbol: 'HD 260410P312.5',    assetType: 'StockOption', unrealizedProfitLoss: -58 },
-      { symbol: 'QQQ 260406P561',     assetType: 'StockOption', unrealizedProfitLoss: -45 },
-      { symbol: 'XLF 260410P49',      assetType: 'StockOption', unrealizedProfitLoss: -60 },
-      { symbol: 'DKNG 260410C21.5',   assetType: 'StockOption', unrealizedProfitLoss: 5 },
-    ];
-
-    var gamePlan = buildGamePlanCard(staticPositions, 0, 300);
-    await sendOffsetCard(gamePlan);
-
-    var analysis = analyzePositions(staticPositions.map(function(p) {
-      return { Symbol: p.symbol, UnrealizedProfitLoss: p.unrealizedProfitLoss };
-    }));
-    var offsetCard = buildOffsetCard(analysis);
-    await sendOffsetCard(offsetCard);
+    // Token not available -- skip silently, no Discord noise
+    console.log('[OFFSET] No TS token -- skipping offset analysis quietly');
     return;
   }
 

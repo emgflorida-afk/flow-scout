@@ -49,19 +49,26 @@ async function getAccessToken() {
       var etHourNow = ((new Date().getUTCHours() - 4) + 24) % 24;
       var isDuringMarketHours = etHourNow >= 9 && etHourNow < 17;
       if (isDuringMarketHours) {
-      // Post to Discord that token needs re-auth
-      try {
-        var webhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
-          'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
-        await fetch(webhook, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: '```\nTS TOKEN EXPIRED -- ACTION REQUIRED\n==============================\nThe TradeStation API token has expired\nAll order execution is currently BLOCKED\n\nFix: Open this URL in your browser:\nhttps://flow-scout-production.up.railway.app/ts-auth\n\nComplete the TradeStation login\nSystem will auto-recover immediately\n```',
-            username: 'Stratum Token Monitor',
-          }),
-        });
-      } catch(de) { /* discord alert failed -- not critical */ }
+      // Post to Discord ONCE per hour max -- use strat-alerts not execute-now
+      var now = Date.now();
+      var lastAlert = global._lastTokenAlert || 0;
+      var oneHour = 60 * 60 * 1000;
+      if (now - lastAlert > oneHour) {
+        global._lastTokenAlert = now;
+        try {
+          var webhook = process.env.DISCORD_STRAT_WEBHOOK ||
+            process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
+            'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+          await fetch(webhook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              content: '```\n TS TOKEN NEEDS REFRESH\nFix: https://flow-scout-production.up.railway.app/ts-auth\n(This alert fires max once per hour)\n```',
+              username: 'Stratum Token Monitor',
+            }),
+          });
+        } catch(de) { /* discord alert failed -- not critical */ }
+      }
       } // end isDuringMarketHours check
     } catch(e) { console.error('[TS] Refresh error:', e.message); }
   }
