@@ -794,7 +794,8 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
 
 // IDEA WATCHLIST CHECK -- every 5 min during RTH (9:30AM - 4PM ET)
 // THIS IS THE CRITICAL CRON -- checks if John's ideas have triggered
-cron.schedule('*/5 9-16 * * 1-5', async function() {
+// Runs every 5 min 13:00-21:00 UTC = 9:00AM-5PM ET (covers full market hours)
+cron.schedule('*/5 13-21 * * 1-5', async function() {
   try {
     if (!ideaIngestor) return;
     var now    = new Date();
