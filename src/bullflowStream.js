@@ -158,6 +158,7 @@ async function sendFlowToDiscord(message) {
     });
     console.log('[FLOW] Sent to #flow-alerts OK');
   } catch (err) { console.error('[FLOW] Discord error:', err.message); }
+}
 
 async function sendConvictionAlert(ticker, direction, cluster, dte, tags) {
   try {
@@ -187,8 +188,6 @@ async function sendConvictionAlert(ticker, direction, cluster, dte, tags) {
   } catch(e) {
     console.error('[CONVICTION] Discord error:', e.message);
   }
-}
-
 }
 
 // -- PARSE OPRA ---------------------------------------------------
