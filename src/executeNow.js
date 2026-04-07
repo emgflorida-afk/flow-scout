@@ -63,10 +63,10 @@ function isEntryWindow() {
   var etMin  = now.getUTCMinutes();
   var etTime = etHour * 60 + etMin;
 
-  var AM_START = 9 * 60 + 45;   // 9:45 AM
-  var AM_END   = 11 * 60;       // 11:00 AM
-  var PM_START = 15 * 60;       // 3:00 PM
-  var PM_END   = 15 * 60 + 45;  // 3:45 PM
+  var AM_START = 9 * 60 + 50;   // 9:50 AM -- skip opening volatility
+  var AM_END   = 10 * 60 + 30;  // 10:30 AM -- prime window only
+  var PM_START = 15 * 60;       // 3:00 PM -- power hour (swing entries only)
+  var PM_END   = 15 * 60 + 30;  // 3:30 PM -- hard close deadline
 
   if (etTime >= AM_START && etTime <= AM_END) return { ok: true, window: 'AM' };
   if (etTime >= PM_START && etTime <= PM_END) return { ok: true, window: 'PM' };
@@ -380,7 +380,78 @@ async function postExecuteNow(card) {
   } catch(e) { console.error('[EXECUTE-NOW] Error:', e.message); }
 }
 
+// ============================================================
+// STALE ORDER CANCEL -- cancel unfilled entries older than 30 min
+// ============================================================
+async function cancelStaleOrders() {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return;
+    var simAccount = process.env.SIM_ACCOUNT_ID || 'SIM3142118M';
+    var baseUrl = 'https://sim-api.tradestation.com/v3';
+    var res = await fetch(baseUrl + '/brokerage/accounts/' + simAccount + '/orders', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var data = await res.json();
+    var orders = data.Orders || [];
+    var now = Date.now();
+    var STALE_MS = 30 * 60 * 1000;
+    var cancelled = 0;
+    for (var i = 0; i < orders.length; i++) {
+      var o = orders[i];
+      var st = o.StatusDescription || '';
+      if (st !== 'Received' && st !== 'Queued' && st !== 'Open') continue;
+      var legs = o.Legs || [];
+      var isBuy = legs.some(function(l) { return l.BuyOrSell === 'Buy' && l.OpenOrClose === 'Open'; });
+      if (!isBuy) continue;
+      var age = now - new Date(o.OpenedDateTime || 0).getTime();
+      if (age > STALE_MS) {
+        var oid = o.OrderID || o.OrderId;
+        console.log('[CANCEL-STALE] Cancelling ' + oid + ' (' + (age/60000).toFixed(0) + 'min old)');
+        try {
+          await fetch(baseUrl + '/orderexecution/orders/' + oid, {
+            method: 'DELETE', headers: { 'Authorization': 'Bearer ' + token }
+          });
+          cancelled++;
+        } catch(e) {}
+      }
+    }
+    if (cancelled) console.log('[CANCEL-STALE] Cancelled ' + cancelled + ' stale orders');
+  } catch(e) { console.error('[CANCEL-STALE] Error:', e.message); }
+}
+
+// ============================================================
+// HARD CLOSE 3:30 PM -- close all day trade positions
+// ============================================================
+async function hardCloseAllPositions() {
+  try {
+    var now = new Date();
+    var etH = ((now.getUTCHours()-4)+24)%24, etM = now.getUTCMinutes();
+    if (etH !== 15 || etM < 25 || etM > 35) return;
+    console.log('[HARD-CLOSE] 3:30 PM -- closing all positions');
+    var ts = require('./tradestation');
+    var orderExecutor = require('./orderExecutor');
+    var token = await ts.getAccessToken();
+    if (!token) return;
+    var simAccount = process.env.SIM_ACCOUNT_ID || 'SIM3142118M';
+    var res = await fetch('https://sim-api.tradestation.com/v3/brokerage/accounts/' + simAccount + '/positions', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var data = await res.json();
+    var positions = data.Positions || [];
+    for (var i = 0; i < positions.length; i++) {
+      var p = positions[i];
+      console.log('[HARD-CLOSE] Closing ' + p.Symbol + ' x' + p.Quantity);
+      try {
+        await orderExecutor.placeOrder({ account: simAccount, symbol: p.Symbol, action: 'SELLTOCLOSE', qty: parseInt(p.Quantity || 1), type: 'Market' });
+      } catch(e) { console.error('[HARD-CLOSE] Error:', e.message); }
+    }
+  } catch(e) { console.error('[HARD-CLOSE] Error:', e.message); }
+}
+
 module.exports = {
   shouldExecute, buildExecuteCard, postExecuteNow, resetDailySetups,
   isIndex, CORE_WATCHLIST, calcStructuralStop, checkLVL, check2Bar, isEntryWindow,
+  cancelStaleOrders, hardCloseAllPositions,
 };
