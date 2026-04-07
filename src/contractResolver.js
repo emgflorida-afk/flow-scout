@@ -133,23 +133,57 @@ async function getChainTS(ticker, expiry, type, price, token) {
   try {
     console.log('[CHAIN-TS] Fetching', ticker, type, expiry);
     var optType = type === 'call' ? 'Call' : 'Put';
-    var url = getTSBase() + '/marketdata/options/chains/' + ticker
+    // TS v3 option chains are STREAMING only — /stream/options/chains/
+    var url = getTSBase() + '/marketdata/stream/options/chains/' + ticker
       + '?expiration=' + formatExpiry(expiry)
       + '&optionType=' + optType
       + '&strikeProximity=6&enableGreeks=true';
     if (price) url += '&priceCenter=' + Math.round(price);
-    var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+
+    var controller = new AbortController();
+    var timeout = setTimeout(function(){ controller.abort(); }, 8000);
+
+    var res = await fetch(url, {
+      headers: { 'Authorization': 'Bearer ' + token },
+      signal: controller.signal
+    });
     console.log('[CHAIN-TS] HTTP status:', res.status);
-    var text = await res.text();
-    var data;
-    try { data = JSON.parse(text); } catch(e) {
-      console.error('[CHAIN-TS] Parse error. Status:', res.status);
+    if (!res.ok) {
+      clearTimeout(timeout);
+      console.error('[CHAIN-TS] Failed:', res.status);
       return [];
     }
-    var chain = data.ChainData || data.chainData || [];
-    console.log('[CHAIN-TS] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts');
+
+    // SSE stream — collect JSON objects from response body
+    var text = await res.text();
+    clearTimeout(timeout);
+
+    var chain = [];
+    var lines = text.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line || line.startsWith(':') || line === 'event: snapshot' || line === 'event: heartbeat') continue;
+      if (line.startsWith('data:')) line = line.slice(5).trim();
+      if (!line || line === '') continue;
+      try {
+        var obj = JSON.parse(line);
+        if (obj && (obj.Legs || obj.legs || obj.Delta !== undefined)) {
+          chain.push(obj);
+        }
+      } catch(e) { /* skip non-JSON lines */ }
+    }
+
+    console.log('[CHAIN-TS] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts (stream)');
+    if (!chain.length) console.error('[CHAIN-TS] Empty stream. Lines:', lines.length);
     return chain;
-  } catch(e) { console.error('[CHAIN-TS] Error:', e.message); return []; }
+  } catch(e) {
+    if (e.name === 'AbortError') {
+      console.log('[CHAIN-TS] Stream timeout — collected data processed');
+      return [];
+    }
+    console.error('[CHAIN-TS] Error:', e.message);
+    return [];
+  }
 }
 
 // -- GET OPTION CHAIN: PUBLIC.COM (source 2) ----------------------
