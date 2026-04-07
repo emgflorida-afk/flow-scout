@@ -159,18 +159,20 @@ async function getChainPublic(ticker, expiry, type, price) {
     var apiKey = process.env.PUBLIC_API_KEY;
     if (!apiKey) { console.log('[CHAIN-PUB] No PUBLIC_API_KEY'); return []; }
 
-    var optType = type === 'call' ? 'call' : 'put';
-    // Public.com options endpoint
-    var url = 'https://api.public.com/options/chain/' + ticker
-      + '?expiration=' + expiry
-      + '&option_type=' + optType;
-    if (price) url += '&strike_center=' + Math.round(price) + '&strike_count=12';
+    // Public.com options chain -- POST with JSON body per API docs
+    var url = 'https://api.public.com/userapigateway/marketdata/' + (process.env.PUBLIC_ACCOUNT_ID || '5OF64813') + '/option-chain';
+    var body = JSON.stringify({
+      instrument: { symbol: ticker, type: 'EQUITY' },
+      expirationDate: expiry
+    });
 
     var res = await fetch(url, {
+      method: 'POST',
       headers: {
         'Authorization': 'Bearer ' + apiKey,
         'Content-Type': 'application/json'
-      }
+      },
+      body: body
     });
     console.log('[CHAIN-PUB] HTTP status:', res.status);
     if (!res.ok) { console.log('[CHAIN-PUB] Failed:', res.status); return []; }
