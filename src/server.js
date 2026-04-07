@@ -815,6 +815,21 @@ cron.schedule('0 4 * * 1-5', function() {
   console.log('[EXECUTE-NOW] Daily reset at midnight');
 });
 
+// Every 10 min -- cancel stale unfilled orders older than 30 min
+cron.schedule('*/10 13-20 * * 1-5', function() {
+  if (executeNow && executeNow.cancelStaleOrders) {
+    executeNow.cancelStaleOrders().catch(function(e) { console.error('[CANCEL-STALE]', e.message); });
+  }
+});
+
+// 3:30 PM ET (19:30 UTC) -- hard close all day trade positions
+cron.schedule('30 19 * * 1-5', function() {
+  if (executeNow && executeNow.hardCloseAllPositions) {
+    console.log('[CRON] 3:30 PM -- hard close triggered');
+    executeNow.hardCloseAllPositions().catch(function(e) { console.error('[HARD-CLOSE]', e.message); });
+  }
+});
+
 // 4:00AM ET -- AYCE pre-market scan (catches overnight 12HR Miyagi setups)
 cron.schedule('0 8 * * 1-5', async function() {
   console.log('[CRON] 4:00AM -- AYCE pre-market scan...');
