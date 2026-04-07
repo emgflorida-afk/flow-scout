@@ -92,30 +92,46 @@ function isEntryWindow() {
 
 // ============================================================
 // GATE 2: LVL FRAMEWORK CHECK
+// Two valid trade types per direction:
+//   CALL: Type 1 = breakout above PDH | Type 2 = reversal bounce off PDL
+//   PUT:  Type 1 = breakdown below PDL | Type 2 = reversal rejection at PDH
 // ============================================================
 function checkLVL(ticker, type, price, lvls) {
-  if (!lvls) return { pass: true, reason: 'No LVL data -- allowing (fallback)' };
+  if (!lvls) return { pass: true, reason: 'No LVL data -- allowing (fallback)', tradeType: 'UNKNOWN' };
+
+  var distFromPDH = (price - lvls.pdh) / lvls.pdh;
+  var distFromPDL = (lvls.pdl - price) / lvls.pdl;
 
   if (type === 'call') {
-    var distFromPDH = (price - lvls.pdh) / lvls.pdh;
-    // For calls: price should be near or breaking above PDH
+    // TYPE 1: Breakout — price near or above PDH
+    if (Math.abs(distFromPDH) <= 0.03) {
+      return { pass: true, reason: 'BREAKOUT: Near PDH $' + lvls.pdh.toFixed(2), tradeType: 'BREAKOUT' };
+    }
+    // TYPE 2: Reversal — price bouncing off PDL (was near PDL, now moving up)
+    if (distFromPDL >= -0.01 && distFromPDL <= 0.03) {
+      return { pass: true, reason: 'REVERSAL: Bouncing off PDL $' + lvls.pdl.toFixed(2), tradeType: 'REVERSAL' };
+    }
+    // Too extended above PDH
     if (distFromPDH > 0.03) {
-      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' is ' + (distFromPDH * 100).toFixed(1) + '% above PDH $' + lvls.pdh.toFixed(2) + ' -- too extended' };
+      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' too extended above PDH $' + lvls.pdh.toFixed(2), tradeType: null };
     }
-    if (distFromPDH < -0.03) {
-      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' is ' + (Math.abs(distFromPDH) * 100).toFixed(1) + '% below PDH $' + lvls.pdh.toFixed(2) + ' -- not near level' };
-    }
-    return { pass: true, reason: 'Near PDH $' + lvls.pdh.toFixed(2) + ' (dist: ' + (distFromPDH * 100).toFixed(1) + '%)' };
+    // In no mans land — between PDL and PDH but not near either
+    return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' not near PDH $' + lvls.pdh.toFixed(2) + ' or PDL $' + lvls.pdl.toFixed(2), tradeType: null };
   } else {
-    var distFromPDL = (lvls.pdl - price) / lvls.pdl;
-    // For puts: price should be near or breaking below PDL
+    // TYPE 1: Breakdown — price near or below PDL
+    if (Math.abs(distFromPDL) <= 0.03) {
+      return { pass: true, reason: 'BREAKDOWN: Near PDL $' + lvls.pdl.toFixed(2), tradeType: 'BREAKOUT' };
+    }
+    // TYPE 2: Reversal — price rejected at PDH (was near PDH, now moving down)
+    if (distFromPDH >= -0.01 && distFromPDH <= 0.03) {
+      return { pass: true, reason: 'REVERSAL: Rejected at PDH $' + lvls.pdh.toFixed(2), tradeType: 'REVERSAL' };
+    }
+    // Too extended below PDL
     if (distFromPDL > 0.03) {
-      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' is ' + (distFromPDL * 100).toFixed(1) + '% below PDL $' + lvls.pdl.toFixed(2) + ' -- too extended' };
+      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' too extended below PDL $' + lvls.pdl.toFixed(2), tradeType: null };
     }
-    if (distFromPDL < -0.03) {
-      return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' is above PDL $' + lvls.pdl.toFixed(2) + ' -- not near level' };
-    }
-    return { pass: true, reason: 'Near PDL $' + lvls.pdl.toFixed(2) + ' (dist: ' + (distFromPDL * 100).toFixed(1) + '%)' };
+    // In no mans land
+    return { pass: false, reason: ticker + ' $' + price.toFixed(2) + ' not near PDL $' + lvls.pdl.toFixed(2) + ' or PDH $' + lvls.pdh.toFixed(2), tradeType: null };
   }
 }
 
