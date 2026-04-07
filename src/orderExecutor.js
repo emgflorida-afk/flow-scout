@@ -1,9 +1,12 @@
-// orderExecutor.js -- Stratum v7.4
+// orderExecutor.js -- Stratum v7.5
 // DIRECT ORDER EXECUTION via TradeStation API
 // Bypasses MCP limitation -- places orders directly
 // Supports LIVE and SIM accounts
 // Called from /webhook/execute endpoint
 // Full bracket: entry + stop + T1 in one order using OSO
+// FIXED v7.5: decimal precision rounding, removed duplicate code blocks
+
+'use strict';
 
 var fetch = require('node-fetch');
 
@@ -11,19 +14,77 @@ var TS_LIVE = 'https://api.tradestation.com/v3';
 var TS_SIM  = 'https://sim-api.tradestation.com/v3';
 
 // ================================================================
+// PRICE ROUNDING -- prevents floating point artifacts
+// e.g. 1.15 * 0.75 = 1.1500000000000001 -> round to 1.15
+// ================================================================
+function round2(n) {
+  return parseFloat(Math.round(parseFloat(n) * 100) / 100).toFixed(2);
+}
+
+// ================================================================
+// DAILY EXPOSURE TRACKER
+// Tracks total risk deployed today across all trades
+// Resets at midnight ET
+// ================================================================
+var dailyRiskDeployed = 0;
+var dailyRiskDate     = '';
+
+function getTodayET() {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+}
+
+function resetDailyRiskIfNewDay() {
+  var today = getTodayET();
+  if (dailyRiskDate !== today) {
+    dailyRiskDeployed = 0;
+    dailyRiskDate     = today;
+    console.log('[RISK] Daily exposure reset for new day:', today);
+  }
+}
+
+function checkDailyExposure(riskAmount, accountEquity) {
+  resetDailyRiskIfNewDay();
+  var maxDailyRisk   = (accountEquity || 19268) * 0.02;
+  var projectedTotal = dailyRiskDeployed + riskAmount;
+  if (projectedTotal > maxDailyRisk) {
+    console.log('[RISK] DAILY EXPOSURE BLOCKED -- deployed:$' + dailyRiskDeployed.toFixed(0) +
+      ' + this:$' + riskAmount.toFixed(0) + ' = $' + projectedTotal.toFixed(0) +
+      ' exceeds 2% limit of $' + maxDailyRisk.toFixed(0));
+    return { allowed: false, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+  }
+  return { allowed: true, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
+}
+
+function recordTradeRisk(riskAmount) {
+  resetDailyRiskIfNewDay();
+  dailyRiskDeployed += riskAmount;
+  console.log('[RISK] Trade recorded -- risk:$' + riskAmount.toFixed(0) +
+    ' total today:$' + dailyRiskDeployed.toFixed(0));
+}
+
+// ================================================================
 // GET BASE URL -- live vs sim
 // ================================================================
 function getBaseUrl(account, liveBypass) {
-  // liveBypass=true means ALWAYS use live API (John's ideas bypass simMode)
   if (liveBypass === true) {
     console.log('[EXECUTOR] liveBypass -- forcing LIVE API for:', account);
     return TS_LIVE;
   }
-  // SIM accounts start with SIM
   if (account && account.toUpperCase().startsWith('SIM')) {
     return TS_SIM;
   }
   return TS_LIVE;
+}
+
+// ================================================================
+// ROUND TO VALID OPTION PRICE INCREMENT
+// Options use $0.05 above $3, $0.01 below $3
+// ================================================================
+function roundToIncrement(price) {
+  if (!price) return price;
+  var p = parseFloat(price);
+  if (p >= 3) return parseFloat((Math.round(p / 0.05) * 0.05).toFixed(2));
+  return parseFloat((Math.round(p / 0.01) * 0.01).toFixed(2));
 }
 
 // ================================================================
@@ -44,57 +105,18 @@ async function placeOrder(params) {
     note,        // for logging
   } = params;
 
-  // DAILY EXPOSURE TRACKER
-// Tracks total risk deployed today across all trades
-// Resets at midnight ET
-var dailyRiskDeployed = 0;
-var dailyRiskDate     = '';
-
-function getTodayET() {
-  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-}
-
-function resetDailyRiskIfNewDay() {
-  var today = getTodayET();
-  if (dailyRiskDate !== today) {
-    dailyRiskDeployed = 0;
-    dailyRiskDate     = today;
-    console.log('[RISK] Daily exposure reset for new day:', today);
-  }
-}
-
-function checkDailyExposure(riskAmount, accountEquity) {
-  resetDailyRiskIfNewDay();
-  var maxDailyRisk    = (accountEquity || 19268) * 0.02; // 2% of account
-  var projectedTotal  = dailyRiskDeployed + riskAmount;
-  if (projectedTotal > maxDailyRisk) {
-    console.log('[RISK] DAILY EXPOSURE BLOCKED -- deployed:$' + dailyRiskDeployed.toFixed(0) +
-      ' + this:$' + riskAmount.toFixed(0) + ' = $' + projectedTotal.toFixed(0) +
-      ' exceeds 2% limit of $' + maxDailyRisk.toFixed(0));
-    return { allowed: false, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
-  }
-  return { allowed: true, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
-}
-
-function recordTradeRisk(riskAmount) {
-  resetDailyRiskIfNewDay();
-  dailyRiskDeployed += riskAmount;
-  console.log('[RISK] Trade recorded -- risk:$' + riskAmount.toFixed(0) +
-    ' total today:$' + dailyRiskDeployed.toFixed(0));
-}
-
-// DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
+  // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
   // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
   // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
-  // Financials/others (JPM, GS) = 35% target
+  // Others = 35% target
   if (!t1 && limit) {
     var HIGH_VOL_T = ['TSLA', 'COIN', 'MRVL', 'NVDA'];
     var MED_VOL_T  = ['AAPL', 'AMZN', 'MSFT', 'GOOGL', 'META'];
     var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
     var t1Mult;
-    if (HIGH_VOL_T.indexOf(baseTicker) > -1)    t1Mult = 1.50;
-    else if (MED_VOL_T.indexOf(baseTicker) > -1) t1Mult = 1.40;
-    else                                          t1Mult = 1.35;
+    if (HIGH_VOL_T.indexOf(baseTicker) > -1)     t1Mult = 1.50;
+    else if (MED_VOL_T.indexOf(baseTicker) > -1)  t1Mult = 1.40;
+    else                                           t1Mult = 1.35;
     t1 = parseFloat((parseFloat(limit) * t1Mult).toFixed(2));
     console.log('[EXECUTOR] Dynamic T1:', baseTicker, 'mult:', t1Mult, 'entry:$' + limit, 'T1:$' + t1);
   }
@@ -105,28 +127,20 @@ function recordTradeRisk(riskAmount) {
     if (!token) return { error: 'No TradeStation token' };
 
     // SMART CONTRACT SIZING -- based on account size and premium
-    // Overrides qty if it exceeds safe sizing for account
     try {
-      var premium    = parseFloat(limit);
-      var orderCost  = premium * 100; // cost per contract
-      var acctSize   = 19268;         // approximate live account size
-      var maxRisk2pct = acctSize * 0.02; // $385 max risk
+      var premium     = parseFloat(limit);
+      var acctSize    = 19268;
+      var maxRisk2pct = acctSize * 0.02;
 
-      // Premium-based sizing rules for $19K account:
-      // Under $1.00 = max 3 contracts
-      // $1.00-$2.00 = max 2 contracts
-      // $2.00-$4.00 = max 1 contract
-      // Over $4.00  = max 1 contract
       var premiumLimit;
       if      (premium < 1.00) premiumLimit = 3;
       else if (premium < 2.00) premiumLimit = 2;
       else                     premiumLimit = 1;
 
-      // Also cap by 2% risk rule
-      var riskLimit = Math.max(1, Math.floor(maxRisk2pct / orderCost));
-
-      // Take the more conservative of the two
+      var orderCostSizing = premium * 100;
+      var riskLimit = Math.max(1, Math.floor(maxRisk2pct / orderCostSizing));
       var maxAllowed = Math.min(premiumLimit, riskLimit);
+
       if (qty > maxAllowed) {
         console.log('[EXECUTOR] Qty reduced from ' + qty + ' to ' + maxAllowed +
           ' -- premium $' + premium + ' risk limit $' + maxRisk2pct.toFixed(0));
@@ -134,14 +148,14 @@ function recordTradeRisk(riskAmount) {
       }
     } catch(e) { /* sizing check skipped */ }
 
-    // DAILY EXPOSURE CHECK -- block if 2% daily risk limit hit
-    // Uses ACCOUNT-SPECIFIC equity -- live account gets $19K limit, SIM gets $1M limit
+    // DAILY EXPOSURE CHECK
     try {
-      var riskPerContract = stop ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100 : parseFloat(limit) * 0.40 * 100;
-      var totalRisk       = riskPerContract * (qty || 1);
-      // Hard-coded per account -- prevents SIM $1M from inflating the limit
-      var equityForCheck  = (account === '11975462') ? 19268 : 50000; // live=real equity, SIM=capped at $50K equivalent
-      var exposureCheck   = checkDailyExposure(totalRisk, equityForCheck);
+      var riskPerContract = stop
+        ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100
+        : parseFloat(limit) * 0.40 * 100;
+      var totalRisk      = riskPerContract * (qty || 1);
+      var equityForCheck = (account === '11975462') ? 19268 : 50000;
+      var exposureCheck  = checkDailyExposure(totalRisk, equityForCheck);
       if (!exposureCheck.allowed) {
         var msg = 'Daily 2% risk limit hit -- deployed:$' + exposureCheck.deployed.toFixed(0) +
           ' + this trade:$' + totalRisk.toFixed(0) + ' = $' + exposureCheck.projected.toFixed(0) +
@@ -151,9 +165,9 @@ function recordTradeRisk(riskAmount) {
       }
     } catch(e) { console.log('[RISK] Exposure check skipped:', e.message); }
 
-    // MAX POSITIONS CHECK -- block if too many open positions
+    // MAX POSITIONS CHECK
     try {
-      var posMgr = require('./positionManager');
+      var posMgr   = require('./positionManager');
       var maxCheck = await posMgr.checkMaxPositions(account);
       if (!maxCheck.allowed) {
         console.log('[EXECUTOR] BLOCKED -- max positions hit:', maxCheck.current, '/', maxCheck.max);
@@ -173,10 +187,10 @@ function recordTradeRisk(riskAmount) {
       }
     } catch(e) { /* position manager not loaded -- continue */ }
 
-    // DYNAMIC BIAS CHECK -- block if trading against current bias
+    // DYNAMIC BIAS CHECK
     try {
       var dynamicBias = require('./dynamicBias');
-      var direction   = (action === 'BUYTOOPEN') 
+      var direction   = (action === 'BUYTOOPEN')
         ? (symbol.includes('C') ? 'call' : 'put')
         : null;
       if (direction && !dynamicBias.isAllowed(direction)) {
@@ -186,7 +200,7 @@ function recordTradeRisk(riskAmount) {
       }
     } catch(e) { /* dynamic bias not loaded -- continue */ }
 
-    // DAILY LOSS LIMIT CHECK -- block if limit hit
+    // DAILY LOSS LIMIT CHECK
     try {
       var lossLimit = require('./dailyLossLimit');
       if (lossLimit.isBlocked(account)) {
@@ -195,9 +209,8 @@ function recordTradeRisk(riskAmount) {
       }
     } catch(e) { /* loss limit module not loaded -- continue */ }
 
-    // Convert OPRA format to TradeStation format
+    // CONVERT OPRA FORMAT TO TRADESTATION FORMAT
     // NVDA260406C00175000 -> NVDA 260406C175
-    // NVDA260406C00177500 -> NVDA 260406C177.5
     if (symbol && symbol.indexOf(' ') === -1 && /^[A-Z]/.test(symbol)) {
       var om = symbol.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
       if (om) {
@@ -209,21 +222,13 @@ function recordTradeRisk(riskAmount) {
       }
     }
 
-    // Round price to nearest valid increment (options use $0.05 above $3, $0.01 below)
-    function roundToIncrement(price) {
-      if (!price) return price;
-      var p = parseFloat(price);
-      if (p >= 3) return Math.round(p / 0.05) * 0.05;
-      return Math.round(p / 0.01) * 0.01;
-    }
-    limit = roundToIncrement(limit);
-    if (stop) stop = roundToIncrement(stop);
-    if (t1)   t1   = roundToIncrement(t1);
-    if (t2)   t2   = roundToIncrement(t2);
+    // ROUND ALL PRICES TO VALID INCREMENTS + apply round2 to prevent float artifacts
+    limit = round2(roundToIncrement(limit));
+    if (stop) stop = round2(roundToIncrement(stop));
+    if (t1)   t1   = round2(roundToIncrement(t1));
+    if (t2)   t2   = round2(roundToIncrement(t2));
 
     // PORTFOLIO-AWARE POSITION SIZING
-    // Check buying power before placing order
-    // Never risk more than 2% of account on single trade
     try {
       var tsCheck    = require('./tradestation');
       var tokenCheck = await tsCheck.getAccessToken();
@@ -232,16 +237,14 @@ function recordTradeRisk(riskAmount) {
         var balRes    = await fetch(baseCheck + '/brokerage/accounts/' + account + '/balances', {
           headers: { 'Authorization': 'Bearer ' + tokenCheck }
         });
-        var balData   = await balRes.json();
-        var balArr    = balData.Balances || balData.balances || [];
-        var bal       = balArr[0] || {};
+        var balData     = await balRes.json();
+        var balArr      = balData.Balances || balData.balances || [];
+        var bal         = balArr[0] || {};
         var buyingPower = parseFloat(bal.BuyingPower || bal.CashBalance || 0);
         var equity      = parseFloat(bal.Equity || buyingPower);
-
-        // Hard stops
         var orderCost   = parseFloat(limit) * qty * 100;
-        var maxRisk     = equity * 0.02; // 2% of account
-        var minBP       = 300;           // minimum buying power gate
+        var maxRisk     = equity * 0.02;
+        var minBP       = 300;
 
         if (buyingPower < minBP) {
           console.log('[EXECUTOR] BLOCKED -- buying power $' + buyingPower + ' below $' + minBP + ' gate');
@@ -249,7 +252,6 @@ function recordTradeRisk(riskAmount) {
         }
 
         if (orderCost > maxRisk && equity > 1000) {
-          // Reduce qty to fit within 2% risk
           var maxQty = Math.max(1, Math.floor(maxRisk / (parseFloat(limit) * 100)));
           if (maxQty < qty) {
             console.log('[EXECUTOR] Qty reduced from ' + qty + ' to ' + maxQty + ' -- 2% risk rule ($' + maxRisk.toFixed(0) + ' max)');
@@ -267,34 +269,32 @@ function recordTradeRisk(riskAmount) {
     console.log('[EXECUTOR] Placing order on', base, '-- account:', account);
     console.log('[EXECUTOR] Order:', symbol, action, qty, 'x @ $' + limit);
 
-    // Build OSO bracket orders (fire after parent fills)
+    // BUILD OSO BRACKET ORDERS
     var osos = [];
 
     if (stop || t1) {
       var bracketOrders = [];
 
-      // Stop loss
       if (stop) {
         bracketOrders.push({
           AccountID:   account,
           Symbol:      symbol,
           Quantity:    String(qty),
           OrderType:   'StopMarket',
-          StopPrice:   String(stop),
+          StopPrice:   String(stop),      // already round2'd above
           TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
           TimeInForce: { Duration: duration || 'GTC' },
           Route:       'Intelligent',
         });
       }
 
-      // T1 take profit
       if (t1) {
         bracketOrders.push({
           AccountID:   account,
           Symbol:      symbol,
           Quantity:    String(qty),
           OrderType:   'Limit',
-          LimitPrice:  String(t1),
+          LimitPrice:  String(t1),        // already round2'd above
           TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
           TimeInForce: { Duration: duration || 'GTC' },
           Route:       'Intelligent',
@@ -309,26 +309,24 @@ function recordTradeRisk(riskAmount) {
       }
     }
 
-    // Build main entry order
+    // BUILD MAIN ENTRY ORDER
     var orderBody = {
       AccountID:   account,
       Symbol:      symbol,
       Quantity:    String(qty),
       OrderType:   'Limit',
-      LimitPrice:  String(limit),
+      LimitPrice:  String(limit),         // already round2'd above
       TradeAction: action,
       TimeInForce: { Duration: duration || 'GTC' },
       Route:       'Intelligent',
     };
 
-    // Attach bracket if we have one
     if (osos.length > 0) {
       orderBody.OSOs = osos;
     }
 
     console.log('[EXECUTOR] Order body:', JSON.stringify(orderBody, null, 2));
 
-    // Place the order
     var res = await fetch(base + '/orderexecution/orders', {
       method:  'POST',
       headers: {
@@ -345,23 +343,31 @@ function recordTradeRisk(riskAmount) {
       return { error: 'Order failed: ' + JSON.stringify(data), status: res.status };
     }
 
-    var orders = data.Orders || [data];
+    var orders  = data.Orders || [data];
     var orderId = orders[0] && (orders[0].OrderID || orders[0].orderId);
 
     console.log('[EXECUTOR] Order placed OK -- ID:', orderId);
 
+    // RECORD RISK AFTER SUCCESSFUL PLACEMENT
+    try {
+      var riskRecorded = stop
+        ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100 * qty
+        : parseFloat(limit) * 0.40 * 100 * qty;
+      recordTradeRisk(riskRecorded);
+    } catch(e) { /* recording skipped */ }
+
     return {
-      success:  true,
-      orderId:  orderId,
-      symbol:   symbol,
-      account:  account,
-      qty:      qty,
-      limit:    limit,
-      stop:     stop,
-      t1:       t1,
-      t2:       t2,
+      success:    true,
+      orderId:    orderId,
+      symbol:     symbol,
+      account:    account,
+      qty:        qty,
+      limit:      limit,
+      stop:       stop,
+      t1:         t1,
+      t2:         t2,
       bracketSet: !!(stop || t1),
-      response: data,
+      response:   data,
     };
 
   } catch(e) {
@@ -371,70 +377,15 @@ function recordTradeRisk(riskAmount) {
 }
 
 // ================================================================
-// CLOSE POSITION
+// CLOSE POSITION -- market sell to close
 // ================================================================
 async function closePosition(account, symbol, qty) {
-  // DAILY EXPOSURE TRACKER
-// Tracks total risk deployed today across all trades
-// Resets at midnight ET
-var dailyRiskDeployed = 0;
-var dailyRiskDate     = '';
-
-function getTodayET() {
-  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-}
-
-function resetDailyRiskIfNewDay() {
-  var today = getTodayET();
-  if (dailyRiskDate !== today) {
-    dailyRiskDeployed = 0;
-    dailyRiskDate     = today;
-    console.log('[RISK] Daily exposure reset for new day:', today);
-  }
-}
-
-function checkDailyExposure(riskAmount, accountEquity) {
-  resetDailyRiskIfNewDay();
-  var maxDailyRisk    = (accountEquity || 19268) * 0.02; // 2% of account
-  var projectedTotal  = dailyRiskDeployed + riskAmount;
-  if (projectedTotal > maxDailyRisk) {
-    console.log('[RISK] DAILY EXPOSURE BLOCKED -- deployed:$' + dailyRiskDeployed.toFixed(0) +
-      ' + this:$' + riskAmount.toFixed(0) + ' = $' + projectedTotal.toFixed(0) +
-      ' exceeds 2% limit of $' + maxDailyRisk.toFixed(0));
-    return { allowed: false, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
-  }
-  return { allowed: true, deployed: dailyRiskDeployed, limit: maxDailyRisk, projected: projectedTotal };
-}
-
-function recordTradeRisk(riskAmount) {
-  resetDailyRiskIfNewDay();
-  dailyRiskDeployed += riskAmount;
-  console.log('[RISK] Trade recorded -- risk:$' + riskAmount.toFixed(0) +
-    ' total today:$' + dailyRiskDeployed.toFixed(0));
-}
-
-// DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
-  // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
-  // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
-  // Financials/others (JPM, GS) = 35% target
-  if (!t1 && limit) {
-    var HIGH_VOL_T = ['TSLA', 'COIN', 'MRVL', 'NVDA'];
-    var MED_VOL_T  = ['AAPL', 'AMZN', 'MSFT', 'GOOGL', 'META'];
-    var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
-    var t1Mult;
-    if (HIGH_VOL_T.indexOf(baseTicker) > -1)    t1Mult = 1.50;
-    else if (MED_VOL_T.indexOf(baseTicker) > -1) t1Mult = 1.40;
-    else                                          t1Mult = 1.35;
-    t1 = parseFloat((parseFloat(limit) * t1Mult).toFixed(2));
-    console.log('[EXECUTOR] Dynamic T1:', baseTicker, 'mult:', t1Mult, 'entry:$' + limit, 'T1:$' + t1);
-  }
-
   try {
     var ts    = require('./tradestation');
     var token = await ts.getAccessToken();
     if (!token) return { error: 'No TradeStation token' };
 
-    var base = getBaseUrl(account, params.liveBypass || false);
+    var base = getBaseUrl(account, false);
 
     var orderBody = {
       AccountID:   account,
