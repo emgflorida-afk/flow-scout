@@ -2,8 +2,9 @@
 // TRADESTATION ONLY -- no Public.com, no Polygon
 // FIXED: Token fetched once per resolve, passed through all functions
 // FIXED: DTE calculated from date string, not stale API field
-// FIXED: SWING minDTE lowered to 1 to catch all valid expirations
-// FIXED: Emergency fallback expiry selection
+// FIXED: SWING minDTE 5 -- skips short expirations with no chain data
+// FIXED: Safe JSON parse on chain endpoint
+// FIXED: Auto retry with next expiry if chain returns 404
 // LVL Framework -- PDH/PDL structural levels
 // Dynamic Stop -- underlying price based
 // Smart Entry -- ORB/breakout vs retracement
@@ -19,7 +20,7 @@ const MODES = {
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
-    minDTE: 1, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
+    minDTE: 5, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
   },
 };
 
@@ -125,7 +126,6 @@ async function getExpirations(ticker, token) {
 
 function selectExpiry(expirations, mode) {
   var config = MODES[mode] || MODES.SWING;
-  // Find expirations in DTE range
   var valid = expirations.filter(function(e){
     return e.dte >= config.minDTE && e.dte <= config.maxDTE;
   });
@@ -133,13 +133,11 @@ function selectExpiry(expirations, mode) {
     console.log('[EXPIRY] Selected:', valid[0].date+'('+valid[0].dte+'DTE)');
     return valid[0];
   }
-  // Fallback -- nearest future expiry
   var future = expirations.filter(function(e){ return e.dte > 0; });
   if (future.length > 0) {
     console.log('[EXPIRY] Fallback:', future[0].date+'('+future[0].dte+'DTE)');
     return future[0];
   }
-  // Emergency -- just use first available
   if (expirations.length > 0) {
     console.log('[EXPIRY] Emergency fallback:', expirations[0].date+'('+expirations[0].dte+'DTE)');
     return expirations[0];
@@ -290,20 +288,25 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   if (!expirations.length) { console.error('[RESOLVE] No expirations for',ticker); return null; }
   var expiryObj=selectExpiry(expirations, mode);
   if (!expiryObj) { console.error('[RESOLVE] No expiry found'); return null; }
+
+  // Try expirations until chain returns data
   var expiry=expiryObj.date, dte=expiryObj.dte;
   var rawChain=await getOptionChain(ticker, expiry, type, price, token);
+
   if (!rawChain.length) {
-    // Try next expiry if first one fails
-    console.log('[RESOLVE] Trying next expiry...');
-    var nextExp = expirations.filter(function(e){ return e.date > expiry && e.dte > 0; });
-    if (nextExp.length) {
-      expiry = nextExp[0].date;
-      dte    = nextExp[0].dte;
-      console.log('[RESOLVE] Retrying with', expiry+'('+dte+'DTE)');
+    // Walk forward through remaining expirations until one works
+    var remaining=expirations.filter(function(e){ return e.date > expiry && e.dte > 0; });
+    for (var i=0; i<Math.min(remaining.length,3); i++) {
+      console.log('[RESOLVE] Retrying with', remaining[i].date+'('+remaining[i].dte+'DTE)');
+      expiry  = remaining[i].date;
+      dte     = remaining[i].dte;
       rawChain = await getOptionChain(ticker, expiry, type, price, token);
+      if (rawChain.length) break;
     }
-    if (!rawChain.length) { console.error('[RESOLVE] Empty chain for',ticker,expiry,type); return null; }
   }
+
+  if (!rawChain.length) { console.error('[RESOLVE] No chain found for',ticker,type); return null; }
+
   var contracts=rawChain.map(function(c){return parseContract(c,expiry,type);}).filter(Boolean);
   console.log('[RESOLVE] Parsed contracts:',contracts.length);
   if (!contracts.length) { console.error('[RESOLVE] No parseable contracts'); return null; }
