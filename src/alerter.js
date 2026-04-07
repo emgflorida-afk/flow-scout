@@ -696,23 +696,102 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
     return;
   }
 
-  // Lock dedup immediately
-  executedToday[dedupKey] = Date.now();
-  console.log('[DEDUP] Locking ticker for today:', dedupKey);
-
   try {
+    // ============================================
+    // RUN ALL GATES BEFORE EXECUTING
+    // ============================================
+    var execGates = require('./executeNow');
     var orderExecutor = require('./orderExecutor');
-    var ep   = parseFloat(resolved.mid);
-    var lmt  = parseFloat((ep * 0.875).toFixed(2));
-    var stp  = parseFloat((ep * 0.60).toFixed(2));
-    var t1v  = parseFloat((ep * 1.60).toFixed(2));
-    var qty  = stratGrade === 'A+' ? 2 : 1;
 
-    // Respect max premium rule
-    if (ep > 2.40) {
-      console.log('[AUTO-EXEC] Premium $' + ep + ' over $2.40 max -- skipping SIM order for', parsed.ticker);
+    // Build signal for gate check
+    var signal = {
+      ticker: parsed.ticker,
+      type: parsed.type,
+      confluence: tvData.confluence || parsed.confluence || '0/6',
+      close: resolved.price || null,
+    };
+
+    // Get current positions count
+    var positions = 0;
+    try {
+      var ts = require('./tradestation');
+      var token = await ts.getAccessToken();
+      if (token) {
+        var posRes = await fetch('https://sim-api.tradestation.com/v3/brokerage/accounts/SIM3142118M/positions', {
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        var posData = await posRes.json();
+        positions = (posData.Positions || []).length;
+      }
+    } catch(e) { console.log('[AUTO-EXEC] Position check error:', e.message); }
+
+    // Get buying power
+    var buyingPower = 6000;
+    try {
+      var ts2 = require('./tradestation');
+      var token2 = await ts2.getAccessToken();
+      if (token2) {
+        var balRes = await fetch('https://sim-api.tradestation.com/v3/brokerage/accounts/SIM3142118M/balances', {
+          headers: { 'Authorization': 'Bearer ' + token2 }
+        });
+        var balData = await balRes.json();
+        var bals = balData.Balances || [balData];
+        if (bals[0]) buyingPower = parseFloat(bals[0].BuyingPower || bals[0].CashBalance || 6000);
+      }
+    } catch(e) { console.log('[AUTO-EXEC] Balance check error:', e.message); }
+
+    // Get macro bias
+    var macroBias = 'NEUTRAL';
+    var h6Bias = 'NEUTRAL';
+    try {
+      var dynBias = require('./dynamicBias');
+      if (dynBias.getBias) {
+        var b = dynBias.getBias();
+        macroBias = b.macro || 'NEUTRAL';
+        h6Bias = b.h6 || 'NEUTRAL';
+      }
+    } catch(e) {}
+
+    var hasFlow = false; // Strat-only signal, no flow confirmation
+
+    // Run all 10 gates
+    var decision = await execGates.shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyingPower);
+
+    if (!decision.execute) {
+      console.log('[AUTO-EXEC] ❌ GATES BLOCKED: ' + parsed.ticker + ' -- ' + decision.reason);
       return;
     }
+
+    console.log('[AUTO-EXEC] ✅ GATES PASSED: ' + parsed.ticker + ' ' + decision.grade);
+
+    // Lock dedup after gates pass
+    executedToday[dedupKey] = Date.now();
+
+    var ep   = parseFloat(resolved.mid);
+
+    // Use structural stop from executeNow
+    var stopInfo = execGates.calcStructuralStop(
+      parsed.ticker, parsed.type, ep,
+      decision.lvls, resolved.price, resolved.delta
+    );
+    var stp  = stopInfo ? stopInfo.stopPrice : parseFloat((ep * 0.60).toFixed(2));
+
+    // T1 by ticker volatility
+    var T1_TARGETS = { TSLA:0.50, COIN:0.50, NVDA:0.50, MRVL:0.50, AAPL:0.40, AMZN:0.40, MSFT:0.40, GOOGL:0.40 };
+    var t1Pct = T1_TARGETS[parsed.ticker.toUpperCase()] || 0.35;
+    var t1v  = parseFloat((ep * (1 + t1Pct)).toFixed(2));
+
+    var lmt  = parseFloat((ep * 0.875).toFixed(2));
+    var qty  = decision.contracts;
+
+    // Final premium check
+    if (ep > 2.40) {
+      console.log('[AUTO-EXEC] Premium $' + ep + ' over $2.40 max -- skipping', parsed.ticker);
+      return;
+    }
+
+    // Contract sizing -- $6K rules
+    if (ep <= 1.20) { qty = Math.min(qty, 2); } else { qty = 1; }
 
     var er = await orderExecutor.placeOrder({
       account: 'SIM3142118M',
