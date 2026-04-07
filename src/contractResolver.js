@@ -140,47 +140,63 @@ async function getChainTS(ticker, expiry, type, price, token) {
       + '&strikeProximity=6&enableGreeks=true';
     if (price) url += '&priceCenter=' + Math.round(price);
 
-    var controller = new AbortController();
-    var timeout = setTimeout(function(){ controller.abort(); }, 8000);
-
     var res = await fetch(url, {
-      headers: { 'Authorization': 'Bearer ' + token },
-      signal: controller.signal
+      headers: { 'Authorization': 'Bearer ' + token }
     });
     console.log('[CHAIN-TS] HTTP status:', res.status);
     if (!res.ok) {
-      clearTimeout(timeout);
       console.error('[CHAIN-TS] Failed:', res.status);
       return [];
     }
 
-    // SSE stream — collect JSON objects from response body
-    var text = await res.text();
-    clearTimeout(timeout);
-
+    // SSE stream — read chunks with timeout, don't wait for stream end
     var chain = [];
-    var lines = text.split('\n');
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (!line || line.startsWith(':') || line === 'event: snapshot' || line === 'event: heartbeat') continue;
-      if (line.startsWith('data:')) line = line.slice(5).trim();
-      if (!line || line === '') continue;
-      try {
-        var obj = JSON.parse(line);
-        if (obj && (obj.Legs || obj.legs || obj.Delta !== undefined)) {
-          chain.push(obj);
+    var buffer = '';
+
+    await new Promise(function(resolve) {
+      var done = false;
+      var timer = setTimeout(function() {
+        if (!done) { done = true; res.body.destroy(); resolve(); }
+      }, 5000);
+
+      res.body.on('data', function(chunk) {
+        buffer += chunk.toString();
+        // Process complete lines as they arrive
+        var parts = buffer.split('\n');
+        buffer = parts.pop(); // keep incomplete line in buffer
+        for (var i = 0; i < parts.length; i++) {
+          var line = parts[i].trim();
+          if (!line || line.startsWith(':')) continue;
+          if (line.startsWith('data:')) line = line.slice(5).trim();
+          if (!line) continue;
+          try {
+            var obj = JSON.parse(line);
+            if (obj && (obj.Legs || obj.legs || obj.Delta !== undefined || obj.Ask || obj.Bid)) {
+              chain.push(obj);
+            }
+            // Once we have enough contracts, stop early
+            if (chain.length >= 12) {
+              clearTimeout(timer);
+              if (!done) { done = true; res.body.destroy(); resolve(); }
+            }
+          } catch(e) { /* skip non-JSON lines */ }
         }
-      } catch(e) { /* skip non-JSON lines */ }
-    }
+      });
+
+      res.body.on('end', function() {
+        clearTimeout(timer);
+        if (!done) { done = true; resolve(); }
+      });
+
+      res.body.on('error', function() {
+        clearTimeout(timer);
+        if (!done) { done = true; resolve(); }
+      });
+    });
 
     console.log('[CHAIN-TS] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts (stream)');
-    if (!chain.length) console.error('[CHAIN-TS] Empty stream. Lines:', lines.length);
     return chain;
   } catch(e) {
-    if (e.name === 'AbortError') {
-      console.log('[CHAIN-TS] Stream timeout — collected data processed');
-      return [];
-    }
     console.error('[CHAIN-TS] Error:', e.message);
     return [];
   }
