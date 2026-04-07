@@ -1,523 +1,192 @@
-// bullflowStream.js  Stratum Flow Scout v6.1
-// HIGH CONVICTION: sends BOTH naked option AND spread card to #flow-alerts
-// CLUSTER ENGINE: aggregates flow by ticker, fires when $500K+ in 10 min
-// ALL alerts go to #flow-alerts  no filter
+// bullflowStream.js - Stratum Flow Scout v7.4
+// FIXED: Wide net -- ALL watchlist flow posts to #flow-alerts (no score gate)
+// FIXED: Score 4+ posts to #conviction-flow only
+// FIXED: Compact emoji card format -- 3-line scannable
+// FIXED: TS token health check removed from Discord -- Railway logs only
 // -----------------------------------------------------------------
 
-const fetch    = require('node-fetch');
-const resolver = require('./contractResolver');
-const alerter  = require('./alerter');
-const { processFlow } = require('./flowCluster'); // CLUSTER ENGINE
+const fetch = require('node-fetch');
 
+const WATCHLIST = new Set([
+  'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
+  'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
+  'MRNA','MRVL','GUSH','UVXY','KO','PEP'
+]);
+
+// -- DISCORD WEBHOOKS ---------------------------------------------
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
-const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK ||
-  'https://discord.com/api/webhooks/1489313680641233107/WpeUmp4r4H5CmdpL3LFQ2FXaCcdeszpdKmp0P71Z1CdJjvbujz1NGd630ebQyHyXUH90';
-const EXECUTE_NOW_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
-  'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK;
 
-// CONVICTION CLUSTER TRACKER
-// Tracks repeat sweeps per ticker per direction within 60 min window
-// Only fires to #conviction-flow when ALL criteria met
-var convictionClusters = {};
+// -- SCORE FLOW ALERT ---------------------------------------------
+function scoreFlow(alert) {
+  var score = 0;
+  var type  = (alert.alert_type || alert.alertType || '').toLowerCase();
+  var prem  = parseFloat(alert.premium || alert.total_premium || 0);
+  var vol   = parseInt(alert.volume || 0);
+  var oi    = parseInt(alert.open_interest || alert.openInterest || 0);
 
-function updateCluster(ticker, direction, premium, dte, volGtOI) {
-  var key   = ticker + ':' + direction;
-  var now   = Date.now();
-  var win   = 60 * 60 * 1000; // 60 min window
+  // Alert type
+  if (type.includes('sweep'))  score += 2;
+  if (type.includes('block'))  score += 1;
+  if (type.includes('urgent')) score += 2;
+  if (type.includes('whale'))  score += 2;
 
-  if (!convictionClusters[key]) {
-    convictionClusters[key] = { count: 0, totalPremium: 0, firstSeen: now, lastSeen: now, dte: dte, volGtOI: false };
-  }
+  // Premium size
+  if (prem >= 1000000)     score += 4;
+  else if (prem >= 500000) score += 3;
+  else if (prem >= 100000) score += 2;
+  else if (prem >= 25000)  score += 1;
 
-  var cluster = convictionClusters[key];
+  // Volume vs OI -- new position signal
+  if (vol > 0 && oi > 0 && vol > oi) score += 1;
 
-  // Reset if outside 60 min window
-  if (now - cluster.firstSeen > win) {
-    convictionClusters[key] = { count: 0, totalPremium: 0, firstSeen: now, lastSeen: now, dte: dte, volGtOI: false };
-    cluster = convictionClusters[key];
-  }
-
-  cluster.count        += 1;
-  cluster.totalPremium += (premium || 0);
-  cluster.lastSeen      = now;
-  cluster.dte           = dte;
-  if (volGtOI) cluster.volGtOI = true;
-
-  return cluster;
+  return score;
 }
 
-function isHighConviction(cluster, dte) {
-  return (
-    cluster.count        >= 3      &&  // 3+ repeat sweeps
-    cluster.totalPremium >= 500000 &&  // $500K+ combined
-    dte                  >= 3      &&  // not 0DTE lottery tickets
-    dte                  <= 14         // not far out LEAPS
-  );
+// -- FORMAT COMPACT EMOJI CARD ------------------------------------
+function formatFlowCard(alert, score) {
+  var ticker    = (alert.ticker || alert.symbol || '?').toUpperCase();
+  var direction = (alert.put_call || alert.type || alert.direction || '?').toUpperCase();
+  var prem      = parseFloat(alert.premium || alert.total_premium || 0);
+  var strike    = alert.strike_price || alert.strike || '?';
+  var expiry    = (alert.expiration || alert.expiry || '?').slice(0,10);
+  var type      = alert.alert_type || alert.alertType || 'Flow';
+  var dte       = alert.dte || '?';
+  var vol       = parseInt(alert.volume || 0);
+
+  var emoji = direction === 'CALL' ? '🟢' : direction === 'PUT' ? '🔴' : '⚪';
+  var premStr = prem >= 1000000
+    ? '$' + (prem/1000000).toFixed(1) + 'M'
+    : prem >= 1000
+    ? '$' + (prem/1000).toFixed(0) + 'K'
+    : '$' + prem.toFixed(0);
+
+  return [
+    emoji + ' **' + ticker + '** ' + direction + ' $' + strike + ' ' + expiry,
+    '💰 ' + premStr + ' · ' + type + ' · ' + dte + 'DTE · Vol ' + vol.toLocaleString(),
+    '📊 Score: ' + score + '/10',
+  ].join('\n');
 }
-
-const HIGH_CONVICTION_ALERTS = [
-  'urgent repeater',
-  'sizable sweep',
-  'whale alert',
-  'large block',
-  'unusual sweep',
-  'giant sweep',
-  'explosive',
-  'grenade trade',
-];
-
-function isHighConviction(alertName, alertPremium) {
-  const nameMatch    = HIGH_CONVICTION_ALERTS.some(function(name) {
-    return (alertName || '').toLowerCase().includes(name.toLowerCase());
-  });
-  const premiumMatch = parseFloat(alertPremium || 0) >= 50000;
-  return nameMatch || premiumMatch;
-}
-
-// -- LIVE AGGREGATOR ----------------------------------------------
-// -- PRE-ALERT WARMING SYSTEM ------------------------------------
-// Tracks flow building per ticker before conviction threshold
-// Fires WATCHING alert when $100K+ accumulates
-// Fires READY alert when $300K+ accumulates
-// Fires HIGH CONVICTION when $500K+ or high conviction name
-const warmingTracker = {};
-const WARM_THRESHOLD  = 100000;  // $100K = post WATCHING alert
-const READY_THRESHOLD = 300000;  // $300K = post READY alert
-const CONV_THRESHOLD  = 500000;  // $500K = HIGH CONVICTION
-
-function updateWarming(ticker, type, premium) {
-  var key = ticker + ':' + type;
-  if (!warmingTracker[key]) {
-    warmingTracker[key] = { total: 0, alerted100k: false, alerted300k: false, firstSeen: Date.now() };
-  }
-  var w = warmingTracker[key];
-  w.total += parseFloat(premium || 0);
-  w.lastSeen = Date.now();
-
-  // Reset after 30 minutes
-  if (Date.now() - w.firstSeen > 30 * 60 * 1000) {
-    warmingTracker[key] = { total: parseFloat(premium || 0), alerted100k: false, alerted300k: false, firstSeen: Date.now() };
-    return { level: null };
-  }
-
-  var totalK = (w.total / 1000).toFixed(0);
-
-  if (w.total >= READY_THRESHOLD && !w.alerted300k) {
-    w.alerted300k = true;
-    return { level: 'READY', totalK: totalK };
-  }
-  if (w.total >= WARM_THRESHOLD && !w.alerted100k) {
-    w.alerted100k = true;
-    return { level: 'WATCHING', totalK: totalK };
-  }
-  return { level: null };
-}
-
-const liveAggregator = {
-  data: {}, alertLog: [], lastResetDate: null,
-
-  checkReset: function() {
-    const now    = new Date();
-    const today  = now.toISOString().slice(0, 10);
-    const etHour = now.getUTCHours() - 4;
-    const etMin  = now.getUTCMinutes();
-    if ((etHour > 9 || (etHour === 9 && etMin >= 30)) && this.lastResetDate !== today) {
-      this.data = {}; this.alertLog = []; this.lastResetDate = today;
-      console.log('[AGGREGATOR] Daily reset OK');
-    }
-  },
-
-  add: function(ticker, type, premium, orderType, alertName) {
-    this.checkReset();
-    const key = ticker + ':' + type;
-    if (!this.data[key]) {
-      this.data[key] = { ticker, type, total: 0, count: 0, sweeps: 0, firstSeen: new Date().toISOString() };
-    }
-    const e    = this.data[key];
-    e.total   += parseFloat(premium || 0);
-    e.count   += 1;
-    e.lastSeen = new Date().toISOString();
-    if ((orderType || '').toUpperCase() === 'SWEEP') e.sweeps++;
-    this.alertLog.push({ ticker, type, premium, orderType, alertName, time: new Date().toISOString() });
-    return e;
-  },
-
-  getSummary: function() {
-    return { data: this.data, alertCount: this.alertLog.length, resetDate: this.lastResetDate };
-  },
-};
 
 // -- SEND TO DISCORD ----------------------------------------------
-async function sendFlowToDiscord(message) {
-  if (!FLOW_WEBHOOK) { console.log('[FLOW] No webhook URL'); return; }
+async function sendToDiscord(webhookUrl, message) {
+  if (!webhookUrl) return;
   try {
-    await fetch(FLOW_WEBHOOK, {
+    await fetch(webhookUrl, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ content: '```\n' + message + '\n```', username: 'Stratum Flow' }),
+      body:    JSON.stringify({ content: message, username: 'Stratum Flow' }),
     });
-    console.log('[FLOW] Sent to #flow-alerts OK');
-  } catch (err) { console.error('[FLOW] Discord error:', err.message); }
-}
-
-async function sendConvictionAlert(ticker, direction, cluster, dte, tags) {
-  try {
-    var totalM   = (cluster.totalPremium / 1000000).toFixed(2);
-    var elapsed  = Math.round((Date.now() - cluster.firstSeen) / 60000);
-    var msg = [
-      'CONVICTION FLOW ALERT -- ' + ticker.toUpperCase() + ' ' + direction.toUpperCase(),
-      '========================================',
-      'Sweeps:    ' + cluster.count + 'x repeat in ' + elapsed + ' min',
-      'Total $:   $' + totalM + 'M combined premium',
-      'DTE:       ' + dte + ' days',
-      'Vol>OI:    ' + (cluster.volGtOI ? 'YES -- fresh conviction' : 'No'),
-      'Tags:      ' + (tags || 'unusual sweep'),
-      '----------------------------------------',
-      'ACTION: This is HIGH CONVICTION flow',
-      '        Check chart before entering',
-      '        Confirm Strat direction aligns',
-      'Time: ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
-    ].join('\n');
-
-    await fetch(CONVICTION_WEBHOOK, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ content: '```\n' + msg + '\n```', username: 'Stratum Conviction' }),
-    });
-    console.log('[CONVICTION] Alert fired for', ticker, direction, '$' + totalM + 'M', cluster.count + 'x sweeps');
-  } catch(e) {
-    console.error('[CONVICTION] Discord error:', e.message);
-  }
-}
-
-// -- PARSE OPRA ---------------------------------------------------
-function parseOPRA(symbol) {
-  try {
-    const clean = (symbol || '').replace('O:', '');
-    const match = clean.match(/^([A-Z]+)(\d{6})([CP])(\d{8})$/);
-    if (!match) return null;
-    const [, ticker, date, typeChar, strikePadded] = match;
-    return {
-      ticker,
-      strike:  parseInt(strikePadded) / 1000,
-      expiry:  '20' + date.slice(0,2) + '-' + date.slice(2,4) + '-' + date.slice(4,6),
-      type:    typeChar === 'C' ? 'call' : 'put',
-    };
-  } catch { return null; }
+  } catch(e) { console.error('[BULLFLOW] Discord error:', e.message); }
 }
 
 // -- PROCESS ALERT ------------------------------------------------
-async function processAlert(raw) {
-  console.log('[BULLFLOW RAW]', JSON.stringify(raw));
+async function processAlert(alert) {
+  var ticker = (alert.ticker || alert.symbol || '').toUpperCase();
+  if (!ticker) return;
 
-  const symbol      = raw.symbol      || raw.ticker    || '';
-  const alertName   = raw.alertName   || raw.alert_name || raw.type || 'Flow Alert';
-  const premium     = parseFloat(raw.alertPremium || raw.premium || raw.totalPremium || 0);
-  const orderType   = raw.orderType   || raw.order_type || 'UNKNOWN';
-  const underlying  = raw.underlying  || raw.underlyingSymbol || '';
+  var score     = scoreFlow(alert);
+  var onList    = WATCHLIST.has(ticker);
+  var card      = formatFlowCard(alert, score);
+  var direction = (alert.put_call || alert.type || alert.direction || '').toUpperCase();
 
-  if (!symbol && !underlying) return;
+  console.log('[FLOW] ' + ticker + ' ' + direction + ' score:' + score + ' watchlist:' + onList);
 
-  const parsed     = parseOPRA(symbol);
-  const ticker     = parsed?.ticker || underlying || symbol;
-  const type       = parsed?.type   || 'call';
-  const strike     = parsed?.strike || '?';
-  const expiry     = parsed?.expiry || '?';
-  const expiryFmt  = typeof expiry === 'string' && expiry.length > 5
-    ? expiry.slice(5).replace('-', '/') : expiry;
-
-  const direction  = type === 'call' ? 'BULLISH' : 'BEARISH';
-  const typeLabel  = type === 'call' ? 'C' : 'P';
-  const isSwept    = (orderType || alertName || '').toLowerCase().includes('sweep');
-  const orderTag   = isSwept ? 'SWEEP' : 'BLOCK';
-  const premiumFmt = premium >= 1000000 ? '$' + (premium/1000000).toFixed(1) + 'M'
-                   : premium >= 1000    ? '$' + (premium/1000).toFixed(0) + 'K'
-                   : '$' + premium;
-
-  liveAggregator.add(ticker, type, premium, orderType, alertName);
-
-  // -- WARMING SYSTEM -- post pre-alerts as flow builds
-  var warming = updateWarming(ticker, type, premium);
-  if (warming.level) {
-    var wIcon   = warming.level === 'READY' ? 'READY' : 'WATCHING';
-    var wLines  = [
-      wIcon + ' -- ' + ticker + ' ' + type.toUpperCase(),
-      '===============================',
-      warming.level === 'READY'
-        ? '$' + warming.totalK + 'K accumulated -- PREPARE FOR ENTRY'
-        : '$' + warming.totalK + 'K building -- watching for more',
-      'Direction  ' + direction,
-      'Watch      Set limit ready if Strat confirms',
-      'Time       ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
-    ];
-    sendFlowToDiscord(wLines.join('\n')).catch(console.error);
-
-    // CONVICTION CLUSTER TRACKING
-    try {
-      var fTicker  = ticker || raw.ticker || raw.symbol || '';
-      var fDir     = type || (raw.put_call || raw.type || '').toLowerCase();
-      var fPrem    = premium || parseFloat(raw.premium || raw.size || 0);
-      var fDTE     = parseInt(raw.dte || raw.days_to_expiry || 0);
-      var fVol     = parseInt(raw.volume || 0);
-      var fOI      = parseInt(raw.open_interest || raw.oi || 0);
-      var fVolGtOI = fVol > fOI && fOI > 0;
-      var fTags    = raw.tags || raw.alert_type || '';
-
-      if (fTicker && fDir && fPrem > 0) {
-        var cluster = updateCluster(fTicker, fDir, fPrem, fDTE, fVolGtOI);
-        if (isHighConviction(cluster, fDTE)) {
-          sendConvictionAlert(fTicker, fDir, cluster, fDTE, fTags).catch(console.error);
-          // Reset cluster after firing to avoid repeat alerts
-          delete convictionClusters[fTicker + ':' + fDir];
-        }
-      }
-    } catch(e) { console.error('[CONVICTION] Cluster error:', e.message); }
+  // WIDE NET -- ALL watchlist tickers post to #flow-alerts, no score gate
+  if (onList) {
+    await sendToDiscord(FLOW_WEBHOOK, card);
+    console.log('[FLOW] Sent to #flow-alerts -- ' + ticker);
   }
 
-  // -- FEED INTO CLUSTER ENGINE ---------------------------------
-  // Pass full raw data so cluster can parse OPRA and accumulate
-  processFlow({ ...raw, opra: symbol, totalPremium: premium, orderType, alertName }).catch(function(err) {
-    console.error('[CLUSTER] processFlow error:', err.message);
-  });
-
-  const price = await resolver.getPrice(ticker).catch(function() { return null; });
-  // Pre-resolve contract for retracement levels on flow card
-  var swingResolved = null;
-  try {
-    var flowExpiry2 = typeof expiry === 'string' && expiry.length > 7 ? expiry : null;
-    swingResolved = flowExpiry2
-      ? await resolver.resolveContractWithExpiry(ticker, type, flowExpiry2)
-      : await resolver.resolveContract(ticker, type, 'SWING');
-  } catch(e) { swingResolved = null; }
-
-  // -- BASIC FLOW CARD  all alerts -----------------------------
-  // Retracement levels based on flow premium
-  var flowPremiumNum = premium > 0 ? premium / 100 : null; // convert cents to dollars estimate
-  var retrace125 = null;
-  var retrace250 = null;
-  if (swingResolved && swingResolved.mid) {
-    retrace125 = parseFloat((swingResolved.mid * 0.875).toFixed(2));
-    retrace250 = parseFloat((swingResolved.mid * 0.75).toFixed(2));
-  }
-
-  // Check if flow expiry is expired or near-term vs long-term
-  var flowExpiryDate  = typeof expiry === 'string' && expiry.length > 7 ? new Date(expiry) : null;
-  var daysToExpiry    = flowExpiryDate ? Math.ceil((flowExpiryDate - new Date()) / (1000 * 60 * 60 * 24)) : null;
-  var isLongTerm      = daysToExpiry && daysToExpiry > 30;
-  var isExpired       = daysToExpiry && daysToExpiry < 0;
-
-  const flowLines = [
-    'FLOW -- ' + ticker + ' ' + type.toUpperCase(),
-    '===============================',
-    // Original flow contract info
-    'SMART MONEY TRADE:',
-    ticker + ' $' + strike + typeLabel + ' ' + expiryFmt + (isExpired ? ' -- EXPIRED' : isLongTerm ? ' -- LONG TERM (' + daysToExpiry + ' days)' : ' -- SHORT TERM'),
-    price ? 'Stock   $' + price + ' LIVE' : null,
-    'Premium ' + premiumFmt,
-    'Type    ' + orderTag,
-    'Alert   ' + alertName,
-    '-------------------------------',
-    isHighConviction(alertName, premium) ? 'HIGH CONVICTION -- prepare entry' : 'Watch for Strat confirmation',
-    isLongTerm ? 'Signal  Long-term position build -- bullish for weeks/months' : null,
-    isExpired  ? 'WARNING Expired contract -- use swing card below for entry' : null,
-    // Your entry
-    retrace125 ? '-------------------------------' : null,
-    retrace125 ? 'YOUR ENTRY (ATM swing):' : null,
-    retrace125 ? 'SET LIMIT AT RETRACEMENT:' : null,
-    retrace125 ? '12.5%   $' + retrace125 + '  <-- PRIMARY LIMIT' : null,
-    retrace250 ? '25.0%   $' + retrace250 + '  <-- SECONDARY' : null,
-    '-------------------------------',
-    'Time    ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
-  ].filter(Boolean);
-
-  await sendFlowToDiscord(flowLines.join('\n'));
-
-  // -- HIGH CONVICTION  naked option + spread cards -----------
-  if (isHighConviction(alertName, premium)) {
-    console.log('[BULLFLOW] HIGH CONVICTION -- resolving contracts for ' + ticker);
-
-    try {
-      const swingResolved = await resolver.resolveContract(ticker, type, 'SWING');
-      if (swingResolved) {
-        const swingCard = [
-          'SWING TRADE -- ' + swingResolved.dte + 'DTE',
-          ticker + ' $' + swingResolved.strike + typeLabel + ' ' + (swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--') + ' -- ' + direction,
-          '===============================',
-          'Flow trigger: ' + alertName + ' ' + premiumFmt,
-          '-------------------------------',
-          'Strike  $' + swingResolved.strike + ' -- ATM via Public.com',
-          'Expiry  ' + (swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--') + ' (' + swingResolved.dte + 'DTE)',
-          (swingResolved.bid && swingResolved.ask) ? 'Bid/Ask $' + swingResolved.bid.toFixed(2) + ' / $' + swingResolved.ask.toFixed(2) : null,
-          '-------------------------------',
-        ].filter(Boolean);
-
-        const sizing = resolver.calculatePositionSize(swingResolved.mid, 'SWING');
-        if (sizing && sizing.viable) {
-          swingCard.push(
-            'Entry   $' + sizing.premium.toFixed(2) + ' x' + sizing.contracts + ' = $' + sizing.totalCost,
-            'Stop    $' + sizing.stopPrice + ' (loss -$' + sizing.stopLoss + ')',
-            'T1      $' + sizing.t1Price + ' (profit +$' + sizing.t1Profit + ')',
-            'T2      $' + sizing.t2Price + ' (runner)',
-            'Risk    ' + sizing.riskPct + '% of $7K = $' + sizing.stopLoss + ' max'
-          );
-        } else {
-          swingCard.push('Check live premium before entry');
-        }
-        swingCard.push('-------------------------------', 'Hold    1-3 days max');
-        await sendFlowToDiscord(swingCard.join('\n'));
-
-        // -- COMPACT EMOJI CARD to #execute-now ------------------
-        // This is the 2-second read card for fast execution
-        try {
-          var dirEmoji  = type === 'call' ? 'CALLS' : 'PUTS';
-          var emo       = type === 'call' ? '\uD83D\uDFE2' : '\uD83D\uDD34';
-          var expFmt    = swingResolved.expiry ? swingResolved.expiry.slice(5).replace('-','/') : '--';
-          var execLines = [
-            emo + ' ' + ticker + ' $' + swingResolved.strike + typeLabel + ' ' + expFmt + ' -- ' + dirEmoji,
-            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-          ];
-          if (sizing && sizing.viable) {
-            execLines.push(
-              '\uD83D\uDCB0 Entry  $' + sizing.premium.toFixed(2) + ' (' + sizing.contracts + ' contract' + (sizing.contracts > 1 ? 's' : '') + ' = $' + sizing.totalCost + ')',
-              '\uD83D\uDED1 Stop   $' + sizing.stopPrice + ' (lose -$' + sizing.stopLoss + ')',
-              '\uD83C\uDFAF T1     $' + sizing.t1Price + ' (+$' + sizing.t1Profit + ')',
-              '\uD83D\uDE80 T2     $' + sizing.t2Price + ' (runner)',
-              '\u26A0\uFE0F Risk   $' + sizing.stopLoss + ' max'
-            );
-          } else {
-            execLines.push('\uD83D\uDCB0 Check live premium before entry');
-          }
-          execLines.push(
-            '\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501',
-            '\uD83C\uDF0A Flow   ' + premiumFmt + ' | ' + alertName,
-            '\uD83D\uDD25 HIGH CONVICTION -- execute on next candle close',
-            '\uD83D\uDD50 ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET'
-          );
-          await fetch(EXECUTE_NOW_WEBHOOK, {
-            method:  'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({
-              content:  '```\n' + execLines.join('\n') + '\n```',
-              username: 'Stratum Execute',
-            }),
-          });
-          console.log('[EXECUTE-NOW] Compact card sent for ' + ticker + ' OK');
-        } catch(execErr) {
-          console.error('[EXECUTE-NOW] Card error:', execErr.message);
-        }
-
-        // Spread card
-        const spreadResolved = await resolver.resolveContract(ticker, type, 'SPREAD');
-        if (spreadResolved && spreadResolved.debit) {
-          const spreadSizing = resolver.calculatePositionSize(spreadResolved.debit, 'SPREAD', 7000, spreadResolved);
-          const s = spreadSizing && spreadSizing.viable ? spreadSizing : null;
-          const exFmt = spreadResolved.expiry ? spreadResolved.expiry.slice(5).replace('-','/') : '--';
-
-          const spreadCard = [
-            'SPREAD TRADE -- ' + spreadResolved.dte + 'DTE',
-            ticker + ' $' + spreadResolved.strike + '/$' + spreadResolved.sellStrike + typeLabel + ' ' + exFmt + ' -- ' + direction,
-            '===============================',
-            'Flow trigger: ' + alertName + ' ' + premiumFmt,
-            '-------------------------------',
-            'BUY     ' + ticker + ' $' + spreadResolved.strike    + typeLabel + ' ' + exFmt,
-            'SELL    ' + ticker + ' $' + spreadResolved.sellStrike + typeLabel + ' ' + exFmt,
-            'Width   $' + spreadResolved.spreadWidth + ' spread',
-            '-------------------------------',
-            s ? 'Debit   $' + s.debit.toFixed(2) + ' x' + s.contracts + ' = $' + s.totalCost : 'Debit   $' + (spreadResolved.debit ? spreadResolved.debit.toFixed(2) : '--'),
-            s ? 'Max Loss    $' + s.maxLoss   : null,
-            s ? 'Max Profit  $' + s.maxGain   : null,
-            'Breakeven   $' + spreadResolved.breakeven,
-            '-------------------------------',
-            s ? 'Stop    $' + s.stopPrice + ' (50% of debit)' : 'Stop    50% of debit',
-            s ? 'T1      $' + s.t1Price   + ' (100% gain)'   : 'T1      +100% of debit',
-            s ? 'Risk    ' + s.riskPct + '% of $7K = $' + s.maxLoss : 'Risk    defined',
-            '-------------------------------',
-            'Hold    1-3 days max',
-            'Time    ' + new Date().toLocaleTimeString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit'}) + ' ET',
-          ].filter(Boolean);
-
-          await sendFlowToDiscord(spreadCard.join('\n'));
-          console.log('[SPREAD] Sent spread card for ' + ticker + ' OK');
-        }
-      }
-    } catch (err) {
-      console.error('[BULLFLOW] Contract resolution error:', err.message);
-    }
+  // CONVICTION -- score 4+ AND watchlist -- post to #conviction-flow
+  if (onList && score >= 4) {
+    var convCard = '🚨 **CONVICTION FLOW**\n' + card + '\n✅ Score ' + score + '/10 — High conviction';
+    await sendToDiscord(CONVICTION_WEBHOOK, convCard);
+    console.log('[FLOW] Sent to #conviction-flow -- ' + ticker + ' score:' + score);
   }
 }
 
+// -- LIVE AGGREGATOR (for /flow/summary endpoint) -----------------
+var liveAggregator = {
+  data: {},
+  getSummary: function() { return this.data; },
+  update: function(ticker, direction, premium) {
+    if (!this.data[ticker]) this.data[ticker] = { calls: 0, puts: 0, premium: 0, count: 0 };
+    var d = this.data[ticker];
+    if ((direction||'').toUpperCase() === 'CALL') d.calls++;
+    else d.puts++;
+    d.premium += parseFloat(premium || 0);
+    d.count++;
+  },
+};
+
 // -- MAIN STREAM --------------------------------------------------
-async function startBullflowStream() {
-  const apiKey = process.env.BULLFLOW_API_KEY;
+function startBullflowStream() {
+  var apiKey = process.env.BULLFLOW_API_KEY;
   if (!apiKey) { console.error('[BULLFLOW] No API key'); return; }
 
   console.log('[BULLFLOW] Connecting to stream...');
 
-  const connect = async function() {
-    try {
-      const res = await fetch(
-        'https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey,
-        { headers: { Accept: 'text/event-stream' } }
-      );
-
+  var connect = function() {
+    fetch('https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey, {
+      headers: { 'Accept': 'text/event-stream' }
+    }).then(function(res) {
       if (!res.ok) {
         console.error('[BULLFLOW] Connection failed:', res.status);
-        scheduleReconnect();
+        setTimeout(connect, 10000);
         return;
       }
 
       console.log('[BULLFLOW] Stream connected OK');
+      var buffer = '';
 
-      let buffer = '';
-
-      res.body.on('data', async function(chunk) {
+      res.body.on('data', function(chunk) {
         buffer += chunk.toString();
-        const lines = buffer.split('\n');
+        var lines = buffer.split('\n');
         buffer = lines.pop();
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
+        lines.forEach(function(line) {
+          var trimmed = line.trim();
+          if (!trimmed) return;
           console.log('[BULLFLOW SSE]', trimmed);
-          if (!trimmed.startsWith('data: ')) continue;
+          if (!trimmed.startsWith('data: ')) return;
 
-          const raw = trimmed.slice(6).trim();
-          if (!raw || raw === '{}') continue;
+          var raw = trimmed.slice(6).trim();
+          if (!raw || raw === '{}') return;
 
           try {
-            const parsed = JSON.parse(raw);
-            const event  = parsed && parsed.event ? parsed.event : '';
-            if (event === 'heartbeat' || event === 'init') continue;
-
+            var parsed = JSON.parse(raw);
+            var event  = parsed.event || '';
+            if (event === 'heartbeat' || event === 'init') return;
             if (event === 'alert') {
-              const data = parsed.data || parsed;
-              await processAlert(data);
+              var data = parsed.data || parsed;
+              liveAggregator.update(
+                (data.ticker||data.symbol||'').toUpperCase(),
+                data.put_call || data.type,
+                data.premium || data.total_premium
+              );
+              processAlert(data);
             }
-          } catch (err) {
-            console.log('[BULLFLOW] Parse error:', err.message);
+          } catch(e) {
+            console.log('[BULLFLOW] Parse error:', e.message);
           }
-        }
+        });
       });
 
       res.body.on('error', function(err) {
         console.error('[BULLFLOW] Stream error:', err.message);
-        scheduleReconnect();
+        setTimeout(connect, 10000);
       });
 
       res.body.on('end', function() {
         console.log('[BULLFLOW] Stream ended -- reconnecting...');
-        scheduleReconnect();
+        setTimeout(connect, 10000);
       });
 
-    } catch (err) {
+    }).catch(function(err) {
       console.error('[BULLFLOW] Connection error:', err.message);
-      scheduleReconnect();
-    }
-  };
-
-  const scheduleReconnect = function() {
-    console.log('[BULLFLOW] Reconnecting in 10 seconds...');
-    setTimeout(connect, 10000);
+      setTimeout(connect, 10000);
+    });
   };
 
   connect();
