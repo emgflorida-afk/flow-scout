@@ -17,11 +17,28 @@ var MAX_LOSS_PER_TRADE = 120; // 2% of $6K
 var MAX_POSITIONS    = 4;
 var MAX_SETUPS_PER_DAY = 4;
 
-// Core watchlist
+// Core watchlist -- 43 tickers across sectors for daily setups
 var CORE_WATCHLIST = [
-  'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
-  'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
-  'MRNA','MRVL','GUSH','UVXY','KO','PEP'
+  // Indices
+  'SPY','QQQ','IWM',
+  // Tech
+  'NVDA','TSLA','META','GOOGL','AMZN','MSFT','AMD','AAPL','MRVL',
+  // Financials
+  'JPM','GS','MS','WFC','BAC','V','MA',
+  // Energy
+  'XLE','XOM','CVX','COP',
+  // Healthcare
+  'UNH','MRK','LLY','ABBV',
+  // Retail
+  'WMT','COST','HD','TGT',
+  // Momentum
+  'COIN','MSTR','PLTR','DKNG','RIVN',
+  // Sector ETFs
+  'XLK','XLF','XLV','GLD','TLT',
+  // Defensive
+  'KO','PEP',
+  // Legacy
+  'MRNA','GUSH','UVXY'
 ];
 
 var INDEX_TICKERS = ['SPY', 'QQQ', 'IWM', 'DIA'];

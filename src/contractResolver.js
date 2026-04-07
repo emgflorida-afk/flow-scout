@@ -20,9 +20,15 @@ const MIN_PREMIUM = 0.30;
 const MAX_PREMIUM = 2.40;
 
 const WATCHLIST = new Set([
-  'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
-  'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
-  'MRNA','MRVL','GUSH','UVXY','KO','PEP'
+  'SPY','QQQ','IWM',
+  'NVDA','TSLA','META','GOOGL','AMZN','MSFT','AMD','AAPL','MRVL',
+  'JPM','GS','MS','WFC','BAC','V','MA',
+  'XLE','XOM','CVX','COP',
+  'UNH','MRK','LLY','ABBV',
+  'WMT','COST','HD','TGT',
+  'COIN','MSTR','PLTR','DKNG','RIVN',
+  'XLK','XLF','XLV','GLD','TLT',
+  'KO','PEP','MRNA','GUSH','UVXY'
 ]);
 
 const T1_TARGETS = {
