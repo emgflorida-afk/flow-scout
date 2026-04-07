@@ -1,8 +1,9 @@
-// contractResolver.js - Stratum Flow Scout v7.3
+// contractResolver.js - Stratum Flow Scout v7.4
 // TRADESTATION ONLY -- no Public.com, no Polygon
 // FIXED: Token fetched once per resolve, passed through all functions
-// FIXED: Diagnostic logs on every step -- no silent failures
 // FIXED: DTE calculated from date string, not stale API field
+// FIXED: SWING minDTE lowered to 1 to catch all valid expirations
+// FIXED: Emergency fallback expiry selection
 // LVL Framework -- PDH/PDL structural levels
 // Dynamic Stop -- underlying price based
 // Smart Entry -- ORB/breakout vs retracement
@@ -18,7 +19,7 @@ const MODES = {
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
-    minDTE: 4, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
+    minDTE: 1, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
   },
 };
 
@@ -46,8 +47,10 @@ async function getTSToken() {
   } catch(e) { console.error('[TS] Token error:', e.message); return null; }
 }
 
+// Market data always uses live API (SIM API returns 403 on options endpoints)
 function getTSBase() { return 'https://api.tradestation.com/v3'; }
 
+// Order execution respects SIM_MODE -- orders stay in SIM during testing
 function getTSBaseOrders() {
   return process.env.SIM_MODE === 'true'
     ? 'https://sim-api.tradestation.com/v3'
@@ -109,7 +112,7 @@ async function getExpirations(ticker, token) {
       console.error('[EXPIRY] No expirations. Response:', JSON.stringify(data).slice(0,300));
       return [];
     }
-    // FIXED v7.3: Calculate DTE from date string -- API DaysToExpiration field is stale after hours
+    // Calculate DTE from date string -- API DaysToExpiration can be stale after hours
     var mapped = exps.map(function(e){
       var dateStr = (e.Date||e.date||'').slice(0,10);
       var dte = dateStr ? Math.ceil((new Date(dateStr+'T16:00:00-04:00') - new Date()) / (1000*60*60*24)) : 0;
@@ -122,10 +125,25 @@ async function getExpirations(ticker, token) {
 
 function selectExpiry(expirations, mode) {
   var config = MODES[mode] || MODES.SWING;
-  var valid  = expirations.filter(function(e){ return e.dte>=config.minDTE && e.dte<=config.maxDTE; });
-  if (valid.length > 0) { console.log('[EXPIRY] Selected:',valid[0].date+'('+valid[0].dte+'DTE)'); return valid[0]; }
-  var future = expirations.filter(function(e){ return e.dte>0; });
-  if (future.length > 0) { console.log('[EXPIRY] Fallback:',future[0].date+'('+future[0].dte+'DTE)'); return future[0]; }
+  // Find expirations in DTE range
+  var valid = expirations.filter(function(e){
+    return e.dte >= config.minDTE && e.dte <= config.maxDTE;
+  });
+  if (valid.length > 0) {
+    console.log('[EXPIRY] Selected:', valid[0].date+'('+valid[0].dte+'DTE)');
+    return valid[0];
+  }
+  // Fallback -- nearest future expiry
+  var future = expirations.filter(function(e){ return e.dte > 0; });
+  if (future.length > 0) {
+    console.log('[EXPIRY] Fallback:', future[0].date+'('+future[0].dte+'DTE)');
+    return future[0];
+  }
+  // Emergency -- just use first available
+  if (expirations.length > 0) {
+    console.log('[EXPIRY] Emergency fallback:', expirations[0].date+'('+expirations[0].dte+'DTE)');
+    return expirations[0];
+  }
   console.error('[EXPIRY] No valid expiry for mode', mode);
   return null;
 }
@@ -148,7 +166,12 @@ async function getOptionChain(ticker, expiry, type, price, token) {
     if (price) url += '&priceCenter=' + Math.round(price);
     var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     console.log('[CHAIN] HTTP status:', res.status);
-    var data = await res.json();
+    var text = await res.text();
+    var data;
+    try { data = JSON.parse(text); } catch(e) {
+      console.error('[CHAIN] JSON parse error. Status:', res.status, 'Body:', text.slice(0,200));
+      return [];
+    }
     var chain = data.ChainData || data.chainData || [];
     console.log('[CHAIN] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts');
     if (!chain.length) console.error('[CHAIN] Empty. Response:', JSON.stringify(data).slice(0,300));
@@ -266,10 +289,21 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   var expirations=await getExpirations(ticker, token);
   if (!expirations.length) { console.error('[RESOLVE] No expirations for',ticker); return null; }
   var expiryObj=selectExpiry(expirations, mode);
-  if (!expiryObj) { expiryObj=selectExpiry(expirations,'SWING'); if(!expiryObj){console.error('[RESOLVE] No expiry');return null;} mode='SWING';config=MODES.SWING; }
+  if (!expiryObj) { console.error('[RESOLVE] No expiry found'); return null; }
   var expiry=expiryObj.date, dte=expiryObj.dte;
   var rawChain=await getOptionChain(ticker, expiry, type, price, token);
-  if (!rawChain.length) { console.error('[RESOLVE] Empty chain for',ticker,expiry,type); return null; }
+  if (!rawChain.length) {
+    // Try next expiry if first one fails
+    console.log('[RESOLVE] Trying next expiry...');
+    var nextExp = expirations.filter(function(e){ return e.date > expiry && e.dte > 0; });
+    if (nextExp.length) {
+      expiry = nextExp[0].date;
+      dte    = nextExp[0].dte;
+      console.log('[RESOLVE] Retrying with', expiry+'('+dte+'DTE)');
+      rawChain = await getOptionChain(ticker, expiry, type, price, token);
+    }
+    if (!rawChain.length) { console.error('[RESOLVE] Empty chain for',ticker,expiry,type); return null; }
+  }
   var contracts=rawChain.map(function(c){return parseContract(c,expiry,type);}).filter(Boolean);
   console.log('[RESOLVE] Parsed contracts:',contracts.length);
   if (!contracts.length) { console.error('[RESOLVE] No parseable contracts'); return null; }
