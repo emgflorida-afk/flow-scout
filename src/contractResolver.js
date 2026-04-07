@@ -19,13 +19,13 @@ const MODES = {
     minDTE: 0, maxDTE: 2, stopPct: 0.35, t1Pct: 0.25, maxRisk: 120,
   },
   SWING: {
-    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
+    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 3.50,
     minDTE: 5, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
   },
 };
 
 const MIN_PREMIUM = 0.30;
-const MAX_PREMIUM = 2.40;
+const MAX_PREMIUM = 3.50;
 
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
@@ -382,7 +382,7 @@ function calculatePositionSize(premium, mode, accountSize) {
   if (!mode) mode='SWING'; if (!accountSize) accountSize=6400;
   var config=MODES[mode]||MODES.SWING;
   if (!premium||premium<=0) return {viable:false,reason:'No premium'};
-  if (premium>MAX_PREMIUM)  return {viable:false,reason:'Over $2.40 max'};
+  if (premium>MAX_PREMIUM)  return {viable:false,reason:'Over $3.50 max'};
   if (premium<config.minPremium) return {viable:false,reason:'Under min'};
   var contracts=premium<=1.20?2:1;
   var stopPrice=parseFloat((premium*(1-config.stopPct)).toFixed(2));
