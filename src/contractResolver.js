@@ -5,6 +5,18 @@
 
 const fetch = require('node-fetch');
 
+// Rate limiter -- prevent TS 429 throttling
+var _lastChainRequest = 0;
+var CHAIN_DELAY_MS = 1500; // 1.5 seconds between chain requests
+async function rateLimit() {
+  var now = Date.now();
+  var elapsed = now - _lastChainRequest;
+  if (elapsed < CHAIN_DELAY_MS) {
+    await new Promise(function(r) { setTimeout(r, CHAIN_DELAY_MS - elapsed); });
+  }
+  _lastChainRequest = Date.now();
+}
+
 const MODES = {
   DAY: {
     label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
@@ -138,12 +150,13 @@ function formatExpiry(dateStr) {
 async function getChainTS(ticker, expiry, type, price, token) {
   try {
     console.log('[CHAIN-TS] Fetching', ticker, type, expiry);
+    await rateLimit(); // Prevent 429 throttling
     var optType = type === 'call' ? 'Call' : 'Put';
     // TS v3 option chains are STREAMING only — /stream/options/chains/
     var url = getTSBase() + '/marketdata/stream/options/chains/' + ticker
       + '?expiration=' + formatExpiry(expiry)
       + '&optionType=' + optType
-      + '&strikeProximity=6&enableGreeks=true';
+      + '&strikeProximity=12&enableGreeks=true';
     if (price) url += '&priceCenter=' + Math.round(price);
 
     var res = await fetch(url, {

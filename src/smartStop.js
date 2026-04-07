@@ -172,10 +172,10 @@ function calcStop(category, type, premium, delta, price, prevHigh, prevLow) {
 
   if (category === 'TIGHT') {
     // DYNAMIC: Use structural level if available -- flat 40% gets stopped out too early
-    if (prevHigh && prevLow && underlyingPrice) {
-      var structLevel  = direction === 'put' ? prevHigh : prevLow;
-      var structDist   = Math.abs(underlyingPrice - structLevel);
-      var structPct    = structDist / underlyingPrice;
+    if (prevHigh && prevLow && price) {
+      var structLevel  = type === 'put' ? prevHigh : prevLow;
+      var structDist   = Math.abs(price - structLevel);
+      var structPct    = structDist / price;
       var hybridStop   = parseFloat(Math.max(premium * 0.50, premium - (structPct * premium * 2)).toFixed(2));
       hybridStop = Math.min(hybridStop, parseFloat((premium * 0.65).toFixed(2)));
       return {
@@ -183,7 +183,7 @@ function calcStop(category, type, premium, delta, price, prevHigh, prevLow) {
         underlyingStop: structLevel.toFixed(2),
         optionStop: hybridStop.toFixed(2), stopPrice: hybridStop.toFixed(2),
         distance: structDist.toFixed(2),
-        label: 'hybrid -- tight range with structure (prev ' + (direction === 'put' ? 'high' : 'low') + ' $' + structLevel.toFixed(2) + ')',
+        label: 'hybrid -- tight range with structure (prev ' + (type === 'put' ? 'high' : 'low') + ' $' + structLevel.toFixed(2) + ')',
         why: 'TIGHT RANGE -- structural preferred, respects price structure',
         source: 'TradeStation',
       };
