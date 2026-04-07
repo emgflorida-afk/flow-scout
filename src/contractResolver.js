@@ -1,14 +1,6 @@
-// contractResolver.js - Stratum Flow Scout v7.4
-// TRADESTATION ONLY -- no Public.com, no Polygon
-// FIXED: Token fetched once per resolve, passed through all functions
-// FIXED: DTE calculated from date string, not stale API field
-// FIXED: SWING minDTE 5 -- skips short expirations with no chain data
-// FIXED: Safe JSON parse on chain endpoint
-// FIXED: Auto retry with next expiry if chain returns 404
-// LVL Framework -- PDH/PDL structural levels
-// Dynamic Stop -- underlying price based
-// Smart Entry -- ORB/breakout vs retracement
-// Smart Take Profit -- base hits over home runs
+// contractResolver.js - Stratum Flow Scout v7.5
+// CHAIN HIERARCHY: TradeStation → Public.com → Polygon
+// Falls back to next source if chain returns 404 or empty
 // -----------------------------------------------------------------
 
 const fetch = require('node-fetch');
@@ -19,13 +11,13 @@ const MODES = {
     minDTE: 0, maxDTE: 2, stopPct: 0.35, t1Pct: 0.25, maxRisk: 120,
   },
   SWING: {
-    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 3.50,
+    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
     minDTE: 5, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
   },
 };
 
 const MIN_PREMIUM = 0.30;
-const MAX_PREMIUM = 3.50;
+const MAX_PREMIUM = 2.40;
 
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
@@ -39,6 +31,7 @@ const T1_TARGETS = {
 };
 function getT1Target(ticker) { return T1_TARGETS[ticker] || 0.30; }
 
+// -- TRADESTATION TOKEN -------------------------------------------
 async function getTSToken() {
   try {
     var ts = require('./tradestation');
@@ -48,38 +41,36 @@ async function getTSToken() {
   } catch(e) { console.error('[TS] Token error:', e.message); return null; }
 }
 
-// Market data always uses live API (SIM API returns 403 on options endpoints)
-function getTSBase() { return 'https://api.tradestation.com/v3'; }
-
-// Order execution respects SIM_MODE -- orders stay in SIM during testing
+function getTSBase()       { return 'https://api.tradestation.com/v3'; }
 function getTSBaseOrders() {
   return process.env.SIM_MODE === 'true'
     ? 'https://sim-api.tradestation.com/v3'
     : 'https://api.tradestation.com/v3';
 }
 
+// -- GET STOCK PRICE ----------------------------------------------
 async function getPrice(ticker, token) {
   try {
     console.log('[PRICE] Fetching', ticker);
-    if (!token) { console.error('[PRICE] No token'); return null; }
+    if (!token) return null;
     var res = await fetch(getTSBase() + '/marketdata/quotes/' + ticker, {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     var data = await res.json();
     var quotes = data.Quotes || data.quotes || (Array.isArray(data) ? data : [data]);
     var q = quotes[0];
-    if (!q) { console.error('[PRICE] No quote for', ticker); return null; }
+    if (!q) return null;
     var price = parseFloat(q.Last || q.Bid || q.Ask || 0);
     if (price > 0) { console.log('[PRICE] ' + ticker + ' $' + price + ' - TradeStation'); return price; }
-    console.error('[PRICE] Zero price for', ticker, JSON.stringify(q).slice(0,200));
     return null;
   } catch(e) { console.error('[PRICE] Error:', e.message); return null; }
 }
 
+// -- GET PDH/PDL --------------------------------------------------
 async function getLVLs(ticker, token) {
   try {
     console.log('[LVL] Fetching bars for', ticker);
-    if (!token) { console.error('[LVL] No token'); return null; }
+    if (!token) return null;
     var res = await fetch(
       getTSBase() + '/marketdata/barcharts/' + ticker +
       '?unit=Daily&interval=1&barsback=3&sessiontemplate=Default',
@@ -88,7 +79,7 @@ async function getLVLs(ticker, token) {
     var data = await res.json();
     var bars = data.Bars || data.bars || [];
     console.log('[LVL] Bars returned:', bars.length);
-    if (bars.length < 2) { console.error('[LVL] Not enough bars for', ticker); return null; }
+    if (bars.length < 2) return null;
     bars.sort(function(a,b){ return new Date(a.TimeStamp)-new Date(b.TimeStamp); });
     var prev = bars[bars.length-2];
     var curr = bars[bars.length-1];
@@ -99,21 +90,18 @@ async function getLVLs(ticker, token) {
   } catch(e) { console.error('[LVL] Error for',ticker,':',e.message); return null; }
 }
 
+// -- GET EXPIRATIONS ----------------------------------------------
 async function getExpirations(ticker, token) {
   try {
     console.log('[EXPIRY] Fetching for', ticker);
-    if (!token) { console.error('[EXPIRY] No token'); return []; }
+    if (!token) return [];
     var url = getTSBase() + '/marketdata/options/expirations/' + ticker;
     var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     console.log('[EXPIRY] HTTP status:', res.status);
     var data = await res.json();
     var exps = data.Expirations || data.expirations || [];
     console.log('[EXPIRY] Raw count:', exps.length);
-    if (!exps.length) {
-      console.error('[EXPIRY] No expirations. Response:', JSON.stringify(data).slice(0,300));
-      return [];
-    }
-    // Calculate DTE from date string -- API DaysToExpiration can be stale after hours
+    if (!exps.length) return [];
     var mapped = exps.map(function(e){
       var dateStr = (e.Date||e.date||'').slice(0,10);
       var dte = dateStr ? Math.ceil((new Date(dateStr+'T16:00:00-04:00') - new Date()) / (1000*60*60*24)) : 0;
@@ -126,23 +114,11 @@ async function getExpirations(ticker, token) {
 
 function selectExpiry(expirations, mode) {
   var config = MODES[mode] || MODES.SWING;
-  var valid = expirations.filter(function(e){
-    return e.dte >= config.minDTE && e.dte <= config.maxDTE;
-  });
-  if (valid.length > 0) {
-    console.log('[EXPIRY] Selected:', valid[0].date+'('+valid[0].dte+'DTE)');
-    return valid[0];
-  }
-  var future = expirations.filter(function(e){ return e.dte > 0; });
-  if (future.length > 0) {
-    console.log('[EXPIRY] Fallback:', future[0].date+'('+future[0].dte+'DTE)');
-    return future[0];
-  }
-  if (expirations.length > 0) {
-    console.log('[EXPIRY] Emergency fallback:', expirations[0].date+'('+expirations[0].dte+'DTE)');
-    return expirations[0];
-  }
-  console.error('[EXPIRY] No valid expiry for mode', mode);
+  var valid = expirations.filter(function(e){ return e.dte>=config.minDTE && e.dte<=config.maxDTE; });
+  if (valid.length > 0) { console.log('[EXPIRY] Selected:',valid[0].date+'('+valid[0].dte+'DTE)'); return valid[0]; }
+  var future = expirations.filter(function(e){ return e.dte>0; });
+  if (future.length > 0) { console.log('[EXPIRY] Fallback:',future[0].date+'('+future[0].dte+'DTE)'); return future[0]; }
+  if (expirations.length > 0) { console.log('[EXPIRY] Emergency:',expirations[0].date); return expirations[0]; }
   return null;
 }
 
@@ -152,10 +128,10 @@ function formatExpiry(dateStr) {
   return p.length !== 3 ? dateStr : p[1]+'-'+p[2]+'-'+p[0];
 }
 
-async function getOptionChain(ticker, expiry, type, price, token) {
+// -- GET OPTION CHAIN: TRADESTATION (source 1) --------------------
+async function getChainTS(ticker, expiry, type, price, token) {
   try {
-    console.log('[CHAIN] Fetching', ticker, type, expiry);
-    if (!token) { console.error('[CHAIN] No token'); return []; }
+    console.log('[CHAIN-TS] Fetching', ticker, type, expiry);
     var optType = type === 'call' ? 'Call' : 'Put';
     var url = getTSBase() + '/marketdata/options/chains/' + ticker
       + '?expiration=' + formatExpiry(expiry)
@@ -163,20 +139,142 @@ async function getOptionChain(ticker, expiry, type, price, token) {
       + '&strikeProximity=6&enableGreeks=true';
     if (price) url += '&priceCenter=' + Math.round(price);
     var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
-    console.log('[CHAIN] HTTP status:', res.status);
+    console.log('[CHAIN-TS] HTTP status:', res.status);
     var text = await res.text();
     var data;
     try { data = JSON.parse(text); } catch(e) {
-      console.error('[CHAIN] JSON parse error. Status:', res.status, 'Body:', text.slice(0,200));
+      console.error('[CHAIN-TS] Parse error. Status:', res.status);
       return [];
     }
     var chain = data.ChainData || data.chainData || [];
-    console.log('[CHAIN] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts');
-    if (!chain.length) console.error('[CHAIN] Empty. Response:', JSON.stringify(data).slice(0,300));
+    console.log('[CHAIN-TS] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + chain.length + ' contracts');
     return chain;
-  } catch(e) { console.error('[CHAIN] Error:', e.message); return []; }
+  } catch(e) { console.error('[CHAIN-TS] Error:', e.message); return []; }
 }
 
+// -- GET OPTION CHAIN: PUBLIC.COM (source 2) ----------------------
+async function getChainPublic(ticker, expiry, type, price) {
+  try {
+    console.log('[CHAIN-PUB] Fetching', ticker, type, expiry);
+    var apiKey = process.env.PUBLIC_API_KEY;
+    if (!apiKey) { console.log('[CHAIN-PUB] No PUBLIC_API_KEY'); return []; }
+
+    var optType = type === 'call' ? 'call' : 'put';
+    // Public.com options endpoint
+    var url = 'https://api.public.com/options/chain/' + ticker
+      + '?expiration=' + expiry
+      + '&option_type=' + optType;
+    if (price) url += '&strike_center=' + Math.round(price) + '&strike_count=12';
+
+    var res = await fetch(url, {
+      headers: {
+        'Authorization': 'Bearer ' + apiKey,
+        'Content-Type': 'application/json'
+      }
+    });
+    console.log('[CHAIN-PUB] HTTP status:', res.status);
+    if (!res.ok) { console.log('[CHAIN-PUB] Failed:', res.status); return []; }
+
+    var data = await res.json();
+    var contracts = data.contracts || data.options || data.results || data || [];
+    if (!Array.isArray(contracts)) { console.log('[CHAIN-PUB] Unexpected format'); return []; }
+
+    // Normalize to TS format
+    var normalized = contracts.map(function(c) {
+      var bid = parseFloat(c.bid || c.bid_price || 0);
+      var ask = parseFloat(c.ask || c.ask_price || 0);
+      var mid = (bid + ask) / 2;
+      var strike = parseFloat(c.strike || c.strike_price || 0);
+      var sym = ticker + ' ' + expiry.replace(/-/g,'').slice(2) + (type==='call'?'C':'P') + strike;
+      return {
+        Bid: bid, Ask: ask, Mid: mid,
+        Volume: parseInt(c.volume || 0),
+        DailyOpenInterest: parseInt(c.open_interest || c.openInterest || 0),
+        Delta: parseFloat(c.greeks && c.greeks.delta || c.delta || 0),
+        Theta: parseFloat(c.greeks && c.greeks.theta || c.theta || 0),
+        ImpliedVolatility: parseFloat(c.implied_volatility || c.iv || 0),
+        ProbabilityITM: parseFloat(c.probability_itm || 0),
+        Legs: [{ Symbol: sym, StrikePrice: String(strike) }],
+        _source: 'public'
+      };
+    }).filter(function(c){ return c.Bid > 0 || c.Ask > 0; });
+
+    console.log('[CHAIN-PUB] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + normalized.length + ' contracts');
+    return normalized;
+  } catch(e) { console.error('[CHAIN-PUB] Error:', e.message); return []; }
+}
+
+// -- GET OPTION CHAIN: POLYGON (source 3) -------------------------
+async function getChainPolygon(ticker, expiry, type, price) {
+  try {
+    console.log('[CHAIN-POL] Fetching', ticker, type, expiry);
+    var apiKey = process.env.POLYGON_API_KEY;
+    if (!apiKey) { console.log('[CHAIN-POL] No POLYGON_API_KEY'); return []; }
+
+    var optType = type === 'call' ? 'call' : 'put';
+    var url = 'https://api.polygon.io/v3/snapshot/options/' + ticker
+      + '?expiration_date=' + expiry
+      + '&contract_type=' + optType
+      + '&limit=25'
+      + '&apiKey=' + apiKey;
+    if (price) url += '&strike_price_gte=' + Math.round(price*0.9) + '&strike_price_lte=' + Math.round(price*1.1);
+
+    var res  = await fetch(url);
+    console.log('[CHAIN-POL] HTTP status:', res.status);
+    if (!res.ok) { console.log('[CHAIN-POL] Failed:', res.status); return []; }
+
+    var data = await res.json();
+    var results = data.results || [];
+
+    // Normalize to TS format
+    var normalized = results.map(function(r) {
+      var d = r.details || {};
+      var q = r.day || {};
+      var g = r.greeks || {};
+      var bid = parseFloat(r.last_quote && r.last_quote.bid || 0);
+      var ask = parseFloat(r.last_quote && r.last_quote.ask || 0);
+      var mid = parseFloat(r.last_trade && r.last_trade.price || (bid+ask)/2);
+      var strike = parseFloat(d.strike_price || 0);
+      var sym = ticker + ' ' + expiry.replace(/-/g,'').slice(2) + (type==='call'?'C':'P') + strike;
+      return {
+        Bid: bid, Ask: ask, Mid: mid,
+        Volume: parseInt(q.volume || r.open_interest || 0),
+        DailyOpenInterest: parseInt(r.open_interest || 0),
+        Delta: parseFloat(g.delta || 0),
+        Theta: parseFloat(g.theta || 0),
+        ImpliedVolatility: parseFloat(r.implied_volatility || 0),
+        ProbabilityITM: Math.abs(parseFloat(g.delta || 0)),
+        Legs: [{ Symbol: sym, StrikePrice: String(strike) }],
+        _source: 'polygon'
+      };
+    }).filter(function(c){ return c.Bid > 0 || c.Ask > 0; });
+
+    console.log('[CHAIN-POL] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + normalized.length + ' contracts');
+    return normalized;
+  } catch(e) { console.error('[CHAIN-POL] Error:', e.message); return []; }
+}
+
+// -- GET OPTION CHAIN WITH FALLBACK HIERARCHY ---------------------
+async function getOptionChain(ticker, expiry, type, price, token) {
+  // Source 1: TradeStation
+  var chain = await getChainTS(ticker, expiry, type, price, token);
+  if (chain.length > 0) return chain;
+
+  // Source 2: Public.com
+  console.log('[CHAIN] TS failed -- trying Public.com...');
+  chain = await getChainPublic(ticker, expiry, type, price);
+  if (chain.length > 0) return chain;
+
+  // Source 3: Polygon
+  console.log('[CHAIN] Public failed -- trying Polygon...');
+  chain = await getChainPolygon(ticker, expiry, type, price);
+  if (chain.length > 0) return chain;
+
+  console.error('[CHAIN] All sources failed for', ticker, expiry, type);
+  return [];
+}
+
+// -- PARSE CONTRACT -----------------------------------------------
 function parseContract(c, expiry, type) {
   try {
     var legs=c.Legs||c.legs||[], leg=legs[0]||{};
@@ -194,16 +292,19 @@ function parseContract(c, expiry, type) {
       volume:parseInt(c.Volume||c.volume||0), openInterest:parseInt(c.DailyOpenInterest||0),
       delta:parseFloat(c.Delta||c.delta||0), theta:parseFloat(c.Theta||c.theta||0),
       iv:parseFloat(c.ImpliedVolatility||0), probITM:parseFloat(c.ProbabilityITM||0),
-      expiry, type, high:parseFloat(c.High||0), low:parseFloat(c.Low||0), open:parseFloat(c.Open||0) };
+      expiry, type, source:c._source||'ts',
+      high:parseFloat(c.High||0), low:parseFloat(c.Low||0), open:parseFloat(c.Open||0) };
   } catch(e) { return null; }
 }
 
+// -- ENTRY MODE ---------------------------------------------------
 function getEntryMode(confluence, strategy) {
   var score=parseInt((confluence||'0').split('/')[0])||0;
   var isORB=(strategy||'').toUpperCase().includes('ORB')||(strategy||'').toUpperCase().includes('3-2-2');
   return (score>=5||isORB) ? 'BREAKOUT' : 'RETRACEMENT';
 }
 
+// -- SELECT BEST CONTRACT -----------------------------------------
 function selectBestContract(contracts, price, config, lvls, type) {
   if (!contracts||!contracts.length) return null;
   var candidates=contracts.filter(function(c){
@@ -213,8 +314,7 @@ function selectBestContract(contracts, price, config, lvls, type) {
     candidates=contracts.filter(function(c){ return c&&c.mid>=config.minPremium&&c.mid<=config.maxPremium; });
   }
   if (!candidates.length) {
-    console.error('[SELECT] No candidates. Contracts:',contracts.length,
-      'Range:$'+config.minPremium+'-$'+config.maxPremium,
+    console.error('[SELECT] No candidates. Range:$'+config.minPremium+'-$'+config.maxPremium,
       'Mids:',contracts.slice(0,5).map(function(c){return c?'$'+c.mid:'null';}).join(', '));
     return null;
   }
@@ -233,7 +333,7 @@ function selectBestContract(contracts, price, config, lvls, type) {
   });
   scored.sort(function(a,b){return b.score-a.score;});
   var best=scored[0].contract;
-  console.log('[SELECT] '+best.symbol+' strike:$'+best.strike+' mid:$'+best.mid+' delta:'+best.delta.toFixed(2)+' score:'+scored[0].score);
+  console.log('[SELECT] '+best.symbol+' strike:$'+best.strike+' mid:$'+best.mid+' delta:'+best.delta.toFixed(2)+' score:'+scored[0].score+' source:'+best.source);
   return best;
 }
 
@@ -251,6 +351,7 @@ function getTimeContext() {
   return {window:'OPEN',ok:true};
 }
 
+// -- RESOLVE CONTRACT (MAIN) --------------------------------------
 async function resolveContract(ticker, type, tradeType, signalMeta) {
   type=(type||'call').toLowerCase();
   tradeType=(tradeType||'SWING').toUpperCase();
@@ -258,15 +359,20 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   var mode=tradeType.includes('DAY')?'DAY':'SWING';
   var config=MODES[mode];
   console.log('[RESOLVE] '+ticker+' '+type+' '+mode);
+
   var token=await getTSToken();
   if (!token) { console.error('[RESOLVE] No TS token -- aborting'); return null; }
   console.log('[RESOLVE] Token OK');
+
   var price=await getPrice(ticker, token);
   if (!price) { console.error('[RESOLVE] No price for',ticker); return null; }
+
   var lvls=await getLVLs(ticker, token);
   if (!lvls) console.log('[RESOLVE] No LVL data -- continuing without LVL filter');
+
   var entryMode=getEntryMode(signalMeta.confluence, signalMeta.strategy);
   console.log('[ENTRY MODE] '+entryMode+' | confluence:'+(signalMeta.confluence||'N/A'));
+
   if (lvls) {
     if (type==='call') {
       var dPDH=(price-lvls.pdh)/lvls.pdh;
@@ -284,20 +390,20 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
       }
     }
   }
+
   var expirations=await getExpirations(ticker, token);
   if (!expirations.length) { console.error('[RESOLVE] No expirations for',ticker); return null; }
+
   var expiryObj=selectExpiry(expirations, mode);
   if (!expiryObj) { console.error('[RESOLVE] No expiry found'); return null; }
 
-  // Try expirations until chain returns data
   var expiry=expiryObj.date, dte=expiryObj.dte;
   var rawChain=await getOptionChain(ticker, expiry, type, price, token);
 
   if (!rawChain.length) {
-    // Walk forward through remaining expirations until one works
     var remaining=expirations.filter(function(e){ return e.date > expiry && e.dte > 0; });
     for (var i=0; i<Math.min(remaining.length,3); i++) {
-      console.log('[RESOLVE] Retrying with', remaining[i].date+'('+remaining[i].dte+'DTE)');
+      console.log('[RESOLVE] Retrying expiry', remaining[i].date+'('+remaining[i].dte+'DTE)');
       expiry  = remaining[i].date;
       dte     = remaining[i].dte;
       rawChain = await getOptionChain(ticker, expiry, type, price, token);
@@ -310,11 +416,14 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   var contracts=rawChain.map(function(c){return parseContract(c,expiry,type);}).filter(Boolean);
   console.log('[RESOLVE] Parsed contracts:',contracts.length);
   if (!contracts.length) { console.error('[RESOLVE] No parseable contracts'); return null; }
+
   var best=selectBestContract(contracts, price, config, lvls, type);
   if (!best) { console.error('[RESOLVE] No contract passed selection'); return null; }
+
   var t1Pct=getT1Target(ticker), stopPct=config.stopPct;
   var entryPrice=entryMode==='BREAKOUT'?best.ask:parseFloat((best.ask*0.875).toFixed(2));
   var underlyingStop=null, optionStopPct=stopPct;
+
   if (lvls) {
     underlyingStop=type==='call'?lvls.callStop:lvls.putStop;
     var dist=Math.abs(price-underlyingStop);
@@ -322,11 +431,14 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
     optionStopPct=Math.min(0.50,Math.max(0.20,estLoss/best.mid));
     console.log('[DYNAMIC STOP] dist:$'+dist.toFixed(2)+' delta:'+best.delta.toFixed(2)+' estLoss:$'+estLoss.toFixed(2)+' stopPct:'+(optionStopPct*100).toFixed(0)+'%');
   }
+
   var optionStop=parseFloat((best.mid*(1-optionStopPct)).toFixed(2));
   var t1Price=parseFloat((best.mid*(1+t1Pct)).toFixed(2));
   var qty=best.mid<=1.20?2:1;
   var timeCtx=getTimeContext();
-  console.log('[OPRA] '+ticker+' '+best.symbol+' $'+best.strike+' mid:$'+best.mid+' '+dte+'DTE entry:'+entryMode+' T1:+'+(t1Pct*100).toFixed(0)+'%');
+
+  console.log('[OPRA] '+ticker+' '+best.symbol+' $'+best.strike+' mid:$'+best.mid+' '+dte+'DTE entry:'+entryMode+' T1:+'+(t1Pct*100).toFixed(0)+'% source:'+best.source);
+
   return {
     symbol:best.symbol, mid:best.mid, bid:best.bid, ask:best.ask,
     strike:best.strike, expiry, mode, dte, price,
@@ -337,13 +449,15 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
     optionStop, optionStopPct:Math.round(optionStopPct*100),
     t1Price, t1Pct:Math.round(t1Pct*100),
     qty, timeCtx, wideSpread:(best.ask-best.bid)/best.ask>0.15,
+    source:best.source,
   };
 }
 
+// -- RESOLVE WITH SPECIFIC EXPIRY ---------------------------------
 async function resolveContractWithExpiry(ticker, type, expiry) {
   try {
     var token=await getTSToken();
-    if (!token) { console.error('[RESOLVE EXPIRY] No token'); return null; }
+    if (!token) return null;
     var price=await getPrice(ticker, token);
     if (!price) return null;
     var rawChain=await getOptionChain(ticker, expiry, type, price, token);
@@ -354,10 +468,11 @@ async function resolveContractWithExpiry(ticker, type, expiry) {
     if (!best) return null;
     return { symbol:best.symbol, mid:best.mid, bid:best.bid, ask:best.ask,
       strike:best.strike, expiry, mode:'SWING', dte:calcDTE(expiry),
-      price, delta:best.delta, probITM:Math.round(best.probITM*100) };
+      price, delta:best.delta, probITM:Math.round(best.probITM*100), source:best.source };
   } catch(e) { console.error('[RESOLVE EXPIRY] Error:',e.message); return null; }
 }
 
+// -- PARSE OPRA ---------------------------------------------------
 function parseOPRA(opraSymbol) {
   try {
     var raw=(opraSymbol||'').trim().replace(/^O:/,'');
@@ -378,11 +493,12 @@ function parseOPRA(opraSymbol) {
   } catch(e) { return null; }
 }
 
+// -- POSITION SIZING ----------------------------------------------
 function calculatePositionSize(premium, mode, accountSize) {
   if (!mode) mode='SWING'; if (!accountSize) accountSize=6400;
   var config=MODES[mode]||MODES.SWING;
   if (!premium||premium<=0) return {viable:false,reason:'No premium'};
-  if (premium>MAX_PREMIUM)  return {viable:false,reason:'Over $3.50 max'};
+  if (premium>MAX_PREMIUM)  return {viable:false,reason:'Over $2.40 max'};
   if (premium<config.minPremium) return {viable:false,reason:'Under min'};
   var contracts=premium<=1.20?2:1;
   var stopPrice=parseFloat((premium*(1-config.stopPct)).toFixed(2));
@@ -394,6 +510,7 @@ function calculatePositionSize(premium, mode, accountSize) {
   return {viable:true,mode,contracts,premium,totalCost,stopPrice,t1Price,stopLoss,t1Profit,riskPct};
 }
 
+// -- GET OPTION SNAPSHOT ------------------------------------------
 async function getOptionSnapshot(tsSymbol) {
   try {
     var token=await getTSToken();
