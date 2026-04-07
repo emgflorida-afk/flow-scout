@@ -47,7 +47,13 @@ async function getTSToken() {
   } catch(e) { console.error('[TS] Token error:', e.message); return null; }
 }
 
+// Market data always uses live API (SIM API returns 403 on options endpoints)
 function getTSBase() {
+  return 'https://api.tradestation.com/v3';
+}
+
+// Order execution respects SIM_MODE -- orders stay in SIM during testing
+function getTSBaseOrders() {
   return process.env.SIM_MODE === 'true'
     ? 'https://sim-api.tradestation.com/v3'
     : 'https://api.tradestation.com/v3';
