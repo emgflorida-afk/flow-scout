@@ -610,6 +610,19 @@ app.get('/sim/status', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- MARKET DEPTH API (Level 2 / Matrix) -------------------------
+var marketDepth = null;
+try { marketDepth = require('./marketDepth'); console.log('[DEPTH] Loaded OK'); } catch(e) { console.log('[DEPTH] Skipped:', e.message); }
+
+app.get('/api/depth/:symbol', async function(req, res) {
+  if (!marketDepth) return res.json({ status: 'not loaded' });
+  try {
+    var depth = await marketDepth.fetchDepth(req.params.symbol.toUpperCase());
+    if (!depth) return res.json({ status: 'no data', symbol: req.params.symbol });
+    res.json({ status: 'OK', depth: depth });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- ALERTS API (for Claude Code to read strat alerts) -----------
 app.get('/api/alerts', function(req, res) {
   var count = parseInt(req.query.count) || 20;
