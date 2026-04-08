@@ -26,13 +26,32 @@ async function fetchDepth(symbol) {
     var token = await getToken();
     if (!token) return null;
 
-    var url = getTSBase() + '/marketdata/stream/marketdepth/quotes/' + encodeURIComponent(symbol);
-    var res = await fetch(url, {
-      headers: { 'Authorization': 'Bearer ' + token }
-    });
+    // Try multiple endpoint paths — TS docs vary between versions
+    var paths = [
+      '/marketdata/stream/marketdepth/quotes/' + encodeURIComponent(symbol),
+      '/marketdata/stream/marketdepth/aggregates/' + encodeURIComponent(symbol),
+      '/marketdata/marketdepth/quotes/' + encodeURIComponent(symbol),
+    ];
 
-    if (!res.ok) {
-      console.error('[DEPTH] HTTP', res.status, 'for', symbol);
+    var res = null;
+    var usedPath = '';
+    for (var p = 0; p < paths.length; p++) {
+      var url = getTSBase() + paths[p];
+      console.log('[DEPTH] Trying:', url);
+      var attempt = await fetch(url, {
+        headers: { 'Authorization': 'Bearer ' + token }
+      });
+      console.log('[DEPTH] Response:', attempt.status, 'for path', paths[p]);
+      if (attempt.ok) {
+        res = attempt;
+        usedPath = paths[p];
+        console.log('[DEPTH] SUCCESS on path:', usedPath);
+        break;
+      }
+    }
+
+    if (!res) {
+      console.error('[DEPTH] All paths failed for', symbol);
       return null;
     }
 
@@ -57,15 +76,22 @@ async function fetchDepth(symbol) {
           if (!line) continue;
           try {
             var obj = JSON.parse(line);
-            if (obj && obj.Bids) {
-              depth.bids = obj.Bids.map(function(b) {
-                return { price: parseFloat(b.Price || 0), size: parseInt(b.Size || 0) };
+            // Handle multiple response formats
+            var bids = obj.Bids || obj.bids || obj.BidLevels || obj.bidLevels || [];
+            var asks = obj.Asks || obj.asks || obj.AskLevels || obj.askLevels || [];
+            if (bids.length > 0) {
+              depth.bids = bids.map(function(b) {
+                return { price: parseFloat(b.Price || b.price || 0), size: parseInt(b.Size || b.size || b.TotalSize || 0) };
               });
             }
-            if (obj && obj.Asks) {
-              depth.asks = obj.Asks.map(function(a) {
-                return { price: parseFloat(a.Price || 0), size: parseInt(a.Size || 0) };
+            if (asks.length > 0) {
+              depth.asks = asks.map(function(a) {
+                return { price: parseFloat(a.Price || a.price || 0), size: parseInt(a.Size || a.size || a.TotalSize || 0) };
               });
+            }
+            // Also capture raw for debugging
+            if (!depth.bids.length && !depth.asks.length && obj) {
+              depth._raw = JSON.stringify(obj).substring(0, 500);
             }
             // Got data, close stream
             if (depth.bids.length > 0 || depth.asks.length > 0) {
