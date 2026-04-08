@@ -288,6 +288,41 @@ async function checkBreakingNews() {
   }
 }
 
+// -- EARNINGS CALENDAR (Finnhub) ---------------------------------
+async function getEarningsCalendar(fromDate, toDate) {
+  try {
+    var key = getFinnhubKey();
+    if (!key) { console.log('[EARNINGS] No Finnhub key'); return []; }
+    if (!fromDate) {
+      var d = new Date();
+      fromDate = d.toISOString().slice(0, 10);
+      d.setDate(d.getDate() + 7);
+      toDate = d.toISOString().slice(0, 10);
+    }
+    var url = 'https://finnhub.io/api/v1/calendar/earnings?from=' + fromDate + '&to=' + toDate + '&token=' + key;
+    var res = await fetch(url);
+    var data = await res.json();
+    var earnings = data.earningsCalendar || [];
+    // Sort by date, filter for known tickers
+    earnings.sort(function(a, b) { return (a.date || '').localeCompare(b.date || ''); });
+    console.log('[EARNINGS] Found', earnings.length, 'reports from', fromDate, 'to', toDate);
+    return earnings.map(function(e) {
+      return {
+        date: e.date,
+        symbol: e.symbol,
+        hour: e.hour === 'bmo' ? 'Before Market' : e.hour === 'amc' ? 'After Market' : e.hour,
+        epsEstimate: e.epsEstimate,
+        revenueEstimate: e.revenueEstimate,
+        quarter: e.quarter,
+        year: e.year,
+      };
+    });
+  } catch(e) {
+    console.error('[EARNINGS] Error:', e.message);
+    return [];
+  }
+}
+
 // alerter.js calls calendar.shouldBlockAlert() -- alias to isTradingBlocked
 function shouldBlockAlert() {
   return state.blockTrading === true;
@@ -298,5 +333,6 @@ module.exports = {
   checkBreakingNews: checkBreakingNews,
   isTradingBlocked:  isTradingBlocked,
   shouldBlockAlert:   shouldBlockAlert,
+  getEarningsCalendar: getEarningsCalendar,
   getState:          function() { return state; },
 };

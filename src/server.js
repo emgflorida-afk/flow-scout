@@ -610,6 +610,17 @@ app.get('/sim/status', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- EARNINGS CALENDAR -------------------------------------------
+app.get('/api/earnings', async function(req, res) {
+  if (!econCalendar || !econCalendar.getEarningsCalendar) return res.json({ status: 'not loaded' });
+  try {
+    var from = req.query.from || null;
+    var to = req.query.to || null;
+    var earnings = await econCalendar.getEarningsCalendar(from, to);
+    res.json({ status: 'OK', count: earnings.length, earnings: earnings });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- BOTTOM TICK SCANNER (@TheStrat method) ----------------------
 var bottomTick = null;
 try { bottomTick = require('./bottomTick'); console.log('[BOTTOM-TICK] Loaded OK'); } catch(e) { console.log('[BOTTOM-TICK] Skipped:', e.message); }
