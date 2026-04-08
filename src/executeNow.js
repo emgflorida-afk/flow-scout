@@ -55,15 +55,55 @@ var T1_TARGETS = {
 };
 function getT1Pct(ticker) { return T1_TARGETS[ticker] || 0.35; }
 
-// Track state
+// Track state -- persistent across restarts
+var fs = require('fs');
+var STATE_FILE = '/tmp/stratum-exec-state.json';
+
 var todaySetups = [];
-var todayTickers = {};      // { 'TSLA': true } -- one trade per ticker per day
-var pendingBars = {};       // { 'TSLA_put': 1 } -- counts consecutive bars through level
+var todayTickers = {};
+var pendingBars = {};
+
+// Load state from file on startup
+function loadState() {
+  try {
+    if (fs.existsSync(STATE_FILE)) {
+      var data = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+      // Only restore if same day
+      var today = new Date().toISOString().slice(0, 10);
+      if (data.date === today) {
+        todaySetups = data.todaySetups || [];
+        todayTickers = data.todayTickers || {};
+        pendingBars = data.pendingBars || {};
+        console.log('[EXECUTE-NOW] State restored from file:', todaySetups.length, 'setups,', Object.keys(pendingBars).length, 'pending bars');
+      } else {
+        console.log('[EXECUTE-NOW] State file is from', data.date, '-- starting fresh');
+      }
+    }
+  } catch(e) { console.log('[EXECUTE-NOW] No saved state -- starting fresh'); }
+}
+
+// Save state to file after each change
+function saveState() {
+  try {
+    var data = {
+      date: new Date().toISOString().slice(0, 10),
+      todaySetups: todaySetups,
+      todayTickers: todayTickers,
+      pendingBars: pendingBars,
+      savedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(STATE_FILE, JSON.stringify(data));
+  } catch(e) { console.error('[EXECUTE-NOW] Save state error:', e.message); }
+}
+
+// Load on module init
+loadState();
 
 function resetDailySetups() {
   todaySetups = [];
   todayTickers = {};
   pendingBars = {};
+  saveState();
   console.log('[EXECUTE-NOW] Daily state reset');
 }
 
@@ -153,10 +193,12 @@ function check2Bar(ticker, type, price, lvls) {
   if (!through) {
     // Price not through level -- reset counter
     pendingBars[key] = 0;
+    saveState();
     return { confirmed: false, reason: ticker + ' not through ' + (type === 'call' ? 'PDH' : 'PDL') + ' $' + level.toFixed(2) };
   }
 
   pendingBars[key] = (pendingBars[key] || 0) + 1;
+  saveState();
 
   if (pendingBars[key] >= 2) {
     return { confirmed: true, reason: '2-bar confirmed: ' + ticker + ' through $' + level.toFixed(2) + ' for ' + pendingBars[key] + ' bars' };
@@ -323,6 +365,7 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
   // ALL GATES PASSED -- record and execute
   todaySetups.push({ ticker, type, grade, time: new Date().toISOString() });
   todayTickers[ticker] = true;
+  saveState();
 
   console.log('[EXECUTE-NOW] ✅ ALL GATES PASSED: ' + ticker + ' ' + type + ' ' + grade);
 

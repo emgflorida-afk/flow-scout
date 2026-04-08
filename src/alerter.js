@@ -778,12 +778,9 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
 
     var ep   = parseFloat(resolved.mid);
 
-    // Use structural stop from executeNow
-    var stopInfo = execGates.calcStructuralStop(
-      parsed.ticker, parsed.type, ep,
-      decision.lvls, resolved.price, resolved.delta
-    );
-    var stp  = stopInfo ? stopInfo.stopPrice : parseFloat((ep * 0.60).toFixed(2));
+    // Stop at -25% like John's method (was structural/flat 40%)
+    // -25% is tight enough to limit losses but wide enough to not get shaken out
+    var stp  = parseFloat((ep * 0.75).toFixed(2));
 
     // T1: minimum 50% target -- hold for REAL gains, not pennies
     // Primo's community makes 100-300% per trade. 50% is conservative.
