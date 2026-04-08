@@ -610,6 +610,20 @@ app.get('/sim/status', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- ALERTS API (for Claude Code to read strat alerts) -----------
+app.get('/api/alerts', function(req, res) {
+  var count = parseInt(req.query.count) || 20;
+  var alerts = alerter.getRecentAlerts(count);
+  res.json({ status: 'OK', count: alerts.length, alerts: alerts });
+});
+
+app.delete('/api/alerts', function(req, res) {
+  var secret = req.headers['x-stratum-secret'];
+  if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  alerter.clearAlerts();
+  res.json({ status: 'OK', message: 'Alerts cleared' });
+});
+
 // -- AGENT STATE ENDPOINT
 app.get('/agent/state', function(req, res) {
   if (stratumAgent) {

@@ -680,6 +680,15 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   }
 
   // ✅ ALL CHECKS PASSED -- POST COMPACT CARD TO #execute-now
+  storeAlert({
+    ticker: parsed.ticker, type: cType, grade: stratGrade,
+    strike: resolved && resolved.strike ? resolved.strike : null,
+    expiry: resolved && resolved.expiry ? resolved.expiry : null,
+    dte: resolved && resolved.dte ? resolved.dte : null,
+    entry: cEntry, stop: cStop, t1: cT1,
+    probITM: probITM, mid: cMid,
+    compact: compact, time: new Date().toISOString(),
+  });
   await sendToChannel(stratChannel, compact, parsed.ticker);
   console.log('[STRAT] Card posted to #' + stratChannel + ' -- ' + parsed.ticker + ' ' + stratGrade);
 
@@ -945,4 +954,21 @@ async function sendSystemMessage(msg) {
   await sendToChannel('strat', 'STRATUM\n' + msg);
 }
 
-module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow };
+// -- ALERT STORE for API access ----------------------------------
+var _recentAlerts = [];
+var MAX_STORED_ALERTS = 50;
+
+function storeAlert(alert) {
+  _recentAlerts.unshift(alert);
+  if (_recentAlerts.length > MAX_STORED_ALERTS) _recentAlerts.length = MAX_STORED_ALERTS;
+}
+
+function getRecentAlerts(count) {
+  return _recentAlerts.slice(0, count || 20);
+}
+
+function clearAlerts() {
+  _recentAlerts = [];
+}
+
+module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow, storeAlert, getRecentAlerts, clearAlerts };
