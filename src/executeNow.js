@@ -10,12 +10,12 @@ var EXECUTE_NOW_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
 var CONVICTION_WEBHOOK  = process.env.DISCORD_CONVICTION_WEBHOOK;
 
-// Account rules -- mirrors real $6K account
+// Account rules -- primo method: fewer trades, bigger targets
 var ACCOUNT_SIZE     = parseFloat(process.env.ACCOUNT_SIZE || '6000');
 var MAX_PREMIUM      = 2.40;
-var MAX_LOSS_PER_TRADE = 120; // 2% of $6K
-var MAX_POSITIONS    = 4;
-var MAX_SETUPS_PER_DAY = 4;
+var MAX_LOSS_PER_TRADE = 120;
+var MAX_POSITIONS    = 3;     // Primo: 1-3 positions max, not 4+
+var MAX_SETUPS_PER_DAY = 3;   // Quality over quantity -- 3 max per day
 
 // Core watchlist -- 43 tickers across sectors for daily setups
 var CORE_WATCHLIST = [
@@ -281,10 +281,39 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
     return { execute: false, reason: openCount + ' positions open -- max ' + MAX_POSITIONS };
   }
 
-  // GATE 3: Duplicate ticker today
+  // GATE 3: Duplicate ticker today (ANY direction)
   if (todayTickers[ticker]) {
     console.log('[EXECUTE-NOW] BLOCKED: Already traded ' + ticker + ' today');
     return { execute: false, reason: 'Already traded ' + ticker + ' today -- one per ticker' };
+  }
+
+  // GATE 3B: Check if we already have an OPEN position in this ticker (prevents duplicates)
+  if (Array.isArray(positions)) {
+    var tickerPositions = positions.filter(function(p) {
+      var sym = (p.Symbol || p.symbol || '').toUpperCase();
+      return sym.startsWith(ticker);
+    });
+    if (tickerPositions.length > 0) {
+      console.log('[EXECUTE-NOW] BLOCKED: Already have open position in ' + ticker);
+      return { execute: false, reason: 'Open position exists for ' + ticker + ' -- no duplicates' };
+    }
+  }
+
+  // GATE 3C: Check direction conflict -- don't open PUT if we have CALL on same sector
+  // This prevents the system from hedging itself into zero
+  var todayDirections = todaySetups.map(function(s) { return s.type; });
+  var callCount = todayDirections.filter(function(d) { return d === 'call'; }).length;
+  var putCount = todayDirections.filter(function(d) { return d === 'put'; }).length;
+  if (callCount > 0 && putCount > 0 && todaySetups.length >= 2) {
+    // Already have both directions -- don't add more confusion
+    if (type === 'call' && putCount > callCount) {
+      console.log('[EXECUTE-NOW] BLOCKED: Day is bearish-leaning, blocking additional call');
+      return { execute: false, reason: 'Day direction is bearish -- blocking call' };
+    }
+    if (type === 'put' && callCount > putCount) {
+      console.log('[EXECUTE-NOW] BLOCKED: Day is bullish-leaning, blocking additional put');
+      return { execute: false, reason: 'Day direction is bullish -- blocking put' };
+    }
   }
 
   // GATE 4: Max setups per day

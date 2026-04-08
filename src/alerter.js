@@ -720,8 +720,8 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
       close: resolved.price || null,
     };
 
-    // Get current positions count
-    var positions = 0;
+    // Get current positions (full list, not just count) for duplicate check
+    var positions = [];
     try {
       var ts = require('./tradestation');
       var token = await ts.getAccessToken();
@@ -730,7 +730,7 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
           headers: { 'Authorization': 'Bearer ' + token }
         });
         var posData = await posRes.json();
-        positions = (posData.Positions || []).length;
+        positions = posData.Positions || [];
       }
     } catch(e) { console.log('[AUTO-EXEC] Position check error:', e.message); }
 
