@@ -610,6 +610,37 @@ app.get('/sim/status', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- BOTTOM TICK SCANNER (@TheStrat method) ----------------------
+var bottomTick = null;
+try { bottomTick = require('./bottomTick'); console.log('[BOTTOM-TICK] Loaded OK'); } catch(e) { console.log('[BOTTOM-TICK] Skipped:', e.message); }
+
+app.get('/api/scan', async function(req, res) {
+  if (!bottomTick) return res.json({ status: 'not loaded' });
+  try {
+    var results = await bottomTick.scanAll();
+    res.json({ status: 'OK', data: results });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/scan/:symbol', async function(req, res) {
+  if (!bottomTick) return res.json({ status: 'not loaded' });
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.json({ status: 'no token' });
+    var result = await bottomTick.scanTicker(req.params.symbol.toUpperCase(), token);
+    res.json({ status: 'OK', data: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- BULLFLOW PER-TICKER QUERY -----------------------------------
+app.get('/api/flow/:symbol', function(req, res) {
+  var sym = req.params.symbol.toUpperCase();
+  var summary = bullflow.liveAggregator.getSummary();
+  var tickerFlow = summary[sym] || null;
+  res.json({ status: 'OK', symbol: sym, flow: tickerFlow });
+});
+
 // -- MARKET DEPTH API (Level 2 / Matrix) -------------------------
 var marketDepth = null;
 try { marketDepth = require('./marketDepth'); console.log('[DEPTH] Loaded OK'); } catch(e) { console.log('[DEPTH] Skipped:', e.message); }
