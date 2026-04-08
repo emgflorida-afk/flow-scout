@@ -601,5 +601,6 @@ module.exports = {
   parseOPRA, resolveContract, resolveContractWithExpiry,
   getOptionSnapshot, getPrice, getLVLs, getEntryMode,
   calculatePositionSize, getTimeContext, getT1Target,
+  getTSToken,
   WATCHLIST, MIN_PREMIUM, MAX_PREMIUM, MODES,
 };

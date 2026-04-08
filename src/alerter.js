@@ -595,7 +595,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
 
   // BUILD COMPACT EMOJI CARD
   var cType   = tvData.type.toUpperCase();
-  var cPrice  = tvData.price || '?';
+  var cPrice  = resolved && resolved.strike ? resolved.strike : (tvData.price || '?');
   var cDTE    = resolved && resolved.dte ? resolved.dte + 'DTE' : '?';
   var cMid    = resolved && resolved.mid ? parseFloat(resolved.mid) : null;
   var cEntry  = cMid ? parseFloat((cMid * 0.875).toFixed(2)) : '?';

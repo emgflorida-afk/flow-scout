@@ -255,21 +255,26 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
   var timeCheck = isEntryWindow();
   if (!timeCheck.ok) {
     console.log('[EXECUTE-NOW] BLOCKED: Outside entry window');
-    return { execute: false, reason: 'Outside entry window (9:45-11AM or 3-3:45PM ET)' };
+    return { execute: false, reason: 'Outside entry window (9:50-10:30AM or 3:00-3:30PM ET)' };
   }
 
-  // GATE 6: Macro bias
-  if (h6Bias === 'BULLISH' && type === 'put') {
-    return { execute: false, reason: '6HR is BULLISH -- no puts' };
-  }
-  if (h6Bias === 'BEARISH' && type === 'call') {
-    return { execute: false, reason: '6HR is BEARISH -- no calls' };
-  }
-  if (macroBias === 'BULLISH' && type === 'put') {
-    return { execute: false, reason: 'SPY macro BULLISH -- blocking puts' };
-  }
-  if (macroBias === 'BEARISH' && type === 'call') {
-    return { execute: false, reason: 'SPY macro BEARISH -- blocking calls' };
+  // GATE 6: Macro bias -- allows contra-trend trades when ticker shows relative weakness/strength
+  // High confluence (5+/6) overrides macro bias -- the setup IS the edge
+  if (confluence < 5) {
+    if (h6Bias === 'BULLISH' && type === 'put') {
+      return { execute: false, reason: '6HR is BULLISH -- no puts (need 5+/6 to override)' };
+    }
+    if (h6Bias === 'BEARISH' && type === 'call') {
+      return { execute: false, reason: '6HR is BEARISH -- no calls (need 5+/6 to override)' };
+    }
+    if (macroBias === 'BULLISH' && type === 'put') {
+      return { execute: false, reason: 'SPY macro BULLISH -- blocking puts (need 5+/6 to override)' };
+    }
+    if (macroBias === 'BEARISH' && type === 'call') {
+      return { execute: false, reason: 'SPY macro BEARISH -- blocking calls (need 5+/6 to override)' };
+    }
+  } else {
+    console.log('[EXECUTE-NOW] Confluence ' + confluence + '/6 overrides macro bias for ' + ticker + ' ' + type);
   }
 
   // GATE 7: Buying power
@@ -292,8 +297,8 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
   // GATE 9: LVL Framework -- fetch PDH/PDL/PDC
   var lvls = null;
   try {
-    var token = await resolver.getTSToken ? resolver.getTSToken() : null;
-    if (token && resolver.getLVLs) {
+    var token = resolver.getTSToken ? await resolver.getTSToken() : null;
+    if (token) {
       lvls = await resolver.getLVLs(ticker, token);
     }
   } catch(e) { console.log('[EXECUTE-NOW] LVL fetch error:', e.message); }
