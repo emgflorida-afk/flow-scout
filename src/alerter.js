@@ -785,12 +785,13 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
     );
     var stp  = stopInfo ? stopInfo.stopPrice : parseFloat((ep * 0.60).toFixed(2));
 
-    // T1 by ticker volatility
-    var T1_TARGETS = { TSLA:0.50, COIN:0.50, NVDA:0.50, MRVL:0.50, AAPL:0.40, AMZN:0.40, MSFT:0.40, GOOGL:0.40 };
-    var t1Pct = T1_TARGETS[parsed.ticker.toUpperCase()] || 0.35;
+    // T1: minimum 50% target -- hold for REAL gains, not pennies
+    // Primo's community makes 100-300% per trade. 50% is conservative.
+    var t1Pct = 0.50; // 50% minimum target on ALL tickers
     var t1v  = parseFloat((ep * (1 + t1Pct)).toFixed(2));
 
-    var lmt  = parseFloat((ep * 0.875).toFixed(2));
+    // Enter at ask, not 12.5% retrace -- retrace limits never fill
+    var lmt  = resolved.ask ? parseFloat(resolved.ask.toFixed(2)) : parseFloat((ep * 1.02).toFixed(2));
     var qty  = decision.contracts;
 
     // Final premium check

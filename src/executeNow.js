@@ -80,9 +80,9 @@ function isEntryWindow() {
   var etMin  = now.getUTCMinutes();
   var etTime = etHour * 60 + etMin;
 
-  var AM_START = 9 * 60 + 50;   // 9:50 AM -- skip opening volatility
-  var AM_END   = 10 * 60 + 30;  // 10:30 AM -- prime window only
-  var PM_START = 15 * 60;       // 3:00 PM -- power hour (swing entries only)
+  var AM_START = 9 * 60 + 35;   // 9:35 AM -- primo enters at open, 5 min buffer
+  var AM_END   = 11 * 60;       // 11:00 AM -- extended morning window
+  var PM_START = 14 * 60 + 45;  // 2:45 PM -- pre-power hour for catalyst setups
   var PM_END   = 15 * 60 + 30;  // 3:30 PM -- hard close deadline
 
   if (etTime >= AM_START && etTime <= AM_END) return { ok: true, window: 'AM' };

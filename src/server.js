@@ -946,6 +946,42 @@ cron.schedule('*/30 13-20 * * 1-5', async function() {
   if (econCalendar) { try { await econCalendar.checkBreakingNews(); } catch(e) { console.error('[CAL]', e.message); } }
 });
 
+// Every 30 min during market hours -- BOTTOM TICK SCANNER
+// Scans 30min/2HR bars for Failed 2U/2D, 3-1, 2-1-2 setups
+// Posts setups to Discord and stores for API access
+cron.schedule('*/30 13-20 * * 1-5', async function() {
+  if (!bottomTick) return;
+  try {
+    console.log('[CRON] Running bottom tick scanner...');
+    var results = await bottomTick.scanAll();
+    var withSetups = results.results || [];
+    if (withSetups.length > 0) {
+      // Post top setups to Discord
+      var webhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+      if (webhook) {
+        var lines = ['🔍 BOTTOM TICK SCAN -- ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET'];
+        for (var i = 0; i < Math.min(withSetups.length, 5); i++) {
+          var r = withSetups[i];
+          for (var j = 0; j < r.setups.length; j++) {
+            var s = r.setups[j];
+            lines.push(r.symbol + ' | ' + s.timeframe + ' | ' + s.type + ' | ' + s.action + ' | Trigger $' + (s.trigger ? s.trigger.toFixed(2) : '?'));
+          }
+        }
+        if (r && r.levels) {
+          lines.push('---');
+          lines.push('Levels: PDH $' + (r.levels.PDH || '?') + ' | PDL $' + (r.levels.PDL || '?') + ' | PWH $' + (r.levels.PWH || '?'));
+        }
+        await fetch(webhook, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: '```\n' + lines.join('\n') + '\n```', username: 'Stratum Scanner' })
+        }).catch(function(e) { console.error('[SCANNER-CRON] Discord error:', e.message); });
+      }
+      console.log('[CRON] Scanner found', withSetups.length, 'tickers with setups');
+    }
+  } catch(e) { console.error('[CRON] Scanner error:', e.message); }
+});
+
 // 10:00AM ET -- 3-2-2 First Live scan
 cron.schedule('0 14 * * 1-5', async function() {
   console.log('[CRON] 10:00AM -- 3-2-2 scan...');
