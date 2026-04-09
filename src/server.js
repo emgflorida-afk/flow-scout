@@ -610,6 +610,18 @@ app.get('/sim/status', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- CATALYST SCANNER (upgrades/downgrades like primo's Stratalyst)
+var catalystScanner = null;
+try { catalystScanner = require('./catalystScanner'); console.log('[CATALYST] Loaded OK'); } catch(e) { console.log('[CATALYST] Skipped:', e.message); }
+
+app.get('/api/catalysts', async function(req, res) {
+  if (!catalystScanner) return res.json({ status: 'not loaded' });
+  try {
+    var data = await catalystScanner.scanCatalysts();
+    res.json({ status: 'OK', data: data });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- EARNINGS CALENDAR -------------------------------------------
 app.get('/api/earnings', async function(req, res) {
   if (!econCalendar || !econCalendar.getEarningsCalendar) return res.json({ status: 'not loaded' });
@@ -922,6 +934,12 @@ cron.schedule('0 12 * * 1-5', async function() {
   console.log('[CRON] 8:00AM -- pre-market report...');
   if (preMarketReport) { try { await preMarketReport.postPreMarketReport(); } catch(e) { console.error('[PMR]', e.message); } }
   if (econCalendar)    { try { await econCalendar.postDailyBrief();         } catch(e) { console.error('[CAL]', e.message); } }
+});
+
+// 8:30AM ET -- CATALYST SCANNER (upgrades/downgrades/news before market open)
+cron.schedule('30 12 * * 1-5', async function() {
+  console.log('[CRON] 8:30AM -- catalyst scanner...');
+  if (catalystScanner) { try { await catalystScanner.postCatalystBrief(); } catch(e) { console.error('[CATALYST]', e.message); } }
 });
 
 // 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan + OFFSET ANALYZER
