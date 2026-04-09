@@ -1076,6 +1076,25 @@ cron.schedule('0 20 * * 1-5', async function() {
   }
 });
 
+// -- SCALP MODE ENDPOINTS ----------------------------------------
+app.get('/api/scalp/status', function(req, res) {
+  if (!executeNow || !executeNow.getScalpMode) {
+    return res.json({ status: 'executeNow not loaded or no scalp support' });
+  }
+  res.json({ status: 'OK', scalp: executeNow.getScalpMode() });
+});
+
+app.post('/api/scalp/toggle', function(req, res) {
+  try {
+    if (!executeNow || !executeNow.toggleScalpMode) {
+      return res.json({ status: 'executeNow not loaded or no scalp support' });
+    }
+    var result = executeNow.toggleScalpMode();
+    console.log('[SCALP] Toggled via API -- now:', result.enabled ? 'ON' : 'OFF');
+    res.json({ status: 'OK', scalp: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- START ------------------------------------------------------
 app.listen(PORT, function() {
   console.log('Flow Scout v7.2 running on port ' + PORT);

@@ -617,8 +617,9 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
 
   var cLine1 = gradeEmoji + ' ' + stratGrade + (contractGrade ? '|' + contractGrade : '') + ' | ' + dirEmoji + ' ' + parsed.ticker + ' ' + cType + ' | $' + cPrice + ' | ' + cDTE;
   var cLine2 = '💰 Entry $' + cEntry + '  🛑 Stop $' + cStop + '  🎯 T1 $' + cT1 + (probITM ? '  ' + probITM : '');
+  var cLine2ct = cMid ? '📋 2-CT METHOD: Trim 1 @ $' + parseFloat((cMid * 1.25).toFixed(2)) + ' | Runner stop @ $' + cMid.toFixed(2) + ' (breakeven)' : '';
   var cLine3 = scoreEmoji + ' ' + (cScore.length ? cScore.join(' + ') : 'Pure Strat TA') + ' | 🕐 ' + cTime + ' ET' + (contractWarn ? '\n' + contractWarn : '');
-  var compact = cLine1 + '\n' + cLine2 + '\n' + cLine3;
+  var compact = cLine1 + '\n' + cLine2 + (cLine2ct ? '\n' + cLine2ct : '') + '\n' + cLine3;
 
   // ROUTE: indices to #indices-bias, all others to #execute-now
   var isIndexTicker = INDEX_TICKERS.indexOf(parsed.ticker) > -1;
@@ -680,6 +681,10 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   }
 
   // ✅ ALL CHECKS PASSED -- POST COMPACT CARD TO #execute-now
+  // 2-CT METHOD fields
+  var alertTrimTarget  = cMid ? parseFloat((cMid * 1.25).toFixed(2)) : null;
+  var alertRunnerStop  = cMid ? cMid : null;
+
   storeAlert({
     ticker: parsed.ticker, type: cType, grade: stratGrade,
     strike: resolved && resolved.strike ? resolved.strike : null,
@@ -687,6 +692,8 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
     dte: resolved && resolved.dte ? resolved.dte : null,
     entry: cEntry, stop: cStop, t1: cT1,
     probITM: probITM, mid: cMid,
+    trimTarget: alertTrimTarget, runnerStop: alertRunnerStop,
+    contracts: 2,
     compact: compact, time: new Date().toISOString(),
   });
   await sendToChannel(stratChannel, compact, parsed.ticker);
@@ -797,8 +804,14 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
       return;
     }
 
-    // Contract sizing -- $6K rules
-    if (ep <= 1.20) { qty = Math.min(qty, 2); } else { qty = 1; }
+    // 2-CONTRACT METHOD -- always buy 2, trim 1 at +25%, leave runner
+    qty = 2;
+    // Only reduce to 1 if premium is too high for 2 contracts within account limits
+    if (ep > 1.20) { qty = 1; }
+
+    // 2-CT trim and runner targets
+    var trimTarget  = parseFloat((ep * 1.25).toFixed(2));  // Trim 1 contract at +25%
+    var runnerStop  = ep;                                   // Runner stop at breakeven (entry price)
 
     var er = await orderExecutor.placeOrder({
       account: 'SIM3142118M',
@@ -815,9 +828,12 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
       // Post execution confirmation to #execute-now
       var execWebhook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
         'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
+      var twoCtLine = qty >= 2
+        ? '\n📋 2-CT METHOD: Trim 1 @ $' + trimTarget.toFixed(2) + ' | Runner stop @ $' + runnerStop.toFixed(2) + ' (breakeven)'
+        : '';
       var execCard = '✅ SIM ORDER PLACED -- ' + parsed.ticker + '\n' +
         parsed.ticker + ' ' + parsed.type.toUpperCase() + ' x' + qty + ' @ $' + lmt + ' limit\n' +
-        '🛑 Stop $' + stp + '  🎯 T1 $' + t1v + '\n' +
+        '🛑 Stop $' + stp + '  🎯 T1 $' + t1v + twoCtLine + '\n' +
         'Order ID: ' + er.orderId + ' | Pure Strat TA | ' +
         new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET';
       await fetch(execWebhook, {

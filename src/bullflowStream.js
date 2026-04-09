@@ -55,6 +55,7 @@ function pushRecentFlow(alert, ticker, score) {
   };
 
   _recentFlowAlerts.push(entry);
+  console.log('[FLOW] Alert stored:', ticker, type, prem > 0 ? '$' + Math.round(prem) : 'no-premium');
   // Trim to max size
   if (_recentFlowAlerts.length > MAX_RECENT_FLOW) {
     _recentFlowAlerts = _recentFlowAlerts.slice(_recentFlowAlerts.length - MAX_RECENT_FLOW);
@@ -222,15 +223,31 @@ function startBullflowStream() {
   if (!apiKey) { console.error('[BULLFLOW] No API key'); return; }
   console.log('[BULLFLOW] Connecting to stream...');
 
+  var MAX_RETRIES     = 10;
+  var RETRY_DELAY_MS  = 5000;
+  var retryCount      = 0;
+
   var connect = function() {
+    if (retryCount >= MAX_RETRIES) {
+      console.error('[BULLFLOW] Max retries (' + MAX_RETRIES + ') reached -- stopping reconnection. Manual restart needed.');
+      return;
+    }
+
+    if (retryCount > 0) {
+      console.log('[BULLFLOW] Reconnect attempt ' + retryCount + '/' + MAX_RETRIES + '...');
+    }
+
     fetch('https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey, {
       headers: { 'Accept': 'text/event-stream' }
     }).then(function(res) {
       if (!res.ok) {
         console.error('[BULLFLOW] Connection failed:', res.status);
-        setTimeout(connect, 10000);
+        retryCount++;
+        setTimeout(connect, RETRY_DELAY_MS);
         return;
       }
+      // Reset retry count on successful connection
+      retryCount = 0;
       console.log('[BULLFLOW] Stream connected OK');
       var buffer = '';
 
@@ -256,7 +273,9 @@ function startBullflowStream() {
               var data = parsed.data || parsed;
               var ticker = extractTicker(data.symbol || '');
               var alertScore = scoreFlow(data);
-              liveAggregator.update(ticker, data.symbol || '', data.alertPremium || data.premium || 0);
+              var alertPremium = data.alertPremium || data.premium || 0;
+              liveAggregator.update(ticker, data.symbol || '', alertPremium);
+              // Store flow BEFORE processing alert -- ensures data is captured even if processAlert throws
               pushRecentFlow(data, ticker, alertScore);
               processAlert(data);
             }
@@ -268,17 +287,20 @@ function startBullflowStream() {
 
       res.body.on('error', function(err) {
         console.error('[BULLFLOW] Stream error:', err.message);
-        setTimeout(connect, 10000);
+        retryCount++;
+        setTimeout(connect, RETRY_DELAY_MS);
       });
 
       res.body.on('end', function() {
-        console.log('[BULLFLOW] Stream ended -- reconnecting...');
-        setTimeout(connect, 10000);
+        console.log('[BULLFLOW] Stream ended -- reconnecting in ' + (RETRY_DELAY_MS / 1000) + 's...');
+        retryCount++;
+        setTimeout(connect, RETRY_DELAY_MS);
       });
 
     }).catch(function(err) {
       console.error('[BULLFLOW] Connection error:', err.message);
-      setTimeout(connect, 10000);
+      retryCount++;
+      setTimeout(connect, RETRY_DELAY_MS);
     });
   };
 

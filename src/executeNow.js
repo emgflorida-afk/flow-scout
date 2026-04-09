@@ -17,6 +17,14 @@ var MAX_LOSS_PER_TRADE = 120;
 var MAX_POSITIONS    = 3;     // Primo: 1-3 positions max, not 4+
 var MAX_SETUPS_PER_DAY = 3;   // Quality over quantity -- 3 max per day
 
+// SCALP MODE -- configurable, default OFF
+var SCALP_MODE       = false;
+var SCALP_TARGET     = 0.30;  // 30 cents = ~$30 per contract profit target
+var SCALP_STOP       = 0.15;  // 15 cents = ~$15 per contract stop loss
+var SCALP_MAX_HOLD   = 15;    // Max hold time in minutes before forced close
+var SCALP_WINDOW_START = 9 * 60 + 30;  // 9:30 AM ET
+var SCALP_WINDOW_END   = 10 * 60;      // 10:00 AM ET (first 30 min only)
+
 // Core watchlist -- 43 tickers across sectors for daily setups
 var CORE_WATCHLIST = [
   // Indices
@@ -119,6 +127,14 @@ function isEntryWindow() {
   var etHour = ((now.getUTCHours() - 4) + 24) % 24;
   var etMin  = now.getUTCMinutes();
   var etTime = etHour * 60 + etMin;
+
+  // SCALP MODE -- tighter window: first 30 min of market only (9:30-10:00 AM)
+  if (SCALP_MODE) {
+    if (etTime >= SCALP_WINDOW_START && etTime <= SCALP_WINDOW_END) {
+      return { ok: true, window: 'SCALP' };
+    }
+    return { ok: false, window: 'SCALP_CLOSED' };
+  }
 
   var AM_START = 9 * 60 + 35;   // 9:35 AM -- primo enters at open, 5 min buffer
   var AM_END   = 11 * 60;       // 11:00 AM -- extended morning window
@@ -402,11 +418,15 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
     execute:   true,
     grade:     grade,
     contracts: contracts,
-    reason:    grade + ' -- ' + confluence + '/6' + (hasFlow ? ' + flow' : '') + ' -- LVL confirmed -- 2-bar confirmed',
+    reason:    grade + ' -- ' + confluence + '/6' + (hasFlow ? ' + flow' : '') + ' -- LVL confirmed -- 2-bar confirmed' + (SCALP_MODE ? ' -- SCALP MODE' : ''),
     isIndex:   isIndex(ticker),
     entryTF:   isIndex(ticker) ? '1HR' : '5MIN',
     lvls:      lvls,
     stopCalc:  null, // Will be calculated after contract resolution with premium/delta
+    scalpMode:     SCALP_MODE,
+    scalpTarget:   SCALP_MODE ? SCALP_TARGET : null,
+    scalpStop:     SCALP_MODE ? SCALP_STOP : null,
+    scalpMaxHold:  SCALP_MODE ? SCALP_MAX_HOLD : null,
   };
 }
 
@@ -467,6 +487,16 @@ function buildExecuteCard(signal, decision, resolved) {
   if (decision.lvls) {
     lines.push('-------------------------------');
     lines.push('PDH $' + decision.lvls.pdh.toFixed(2) + ' | PDL $' + decision.lvls.pdl.toFixed(2) + ' | PDC $' + decision.lvls.pdc.toFixed(2));
+  }
+
+  // SCALP MODE overlay
+  if (decision.scalpMode && premium) {
+    lines.push('-------------------------------');
+    lines.push('⚡ SCALP MODE ACTIVE');
+    lines.push('Scalp T/P   $' + (premium + SCALP_TARGET).toFixed(2) + ' (+$' + SCALP_TARGET.toFixed(2) + ')');
+    lines.push('Scalp Stop  $' + Math.max(0.01, premium - SCALP_STOP).toFixed(2) + ' (-$' + SCALP_STOP.toFixed(2) + ')');
+    lines.push('Max Hold    ' + SCALP_MAX_HOLD + ' min -- auto-close at market');
+    lines.push('Window      9:30-10:00 AM ET only');
   }
 
   lines.push('-------------------------------');
@@ -560,8 +590,34 @@ async function hardCloseAllPositions() {
   } catch(e) { console.error('[HARD-CLOSE] Error:', e.message); }
 }
 
+// ============================================================
+// SCALP MODE CONTROLS
+// ============================================================
+function getScalpMode() {
+  return {
+    enabled:  SCALP_MODE,
+    target:   SCALP_TARGET,
+    stop:     SCALP_STOP,
+    maxHold:  SCALP_MAX_HOLD,
+    window:   SCALP_WINDOW_START + '-' + SCALP_WINDOW_END,
+  };
+}
+
+function toggleScalpMode() {
+  SCALP_MODE = !SCALP_MODE;
+  console.log('[SCALP] Mode toggled:', SCALP_MODE ? 'ON' : 'OFF');
+  return getScalpMode();
+}
+
+function setScalpMode(enabled) {
+  SCALP_MODE = !!enabled;
+  console.log('[SCALP] Mode set:', SCALP_MODE ? 'ON' : 'OFF');
+  return getScalpMode();
+}
+
 module.exports = {
   shouldExecute, buildExecuteCard, postExecuteNow, resetDailySetups,
   isIndex, CORE_WATCHLIST, calcStructuralStop, checkLVL, check2Bar, isEntryWindow,
   cancelStaleOrders, hardCloseAllPositions,
+  getScalpMode, toggleScalpMode, setScalpMode,
 };
