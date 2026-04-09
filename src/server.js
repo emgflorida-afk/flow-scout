@@ -1095,9 +1095,55 @@ app.post('/api/scalp/toggle', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- BRAIN ENGINE -----------------------------------------------
+var brainEngine = null;
+try { brainEngine = require('./brainEngine'); console.log('[BRAIN] Loaded OK'); } catch(e) { console.log('[BRAIN] Skipped:', e.message); }
+
+app.get('/api/brain/status', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    res.json({ status: 'OK', brain: brainEngine.getBrainStatus(), brief: brainEngine.getDailyBrief() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/start', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var result = brainEngine.setBrainActive(true);
+    res.json({ status: 'OK', active: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/stop', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var result = brainEngine.setBrainActive(false);
+    res.json({ status: 'OK', active: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/reset', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    brainEngine.resetDaily();
+    res.json({ status: 'OK', message: 'Daily state reset' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Brain Engine cron: every 60 seconds during market hours (weekdays)
+cron.schedule('* 9-16 * * 1-5', function() {
+  if (brainEngine) {
+    brainEngine.runBrainCycle().catch(function(e) {
+      console.error('[BRAIN] Cycle error:', e.message);
+    });
+  }
+}, { timezone: 'America/New_York' });
+
+console.log('[BRAIN] Cron scheduled: every 60s, 9AM-4PM ET, weekdays');
+
 // -- START ------------------------------------------------------
 app.listen(PORT, function() {
-  console.log('Flow Scout v7.2 running on port ' + PORT);
+  console.log('Flow Scout v8.2 running on port ' + PORT);
   bullflow.startBullflowStream();
   discordBot.startDiscordBot();
 });
