@@ -41,6 +41,94 @@ var trimPlan = { first: 0.50, second: 1.00 }; // +50%, +100%
 var strategies = ['SCANNER_BREAKOUT', 'FLOW_CONVICTION', 'SCALP'];
 var currentStrategy = 0;
 
+// -- EXIT MODE: 'TRAIL' or 'STRENGTH' -------------------------------
+// TRAIL = traditional trail stop (sell on pullback)
+// STRENGTH = detect volume exhaustion and sell into the push
+var exitMode = 'STRENGTH'; // default to selling at strength
+
+// -- VOLUME EXHAUSTION DETECTION ------------------------------------
+// Analyzes last N 5-min bars to detect if a move is peaking
+// Returns { exhausted: true/false, reason: string, confidence: 0-100 }
+function detectVolumeExhaustion(bars5min, direction) {
+  if (!bars5min || bars5min.length < 5) return { exhausted: false, reason: 'Insufficient bars', confidence: 0 };
+
+  var last5 = bars5min.slice(-5);
+  var last3 = bars5min.slice(-3);
+  var currentBar = last5[last5.length - 1];
+  var prevBar = last5[last5.length - 2];
+  var signals = 0;
+  var reasons = [];
+
+  // 1. Volume climax then drop: huge bar followed by smaller bars
+  var avgVol3 = (last3[0].TotalVolume + last3[1].TotalVolume + last3[2].TotalVolume) / 3;
+  var peakVol = Math.max(last5[0].TotalVolume, last5[1].TotalVolume, last5[2].TotalVolume);
+  if (peakVol > avgVol3 * 1.5 && currentBar.TotalVolume < peakVol * 0.6) {
+    signals += 2;
+    reasons.push('Volume climax then drop-off');
+  }
+
+  // 2. Wick rejection: long upper wick on bullish, long lower wick on bearish
+  var bodySize = Math.abs(parseFloat(currentBar.Close) - parseFloat(currentBar.Open));
+  var totalRange = parseFloat(currentBar.High) - parseFloat(currentBar.Low);
+  if (totalRange > 0) {
+    var upperWick = parseFloat(currentBar.High) - Math.max(parseFloat(currentBar.Close), parseFloat(currentBar.Open));
+    var lowerWick = Math.min(parseFloat(currentBar.Close), parseFloat(currentBar.Open)) - parseFloat(currentBar.Low);
+    if (direction === 'BULLISH' && upperWick > bodySize * 1.5) {
+      signals += 2;
+      reasons.push('Upper wick rejection (sellers at high)');
+    }
+    if (direction === 'BEARISH' && lowerWick > bodySize * 1.5) {
+      signals += 2;
+      reasons.push('Lower wick rejection (buyers at low)');
+    }
+  }
+
+  // 3. Shrinking candles: last 3 bars getting smaller (momentum fading)
+  var size0 = parseFloat(last3[0].High) - parseFloat(last3[0].Low);
+  var size1 = parseFloat(last3[1].High) - parseFloat(last3[1].Low);
+  var size2 = parseFloat(last3[2].High) - parseFloat(last3[2].Low);
+  if (size0 > size1 && size1 > size2) {
+    signals += 1;
+    reasons.push('Shrinking candles (momentum fading)');
+  }
+
+  // 4. HOD/LOD test and fail: touched high/low but closed away from it
+  var allHighs = bars5min.slice(-20).map(function(b) { return parseFloat(b.High); });
+  var dayHigh = Math.max.apply(null, allHighs);
+  var close = parseFloat(currentBar.Close);
+  var high = parseFloat(currentBar.High);
+  if (direction === 'BULLISH' && high >= dayHigh * 0.999 && close < high - (totalRange * 0.3)) {
+    signals += 2;
+    reasons.push('HOD rejection (tested high, closed weak)');
+  }
+
+  // 5. Time exhaustion: after 11:00 AM, morning momentum fades
+  var et = getETTime();
+  if (et.total >= 11 * 60) {
+    signals += 1;
+    reasons.push('Post-11AM (morning momentum typically fades)');
+  }
+
+  // 6. Down volume exceeding up volume on latest bar (distribution)
+  if (direction === 'BULLISH' && currentBar.DownVolume > currentBar.UpVolume) {
+    signals += 1;
+    reasons.push('Distribution (down volume > up volume)');
+  }
+  if (direction === 'BEARISH' && currentBar.UpVolume > currentBar.DownVolume) {
+    signals += 1;
+    reasons.push('Accumulation (up volume > down volume)');
+  }
+
+  var confidence = Math.min(100, signals * 15);
+  var exhausted = signals >= 3; // need 3+ signals to call exhaustion
+
+  if (exhausted) {
+    logBrain('EXHAUSTION DETECTED (' + confidence + '%): ' + reasons.join(' | '));
+  }
+
+  return { exhausted: exhausted, reason: reasons.join(' | '), confidence: confidence, signals: signals };
+}
+
 // -- BRAIN ACTIVE FLAG (must be started explicitly) -----------------
 var brainActive = false;
 var cycleCount = 0;
@@ -486,7 +574,20 @@ function managePosition(position) {
     return { action: 'TRIM', trimQty: 1, reason: '+100% hit -- trim 1 more, runner left', pctChange: pctChange };
   }
 
-  // TRAIL: runner with 15% minimum trail
+  // EXIT AT STRENGTH: if exitMode is STRENGTH, check volume exhaustion on contracts 1 & 2
+  if (exitMode === 'STRENGTH' && contracts >= 2 && pctChange >= 30) {
+    // Only check exhaustion if we have 5-min bars cached for this ticker
+    var cachedBars = position.recentBars || null;
+    if (cachedBars) {
+      var exhaustion = detectVolumeExhaustion(cachedBars, position.direction || 'BULLISH');
+      if (exhaustion.exhausted) {
+        logBrain('SELL AT STRENGTH: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% | ' + exhaustion.reason);
+        return { action: 'SELL_STRENGTH', reason: 'Volume exhaustion at +' + pctChange.toFixed(1) + '% -- SELL NOW', pctChange: pctChange, exhaustion: exhaustion };
+      }
+    }
+  }
+
+  // TRAIL: runner with 15% minimum trail (only for last contract / house money)
   if (position.trim1Done && contracts <= 1) {
     var trailStop = current * 0.85; // never tighter than 15% below current
     if (position.trailStop && trailStop > position.trailStop) {
@@ -575,6 +676,7 @@ function getBrainStatus() {
     strategyIndex: currentStrategy,
     totalStrategies: strategies.length,
     activePositions: activePositions,
+    exitMode: exitMode,
     contractSize: contractSize,
     cycleCount: cycleCount,
     lastCycleTime: lastCycleTime,
@@ -622,6 +724,20 @@ function setBrainActive(active) {
   }
   return brainActive;
 }
+
+// ===================================================================
+// SET EXIT MODE: 'TRAIL' or 'STRENGTH'
+// ===================================================================
+function setExitMode(mode) {
+  if (mode === 'TRAIL' || mode === 'STRENGTH') {
+    exitMode = mode;
+    logBrain('Exit mode set to: ' + exitMode);
+    return exitMode;
+  }
+  return exitMode;
+}
+
+function getExitMode() { return exitMode; }
 
 // ===================================================================
 // RUN BRAIN CYCLE -- Called every 60 seconds during market hours
@@ -1014,4 +1130,7 @@ module.exports = {
   resetDaily: resetDaily,
   setBrainActive: setBrainActive,
   getBrainStatus: getBrainStatus,
+  setExitMode: setExitMode,
+  getExitMode: getExitMode,
+  detectVolumeExhaustion: detectVolumeExhaustion,
 };

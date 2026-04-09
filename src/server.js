@@ -1139,6 +1139,15 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
+app.post('/api/brain/exitmode', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var mode = req.query.mode || req.body.mode || 'STRENGTH';
+    var result = brainEngine.setExitMode(mode);
+    res.json({ status: 'OK', exitMode: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 console.log('[BRAIN] Cron scheduled: every 60s, 9AM-4PM ET, weekdays');
 
 // -- START ------------------------------------------------------
