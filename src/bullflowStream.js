@@ -12,7 +12,7 @@ const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
   'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
   'MRNA','MRVL','GUSH','UVXY','KO','PEP',
-  'CRWV','BA','NFLX','MCD','DKNG','SBUX'
+  'CRWV','BA','NFLX','MCD','DKNG','SBUX','HUM','TSLL'
 ]);
 
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;

@@ -6,7 +6,7 @@
 
 var fetch = require('node-fetch');
 
-var SCAN_TICKERS = ['SPY','QQQ','IWM','TSLA','NVDA','AMD','META','AAPL','AMZN','MSFT','GOOGL'];
+var SCAN_TICKERS = ['SPY','QQQ','IWM','TSLA','NVDA','AMD','META','AAPL','AMZN','MSFT','GOOGL','HUM'];
 
 // -- GET TOKEN ----------------------------------------------------
 async function getToken() {
