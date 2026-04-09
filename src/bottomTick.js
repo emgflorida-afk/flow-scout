@@ -18,6 +18,262 @@ async function getToken() {
 
 function getTSBase() { return 'https://api.tradestation.com/v3'; }
 
+// -- CALCULATE EMA -----------------------------------------------
+// Standard Exponential Moving Average calculation
+// bars = array of {Close: price} objects, period = 13, 48, or 200
+// Returns array of EMA values (same length as bars, NaN for insufficient data)
+function calculateEMA(bars, period) {
+  if (!bars || bars.length === 0) return [];
+  var emaValues = [];
+  var multiplier = 2 / (period + 1);
+
+  // First EMA value = SMA of first 'period' bars
+  var sum = 0;
+  for (var i = 0; i < bars.length; i++) {
+    var close = parseFloat(bars[i].Close);
+    if (i < period - 1) {
+      sum += close;
+      emaValues.push(NaN);
+    } else if (i === period - 1) {
+      sum += close;
+      var sma = sum / period;
+      emaValues.push(sma);
+    } else {
+      var prevEma = emaValues[i - 1];
+      var ema = (close - prevEma) * multiplier + prevEma;
+      emaValues.push(ema);
+    }
+  }
+  console.log('[EMA] Calculated ' + period + ' EMA over ' + bars.length + ' bars, last value: ' + (emaValues.length > 0 ? emaValues[emaValues.length - 1] : 'N/A'));
+  return emaValues;
+}
+
+// -- DETECT EMA CROSSOVERS & ALIGNMENT ----------------------------
+function detectEMASignals(bars5min, currentPrice) {
+  var result = {
+    ema13: null,
+    ema48: null,
+    ema200: null,
+    crossAbove: false,
+    crossBelow: false,
+    fanOut: false,
+    bullishAligned: false,
+    bearishAligned: false,
+    priceAbove200: false,
+  };
+
+  if (!bars5min || bars5min.length < 50) {
+    console.log('[EMA] Not enough 5min bars (' + (bars5min ? bars5min.length : 0) + '), need 50+');
+    return result;
+  }
+
+  var ema13 = calculateEMA(bars5min, 13);
+  var ema48 = calculateEMA(bars5min, 48);
+  var ema200 = calculateEMA(bars5min, 200);
+
+  var len = bars5min.length;
+  var cur13 = ema13[len - 1];
+  var cur48 = ema48[len - 1];
+  var cur200 = ema200[len - 1];
+  var prev13 = ema13[len - 2];
+  var prev48 = ema48[len - 2];
+
+  result.ema13 = cur13;
+  result.ema48 = cur48;
+  result.ema200 = cur200;
+
+  // Crossover detection: 13 EMA vs 48 EMA
+  if (!isNaN(cur13) && !isNaN(cur48) && !isNaN(prev13) && !isNaN(prev48)) {
+    // 13 crosses ABOVE 48
+    if (prev13 < prev48 && cur13 > cur48) {
+      result.crossAbove = true;
+      console.log('[EMA] 13 EMA crossed ABOVE 48 EMA! Bullish crossover detected');
+    }
+    // 13 crosses BELOW 48
+    if (prev13 > prev48 && cur13 < cur48) {
+      result.crossBelow = true;
+      console.log('[EMA] 13 EMA crossed BELOW 48 EMA! Bearish crossover detected');
+    }
+  }
+
+  // Fan out detection: spread between 13 and 48 increasing over last 3 bars
+  if (len >= 3 && !isNaN(ema13[len - 3]) && !isNaN(ema48[len - 3])) {
+    var spread1 = Math.abs(ema13[len - 3] - ema48[len - 3]);
+    var spread2 = Math.abs(ema13[len - 2] - ema48[len - 2]);
+    var spread3 = Math.abs(ema13[len - 1] - ema48[len - 1]);
+    if (spread3 > spread2 && spread2 > spread1) {
+      result.fanOut = true;
+      console.log('[EMA] EMA fan out detected -- spread increasing: ' + spread1.toFixed(4) + ' -> ' + spread2.toFixed(4) + ' -> ' + spread3.toFixed(4));
+    }
+  }
+
+  // Alignment detection
+  if (!isNaN(cur13) && !isNaN(cur48) && !isNaN(cur200)) {
+    if (cur13 > cur48 && cur48 > cur200) {
+      result.bullishAligned = true;
+      console.log('[EMA] BULLISH alignment: 13 > 48 > 200');
+    }
+    if (cur13 < cur48 && cur48 < cur200) {
+      result.bearishAligned = true;
+      console.log('[EMA] BEARISH alignment: 13 < 48 < 200');
+    }
+  }
+
+  // Price vs 200 EMA
+  if (currentPrice && !isNaN(cur200)) {
+    result.priceAbove200 = currentPrice > cur200;
+    console.log('[EMA] Price ($' + currentPrice.toFixed(2) + ') ' + (result.priceAbove200 ? 'ABOVE' : 'BELOW') + ' 200 EMA ($' + cur200.toFixed(2) + ')');
+  }
+
+  return result;
+}
+
+// -- DETECT PRE-MARKET HIGH/LOW (first 30 min = first 6 5min bars) --
+function detectPremarketLevels(bars5min, currentPrice) {
+  var result = {
+    high: null,
+    low: null,
+    breakAbovePMH: false,
+    breakBelowPML: false,
+    retestPMH: false,
+    retestPML: false,
+  };
+
+  if (!bars5min || bars5min.length < 10) {
+    console.log('[EMA] Not enough bars for premarket detection');
+    return result;
+  }
+
+  // Find bars from 9:30-10:00 AM ET (first 6 five-minute bars of session)
+  // TradeStation timestamps include timezone info, parse them
+  var openingBars = [];
+  for (var i = 0; i < bars5min.length; i++) {
+    var ts = bars5min[i].TimeStamp || bars5min[i].Timestamp || '';
+    var d = new Date(ts);
+    var etHour = ((d.getUTCHours() - 4) + 24) % 24;
+    var etMin = d.getUTCMinutes();
+    var etTime = etHour * 60 + etMin;
+    // 9:30 AM = 570, 10:00 AM = 600
+    if (etTime >= 570 && etTime < 600) {
+      openingBars.push(bars5min[i]);
+    }
+  }
+
+  // If we can't parse timestamps, fall back to first 6 bars
+  if (openingBars.length === 0 && bars5min.length >= 6) {
+    console.log('[EMA] Could not parse timestamps for PM levels, using first 6 bars');
+    openingBars = bars5min.slice(0, 6);
+  }
+
+  if (openingBars.length === 0) {
+    console.log('[EMA] No opening range bars found');
+    return result;
+  }
+
+  // Calculate pre-market high and low from opening range
+  var pmHigh = -Infinity;
+  var pmLow = Infinity;
+  for (var j = 0; j < openingBars.length; j++) {
+    var h = parseFloat(openingBars[j].High);
+    var l = parseFloat(openingBars[j].Low);
+    if (h > pmHigh) pmHigh = h;
+    if (l < pmLow) pmLow = l;
+  }
+
+  result.high = pmHigh;
+  result.low = pmLow;
+  console.log('[EMA] Pre-market levels: PMH=$' + pmHigh.toFixed(2) + ' PML=$' + pmLow.toFixed(2) + ' (' + openingBars.length + ' bars)');
+
+  if (!currentPrice) return result;
+
+  // Break above PMH: current price is above pre-market high
+  result.breakAbovePMH = currentPrice > pmHigh;
+  // Break below PML: current price is below pre-market low
+  result.breakBelowPML = currentPrice < pmLow;
+
+  // Retest detection: look at recent bars for break-and-return pattern
+  var recentBars = bars5min.slice(-5); // last 5 bars
+  if (recentBars.length >= 3) {
+    // Retest PMH: price was above PMH, pulled back near it, now bouncing
+    var wasAbovePMH = false;
+    var touchedPMH = false;
+    for (var k = 0; k < recentBars.length - 1; k++) {
+      var barHigh = parseFloat(recentBars[k].High);
+      var barLow = parseFloat(recentBars[k].Low);
+      var barClose = parseFloat(recentBars[k].Close);
+      if (barHigh > pmHigh) wasAbovePMH = true;
+      // "Touch" = low came within 0.15% of PMH
+      if (wasAbovePMH && Math.abs(barLow - pmHigh) / pmHigh < 0.0015) touchedPMH = true;
+    }
+    if (wasAbovePMH && touchedPMH && currentPrice > pmHigh) {
+      result.retestPMH = true;
+      console.log('[EMA] RETEST PMH detected: broke above, pulled back, bouncing -- CALL signal');
+    }
+
+    // Retest PML: price was below PML, pulled back near it, now rejecting
+    var wasBelowPML = false;
+    var touchedPML = false;
+    for (var m = 0; m < recentBars.length - 1; m++) {
+      var mBarHigh = parseFloat(recentBars[m].High);
+      var mBarLow = parseFloat(recentBars[m].Low);
+      if (mBarLow < pmLow) wasBelowPML = true;
+      if (wasBelowPML && Math.abs(mBarHigh - pmLow) / pmLow < 0.0015) touchedPML = true;
+    }
+    if (wasBelowPML && touchedPML && currentPrice < pmLow) {
+      result.retestPML = true;
+      console.log('[EMA] RETEST PML detected: broke below, pulled back, rejecting -- PUT signal');
+    }
+  }
+
+  return result;
+}
+
+// -- BUILD CASEY SIGNAL MESSAGE -----------------------------------
+function buildCaseySignal(ticker, emaData, premarketData, price) {
+  var lines = [];
+  lines.push('\uD83C\uDFAF CASEY SIGNAL: ' + ticker);
+
+  // EMA crossover
+  if (emaData.crossAbove) lines.push('13 EMA crossed ABOVE 48 EMA \u2705');
+  if (emaData.crossBelow) lines.push('13 EMA crossed BELOW 48 EMA \u2705');
+
+  // Alignment
+  if (emaData.bullishAligned) lines.push('EMAs aligned BULLISH (13 > 48 > 200) \u2705');
+  if (emaData.bearishAligned) lines.push('EMAs aligned BEARISH (13 < 48 < 200) \u2705');
+
+  // Fan out
+  if (emaData.fanOut) lines.push('EMAs fanning out \u2705');
+
+  // Price vs 200
+  if (emaData.priceAbove200) lines.push('Price above 200 EMA \u2705');
+  else lines.push('Price below 200 EMA \u274C');
+
+  // Premarket levels
+  if (premarketData.high) {
+    lines.push('PMH: $' + premarketData.high.toFixed(2) + ' | PML: $' + premarketData.low.toFixed(2));
+  }
+  if (premarketData.breakAbovePMH) lines.push('Break above PMH \u2705');
+  if (premarketData.breakBelowPML) lines.push('Break below PML \u2705');
+  if (premarketData.retestPMH) lines.push('Break & retest of PMH ($' + premarketData.high.toFixed(2) + ') \u2705');
+  if (premarketData.retestPML) lines.push('Break & retest of PML ($' + premarketData.low.toFixed(2) + ') \u2705');
+
+  // Direction
+  var direction = 'NEUTRAL';
+  var entryTrigger = null;
+  if (emaData.crossAbove || emaData.bullishAligned) {
+    direction = 'CALLS';
+    entryTrigger = premarketData.high ? premarketData.high + 0.05 : (price ? price + 0.10 : null);
+  } else if (emaData.crossBelow || emaData.bearishAligned) {
+    direction = 'PUTS';
+    entryTrigger = premarketData.low ? premarketData.low - 0.05 : (price ? price - 0.10 : null);
+  }
+
+  lines.push('DIRECTION: ' + direction);
+  if (entryTrigger) lines.push('Entry trigger: $' + entryTrigger.toFixed(2));
+
+  return lines.join('\n');
+}
+
 // -- CLASSIFY BAR (The Strat) ------------------------------------
 function classifyBar(current, previous) {
   if (!current || !previous) return { type: 0, label: 'UNKNOWN' };
@@ -186,20 +442,26 @@ async function scanTicker(symbol, token) {
       '?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
     var urlWeekly = getTSBase() + '/marketdata/barcharts/' + symbol +
       '?unit=Weekly&interval=1&barsback=3&sessiontemplate=Default';
+    // Casey method: 5min bars for EMA crossover detection (need 60 bars for 48 EMA + buffer)
+    var url5min = getTSBase() + '/marketdata/barcharts/' + symbol +
+      '?unit=Minute&interval=5&barsback=60&sessiontemplate=Default';
 
     var headers = { 'Authorization': 'Bearer ' + token };
 
-    var [res30, res2h, resDaily, resWeekly] = await Promise.all([
+    var [res30, res2h, resDaily, resWeekly, res5min] = await Promise.all([
       fetch(url30, { headers }).then(r => r.json()).catch(() => ({})),
       fetch(url2h, { headers }).then(r => r.json()).catch(() => ({})),
       fetch(urlDaily, { headers }).then(r => r.json()).catch(() => ({})),
       fetch(urlWeekly, { headers }).then(r => r.json()).catch(() => ({})),
+      fetch(url5min, { headers }).then(r => r.json()).catch(() => ({})),
     ]);
 
     var bars30 = (res30.Bars || res30.bars || []);
     var bars2h = (res2h.Bars || res2h.bars || []);
     var barsDaily = (resDaily.Bars || resDaily.bars || []);
     var barsWeekly = (resWeekly.Bars || resWeekly.bars || []);
+    var bars5min = (res5min.Bars || res5min.bars || []);
+    console.log('[EMA] ' + symbol + ': fetched ' + bars5min.length + ' 5min bars for EMA calculation');
 
     // Detect setups on each timeframe
     var setups30 = detectSetups(bars30).map(function(s) { s.timeframe = '30MIN'; s.symbol = symbol; return s; });
@@ -209,8 +471,20 @@ async function scanTicker(symbol, token) {
     // Calculate levels
     var levels = calculateLevels(barsDaily, barsWeekly);
 
-    // Get current price
-    var price = barsDaily.length > 0 ? parseFloat(barsDaily[barsDaily.length - 1].Close) : null;
+    // Get current price (prefer 5min close for most recent, fall back to daily)
+    var price = bars5min.length > 0 ? parseFloat(bars5min[bars5min.length - 1].Close) :
+                barsDaily.length > 0 ? parseFloat(barsDaily[barsDaily.length - 1].Close) : null;
+
+    // Casey method: EMA crossover detection on 5min bars
+    var emaData = detectEMASignals(bars5min, price);
+    var premarketData = detectPremarketLevels(bars5min, price);
+
+    // Build Casey signal message if we have a crossover or alignment signal
+    var caseySignal = null;
+    if (emaData.crossAbove || emaData.crossBelow || emaData.bullishAligned || emaData.bearishAligned) {
+      caseySignal = buildCaseySignal(symbol, emaData, premarketData, price);
+      console.log('[EMA] ' + symbol + ' Casey signal built:\n' + caseySignal);
+    }
 
     // Check if price is near any key level
     var nearLevel = null;
@@ -240,6 +514,10 @@ async function scanTicker(symbol, token) {
       setups: latestSetups,
       bars30count: bars30.length,
       bars2hcount: bars2h.length,
+      bars5mincount: bars5min.length,
+      ema: emaData,
+      premarket: premarketData,
+      caseySignal: caseySignal,
     };
   } catch(e) {
     console.error('[BOTTOM-TICK] Error scanning', symbol, ':', e.message);
@@ -284,4 +562,4 @@ async function scanAll() {
   };
 }
 
-module.exports = { scanTicker, scanAll, detectSetups, classifyBar, calculateLevels, SCAN_TICKERS };
+module.exports = { scanTicker, scanAll, detectSetups, classifyBar, calculateLevels, calculateEMA, detectEMASignals, detectPremarketLevels, buildCaseySignal, SCAN_TICKERS };

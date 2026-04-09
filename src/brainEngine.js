@@ -172,8 +172,88 @@ async function evaluateScannerSignal() {
       }
     }
 
-    logBrain('Scanner: ' + results.length + ' tickers with setups, but none with 2+ TF confluence on watchlist');
-    return { triggered: false, reason: 'No 2+ TF confluence on watchlist tickers' };
+    // ---- CASEY METHOD: Check for EMA crossover signals ----
+    // Even without 2+ TF confluence, a Casey EMA signal is high conviction
+    for (var c = 0; c < FULL_WATCHLIST.length; c++) {
+      var caseyTicker = FULL_WATCHLIST[c];
+      // Check all results (not just withSetups) for EMA signals
+      var allResults = scanResults.allResults || results;
+      for (var cr = 0; cr < allResults.length; cr++) {
+        var caseyResult = allResults[cr];
+        if (caseyResult.symbol !== caseyTicker) continue;
+        if (!caseyResult.ema) continue;
+
+        var ema = caseyResult.ema;
+        var pm = caseyResult.premarket || {};
+
+        // HIGH CONVICTION CASEY SIGNAL:
+        // crossAbove + fanOut + (breakAbovePMH or retestPMH) = CALL
+        // crossBelow + fanOut + (breakBelowPML or retestPML) = PUT
+        var caseyBull = ema.crossAbove && ema.fanOut && (pm.breakAbovePMH || pm.retestPMH);
+        var caseyBear = ema.crossBelow && ema.fanOut && (pm.breakBelowPML || pm.retestPML);
+
+        // Also trigger on strong alignment + crossover even without premarket break
+        var strongBull = ema.crossAbove && ema.bullishAligned && ema.priceAbove200;
+        var strongBear = ema.crossBelow && ema.bearishAligned && !ema.priceAbove200;
+
+        if (caseyBull || caseyBear || strongBull || strongBear) {
+          var caseyDirection = (caseyBull || strongBull) ? 'BULLISH' : 'BEARISH';
+          var caseyAction = caseyDirection === 'BULLISH' ? 'CALL' : 'PUT';
+          var caseyTrigger = caseyDirection === 'BULLISH'
+            ? (pm.high ? pm.high + 0.05 : caseyResult.price)
+            : (pm.low ? pm.low - 0.05 : caseyResult.price);
+          var caseyStop = caseyDirection === 'BULLISH'
+            ? (pm.low || (caseyResult.price ? caseyResult.price * 0.995 : null))
+            : (pm.high || (caseyResult.price ? caseyResult.price * 1.005 : null));
+
+          var caseySignal = {
+            triggered: true,
+            ticker: caseyResult.symbol,
+            direction: caseyDirection,
+            action: caseyAction,
+            trigger: caseyTrigger,
+            stop: caseyStop,
+            timeframes: ['5MIN-EMA'],
+            tfCount: 1,
+            nearLevel: caseyResult.nearLevel,
+            price: caseyResult.price,
+            setupType: 'CASEY_EMA',
+            isCaseySignal: true,
+            highConviction: caseyBull || caseyBear,
+            caseyMessage: caseyResult.caseySignal,
+            description: 'Casey EMA: 13/48 crossover' +
+              (ema.fanOut ? ' + fan out' : '') +
+              (pm.retestPMH ? ' + PMH retest' : '') +
+              (pm.retestPML ? ' + PML retest' : '') +
+              (ema.bullishAligned ? ' + bullish aligned' : '') +
+              (ema.bearishAligned ? ' + bearish aligned' : '') +
+              ' -> ' + caseyAction,
+            ema: ema,
+            premarket: pm,
+          };
+
+          logBrain('CASEY SIGNAL: ' + caseySignal.ticker + ' ' + caseyDirection +
+            ' | EMA crossover' +
+            (ema.fanOut ? ' + FAN OUT' : '') +
+            (caseyBull ? ' + PMH break/retest' : '') +
+            (caseyBear ? ' + PML break/retest' : '') +
+            (caseySignal.highConviction ? ' | HIGH CONVICTION' : ' | STRONG'));
+
+          return caseySignal;
+        }
+
+        // Lower conviction: just a crossover (still worth reporting)
+        if (ema.crossAbove || ema.crossBelow) {
+          var crossDir = ema.crossAbove ? 'BULLISH' : 'BEARISH';
+          var crossAction = ema.crossAbove ? 'CALL' : 'PUT';
+          logBrain('CASEY (low conviction): ' + caseyTicker + ' 13/48 EMA crossover ' + crossDir +
+            ' -- watching for fan out and PM level break to confirm');
+        }
+      }
+    }
+
+    logBrain('Scanner: ' + results.length + ' tickers with setups, but none with 2+ TF confluence or Casey signal on watchlist');
+    return { triggered: false, reason: 'No 2+ TF confluence or Casey EMA signal on watchlist tickers' };
 
   } catch(e) {
     logBrain('Scanner error: ' + e.message);
@@ -338,6 +418,9 @@ function evaluateEntry(signal) {
   var trim1 = entry && entry > 0 ? parseFloat((entry * (1 + trimPlan.first)).toFixed(2)) : null;
   var trim2 = entry && entry > 0 ? parseFloat((entry * (1 + trimPlan.second)).toFixed(2)) : null;
 
+  // Casey signals get tagged as high priority source
+  var source = signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW');
+
   var result = {
     approved: true,
     ticker: ticker,
@@ -349,9 +432,13 @@ function evaluateEntry(signal) {
     trim1: trim1,
     trim2: trim2,
     strategy: strategies[currentStrategy],
-    source: signal.setupType ? 'SCANNER' : 'FLOW',
+    source: source,
+    isCaseySignal: signal.isCaseySignal || false,
+    highConviction: signal.highConviction || false,
+    caseyMessage: signal.caseyMessage || null,
     signal: signal,
-    reason: 'All checks passed -- ' + strategies[currentStrategy],
+    reason: 'All checks passed -- ' + strategies[currentStrategy] +
+      (signal.isCaseySignal ? ' (CASEY EMA SIGNAL)' : ''),
   };
 
   logBrain('ENTRY APPROVED: ' + ticker + ' ' + type.toUpperCase() +
@@ -662,7 +749,7 @@ async function runBrainCycle() {
       var entry = evaluateEntry(signal);
       if (entry.approved) {
         // WOULD execute here -- for now just log and post
-        var entryMsg = [
+        var entryLines = [
           'ENTRY SIGNAL -- ' + entry.strategy,
           '================================',
           'Ticker:    ' + entry.ticker,
@@ -674,10 +761,19 @@ async function runBrainCycle() {
           'T1 (+50%): ~$' + (entry.trim1 ? entry.trim1.toFixed(2) : '?'),
           'T2 (+100%):~$' + (entry.trim2 ? entry.trim2.toFixed(2) : '?'),
           'Source:    ' + entry.source,
-          '================================',
-          'STATUS: RECOMMENDATION ONLY',
-          'Auto-execution not enabled yet.',
-        ].join('\n');
+        ];
+        // Add Casey EMA details if applicable
+        if (entry.isCaseySignal && entry.caseyMessage) {
+          entryLines.push('================================');
+          entryLines.push(entry.caseyMessage);
+          if (entry.highConviction) {
+            entryLines.push('\u26A1 HIGH CONVICTION CASEY SIGNAL \u26A1');
+          }
+        }
+        entryLines.push('================================');
+        entryLines.push('STATUS: RECOMMENDATION ONLY');
+        entryLines.push('Auto-execution not enabled yet.');
+        var entryMsg = entryLines.join('\n');
 
         await postToDiscord(entryMsg);
 
