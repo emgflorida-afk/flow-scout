@@ -656,6 +656,63 @@ app.get('/api/scan/:symbol', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- RAW RECENT FLOW ENDPOINT ------------------------------------
+// GET /api/flow/recent?symbol=NVDA&type=sweep&direction=call&minPremium=100000
+app.get('/api/flow/recent', function(req, res) {
+  var filters = {};
+  if (req.query.symbol)     filters.symbol     = req.query.symbol;
+  if (req.query.type)       filters.alertType   = req.query.type;
+  if (req.query.direction)  filters.callPut     = req.query.direction;
+  if (req.query.minPremium) filters.minPremium  = req.query.minPremium;
+  var alerts = bullflow.getRecentFlow(filters);
+  res.json({ status: 'OK', count: alerts.length, alerts: alerts });
+});
+
+// -- RECENT FLOW SUMMARY -----------------------------------------
+// Returns: total alerts in last 30 min, top 5 tickers by premium,
+//          call vs put ratio, top sweeps
+app.get('/api/flow/recent/summary', function(req, res) {
+  var allAlerts = bullflow.getRecentFlow();
+  var now = Date.now();
+  var thirtyMinAgo = now - (30 * 60 * 1000);
+
+  // Alerts in last 30 minutes
+  var recent30 = allAlerts.filter(function(a) {
+    return new Date(a.timestamp).getTime() >= thirtyMinAgo;
+  });
+
+  // Top 5 tickers by total premium
+  var tickerPremium = {};
+  recent30.forEach(function(a) {
+    if (!tickerPremium[a.ticker]) tickerPremium[a.ticker] = 0;
+    tickerPremium[a.ticker] += a.premium;
+  });
+  var topTickers = Object.keys(tickerPremium)
+    .map(function(t) { return { ticker: t, totalPremium: tickerPremium[t] }; })
+    .sort(function(a, b) { return b.totalPremium - a.totalPremium; })
+    .slice(0, 5);
+
+  // Call vs Put ratio
+  var calls = recent30.filter(function(a) { return a.callPut === 'CALL'; }).length;
+  var puts  = recent30.filter(function(a) { return a.callPut === 'PUT'; }).length;
+  var ratio = puts > 0 ? (calls / puts).toFixed(2) : calls > 0 ? 'ALL_CALLS' : 'N/A';
+
+  // Top sweeps by premium
+  var topSweeps = recent30
+    .filter(function(a) { return a.alertType && a.alertType.includes('sweep'); })
+    .sort(function(a, b) { return b.premium - a.premium; })
+    .slice(0, 10);
+
+  res.json({
+    status: 'OK',
+    totalAlertsLast30Min: recent30.length,
+    totalAlertsStored: allAlerts.length,
+    topTickersByPremium: topTickers,
+    callPutRatio: { calls: calls, puts: puts, ratio: ratio },
+    topSweeps: topSweeps,
+  });
+});
+
 // -- BULLFLOW PER-TICKER QUERY -----------------------------------
 app.get('/api/flow/:symbol', function(req, res) {
   var sym = req.params.symbol.toUpperCase();

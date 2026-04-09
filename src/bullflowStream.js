@@ -11,11 +11,78 @@ const fetch = require('node-fetch');
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
   'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
-  'MRNA','MRVL','GUSH','UVXY','KO','PEP'
+  'MRNA','MRVL','GUSH','UVXY','KO','PEP',
+  'CRWV','BA','NFLX','MCD','DKNG','SBUX'
 ]);
 
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK;
+
+// -- RAW RECENT FLOW ALERTS (max 200) ----------------------------
+var _recentFlowAlerts = [];
+var MAX_RECENT_FLOW = 200;
+
+function pushRecentFlow(alert, ticker, score) {
+  var rawSymbol = alert.symbol || '';
+  var direction = parseDirection(rawSymbol);
+  var prem  = parseFloat(alert.premium || alert.alertPremium || alert.total_premium || 0);
+  var vol   = parseInt(alert.volume || 0);
+  var oi    = parseInt(alert.open_interest || alert.openInterest || 0);
+  var type  = (alert.alert_type || alert.alertType || alert.alertName || 'unknown').toLowerCase();
+
+  // Extract strike/expiry from OPRA
+  var strike = null;
+  var expiry = null;
+  var m = rawSymbol.replace(/^O:/, '').match(/^[A-Z]+(\d{2})(\d{2})(\d{2})([CP])(\d+)/);
+  if (m) {
+    strike = parseInt(m[5]);
+    expiry = m[2] + '/' + m[3] + '/20' + m[1];
+  }
+
+  var entry = {
+    ticker:        ticker,
+    strike:        strike,
+    expiry:        expiry,
+    callPut:       direction,
+    premium:       prem,
+    volume:        vol,
+    openInterest:  oi,
+    alertType:     type,
+    score:         score,
+    timestamp:     new Date().toISOString(),
+    executionType: alert.execution_type || alert.executionType || null,
+    rawSymbol:     rawSymbol,
+  };
+
+  _recentFlowAlerts.push(entry);
+  // Trim to max size
+  if (_recentFlowAlerts.length > MAX_RECENT_FLOW) {
+    _recentFlowAlerts = _recentFlowAlerts.slice(_recentFlowAlerts.length - MAX_RECENT_FLOW);
+  }
+}
+
+function getRecentFlow(filters) {
+  var result = _recentFlowAlerts;
+  if (!filters) return result;
+
+  if (filters.symbol) {
+    var sym = filters.symbol.toUpperCase();
+    result = result.filter(function(a) { return a.ticker === sym; });
+  }
+  if (filters.minPremium) {
+    var minP = parseFloat(filters.minPremium);
+    result = result.filter(function(a) { return a.premium >= minP; });
+  }
+  if (filters.alertType) {
+    var at = filters.alertType.toLowerCase();
+    result = result.filter(function(a) { return a.alertType.includes(at); });
+  }
+  if (filters.callPut) {
+    var cp = filters.callPut.toUpperCase();
+    result = result.filter(function(a) { return a.callPut === cp; });
+  }
+  return result;
+}
 
 // -- EXTRACT TICKER FROM OPRA SYMBOL ------------------------------
 // Handles: O:AMD260410C00230000, AMD260410C00230000, AMD, etc.
@@ -188,7 +255,9 @@ function startBullflowStream() {
             if (event === 'alert') {
               var data = parsed.data || parsed;
               var ticker = extractTicker(data.symbol || '');
+              var alertScore = scoreFlow(data);
               liveAggregator.update(ticker, data.symbol || '', data.alertPremium || data.premium || 0);
+              pushRecentFlow(data, ticker, alertScore);
               processAlert(data);
             }
           } catch(e) {
@@ -216,4 +285,4 @@ function startBullflowStream() {
   connect();
 }
 
-module.exports = { startBullflowStream, liveAggregator };
+module.exports = { startBullflowStream, liveAggregator, getRecentFlow };
