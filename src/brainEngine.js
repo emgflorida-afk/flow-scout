@@ -524,9 +524,9 @@ function evaluateEntry(signal) {
     confluenceResult = caseyConfluence.scoreConfluence(signal.tvData);
     logBrain('CONFLUENCE SCORE: ' + confluenceResult.score + '/10 (' + confluenceResult.conviction + ')');
 
-    // REQUIRE minimum score for entry
-    if (confluenceResult.score < 5) {
-      logBrain('ENTRY REJECTED: Confluence score ' + confluenceResult.score + '/10 -- too low (need 5+)');
+    // REQUIRE minimum score for entry (4+ = valid setup, even if only 2 contracts)
+    if (confluenceResult.score < 4) {
+      logBrain('ENTRY REJECTED: Confluence score ' + confluenceResult.score + '/10 -- too low (need 4+)');
       return { approved: false, reason: 'Confluence too low: ' + confluenceResult.score + '/10' };
     }
 

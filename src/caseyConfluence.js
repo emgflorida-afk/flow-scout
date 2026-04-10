@@ -290,14 +290,24 @@ function scoreConfluence(data) {
 
   // ---------------------------------------------------------------
   // CONVICTION LEVEL -- determines sizing
+  // Flexible: 2 contracts minimum for any valid setup (score 4+)
+  // Never skip a real setup just because we can't afford 5 contracts
   // ---------------------------------------------------------------
   var conviction = 'SKIP';
   var contracts = 0;
   if (score >= 8) { conviction = 'HIGH'; contracts = 5; }
   else if (score >= 7) { conviction = 'MEDIUM_HIGH'; contracts = 4; }
   else if (score >= 6) { conviction = 'MEDIUM'; contracts = 3; }
-  else if (score >= 5) { conviction = 'LOW'; contracts = 2; }
+  else if (score >= 4) { conviction = 'LOW'; contracts = 2; }
   else { conviction = 'SKIP'; contracts = 0; }
+
+  // Budget-aware: if caller provides maxBudget, cap contracts
+  if (data.maxBudget && data.estimatedPremium) {
+    var maxAffordable = Math.floor(data.maxBudget / (data.estimatedPremium * 100));
+    if (maxAffordable < contracts) {
+      contracts = Math.max(maxAffordable, 2); // never go below 2
+    }
+  }
 
   return {
     score: Math.round(score * 10) / 10,
