@@ -309,12 +309,46 @@ function scoreConfluence(data) {
     }
   }
 
+  // ---------------------------------------------------------------
+  // TRADE TYPE: DAY TRADE vs SWING
+  // This is critical — we left $1,274 on the table by day trading
+  // AMZN and MRVL when they were 8 DTE swing setups
+  // ---------------------------------------------------------------
+  var tradeType = 'DAY_TRADE'; // default
+  var swingReason = null;
+
+  // Swing criteria (ALL must be true):
+  // 1. Contract has 5+ DTE (from data.dte if provided)
+  // 2. MOM panel shows 5+ timeframes aligned (higher TFs agree)
+  // 3. EMA fanned (not just crossed — sustained momentum)
+  // 4. Volume above average (institutional participation)
+  // 5. NOT a 0DTE or near-expiry play
+
+  var dte = data.dte || 0;
+  var momAligned = isCalls ? momGreen : momRed;
+
+  if (dte >= 5 && momAligned >= 5 && emaState === 'FANNED' && volScore > 0) {
+    tradeType = 'SWING';
+    swingReason = 'DTE ' + dte + ', MOM ' + momAligned + '/7, EMA fanned, volume confirming';
+  } else if (dte >= 8 && momAligned >= 4 && emaScore >= 2) {
+    tradeType = 'SWING_POSSIBLE';
+    swingReason = 'DTE ' + dte + ', MOM ' + momAligned + '/7 — hold if daily structure confirms at 3:30';
+  }
+
+  // Swing trades get different exit rules:
+  // - Trim 1 contract at +50% (same)
+  // - DO NOT close at 3:30 PM (check daily chart health instead)
+  // - Trail stop on daily structure (not 2-min)
+  // - Hold until daily health drops below 5
+
   return {
     score: Math.round(score * 10) / 10,
     maxScore: 10,
     direction: direction,
     conviction: conviction,
     contracts: contracts,
+    tradeType: tradeType,
+    swingReason: swingReason,
     emaState: emaState,
     momGreen: momGreen,
     momRed: momRed,
