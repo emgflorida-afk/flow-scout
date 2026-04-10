@@ -18,7 +18,54 @@ var WATCHLIST = [
   'COIN','MSTR','PLTR','DKNG','RIVN',
   'KO','PEP','BA','NFLX','CRM',
   'INTC','AVGO','QCOM','MU',
+  'CRWV','HUM','TSLL','SLV','BABA',
 ];
+
+// -- GET BREAKING NEWS (real-time company news) --------------------
+async function getBreakingNews(symbol) {
+  try {
+    var key = getFinnhubKey();
+    if (!key) return [];
+    var today = new Date().toISOString().split('T')[0];
+    var yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+    var url = 'https://finnhub.io/api/v1/company-news?symbol=' + symbol + '&from=' + yesterday + '&to=' + today + '&token=' + key;
+    var res = await fetch(url);
+    var data = await res.json();
+    if (!Array.isArray(data)) return [];
+    // Only return news from last 12 hours
+    var cutoff = Date.now() / 1000 - (12 * 3600);
+    var recent = data.filter(function(n) { return n.datetime > cutoff; });
+    return recent.slice(0, 3).map(function(n) {
+      return {
+        symbol: symbol,
+        headline: n.headline || '',
+        source: n.source || '',
+        datetime: n.datetime,
+        url: n.url || '',
+        category: n.category || '',
+      };
+    });
+  } catch(e) {
+    console.log('[CATALYST] News error for ' + symbol + ':', e.message);
+    return [];
+  }
+}
+
+// -- SCAN BREAKING NEWS FOR ALL WATCHLIST -------------------------
+async function scanBreakingNews() {
+  console.log('[CATALYST] Scanning breaking news for ' + WATCHLIST.length + ' tickers...');
+  var allNews = [];
+  for (var i = 0; i < WATCHLIST.length; i++) {
+    var news = await getBreakingNews(WATCHLIST[i]);
+    if (news.length > 0) {
+      allNews = allNews.concat(news);
+    }
+    // Rate limit: 30 calls/sec on Finnhub free
+    if (i % 10 === 9) await new Promise(function(r) { setTimeout(r, 1500); });
+  }
+  console.log('[CATALYST] Found ' + allNews.length + ' breaking news items');
+  return allNews;
+}
 
 // -- GET ANALYST RECOMMENDATIONS (upgrades/downgrades) ------------
 async function getAnalystActions(symbol) {
@@ -238,4 +285,4 @@ async function postCatalystBrief() {
   }
 }
 
-module.exports = { scanCatalysts, postCatalystBrief, getUpgradeDowngrade, getCompanyNews, buildCatalystBrief };
+module.exports = { scanCatalysts, postCatalystBrief, getUpgradeDowngrade, getCompanyNews, buildCatalystBrief, scanBreakingNews, getBreakingNews };

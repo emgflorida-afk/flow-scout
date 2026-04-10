@@ -1148,6 +1148,15 @@ app.post('/api/brain/exitmode', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/news', function(req, res) {
+  try {
+    if (!catalystScanner || !catalystScanner.scanBreakingNews) return res.json({ error: 'News scanner not loaded' });
+    catalystScanner.scanBreakingNews().then(function(news) {
+      res.json({ status: 'OK', count: news.length, news: news });
+    }).catch(function(e) { res.status(500).json({ error: e.message }); });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 console.log('[BRAIN] Cron scheduled: every 60s, 9AM-4PM ET, weekdays');
 
 // -- START ------------------------------------------------------
