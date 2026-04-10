@@ -1130,6 +1130,35 @@ app.post('/api/brain/reset', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// CONFLUENCE SCORING -- Claude sends TradingView data, gets scored
+app.post('/api/brain/confluence', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var tvData = req.body;
+    var result = brainEngine.scoreSetup(tvData);
+    res.json({ status: 'OK', confluence: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POSITION HEALTH -- Claude sends live TV data for open position
+app.post('/api/brain/health/:ticker', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var ticker = req.params.ticker.toUpperCase();
+    var tvData = req.body;
+    var result = brainEngine.checkPositionHealth(ticker, tvData);
+    res.json({ status: 'OK', health: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET ENTRY CONTEXTS -- for debugging/monitoring
+app.get('/api/brain/contexts', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    res.json({ status: 'OK', contexts: brainEngine.getPositionContexts() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Brain Engine cron: every 60 seconds during market hours (weekdays)
 cron.schedule('* 9-16 * * 1-5', function() {
   if (brainEngine) {

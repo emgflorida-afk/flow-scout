@@ -270,4 +270,133 @@ async function getSmartStop(ticker, type, premium, delta, adx, atrPct) {
   return result;
 }
 
-module.exports = { getSmartStop, classifyTicker, getTSBars, getPublicQuote };
+// ================================================================
+// CASEY METHOD STOP -- Structure-based, NOT flat %
+// Uses the retest level from confluence scorer as invalidation
+// Stop goes below structure, not flat -25% on premium
+// ================================================================
+function calcCaseyStop(params) {
+  // params:
+  // {
+  //   ticker: 'SPY',
+  //   type: 'call' or 'put',
+  //   premium: 2.50,          // option premium at entry
+  //   delta: 0.45,            // option delta
+  //   entryPrice: 549.30,     // underlying price at entry
+  //   retestLevel: 549.25,    // the structural level being retested
+  //   invalidationPrice: 548.80, // price where structure breaks
+  //   atr: 0.35,              // 2-min ATR for buffer
+  // }
+
+  var type = params.type || 'call';
+  var premium = params.premium || 1.00;
+  var delta = params.delta || 0.40;
+  var entryPrice = params.entryPrice || 0;
+  var retestLevel = params.retestLevel || null;
+  var invalidation = params.invalidationPrice || null;
+  var atr = params.atr || 0.50;
+
+  // If no structure data, fall back to smart stop
+  if (!retestLevel || !invalidation || !entryPrice) {
+    console.log('[SMARTSTOP] No Casey structure data -- using legacy stop');
+    return null; // caller should fall back to getSmartStop()
+  }
+
+  // Buffer: half ATR below invalidation (absorbs wicks)
+  var buffer = atr * 0.5;
+  var underlyingStop = type === 'call'
+    ? invalidation - buffer
+    : invalidation + buffer;
+
+  // Distance from entry to stop on the underlying
+  var distance = Math.abs(entryPrice - underlyingStop);
+
+  // Translate to option premium loss
+  var optionLoss = distance * delta;
+  var optionStop = premium - optionLoss;
+
+  // FLOOR: never lose more than 40% on any trade
+  optionStop = Math.max(optionStop, premium * 0.60);
+
+  // CEILING: stop must be at least 10% below entry (give SOME room)
+  optionStop = Math.min(optionStop, premium * 0.90);
+
+  var stopPct = ((premium - optionStop) / premium * 100).toFixed(1);
+  var maxLoss = ((premium - optionStop) * 100).toFixed(0);
+
+  console.log('[SMARTSTOP] CASEY stop: underlying=$' + underlyingStop.toFixed(2) +
+    ' option=$' + optionStop.toFixed(2) + ' (' + stopPct + '% risk)' +
+    ' retest=$' + retestLevel.toFixed(2) + ' invalidation=$' + invalidation.toFixed(2));
+
+  return {
+    stopType: 'CASEY_STRUCTURE',
+    structuralLevel: retestLevel.toFixed(2),
+    invalidationLevel: invalidation.toFixed(2),
+    underlyingStop: underlyingStop.toFixed(2),
+    optionStop: optionStop.toFixed(2),
+    stopPrice: optionStop.toFixed(2),
+    distance: distance.toFixed(2),
+    stopPct: stopPct,
+    maxLoss: maxLoss,
+    stopLoss: maxLoss,
+    label: 'Casey structure -- ' + (type === 'call' ? 'below retest $' : 'above retest $') + retestLevel.toFixed(2),
+    why: 'Structure-based stop at invalidation + ATR buffer. Holds through normal pullbacks.',
+    category: 'CASEY',
+    source: 'CaseyConfluence',
+  };
+}
+
+// ================================================================
+// CASEY TRAIL STOP -- Structure-based trailing
+// Trails on STRUCTURE levels, not candle-by-candle
+// ================================================================
+function calcCaseyTrail(params) {
+  // params:
+  // {
+  //   type: 'call' or 'put',
+  //   currentPrice: 551.00,
+  //   entryPrice: 549.30,
+  //   currentPremium: 3.80,
+  //   entryPremium: 2.50,
+  //   delta: 0.45,
+  //   atr: 0.35,
+  //   retestLevel: 549.25,  // original structure
+  //   health: 8,            // from position health scorer
+  // }
+
+  var type = params.type || 'call';
+  var currentPrice = params.currentPrice || 0;
+  var atr = params.atr || 0.50;
+  var health = params.health || 5;
+  var currentPremium = params.currentPremium || 1.00;
+  var delta = params.delta || 0.40;
+
+  // Trail width based on health score
+  // Healthy trade = wide trail (let it ride)
+  // Weak trade = tight trail (protect gains)
+  var trailMultiplier;
+  if (health >= 8) trailMultiplier = 2.0;      // 2x ATR -- let it ride
+  else if (health >= 6) trailMultiplier = 1.5;  // 1.5x ATR -- standard
+  else if (health >= 4) trailMultiplier = 0.75; // tight -- protect
+  else trailMultiplier = 0.25;                  // very tight -- about to exit
+
+  var trailDistance = atr * trailMultiplier;
+  var underlyingTrail = type === 'call'
+    ? currentPrice - trailDistance
+    : currentPrice + trailDistance;
+
+  // Translate to option premium
+  var optionTrail = currentPremium - (trailDistance * delta);
+  optionTrail = Math.max(optionTrail, currentPremium * 0.50); // never trail below 50% of current value
+
+  return {
+    underlyingTrail: underlyingTrail.toFixed(2),
+    optionTrail: optionTrail.toFixed(2),
+    trailMultiplier: trailMultiplier,
+    trailDistance: trailDistance.toFixed(2),
+    healthBased: true,
+    reason: 'Health ' + health + '/10 → trail ' + trailMultiplier + 'x ATR ($' + trailDistance.toFixed(2) + ')',
+  };
+}
+
+module.exports = { getSmartStop, classifyTicker, getTSBars, getPublicQuote, calcCaseyStop, calcCaseyTrail };

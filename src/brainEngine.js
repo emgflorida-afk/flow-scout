@@ -18,6 +18,15 @@ try { bullflow = require('./bullflowStream'); } catch(e) { console.log('[BRAIN] 
 try { catalystScanner = require('./catalystScanner'); } catch(e) { console.log('[BRAIN] catalystScanner not loaded:', e.message); }
 try { resolver = require('./contractResolver'); } catch(e) { console.log('[BRAIN] contractResolver not loaded:', e.message); }
 
+var caseyConfluence = null;
+var smartStop = null;
+try { caseyConfluence = require('./caseyConfluence'); } catch(e) { console.log('[BRAIN] caseyConfluence not loaded:', e.message); }
+try { smartStop = require('./smartStop'); } catch(e) { console.log('[BRAIN] smartStop not loaded:', e.message); }
+
+// -- CONFLUENCE CONTEXT STORAGE ---------------------------------------
+// Stores entry context for each position so health monitor can compare
+var positionContexts = {};
+
 // -- DISCORD WEBHOOK ------------------------------------------------
 var BRAIN_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
@@ -509,6 +518,43 @@ function evaluateEntry(signal) {
   // Casey signals get tagged as high priority source
   var source = signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW');
 
+  // CONFLUENCE CHECK -- if we have TradingView data, score it
+  var confluenceResult = null;
+  if (signal.tvData && caseyConfluence) {
+    confluenceResult = caseyConfluence.scoreConfluence(signal.tvData);
+    logBrain('CONFLUENCE SCORE: ' + confluenceResult.score + '/10 (' + confluenceResult.conviction + ')');
+
+    // REQUIRE minimum score for entry
+    if (confluenceResult.score < 5) {
+      logBrain('ENTRY REJECTED: Confluence score ' + confluenceResult.score + '/10 -- too low (need 5+)');
+      return { approved: false, reason: 'Confluence too low: ' + confluenceResult.score + '/10' };
+    }
+
+    // Use confluence-based sizing instead of default
+    if (confluenceResult.contracts > 0) {
+      contractSize = confluenceResult.contracts;
+      logBrain('SIZING: ' + confluenceResult.contracts + ' contracts based on conviction ' + confluenceResult.conviction);
+    }
+
+    // Use Casey structure-based stop if available
+    if (confluenceResult.retestLevel && smartStop) {
+      var caseyStop = smartStop.calcCaseyStop({
+        ticker: ticker,
+        type: type,
+        premium: entry || 1.00,
+        delta: signal.delta || 0.40,
+        entryPrice: signal.underlyingPrice || confluenceResult.entryPrice,
+        retestLevel: confluenceResult.retestLevel,
+        invalidationPrice: confluenceResult.invalidationPrice,
+        atr: confluenceResult.atr || 0.50,
+      });
+      if (caseyStop) {
+        stop = parseFloat(caseyStop.stopPrice);
+        logBrain('CASEY STOP: $' + caseyStop.stopPrice + ' (structure at $' + caseyStop.structuralLevel + ')');
+      }
+    }
+  }
+
   var result = {
     approved: true,
     ticker: ticker,
@@ -524,10 +570,22 @@ function evaluateEntry(signal) {
     isCaseySignal: signal.isCaseySignal || false,
     highConviction: signal.highConviction || false,
     caseyMessage: signal.caseyMessage || null,
+    confluenceScore: confluenceResult ? confluenceResult.score : null,
+    confluenceConviction: confluenceResult ? confluenceResult.conviction : null,
+    confluenceChecklist: confluenceResult ? confluenceResult.checklist : null,
+    retestLevel: confluenceResult ? confluenceResult.retestLevel : null,
+    invalidationPrice: confluenceResult ? confluenceResult.invalidationPrice : null,
     signal: signal,
     reason: 'All checks passed -- ' + strategies[currentStrategy] +
-      (signal.isCaseySignal ? ' (CASEY EMA SIGNAL)' : ''),
+      (signal.isCaseySignal ? ' (CASEY EMA SIGNAL)' : '') +
+      (confluenceResult ? ' | Confluence ' + confluenceResult.score + '/10' : ''),
   };
+
+  // Store context for position health monitor
+  if (confluenceResult) {
+    positionContexts[ticker] = confluenceResult;
+    logBrain('Stored entry context for ' + ticker + ' health monitoring');
+  }
 
   logBrain('ENTRY APPROVED: ' + ticker + ' ' + type.toUpperCase() +
     ' | ' + contractSize + ' contracts' +
@@ -555,11 +613,46 @@ function managePosition(position) {
 
   var pctChange = ((current - entry) / entry) * 100;
 
-  // STOP OUT: -25% or below stop
-  if (pctChange <= -25 || (position.stop && current <= position.stop)) {
-    logBrain('STOP OUT: ' + position.ticker + ' at $' + current.toFixed(2) +
-      ' (' + pctChange.toFixed(1) + '% from entry $' + entry.toFixed(2) + ')');
-    return { action: 'STOP', reason: 'Hit -25% stop or structural stop', pctChange: pctChange };
+  // HEALTH-BASED EXIT -- replaces flat -25% panic cut
+  // If we have entry context + live TV data, use health scoring
+  var entryContext = positionContexts[position.ticker] || null;
+  if (entryContext && position.tvData && caseyConfluence) {
+    var health = caseyConfluence.scorePositionHealth(position.tvData, entryContext);
+    position.healthScore = health.health;
+    position.healthAction = health.action;
+
+    if (health.action === 'EXIT') {
+      logBrain('HEALTH EXIT: ' + position.ticker + ' health=' + health.health +
+        '/10 -- ' + health.reasons.join(', '));
+      return { action: 'STOP', reason: 'Structure broken (health ' + health.health + '/10): ' +
+        health.reasons.join(', '), pctChange: pctChange, healthScore: health.health };
+    }
+
+    if (health.action === 'TIGHTEN' && pctChange > 0) {
+      logBrain('HEALTH TIGHTEN: ' + position.ticker + ' health=' + health.health +
+        '/10 -- moving stop to breakeven');
+      return { action: 'TIGHTEN', reason: 'Health dropping (' + health.health + '/10) -- tighten stop',
+        pctChange: pctChange, healthScore: health.health };
+    }
+
+    if (health.action === 'RIDE') {
+      logBrain('HEALTH RIDE: ' + position.ticker + ' health=' + health.health +
+        '/10 -- structure strong, let it ride');
+    }
+  }
+
+  // HARD FLOOR: -40% absolute max loss (no structure data or catastrophic move)
+  if (pctChange <= -40) {
+    logBrain('HARD STOP: ' + position.ticker + ' at $' + current.toFixed(2) +
+      ' (' + pctChange.toFixed(1) + '% -- max loss floor)');
+    return { action: 'STOP', reason: 'Hit -40% hard floor', pctChange: pctChange };
+  }
+
+  // STRUCTURAL STOP: below the stop price (set from Casey or legacy)
+  if (position.stop && current <= position.stop) {
+    logBrain('STRUCTURAL STOP: ' + position.ticker + ' at $' + current.toFixed(2) +
+      ' (below stop $' + position.stop.toFixed(2) + ')');
+    return { action: 'STOP', reason: 'Below structural stop $' + position.stop.toFixed(2), pctChange: pctChange };
   }
 
   // TRIM 1: at +50% and contracts > 2
@@ -587,9 +680,37 @@ function managePosition(position) {
     }
   }
 
-  // TRAIL: runner with 15% minimum trail (only for last contract / house money)
+  // TRAIL: runner with HEALTH-BASED trailing (not flat 15%)
   if (position.trim1Done && contracts <= 1) {
-    var trailStop = current * 0.85; // never tighter than 15% below current
+    var healthScore = position.healthScore || 5;
+
+    // Use Casey trail if we have structure data
+    if (entryContext && smartStop && smartStop.calcCaseyTrail) {
+      var trailResult = smartStop.calcCaseyTrail({
+        type: position.type || 'call',
+        currentPrice: position.underlyingPrice || current,
+        entryPrice: entry,
+        currentPremium: current,
+        entryPremium: entry,
+        delta: position.delta || 0.40,
+        atr: (entryContext && entryContext.atr) || 0.50,
+        retestLevel: entryContext ? entryContext.retestLevel : null,
+        health: healthScore,
+      });
+      var trailStop = parseFloat(trailResult.optionTrail);
+      if (position.trailStop && trailStop > position.trailStop) {
+        logBrain('CASEY TRAIL: ' + position.ticker + ' trail=$' + trailStop.toFixed(2) +
+          ' | ' + trailResult.reason);
+        return { action: 'TRAIL', trailStop: trailStop,
+          reason: 'Casey trail: ' + trailResult.reason, pctChange: pctChange };
+      }
+      return { action: 'HOLD', reason: 'Runner active, trail at $' +
+        (position.trailStop || trailStop).toFixed(2) + ' | health ' + healthScore + '/10',
+        pctChange: pctChange };
+    }
+
+    // Fallback: flat 15% trail (legacy)
+    var trailStop = current * 0.85;
     if (position.trailStop && trailStop > position.trailStop) {
       logBrain('TRAIL: ' + position.ticker + ' trail stop moved up to $' + trailStop.toFixed(2));
       return { action: 'TRAIL', trailStop: trailStop, reason: 'Runner trailing at 15%', pctChange: pctChange };
@@ -1123,6 +1244,25 @@ async function runBrainCycle() {
 // ===================================================================
 // EXPORTS
 // ===================================================================
+// ===================================================================
+// CONFLUENCE API -- for Claude agent to score setups via TV data
+// ===================================================================
+function scoreSetup(tvData) {
+  if (!caseyConfluence) return { error: 'caseyConfluence module not loaded' };
+  return caseyConfluence.scoreConfluence(tvData);
+}
+
+function checkPositionHealth(ticker, tvData) {
+  if (!caseyConfluence) return { error: 'caseyConfluence module not loaded' };
+  var ctx = positionContexts[ticker];
+  if (!ctx) return { error: 'No entry context for ' + ticker + ' -- was not entered via confluence' };
+  return caseyConfluence.scorePositionHealth(tvData, ctx);
+}
+
+function getPositionContexts() {
+  return positionContexts;
+}
+
 module.exports = {
   runBrainCycle: runBrainCycle,
   getDailyBrief: getDailyBrief,
@@ -1133,4 +1273,7 @@ module.exports = {
   setExitMode: setExitMode,
   getExitMode: getExitMode,
   detectVolumeExhaustion: detectVolumeExhaustion,
+  scoreSetup: scoreSetup,
+  checkPositionHealth: checkPositionHealth,
+  getPositionContexts: getPositionContexts,
 };
