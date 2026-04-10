@@ -267,6 +267,17 @@ function scoreConfluence(data) {
       invalidationPrice = data.ema48 - (atr * 1.5);
       structureNote = 'EMA 48 retest at ' + data.ema48.toFixed(2);
     }
+    // BREAKOUT WITHOUT RETEST: price ran 1+ ATR past level, use last micro-pullback as structure
+    if (!retestLevel && data.pmh && data.price && data.price > data.pmh + atr) {
+      retestLevel = data.price - (atr * 0.5); // enter on micro-pullback
+      invalidationPrice = data.pmh; // if it falls back below PMH, setup is dead
+      structureNote = 'BREAKOUT CONTINUATION above PMH ' + data.pmh.toFixed(2) + ' (no retest, use micro-pullback)';
+    }
+    if (!retestLevel && data.pdh && data.price && data.price > data.pdh + atr) {
+      retestLevel = data.price - (atr * 0.5);
+      invalidationPrice = data.pdh;
+      structureNote = 'BREAKOUT CONTINUATION above PDH ' + data.pdh.toFixed(2);
+    }
   } else {
     // For puts: PML retest > PDL retest > PMH retest
     if (data.pml && data.price && data.price >= data.pml * 0.997 && data.price <= data.pml * 1.002) {
@@ -285,6 +296,17 @@ function scoreConfluence(data) {
       retestLevel = data.ema48;
       invalidationPrice = data.ema48 + (atr * 1.5);
       structureNote = 'EMA 48 retest at ' + data.ema48.toFixed(2);
+    }
+    // BREAKOUT WITHOUT RETEST (puts): price dropped 1+ ATR below level
+    if (!retestLevel && data.pml && data.price && data.price < data.pml - atr) {
+      retestLevel = data.price + (atr * 0.5);
+      invalidationPrice = data.pml;
+      structureNote = 'BREAKDOWN CONTINUATION below PML ' + data.pml.toFixed(2);
+    }
+    if (!retestLevel && data.pdl && data.price && data.price < data.pdl - atr) {
+      retestLevel = data.price + (atr * 0.5);
+      invalidationPrice = data.pdl;
+      structureNote = 'BREAKDOWN CONTINUATION below PDL ' + data.pdl.toFixed(2);
     }
   }
 

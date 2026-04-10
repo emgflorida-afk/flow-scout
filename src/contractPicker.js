@@ -52,10 +52,12 @@ function pickContract(params) {
     if (ask > maxPremium) return false;
     // Has liquidity
     if (volume < 50 && oi < 100) return false;
-    // Spread not too wide (< 15% of mid)
+    // HARD RULE: Spread must be < 5% of ask (was 15% — too loose)
+    // $0.10 spread on $2.00 ask = 5% = OK
+    // $0.20 spread on $2.00 ask = 10% = REJECTED (bad fills destroy edge)
     var mid = (ask + bid) / 2;
     var spread = ask - bid;
-    if (mid > 0 && spread / mid > 0.15) return false;
+    if (ask > 0 && spread / ask > 0.05) return false;
 
     return true;
   });

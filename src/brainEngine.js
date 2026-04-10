@@ -504,6 +504,15 @@ function evaluateEntry(signal) {
     return { approved: false, reason: ticker + ' not on watchlist' };
   }
 
+  // Check: no entries before 9:45 AM ET (first 15 min = noise/false breakouts)
+  var etNow = getETTime ? getETTime() : new Date();
+  var etHour = typeof etNow === 'object' ? etNow.getHours() : parseInt(String(etNow).split(':')[0]);
+  var etMin = typeof etNow === 'object' ? etNow.getMinutes() : parseInt(String(etNow).split(':')[1]);
+  if (etHour === 9 && etMin < 45) {
+    logBrain('ENTRY REJECTED: Before 9:45 AM ET (' + etHour + ':' + etMin + ') -- opening volatility');
+    return { approved: false, reason: 'Before 9:45 AM -- opening 15 min is noise' };
+  }
+
   // Check: are we under max trades?
   if (tradesOpened >= maxTrades) {
     logBrain('ENTRY REJECTED: Max trades reached (' + tradesOpened + '/' + maxTrades + ')');
@@ -551,6 +560,12 @@ function evaluateEntry(signal) {
   var entry = trigger;
   var trim1 = entry && entry > 0 ? parseFloat((entry * (1 + trimPlan.first)).toFixed(2)) : null;
   var trim2 = entry && entry > 0 ? parseFloat((entry * (1 + trimPlan.second)).toFixed(2)) : null;
+
+  // Check earnings: if swing candidate, don't swing into earnings
+  if (signal.tvData && signal.tvData.dte >= 5 && signal.earningsWithin3Days) {
+    logBrain('EARNINGS WARNING: ' + ticker + ' has earnings within 3 days -- forcing DAY TRADE (no swing)');
+    if (signal.tvData) signal.tvData.dte = 0; // force day trade classification
+  }
 
   // Casey signals get tagged as high priority source
   var source = signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW');
@@ -692,16 +707,28 @@ function managePosition(position) {
     return { action: 'STOP', reason: 'Below structural stop $' + position.stop.toFixed(2), pctChange: pctChange };
   }
 
-  // TRIM 1: at +50% and contracts > 2
-  if (pctChange >= 50 && contracts > 2 && !position.trim1Done) {
-    logBrain('TRIM 1: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 contract');
-    return { action: 'TRIM', trimQty: 1, reason: '+50% hit -- trim 1 of ' + contracts, pctChange: pctChange };
-  }
-
-  // TRIM 2: at +100% and contracts > 1
-  if (pctChange >= 100 && contracts > 1 && !position.trim2Done) {
-    logBrain('TRIM 2: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 more contract');
-    return { action: 'TRIM', trimQty: 1, reason: '+100% hit -- trim 1 more, runner left', pctChange: pctChange };
+  // TRIM LOGIC — scales with position size
+  // 2 contracts: NO trim at +50%. Hold both. Trail on structure. Exit all when structure breaks.
+  // 3 contracts: trim 1 at +50%, trim 1 at +100%, trail 1 runner
+  // 4-5 contracts: trim 2 at +50%, trim 1-2 at +100%, trail rest
+  if (contracts === 2 && !position.trim1Done) {
+    // 2 CONTRACTS: Don't trim early. Hold for the full move.
+    // Only trim 1 at +100% to lock in breakeven, then trail the runner.
+    if (pctChange >= 100) {
+      logBrain('TRIM (2-lot): ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 of 2, trail runner');
+      return { action: 'TRIM', trimQty: 1, reason: '+100% on 2-lot -- trim 1, runner on house money', pctChange: pctChange };
+    }
+  } else if (contracts > 2) {
+    // 3+ CONTRACTS: Standard trim schedule
+    if (pctChange >= 50 && !position.trim1Done) {
+      var trimQty = contracts >= 4 ? 2 : 1;
+      logBrain('TRIM 1: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell ' + trimQty);
+      return { action: 'TRIM', trimQty: trimQty, reason: '+50% hit -- trim ' + trimQty + ' of ' + contracts, pctChange: pctChange };
+    }
+    if (pctChange >= 100 && contracts > 1 && !position.trim2Done) {
+      logBrain('TRIM 2: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 more');
+      return { action: 'TRIM', trimQty: 1, reason: '+100% hit -- trim 1 more, runner left', pctChange: pctChange };
+    }
   }
 
   // EXIT AT STRENGTH: if exitMode is STRENGTH, check volume exhaustion on contracts 1 & 2
