@@ -347,6 +347,28 @@ function scoreConfluence(data) {
   }
 
   // ---------------------------------------------------------------
+  // ENTRY TYPE: RETEST (limit at mid) vs BREAKOUT (limit at ask)
+  // Decides HOW to fill, not just whether to enter
+  // ---------------------------------------------------------------
+  var entryType = 'RETEST'; // default: patient, limit at mid
+  var fillInstruction = 'LIMIT at mid-price. Wait 60 sec, bump $0.05 if no fill. Skip if still no fill.';
+
+  if (structureNote && structureNote.indexOf('BREAKOUT CONTINUATION') !== -1) {
+    // Price already ran past the level — no retest coming
+    entryType = 'BREAKOUT';
+    fillInstruction = 'LIMIT at ASK. Fill immediately. Do NOT chase if option already moved 30%+.';
+  } else if (brainScore >= 2 && sqzFiring && volScore > 0) {
+    // GO signal + squeeze firing + volume = this is moving NOW
+    entryType = 'BREAKOUT';
+    fillInstruction = 'LIMIT at ASK. Squeeze + signal + volume = move is happening now.';
+  } else if (data.flowRatio && data.flowRatio > 10) {
+    // One-sided flow (like AMZN 638:0 calls)
+    entryType = 'BREAKOUT';
+    fillInstruction = 'LIMIT at ASK. Heavy institutional flow — ride the wave.';
+  }
+  // Retests use mid-price by default (already set above)
+
+  // ---------------------------------------------------------------
   // TRADE TYPE: DAY TRADE vs SWING
   // This is critical — we left $1,274 on the table by day trading
   // AMZN and MRVL when they were 8 DTE swing setups
@@ -386,6 +408,8 @@ function scoreConfluence(data) {
     contracts: contracts,
     tradeType: tradeType,
     swingReason: swingReason,
+    entryType: entryType,
+    fillInstruction: fillInstruction,
     emaState: emaState,
     momGreen: momGreen,
     momRed: momRed,
