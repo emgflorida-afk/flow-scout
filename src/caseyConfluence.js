@@ -289,23 +289,38 @@ function scoreConfluence(data) {
   }
 
   // ---------------------------------------------------------------
-  // CONVICTION LEVEL -- determines sizing
-  // Flexible: 2 contracts minimum for any valid setup (score 4+)
-  // Never skip a real setup just because we can't afford 5 contracts
+  // CONVICTION LEVEL + DOLLAR-BASED SIZING
+  // Position size = max risk ($) / (entry - stop) / 100
+  // Confluence score sets conviction LEVEL, but dollars cap the SIZE
   // ---------------------------------------------------------------
   var conviction = 'SKIP';
-  var contracts = 0;
-  if (score >= 8) { conviction = 'HIGH'; contracts = 5; }
-  else if (score >= 7) { conviction = 'MEDIUM_HIGH'; contracts = 4; }
-  else if (score >= 6) { conviction = 'MEDIUM'; contracts = 3; }
-  else if (score >= 4) { conviction = 'LOW'; contracts = 2; }
-  else { conviction = 'SKIP'; contracts = 0; }
+  var maxRiskPct = 0; // % of account risked
+  if (score >= 8) { conviction = 'HIGH'; maxRiskPct = 0.02; }      // 2% of account
+  else if (score >= 7) { conviction = 'MEDIUM_HIGH'; maxRiskPct = 0.015; } // 1.5%
+  else if (score >= 6) { conviction = 'MEDIUM'; maxRiskPct = 0.01; }       // 1%
+  else if (score >= 4) { conviction = 'LOW'; maxRiskPct = 0.0075; }        // 0.75%
+  else { conviction = 'SKIP'; maxRiskPct = 0; }
 
-  // Budget-aware: if caller provides maxBudget, cap contracts
-  if (data.maxBudget && data.estimatedPremium) {
-    var maxAffordable = Math.floor(data.maxBudget / (data.estimatedPremium * 100));
+  // Calculate contracts from DOLLAR RISK, not arbitrary count
+  var accountSize = data.accountSize || 20000;
+  var maxRiskDollars = accountSize * maxRiskPct;
+  var estimatedPremium = data.estimatedPremium || 1.50;
+  var estimatedStopDist = invalidationPrice && data.price
+    ? Math.abs(data.price - invalidationPrice) * (data.delta || 0.40)
+    : estimatedPremium * 0.25; // fallback: 25% of premium
+  var contracts = 0;
+
+  if (conviction !== 'SKIP' && estimatedStopDist > 0) {
+    contracts = Math.floor(maxRiskDollars / (estimatedStopDist * 100));
+    contracts = Math.max(contracts, 2);  // minimum 2 (need to trim)
+    contracts = Math.min(contracts, 6);  // maximum 6 (don't go crazy)
+  }
+
+  // Budget-aware: if caller provides maxBudget or settledCash, cap further
+  if (data.maxBudget && estimatedPremium) {
+    var maxAffordable = Math.floor(data.maxBudget / (estimatedPremium * 100));
     if (maxAffordable < contracts) {
-      contracts = Math.max(maxAffordable, 2); // never go below 2
+      contracts = Math.max(maxAffordable, 2);
     }
   }
 

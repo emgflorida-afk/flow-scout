@@ -36,6 +36,36 @@ var CORE_WATCHLIST = ['SPY', 'QQQ', 'IWM']; // Casey method -- indices first
 var FLOW_WATCHLIST = ['NVDA', 'AMZN', 'META', 'TSLA', 'AAPL', 'INTC', 'MRVL', 'AMD'];
 var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST);
 
+// -- CORRELATION GROUPS (max 1 position per group, max 2 total) ------
+var CORRELATION_GROUPS = {
+  INDICES: ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'SPXL', 'TNA'],
+  MEGA_TECH: ['NVDA', 'AMZN', 'META', 'AAPL', 'AMD', 'MSFT', 'GOOGL'],
+  HIGH_BETA: ['TSLA', 'MRVL', 'COIN', 'MSTR', 'INTC', 'WULF'],
+};
+
+function getCorrelationGroup(ticker) {
+  for (var group in CORRELATION_GROUPS) {
+    if (CORRELATION_GROUPS[group].indexOf(ticker.toUpperCase()) !== -1) return group;
+  }
+  return 'OTHER';
+}
+
+function isCorrelationAllowed(ticker) {
+  var group = getCorrelationGroup(ticker);
+  var activeGroups = {};
+  var totalPositions = 0;
+  activePositions.forEach(function(p) {
+    var g = getCorrelationGroup(p.ticker);
+    activeGroups[g] = true;
+    totalPositions++;
+  });
+  // Max 2 positions total
+  if (totalPositions >= 2) return { allowed: false, reason: 'Max 2 positions already open' };
+  // Max 1 per correlation group
+  if (activeGroups[group]) return { allowed: false, reason: 'Already have position in ' + group + ' group' };
+  return { allowed: true };
+}
+
 // -- STATE MACHINE --------------------------------------------------
 var STATE = 'PRE_MARKET';
 var dailyPL = 0;
@@ -491,6 +521,13 @@ function evaluateEntry(signal) {
   if (alreadyIn) {
     logBrain('ENTRY REJECTED: Already in ' + ticker);
     return { approved: false, reason: 'Already have position in ' + ticker };
+  }
+
+  // Check: correlation group limit (max 1 per group, max 2 total)
+  var corrCheck = isCorrelationAllowed(ticker);
+  if (!corrCheck.allowed) {
+    logBrain('ENTRY REJECTED: ' + corrCheck.reason + ' (' + ticker + ' is ' + getCorrelationGroup(ticker) + ')');
+    return { approved: false, reason: corrCheck.reason };
   }
 
   // Check: direction aligned with SPY trend (from GEXR or dynamic bias)?
