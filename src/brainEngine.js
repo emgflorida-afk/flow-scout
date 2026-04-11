@@ -25,7 +25,9 @@ var preMarketScanner = null;
 try { caseyConfluence = require('./caseyConfluence'); } catch(e) { console.log('[BRAIN] caseyConfluence not loaded:', e.message); }
 try { smartStop = require('./smartStop'); } catch(e) { console.log('[BRAIN] smartStop not loaded:', e.message); }
 try { econCalendar = require('./economicCalendar'); } catch(e) { console.log('[BRAIN] economicCalendar not loaded:', e.message); }
+var orderExecutor = null;
 try { preMarketScanner = require('./preMarketScanner'); } catch(e) { console.log('[BRAIN] preMarketScanner not loaded:', e.message); }
+try { orderExecutor = require('./orderExecutor'); } catch(e) { console.log('[BRAIN] orderExecutor not loaded:', e.message); }
 
 // -- CONFLUENCE CONTEXT STORAGE ---------------------------------------
 // Stores entry context for each position so health monitor can compare
@@ -206,6 +208,154 @@ function detectVolumeExhaustion(bars5min, direction) {
   }
 
   return { exhausted: exhausted, reason: reasons.join(' | '), confidence: confidence, signals: signals };
+}
+
+// -- BYPASS MODE: FULL AUTONOMOUS EXECUTION -------------------------
+// When true, brain places LIVE orders via orderExecutor instead of logging
+// Account: 11975462 (LIVE TradeStation)
+var BYPASS_MODE = false;
+var LIVE_ACCOUNT = '11975462';
+
+function setBypassMode(enabled) {
+  BYPASS_MODE = !!enabled;
+  logBrain('BYPASS MODE: ' + (BYPASS_MODE ? 'ENABLED -- LIVE AUTONOMOUS EXECUTION' : 'DISABLED -- recommendation only'));
+  return BYPASS_MODE;
+}
+
+function getBypassMode() { return BYPASS_MODE; }
+
+// -- AUTONOMOUS EXECUTION: resolve contract + place order -----------
+async function executeAutonomous(entry) {
+  if (!BYPASS_MODE) {
+    logBrain('BYPASS OFF -- skipping execution for ' + entry.ticker);
+    return { executed: false, reason: 'Bypass mode disabled' };
+  }
+  if (!orderExecutor) {
+    logBrain('ORDER EXECUTOR NOT LOADED -- cannot execute');
+    return { executed: false, reason: 'orderExecutor not loaded' };
+  }
+  if (!resolver) {
+    logBrain('CONTRACT RESOLVER NOT LOADED -- cannot execute');
+    return { executed: false, reason: 'contractResolver not loaded' };
+  }
+
+  try {
+    // Step 1: Resolve the option contract
+    var tradeType = entry.earningsWithin3Days ? 'DAY' : 'DAY'; // always day trade for now
+    var contract = await resolver.resolveContract(
+      entry.ticker,
+      entry.type, // 'call' or 'put'
+      tradeType,
+      { confluence: entry.confluenceScore, strategy: entry.source }
+    );
+
+    if (!contract || contract.blocked) {
+      var blockReason = contract ? contract.reason : 'No contract found';
+      logBrain('EXECUTION BLOCKED: ' + entry.ticker + ' -- ' + blockReason);
+      return { executed: false, reason: blockReason };
+    }
+
+    if (contract.wideSpread) {
+      logBrain('WIDE SPREAD WARNING: ' + entry.ticker + ' ' + contract.symbol +
+        ' bid:$' + contract.bid + ' ask:$' + contract.ask + ' -- proceeding with caution');
+    }
+
+    // Step 2: Determine sizing (contract resolver provides qty, but respect brain sizing)
+    var qty = Math.min(entry.contracts || 3, contract.qty || 2);
+
+    // Step 3: Use contract's calculated prices
+    var limitPrice = contract.entryPrice || contract.ask;
+    var stopPrice  = contract.optionStop || entry.stop || null;
+    var t1Price    = contract.t1Price || null;
+
+    logBrain('EXECUTING: ' + entry.ticker + ' ' + entry.type.toUpperCase() +
+      ' | ' + contract.symbol + ' | ' + qty + 'x @ $' + limitPrice +
+      ' | Stop $' + (stopPrice || '?') + ' | T1 $' + (t1Price || 'auto') +
+      ' | ' + contract.dte + 'DTE | delta:' + (contract.delta || '?'));
+
+    // Step 4: Place the order on LIVE account
+    var result = await orderExecutor.placeOrder({
+      account:    LIVE_ACCOUNT,
+      symbol:     contract.symbol,
+      action:     'BUYTOOPEN',
+      qty:        qty,
+      limit:      limitPrice,
+      stop:       stopPrice,
+      t1:         t1Price,
+      duration:   'DAY',
+      note:       'BRAIN AUTO: ' + entry.source + ' | ' + entry.ticker + ' ' + entry.type,
+      liveBypass: true,
+    });
+
+    if (result.error) {
+      logBrain('ORDER FAILED: ' + result.error);
+      await postToDiscord(
+        'ORDER FAILED: ' + entry.ticker + ' ' + entry.type.toUpperCase() + '\n' +
+        'Error: ' + result.error
+      );
+      return { executed: false, reason: result.error };
+    }
+
+    logBrain('ORDER PLACED: ' + contract.symbol + ' x' + qty +
+      ' @ $' + limitPrice + ' | ID: ' + result.orderId);
+
+    await postToDiscord(
+      'AUTONOMOUS ORDER PLACED\n' +
+      '================================\n' +
+      'Ticker:    ' + entry.ticker + '\n' +
+      'Contract:  ' + contract.symbol + '\n' +
+      'Direction: ' + entry.type.toUpperCase() + '\n' +
+      'Qty:       ' + qty + '\n' +
+      'Entry:     $' + limitPrice + '\n' +
+      'Stop:      $' + (stopPrice || 'auto') + '\n' +
+      'T1:        $' + (t1Price || 'auto') + '\n' +
+      'DTE:       ' + contract.dte + '\n' +
+      'Delta:     ' + (contract.delta ? contract.delta.toFixed(2) : '?') + '\n' +
+      'Source:    ' + entry.source + '\n' +
+      'Strategy:  ' + (entry.ayceStrategy || entry.strategy) + '\n' +
+      'Order ID:  ' + result.orderId + '\n' +
+      '================================\n' +
+      'LIVE AUTONOMOUS EXECUTION'
+    );
+
+    return {
+      executed: true,
+      orderId: result.orderId,
+      contract: contract,
+      qty: qty,
+      limit: limitPrice,
+      stop: stopPrice,
+      t1: t1Price,
+    };
+
+  } catch(e) {
+    logBrain('EXECUTION ERROR: ' + e.message);
+    return { executed: false, reason: e.message };
+  }
+}
+
+// -- AUTONOMOUS CLOSE: market sell to close -------------------------
+async function closeAutonomous(position) {
+  if (!BYPASS_MODE || !orderExecutor) return { closed: false, reason: 'Bypass off or no executor' };
+  try {
+    var symbol = position.contractSymbol || position.symbol;
+    if (!symbol) return { closed: false, reason: 'No contract symbol on position' };
+    var result = await orderExecutor.closePosition(LIVE_ACCOUNT, symbol, position.contracts || 1);
+    if (result.error) {
+      logBrain('CLOSE FAILED: ' + symbol + ' -- ' + result.error);
+      return { closed: false, reason: result.error };
+    }
+    logBrain('CLOSED: ' + symbol + ' x' + (position.contracts || 1) + ' | ID: ' + result.orderId);
+    await postToDiscord(
+      'POSITION CLOSED: ' + (position.ticker || symbol) + '\n' +
+      'Contract: ' + symbol + ' x' + (position.contracts || 1) + '\n' +
+      'Order ID: ' + result.orderId
+    );
+    return { closed: true, orderId: result.orderId };
+  } catch(e) {
+    logBrain('CLOSE ERROR: ' + e.message);
+    return { closed: false, reason: e.message };
+  }
 }
 
 // -- BRAIN ACTIVE FLAG (must be started explicitly) -----------------
@@ -1122,7 +1272,8 @@ async function runBrainCycle() {
         'Market OPEN -- Brain entering WATCHING state\n' +
         'Strategy: ' + strategies[currentStrategy] + '\n' +
         'Target: $' + dailyTarget + ' | Max Loss: $' + maxDailyLoss + '\n' +
-        'Max Trades: ' + maxTrades + ' | Contracts: ' + contractSize
+        'Max Trades: ' + maxTrades + ' | Contracts: ' + contractSize + '\n' +
+        'BYPASS MODE: ' + (BYPASS_MODE ? 'ON -- LIVE AUTONOMOUS EXECUTION' : 'OFF -- recommendations only')
       );
     }
     return;
@@ -1205,7 +1356,12 @@ async function runBrainCycle() {
       // Evaluate immediately
       var entry = evaluateEntry(signal);
       if (entry.approved) {
-        // WOULD execute here -- for now just log and post
+        // AUTONOMOUS EXECUTION when bypass mode is on
+        var execResult = null;
+        if (BYPASS_MODE) {
+          execResult = await executeAutonomous(entry);
+        }
+
         var entryLines = [
           'ENTRY SIGNAL -- ' + entry.strategy,
           '================================',
@@ -1219,7 +1375,6 @@ async function runBrainCycle() {
           'T2 (+100%):~$' + (entry.trim2 ? entry.trim2.toFixed(2) : '?'),
           'Source:    ' + entry.source,
         ];
-        // Add Casey EMA details if applicable
         if (entry.isCaseySignal && entry.caseyMessage) {
           entryLines.push('================================');
           entryLines.push(entry.caseyMessage);
@@ -1227,7 +1382,6 @@ async function runBrainCycle() {
             entryLines.push('\u26A1 HIGH CONVICTION CASEY SIGNAL \u26A1');
           }
         }
-        // Add AYCE Strat details if applicable
         if (entry.isAYCESignal) {
           entryLines.push('================================');
           entryLines.push('AYCE STRAT: ' + (entry.ayceStrategy || 'Unknown'));
@@ -1237,28 +1391,39 @@ async function runBrainCycle() {
           entryLines.push('\u26A1 STRAT PATTERN -- STRUCTURAL ENTRY \u26A1');
         }
         entryLines.push('================================');
-        entryLines.push('STATUS: RECOMMENDATION ONLY');
-        entryLines.push('Auto-execution not enabled yet.');
+        if (BYPASS_MODE && execResult && execResult.executed) {
+          entryLines.push('STATUS: LIVE ORDER PLACED');
+          entryLines.push('Order ID: ' + execResult.orderId);
+          entryLines.push('Contract: ' + (execResult.contract ? execResult.contract.symbol : '?'));
+        } else if (BYPASS_MODE && execResult && !execResult.executed) {
+          entryLines.push('STATUS: EXECUTION FAILED');
+          entryLines.push('Reason: ' + execResult.reason);
+        } else {
+          entryLines.push('STATUS: RECOMMENDATION ONLY');
+          entryLines.push('Enable bypass mode for auto-execution.');
+        }
         var entryMsg = entryLines.join('\n');
-
         await postToDiscord(entryMsg);
 
-        // Simulate opening the position (tracking only)
+        // Track position (with contract info if executed)
         var newPos = {
           ticker: entry.ticker,
           type: entry.type,
           direction: entry.direction,
-          contracts: entry.contracts,
-          entry: entry.entry,
-          stop: entry.stop,
+          contracts: execResult && execResult.executed ? execResult.qty : entry.contracts,
+          entry: execResult && execResult.executed ? execResult.limit : entry.entry,
+          stop: execResult && execResult.executed ? execResult.stop : entry.stop,
+          contractSymbol: execResult && execResult.contract ? execResult.contract.symbol : null,
+          orderId: execResult ? execResult.orderId : null,
           trim1Target: entry.trim1,
           trim2Target: entry.trim2,
           trim1Done: false,
           trim2Done: false,
           trailStop: null,
           openTime: new Date().toISOString(),
-          currentPrice: entry.entry, // will be updated
+          currentPrice: entry.entry,
           strategy: entry.strategy,
+          liveOrder: !!(execResult && execResult.executed),
         };
         activePositions.push(newPos);
         tradesOpened++;
@@ -1290,20 +1455,29 @@ async function runBrainCycle() {
         var phEntry = evaluateEntry(phSignal);
         if (phEntry.approved) {
           logBrain('POWER HOUR ENTRY: ' + phEntry.ticker + ' ' + phEntry.type.toUpperCase());
+          var phExec = null;
+          if (BYPASS_MODE) {
+            phExec = await executeAutonomous(phEntry);
+          }
+          var phStatus = (BYPASS_MODE && phExec && phExec.executed)
+            ? 'LIVE ORDER PLACED | ID: ' + phExec.orderId
+            : (BYPASS_MODE ? 'EXECUTION FAILED: ' + (phExec ? phExec.reason : '?') : 'RECOMMENDATION ONLY');
           await postToDiscord(
             'POWER HOUR ENTRY SIGNAL\n' +
             phEntry.ticker + ' ' + phEntry.type.toUpperCase() + ' x' + phEntry.contracts + '\n' +
             'Entry: ~$' + (phEntry.entry ? phEntry.entry.toFixed(2) : '?') + '\n' +
-            'STATUS: RECOMMENDATION ONLY'
+            'STATUS: ' + phStatus
           );
 
           activePositions.push({
             ticker: phEntry.ticker,
             type: phEntry.type,
             direction: phEntry.direction,
-            contracts: phEntry.contracts,
-            entry: phEntry.entry,
-            stop: phEntry.stop,
+            contracts: (phExec && phExec.executed) ? phExec.qty : phEntry.contracts,
+            entry: (phExec && phExec.executed) ? phExec.limit : phEntry.entry,
+            stop: (phExec && phExec.executed) ? phExec.stop : phEntry.stop,
+            contractSymbol: (phExec && phExec.contract) ? phExec.contract.symbol : null,
+            orderId: phExec ? phExec.orderId : null,
             trim1Target: phEntry.trim1,
             trim2Target: phEntry.trim2,
             trim1Done: false,
@@ -1312,6 +1486,7 @@ async function runBrainCycle() {
             openTime: new Date().toISOString(),
             currentPrice: phEntry.entry,
             strategy: phEntry.strategy,
+            liveOrder: !!(phExec && phExec.executed),
           });
           tradesOpened++;
           transitionTo('POSITION_OPEN', 'Power hour: ' + phEntry.ticker);
@@ -1447,13 +1622,19 @@ async function runBrainCycle() {
       logBrain('CLOSE_OUT: ' + activePositions.length + ' positions to close');
       for (var cl = 0; cl < activePositions.length; cl++) {
         var closePos = activePositions[cl];
+        var closeResult = null;
+        if (BYPASS_MODE && closePos.liveOrder && closePos.contractSymbol) {
+          closeResult = await closeAutonomous(closePos);
+        }
+        var closeStatus = (closeResult && closeResult.closed)
+          ? 'CLOSED | Order ID: ' + closeResult.orderId
+          : (BYPASS_MODE && closePos.liveOrder ? 'CLOSE FAILED: ' + (closeResult ? closeResult.reason : '?') : 'RECOMMENDATION -- close this position');
         await postToDiscord(
           'CLOSE OUT: ' + closePos.ticker + ' ' + closePos.type.toUpperCase() + ' x' + closePos.contracts + '\n' +
           'Entry: $' + (closePos.entry ? closePos.entry.toFixed(2) : '?') + '\n' +
-          'STATUS: RECOMMENDATION -- close this position'
+          'STATUS: ' + closeStatus
         );
       }
-      // Clear positions (simulated close)
       activePositions = [];
     }
 
@@ -1503,6 +1684,8 @@ module.exports = {
   getBrainStatus: getBrainStatus,
   setExitMode: setExitMode,
   getExitMode: getExitMode,
+  setBypassMode: setBypassMode,
+  getBypassMode: getBypassMode,
   detectVolumeExhaustion: detectVolumeExhaustion,
   scoreSetup: scoreSetup,
   checkPositionHealth: checkPositionHealth,

@@ -633,6 +633,41 @@ app.get('/api/earnings', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- EARNINGS CHECK FOR SPECIFIC TICKER ---------------------------
+app.get('/api/earnings/check/:ticker', async function(req, res) {
+  var ticker = (req.params.ticker || '').toUpperCase();
+  // Use brain's earnings cache if available
+  var brain2 = null;
+  try { brain2 = require('./brainEngine'); } catch(e) {}
+  if (brain2 && brain2.tickerHasEarningsWithin3Days) {
+    await brain2.refreshEarningsCache();
+    var hasEarnings = brain2.tickerHasEarningsWithin3Days(ticker);
+    var nextER = brain2.getNextEarningsDate(ticker);
+    return res.json({
+      ticker: ticker,
+      earningsWithin3Days: hasEarnings,
+      nextEarnings: nextER,
+      warning: hasEarnings ? 'DO NOT SWING -- earnings within 3 days' : null,
+    });
+  }
+  // Fallback to raw earnings calendar
+  if (!econCalendar || !econCalendar.getEarningsCalendar) return res.json({ status: 'not loaded' });
+  try {
+    var d = new Date();
+    var from = d.toISOString().slice(0, 10);
+    d.setDate(d.getDate() + 5);
+    var to = d.toISOString().slice(0, 10);
+    var all = await econCalendar.getEarningsCalendar(from, to);
+    var match = all.filter(function(e) { return e.symbol === ticker; });
+    res.json({
+      ticker: ticker,
+      earningsWithin3Days: match.length > 0,
+      nextEarnings: match.length > 0 ? match[0] : null,
+      warning: match.length > 0 ? 'DO NOT SWING -- earnings within 3 days' : null,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- BOTTOM TICK SCANNER (@TheStrat method) ----------------------
 var bottomTick = null;
 try { bottomTick = require('./bottomTick'); console.log('[BOTTOM-TICK] Loaded OK'); } catch(e) { console.log('[BOTTOM-TICK] Skipped:', e.message); }
@@ -1127,6 +1162,22 @@ app.post('/api/brain/reset', function(req, res) {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
     brainEngine.resetDaily();
     res.json({ status: 'OK', message: 'Daily state reset' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/bypass', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var enabled = req.body.enabled !== undefined ? req.body.enabled : true;
+    var result = brainEngine.setBypassMode(enabled);
+    res.json({ status: 'OK', bypassMode: result, message: result ? 'LIVE AUTONOMOUS EXECUTION ENABLED' : 'Bypass mode disabled' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/brain/bypass', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    res.json({ status: 'OK', bypassMode: brainEngine.getBypassMode() });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
