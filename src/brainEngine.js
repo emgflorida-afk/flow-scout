@@ -27,7 +27,9 @@ try { smartStop = require('./smartStop'); } catch(e) { console.log('[BRAIN] smar
 try { econCalendar = require('./economicCalendar'); } catch(e) { console.log('[BRAIN] economicCalendar not loaded:', e.message); }
 var orderExecutor = null;
 try { preMarketScanner = require('./preMarketScanner'); } catch(e) { console.log('[BRAIN] preMarketScanner not loaded:', e.message); }
+var signalEnricher = null;
 try { orderExecutor = require('./orderExecutor'); } catch(e) { console.log('[BRAIN] orderExecutor not loaded:', e.message); }
+try { signalEnricher = require('./signalEnricher'); } catch(e) { console.log('[BRAIN] signalEnricher not loaded:', e.message); }
 
 // -- CONFLUENCE CONTEXT STORAGE ---------------------------------------
 // Stores entry context for each position so health monitor can compare
@@ -830,7 +832,25 @@ function evaluateEntry(signal) {
     logBrain('EARNINGS ALERT: ' + ticker + ' reports ' + erInfo + ' -- forcing DAY TRADE, no swing');
   }
 
-  // Check: direction aligned with SPY trend (from GEXR or dynamic bias)?
+  // Check: direction aligned with SPY trend (dynamic bias + GEXR)
+  try {
+    var dynBias = require('./dynamicBias');
+    if (dynBias && dynBias.getBias) {
+      var bias = dynBias.getBias();
+      if (bias && bias.bias && bias.strength === 'STRONG') {
+        var biasBullish = bias.bias === 'BULLISH';
+        var signalBullish2 = direction === 'BULLISH';
+        if (biasBullish && !signalBullish2) {
+          logBrain('ENTRY WARNING: STRONG BULLISH bias but signal is BEARISH -- reduced conviction');
+        } else if (!biasBullish && signalBullish2) {
+          logBrain('ENTRY WARNING: STRONG BEARISH bias but signal is BULLISH -- reduced conviction');
+        } else {
+          logBrain('BIAS ALIGNED: ' + bias.bias + ' ' + bias.strength + ' matches ' + direction);
+        }
+      }
+    }
+  } catch(e) {}
+
   var gexrDirection = global.gexrDirection || null;
   if (gexrDirection) {
     var gexrBullish = gexrDirection === 'above';
@@ -1353,7 +1373,22 @@ async function runBrainCycle() {
 
     if (signal && signal.triggered) {
       transitionTo('ENTRY_SIGNAL', strat + ' signal: ' + signal.ticker + ' ' + signal.direction);
-      // Evaluate immediately
+
+      // ENRICH signal with 4HR, FTFC, flow, VWAP, EMA data before scoring
+      if (signalEnricher) {
+        try {
+          var tvData = await signalEnricher.enrichSignal(signal);
+          signal.tvData = tvData;
+          logBrain('ENRICHED: ' + signal.ticker +
+            ' | 4HR=' + (tvData.fourHr ? tvData.fourHr.trend + ' ' + tvData.fourHr.candle : 'N/A') +
+            ' | FTFC=' + (tvData.strat ? tvData.strat.ftfc + ' ' + tvData.strat.tfAligned + '/4' : 'N/A') +
+            ' | Strat=' + (tvData.strat && tvData.strat.signal ? tvData.strat.signal : 'none') +
+            ' | Bias=' + (tvData.dynamicBias ? tvData.dynamicBias.bias : 'N/A'));
+        } catch(e) {
+          logBrain('ENRICHMENT FAILED: ' + e.message + ' -- proceeding without full data');
+        }
+      }
+
       var entry = evaluateEntry(signal);
       if (entry.approved) {
         // AUTONOMOUS EXECUTION when bypass mode is on
@@ -1452,6 +1487,13 @@ async function runBrainCycle() {
       }
 
       if (phSignal && phSignal.triggered) {
+        // Enrich power hour signal
+        if (signalEnricher) {
+          try {
+            var phTvData = await signalEnricher.enrichSignal(phSignal);
+            phSignal.tvData = phTvData;
+          } catch(e) { /* proceed without enrichment */ }
+        }
         var phEntry = evaluateEntry(phSignal);
         if (phEntry.approved) {
           logBrain('POWER HOUR ENTRY: ' + phEntry.ticker + ' ' + phEntry.type.toUpperCase());
