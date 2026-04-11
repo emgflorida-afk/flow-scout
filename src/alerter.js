@@ -985,4 +985,49 @@ function clearAlerts() {
   _recentAlerts = [];
 }
 
-module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow, storeAlert, getRecentAlerts, clearAlerts };
+// ===================================================================
+// SCANNER ALERT — Dual: Discord embed + Mac system notification
+// Used by scheduled task scanners to alert AB even during active sessions
+// ===================================================================
+async function scannerAlert(title, message, tier) {
+  tier = tier || 'INFO';
+  var emoji = tier === 'A-TIER' ? '🔥' : tier === 'B-TIER' ? '⚡' : tier === 'HEALTH' ? '💊' : tier === 'PRIMO' ? '🎯' : 'ℹ️';
+
+  // 1. MAC SYSTEM NOTIFICATION — pops up even if Claude Code is mid-conversation
+  try {
+    var { execSync } = require('child_process');
+    var safeTitle = (emoji + ' ' + title).replace(/'/g, '').replace(/"/g, '');
+    var safeMsg = message.replace(/'/g, '').replace(/"/g, '').substring(0, 200);
+    execSync("osascript -e 'display notification \"" + safeMsg + "\" with title \"" + safeTitle + "\" sound name \"Glass\"'");
+    console.log('[SCANNER ALERT] Mac notification: ' + title);
+  } catch(e) {
+    console.log('[SCANNER ALERT] Mac notify failed:', e.message);
+  }
+
+  // 2. DISCORD EMBED — persistent, can check phone
+  try {
+    var color = tier === 'A-TIER' ? 0xFF4500 : tier === 'B-TIER' ? 0xFFA500 : tier === 'HEALTH' ? 0x00FF00 : tier === 'PRIMO' ? 0x9B59B6 : 0x808080;
+    var webhook = INDICES_WEBHOOK; // use the indices channel for scanner alerts
+    await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        embeds: [{
+          title: emoji + ' ' + title,
+          description: message.substring(0, 2000),
+          color: color,
+          timestamp: new Date().toISOString(),
+          footer: { text: 'Flow Scout Scanner | ' + tier }
+        }]
+      }),
+    });
+    console.log('[SCANNER ALERT] Discord sent: ' + title);
+  } catch(e) {
+    console.log('[SCANNER ALERT] Discord failed:', e.message);
+  }
+
+  // Also store in recent alerts
+  storeAlert({ title: title, message: message, tier: tier, time: new Date().toISOString() });
+}
+
+module.exports = { sendTradeAlert, sendMorningBrief, sendSystemMessage, sendDiscordRaw, scoreFlow, storeAlert, getRecentAlerts, clearAlerts, scannerAlert };

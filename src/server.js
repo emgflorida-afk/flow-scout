@@ -1159,6 +1159,16 @@ app.get('/api/brain/contexts', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// SCANNER ALERT ENDPOINT — scanners call this to send Discord + Mac notification
+app.post('/api/alert', async function(req, res) {
+  try {
+    var alerter = require('./alerter');
+    var { title, message, tier } = req.body;
+    await alerter.scannerAlert(title || 'Alert', message || '', tier || 'INFO');
+    res.json({ status: 'OK', sent: true });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Brain Engine cron: every 60 seconds during market hours (weekdays)
 cron.schedule('* 9-16 * * 1-5', function() {
   if (brainEngine) {
