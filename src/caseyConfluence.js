@@ -106,6 +106,75 @@ function scoreConfluence(data) {
   });
 
   // ---------------------------------------------------------------
+  // 0b. THE STRAT — FTFC + ACTIONABLE SIGNALS (0-3 points, can VETO)
+  // Primo's method. FTFC = highest probability. Signals = entries.
+  // "The highest probability trades occur when there is FTFC"
+  // "IF IT DOESN'T TRIGGER, DO NOT ENTER"
+  // ---------------------------------------------------------------
+  var stratScore = 0;
+  var stratState = 'NO STRAT DATA';
+  var stratTriggerLevel = null;
+  var stratStopLevel = null;
+  var stratSignalType = null;
+
+  if (data.strat) {
+    var st = data.strat;
+
+    // FTFC — Full Time Frame Continuity
+    // Monthly, Weekly, Daily, 60-min all agreeing = highest probability
+    var ftfcAligned = false;
+    if (st.ftfc === 'BULL' && isCalls) ftfcAligned = true;
+    if (st.ftfc === 'BEAR' && !isCalls) ftfcAligned = true;
+
+    if (ftfcAligned) {
+      stratScore += 1.5;
+      stratState = 'FTFC ' + st.ftfc + ' (' + (st.tfAligned || '?') + '/4 TFs)';
+    } else if (st.ftfc === 'MIXED') {
+      // Mixed continuity — not a veto but no boost
+      stratState = 'FTFC MIXED (' + (st.tfAligned || '?') + '/4 TFs)';
+    } else if (st.ftfc && !ftfcAligned) {
+      // FTFC AGAINST our direction — VETO
+      stratScore -= 2;
+      stratState = 'FTFC AGAINST (' + st.ftfc + ') — DO NOT FIGHT CONTINUITY';
+    }
+
+    // Actionable Signal — F2U, F2D, Hammer, Shooter, Inside Bar
+    if (st.signal) {
+      var signalBullish = (st.signal === 'F2D' || st.signal === 'HAMMER' || st.signal === 'INSIDE_UP');
+      var signalBearish = (st.signal === 'F2U' || st.signal === 'SHOOTER' || st.signal === 'INSIDE_DOWN');
+      var signalAligned = (isCalls && signalBullish) || (!isCalls && signalBearish);
+
+      if (signalAligned) {
+        stratScore += 1.5;
+        stratState += ' + ' + st.signal;
+        stratSignalType = st.signal;
+        stratTriggerLevel = st.triggerLevel || null;
+
+        // Strat stops are built into the pattern
+        if (st.signal === 'F2U' && st.triggerLevel) {
+          stratStopLevel = st.signalBarHigh || (st.triggerLevel + (data.atr || 0.50));
+        } else if (st.signal === 'F2D' && st.triggerLevel) {
+          stratStopLevel = st.signalBarLow || (st.triggerLevel - (data.atr || 0.50));
+        } else if (st.signal === 'INSIDE_UP' || st.signal === 'INSIDE_DOWN') {
+          // Inside bar stop = opposite side of the inside bar
+          stratStopLevel = isCalls ? (st.insideBarLow || null) : (st.insideBarHigh || null);
+        }
+      }
+    }
+  }
+
+  score += stratScore;
+  checklist.push({
+    item: 'Strat/FTFC: ' + stratState,
+    pass: stratScore >= 1,
+    score: Math.max(0, stratScore),
+    max: 3,
+    detail: data.strat
+      ? 'FTFC=' + (data.strat.ftfc || '?') + ' TFs=' + (data.strat.tfAligned || '?') + '/4 Signal=' + (data.strat.signal || 'none')
+      : 'No Strat data — check multi-TF continuity'
+  });
+
+  // ---------------------------------------------------------------
   // 1. EMA 13/48 RELATIONSHIP on 2-MIN (0-2 points)
   // Casey entry timing — 4hr carries direction, 2-min is just timing
   // ---------------------------------------------------------------
@@ -465,7 +534,13 @@ function scoreConfluence(data) {
     entryType = 'BREAKOUT';
     fillInstruction = 'LIMIT at ASK. Heavy institutional flow — ride the wave.';
   }
-  // Retests use mid-price by default (already set above)
+  // Strat trigger entry — wait for signal bar to close, enter on break of trigger level
+  if (stratSignalType && stratTriggerLevel) {
+    entryType = 'STRAT_TRIGGER';
+    fillInstruction = 'STRAT: Wait for signal bar to CLOSE. Enter LIMIT at trigger $' +
+      stratTriggerLevel.toFixed(2) + '. IF IT DOESNT TRIGGER, DO NOT ENTER. Stop at $' +
+      (stratStopLevel ? stratStopLevel.toFixed(2) : 'signal bar high/low') + '.';
+  }
 
   // ---------------------------------------------------------------
   // TRADE TYPE: DAY TRADE vs SWING
@@ -509,6 +584,10 @@ function scoreConfluence(data) {
     swingReason: swingReason,
     entryType: entryType,
     fillInstruction: fillInstruction,
+    stratSignal: stratSignalType,
+    stratTriggerLevel: stratTriggerLevel,
+    stratStopLevel: stratStopLevel,
+    ftfc: data.strat ? data.strat.ftfc : null,
     emaState: emaState,
     momGreen: momGreen,
     momRed: momRed,

@@ -399,4 +399,71 @@ function calcCaseyTrail(params) {
   };
 }
 
-module.exports = { getSmartStop, classifyTicker, getTSBars, getPublicQuote, calcCaseyStop, calcCaseyTrail };
+// ================================================================
+// STRAT STOP -- Built into the pattern itself
+// F2U stop = above the failed bar high
+// F2D stop = below the failed bar low
+// Inside bar = opposite side of the inside bar
+// These are structural by definition -- the pattern IS the structure
+// ================================================================
+function calcStratStop(params) {
+  var type = params.type || 'call';
+  var premium = params.premium || 1.00;
+  var delta = params.delta || 0.40;
+  var entryPrice = params.entryPrice || 0;
+  var signal = params.signal || null; // F2U, F2D, INSIDE_UP, INSIDE_DOWN
+  var signalBarHigh = params.signalBarHigh || null;
+  var signalBarLow = params.signalBarLow || null;
+  var atr = params.atr || 0.50;
+
+  if (!signal || !entryPrice) return null;
+
+  var underlyingStop;
+  var label;
+
+  if (signal === 'F2D' && signalBarLow) {
+    // F2D = bullish reversal. Stop below the low of the failed bar
+    underlyingStop = signalBarLow - (atr * 0.25); // tiny buffer
+    label = 'STRAT F2D stop below failed bar low $' + signalBarLow.toFixed(2);
+  } else if (signal === 'F2U' && signalBarHigh) {
+    // F2U = bearish reversal. Stop above the high of the failed bar
+    underlyingStop = signalBarHigh + (atr * 0.25);
+    label = 'STRAT F2U stop above failed bar high $' + signalBarHigh.toFixed(2);
+  } else if ((signal === 'INSIDE_UP' || signal === 'INSIDE_DOWN') && signalBarLow && signalBarHigh) {
+    // Inside bar breakout. Stop on opposite side
+    underlyingStop = type === 'call' ? signalBarLow - (atr * 0.25) : signalBarHigh + (atr * 0.25);
+    label = 'STRAT inside bar stop at opposite side';
+  } else if (signal === 'HAMMER' && signalBarLow) {
+    underlyingStop = signalBarLow - (atr * 0.25);
+    label = 'STRAT hammer stop below wick $' + signalBarLow.toFixed(2);
+  } else if (signal === 'SHOOTER' && signalBarHigh) {
+    underlyingStop = signalBarHigh + (atr * 0.25);
+    label = 'STRAT shooter stop above wick $' + signalBarHigh.toFixed(2);
+  } else {
+    return null;
+  }
+
+  var distance = Math.abs(entryPrice - underlyingStop);
+  var optionLoss = distance * delta;
+  var optionStop = premium - optionLoss;
+  optionStop = Math.max(optionStop, premium * 0.50); // floor at 50%
+  optionStop = Math.min(optionStop, premium * 0.90); // ceiling at 90%
+
+  console.log('[SMARTSTOP] STRAT stop: ' + label + ' underlying=$' + underlyingStop.toFixed(2) +
+    ' option=$' + optionStop.toFixed(2));
+
+  return {
+    stopType: 'STRAT_SIGNAL',
+    structuralLevel: underlyingStop.toFixed(2),
+    underlyingStop: underlyingStop.toFixed(2),
+    optionStop: optionStop.toFixed(2),
+    stopPrice: optionStop.toFixed(2),
+    distance: distance.toFixed(2),
+    label: label,
+    why: 'Strat signal stop — pattern defines the invalidation level',
+    category: 'STRAT',
+    source: 'StratSignal',
+  };
+}
+
+module.exports = { getSmartStop, classifyTicker, getTSBars, getPublicQuote, calcCaseyStop, calcCaseyTrail, calcStratStop };
