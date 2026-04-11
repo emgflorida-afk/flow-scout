@@ -20,12 +20,52 @@ try { resolver = require('./contractResolver'); } catch(e) { console.log('[BRAIN
 
 var caseyConfluence = null;
 var smartStop = null;
+var econCalendar = null;
+var preMarketScanner = null;
 try { caseyConfluence = require('./caseyConfluence'); } catch(e) { console.log('[BRAIN] caseyConfluence not loaded:', e.message); }
 try { smartStop = require('./smartStop'); } catch(e) { console.log('[BRAIN] smartStop not loaded:', e.message); }
+try { econCalendar = require('./economicCalendar'); } catch(e) { console.log('[BRAIN] economicCalendar not loaded:', e.message); }
+try { preMarketScanner = require('./preMarketScanner'); } catch(e) { console.log('[BRAIN] preMarketScanner not loaded:', e.message); }
 
 // -- CONFLUENCE CONTEXT STORAGE ---------------------------------------
 // Stores entry context for each position so health monitor can compare
 var positionContexts = {};
+
+// -- EARNINGS CACHE (refreshes daily) -----------------------------------
+var earningsCache = { date: null, data: [] };
+
+async function refreshEarningsCache() {
+  if (!econCalendar || !econCalendar.getEarningsCalendar) return;
+  var today = new Date().toISOString().slice(0, 10);
+  if (earningsCache.date === today && earningsCache.data.length > 0) return; // already fresh
+  try {
+    var d = new Date();
+    var from = d.toISOString().slice(0, 10);
+    d.setDate(d.getDate() + 5); // check 5 days ahead
+    var to = d.toISOString().slice(0, 10);
+    var earnings = await econCalendar.getEarningsCalendar(from, to);
+    earningsCache = { date: today, data: earnings };
+    logBrain('EARNINGS CACHE: loaded ' + earnings.length + ' reports from ' + from + ' to ' + to);
+  } catch(e) { console.error('[BRAIN] Earnings cache error:', e.message); }
+}
+
+function tickerHasEarningsWithin3Days(ticker) {
+  if (!earningsCache.data || earningsCache.data.length === 0) return false;
+  var now = new Date();
+  var cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() + 3);
+  var cutoffStr = cutoff.toISOString().slice(0, 10);
+  var todayStr = now.toISOString().slice(0, 10);
+  return earningsCache.data.some(function(e) {
+    return e.symbol === ticker && e.date >= todayStr && e.date <= cutoffStr;
+  });
+}
+
+function getNextEarningsDate(ticker) {
+  if (!earningsCache.data || earningsCache.data.length === 0) return null;
+  var match = earningsCache.data.find(function(e) { return e.symbol === ticker; });
+  return match ? { date: match.date, hour: match.hour } : null;
+}
 
 // -- DISCORD WEBHOOK ------------------------------------------------
 var BRAIN_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
@@ -77,7 +117,7 @@ var maxTrades = 3;
 var activePositions = [];
 var contractSize = 3; // default 3 contracts per trade
 var trimPlan = { first: 0.50, second: 1.00 }; // +50%, +100%
-var strategies = ['SCANNER_BREAKOUT', 'FLOW_CONVICTION', 'SCALP'];
+var strategies = ['AYCE_STRAT', 'SCANNER_BREAKOUT', 'FLOW_CONVICTION', 'SCALP'];
 var currentStrategy = 0;
 
 // -- EXIT MODE: 'TRAIL' or 'STRENGTH' -------------------------------
@@ -486,6 +526,97 @@ function evaluateFlowSignal() {
 }
 
 // ===================================================================
+// EVALUATE AYCE STRAT SIGNAL
+// Runs all 5 AYCE strategies across watchlist tickers
+// Time-aware: 4HR Re-Trigger at 9:30, 322+Failed9 at 10AM, 7HR after 11AM
+// ===================================================================
+async function evaluateAYCESignal() {
+  if (!preMarketScanner) {
+    logBrain('AYCE not available -- preMarketScanner not loaded');
+    return { triggered: false, reason: 'preMarketScanner not loaded' };
+  }
+
+  var et = getETTime();
+  var tickers = preMarketScanner.SCAN_TICKERS || FULL_WATCHLIST;
+
+  try {
+    for (var i = 0; i < tickers.length; i++) {
+      var ticker = tickers[i];
+      var setup = null;
+
+      // 4HR Re-Trigger: fires at 9:30 bell (earliest AYCE signal)
+      if (et.total >= 9 * 60 + 30) {
+        setup = await preMarketScanner.scan4HRRetrigger(ticker);
+        if (setup) { setup._source = '4HR_RETRIGGER'; }
+      }
+
+      // 12HR Miyagi: fires at open, setup detected pre-market
+      if (!setup && et.total >= 9 * 60 + 30) {
+        setup = await preMarketScanner.scanMiyagi(ticker);
+        if (setup) { setup._source = 'MIYAGI'; }
+      }
+
+      // 322 + Failed 9: need 9AM candle closed (10AM+)
+      if (!setup && et.total >= 10 * 60) {
+        setup = await preMarketScanner.scan322(ticker);
+        if (setup) { setup._source = '322_FIRST_LIVE'; }
+      }
+      if (!setup && et.total >= 10 * 60) {
+        setup = await preMarketScanner.scanFailed9(ticker);
+        if (setup) { setup._source = 'FAILED_9'; }
+      }
+
+      // 7HR: ONLY after 11AM (liquidity sweep window)
+      if (!setup && et.total >= 11 * 60) {
+        setup = await preMarketScanner.scan7HR(ticker);
+        if (setup) { setup._source = '7HR_SWEEP'; }
+      }
+
+      if (setup && setup.valid) {
+        var direction = setup.direction === 'CALLS' ? 'BULLISH' : 'BEARISH';
+        var action = setup.direction === 'CALLS' ? 'CALL' : 'PUT';
+        var entryLevel = parseFloat(setup.entryLevel || setup.trigger || setup.current);
+        var stopLevel = parseFloat(setup.stopLevel || 0);
+
+        // For strategies with targets, use them
+        var target = parseFloat(setup.target || setup.t1 || 0);
+
+        var signal = {
+          triggered: true,
+          ticker: ticker,
+          direction: direction,
+          action: action,
+          trigger: entryLevel,
+          stop: stopLevel,
+          target: target,
+          price: setup.current,
+          setupType: 'AYCE_' + setup._source,
+          isAYCESignal: true,
+          ayceStrategy: setup.strategy,
+          ayceSource: setup._source,
+          description: setup.strategy + ': ' + ticker + ' ' + setup.direction +
+            ' | Entry $' + entryLevel + (stopLevel ? ' | Stop $' + stopLevel : '') +
+            (target ? ' | Target $' + target : ''),
+        };
+
+        logBrain('AYCE SIGNAL: ' + setup.strategy + ' | ' + ticker + ' ' + setup.direction +
+          ' | Entry $' + entryLevel +
+          (stopLevel ? ' | Stop $' + stopLevel : '') +
+          (target ? ' | Target $' + target : ''));
+
+        return signal;
+      }
+    }
+
+    return { triggered: false, reason: 'No AYCE setups across ' + tickers.length + ' tickers' };
+
+  } catch(e) {
+    logBrain('AYCE eval error: ' + e.message);
+    return { triggered: false, reason: 'AYCE error: ' + e.message };
+  }
+}
+
+// ===================================================================
 // EVALUATE ENTRY
 // Takes a signal from scanner or flow, checks all conditions
 // ===================================================================
@@ -505,10 +636,12 @@ function evaluateEntry(signal) {
   }
 
   // Check: no entries before 9:45 AM ET (first 15 min = noise/false breakouts)
+  // EXCEPTION: AYCE 4HR Re-Trigger fires at 9:30 -- structural pattern, not noise
   var etNow = getETTime ? getETTime() : new Date();
   var etHour = typeof etNow === 'object' ? etNow.getHours() : parseInt(String(etNow).split(':')[0]);
   var etMin = typeof etNow === 'object' ? etNow.getMinutes() : parseInt(String(etNow).split(':')[1]);
-  if (etHour === 9 && etMin < 45) {
+  var isAYCE = signal.isAYCESignal || false;
+  if (etHour === 9 && etMin < 45 && !isAYCE) {
     logBrain('ENTRY REJECTED: Before 9:45 AM ET (' + etHour + ':' + etMin + ') -- opening volatility');
     return { approved: false, reason: 'Before 9:45 AM -- opening 15 min is noise' };
   }
@@ -539,6 +672,14 @@ function evaluateEntry(signal) {
     return { approved: false, reason: corrCheck.reason };
   }
 
+  // Check: earnings proximity -- auto-enrich signal
+  signal.earningsWithin3Days = tickerHasEarningsWithin3Days(ticker);
+  if (signal.earningsWithin3Days) {
+    var nextER = getNextEarningsDate(ticker);
+    var erInfo = nextER ? nextER.date + ' (' + nextER.hour + ')' : 'soon';
+    logBrain('EARNINGS ALERT: ' + ticker + ' reports ' + erInfo + ' -- forcing DAY TRADE, no swing');
+  }
+
   // Check: direction aligned with SPY trend (from GEXR or dynamic bias)?
   var gexrDirection = global.gexrDirection || null;
   if (gexrDirection) {
@@ -567,8 +708,8 @@ function evaluateEntry(signal) {
     if (signal.tvData) signal.tvData.dte = 0; // force day trade classification
   }
 
-  // Casey signals get tagged as high priority source
-  var source = signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW');
+  // Tag entry source
+  var source = signal.isAYCESignal ? 'AYCE_STRAT' : (signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW'));
 
   // CONFLUENCE CHECK -- if we have TradingView data, score it
   var confluenceResult = null;
@@ -620,6 +761,9 @@ function evaluateEntry(signal) {
     strategy: strategies[currentStrategy],
     source: source,
     isCaseySignal: signal.isCaseySignal || false,
+    isAYCESignal: signal.isAYCESignal || false,
+    ayceStrategy: signal.ayceStrategy || null,
+    ayceSource: signal.ayceSource || null,
     highConviction: signal.highConviction || false,
     caseyMessage: signal.caseyMessage || null,
     confluenceScore: confluenceResult ? confluenceResult.score : null,
@@ -946,6 +1090,9 @@ async function runBrainCycle() {
     logBrain('Cycle #' + cycleCount + ' | State: ' + STATE + ' | P&L: $' + dailyPL.toFixed(2) + ' | Trades: ' + tradesOpened + '/' + maxTrades);
   }
 
+  // ---- EARNINGS CACHE: refresh once per day ----
+  await refreshEarningsCache();
+
   // ---- STATE: PRE_MARKET ----
   if (STATE === 'PRE_MARKET') {
     // Scan catalysts if we haven't yet today
@@ -1023,24 +1170,33 @@ async function runBrainCycle() {
   // ---- STATE: WATCHING (9:30-11:30 AM window) ----
   if (STATE === 'WATCHING') {
     // Only scan for new entries during AM window or POWER_HOUR
+    // EXCEPTION: AYCE 7HR strategy fires AFTER 11AM (liquidity sweep window)
     if (et.total > amEnd && et.total < powerHourStart) {
-      // Dead zone: 11:30 AM - 2:30 PM -- just monitor positions
-      if (cycleCount % 30 === 0) {
-        logBrain('WATCHING: In dead zone (11:30AM-2:30PM) -- monitoring only');
+      if (strategies[currentStrategy] === 'AYCE_STRAT') {
+        // 7HR scans during dead zone -- this IS the strategy's window
+        if (cycleCount % 30 === 0) {
+          logBrain('WATCHING: Dead zone but AYCE 7HR active -- scanning for liquidity sweeps');
+        }
+      } else {
+        // Dead zone: 11:30 AM - 2:30 PM -- just monitor positions
+        if (cycleCount % 30 === 0) {
+          logBrain('WATCHING: In dead zone (11:30AM-2:30PM) -- monitoring only');
+        }
+        return;
       }
-      return;
     }
 
     // Try current strategy
     var signal = null;
     var strat = strategies[currentStrategy];
 
-    if (strat === 'SCANNER_BREAKOUT') {
+    if (strat === 'AYCE_STRAT') {
+      signal = await evaluateAYCESignal();
+    } else if (strat === 'SCANNER_BREAKOUT') {
       signal = await evaluateScannerSignal();
     } else if (strat === 'FLOW_CONVICTION') {
       signal = evaluateFlowSignal();
     } else if (strat === 'SCALP') {
-      // Scalp uses scanner but with lower bar
       signal = await evaluateScannerSignal();
     }
 
@@ -1070,6 +1226,15 @@ async function runBrainCycle() {
           if (entry.highConviction) {
             entryLines.push('\u26A1 HIGH CONVICTION CASEY SIGNAL \u26A1');
           }
+        }
+        // Add AYCE Strat details if applicable
+        if (entry.isAYCESignal) {
+          entryLines.push('================================');
+          entryLines.push('AYCE STRAT: ' + (entry.ayceStrategy || 'Unknown'));
+          if (entry.signal && entry.signal.target) {
+            entryLines.push('Target:    ~$' + entry.signal.target);
+          }
+          entryLines.push('\u26A1 STRAT PATTERN -- STRUCTURAL ENTRY \u26A1');
         }
         entryLines.push('================================');
         entryLines.push('STATUS: RECOMMENDATION ONLY');
@@ -1113,7 +1278,9 @@ async function runBrainCycle() {
       var phSignal = null;
       var phStrat = strategies[currentStrategy];
 
-      if (phStrat === 'SCANNER_BREAKOUT' || phStrat === 'SCALP') {
+      if (phStrat === 'AYCE_STRAT') {
+        phSignal = await evaluateAYCESignal();
+      } else if (phStrat === 'SCANNER_BREAKOUT' || phStrat === 'SCALP') {
         phSignal = await evaluateScannerSignal();
       } else if (phStrat === 'FLOW_CONVICTION') {
         phSignal = evaluateFlowSignal();
@@ -1340,4 +1507,8 @@ module.exports = {
   scoreSetup: scoreSetup,
   checkPositionHealth: checkPositionHealth,
   getPositionContexts: getPositionContexts,
+  refreshEarningsCache: refreshEarningsCache,
+  tickerHasEarningsWithin3Days: tickerHasEarningsWithin3Days,
+  getNextEarningsDate: getNextEarningsDate,
+  getEarningsCache: function() { return earningsCache; },
 };

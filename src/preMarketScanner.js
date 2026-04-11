@@ -181,6 +181,85 @@ async function scan322(symbol) {
 }
 
 // ================================================================
+// STRATEGY 4: 7HR QQQ (1-3 directional + liquidity sweep)
+// 7hr candles: 9PM, 4AM, 11AM, 6PM
+// Setup: 9PM = 1 (inside), 4AM = 3 (outside)
+// Mark 50% of the 3-bar. Wait until AFTER 11AM.
+// Enter on liquidity sweep + retest on 5/15min TF
+// ================================================================
+async function scan7HR(symbol) {
+  try {
+    var bars = await getBars(symbol, 'Minute', '420', 6);
+    if (bars.length < 4) return null;
+    var b11AM = bars[bars.length - 1];
+    var b4AM  = bars[bars.length - 2];
+    var b9PM  = bars[bars.length - 3];
+    var bPrev = bars[bars.length - 4];
+    var type9PM = getCandleType(b9PM, bPrev);
+    var type4AM = getCandleType(b4AM, b9PM);
+    if (type9PM !== '1') return null;
+    if (type4AM !== '3') return null;
+    var midpoint = parseFloat(((parseFloat(b4AM.High) + parseFloat(b4AM.Low)) / 2).toFixed(2));
+    var high4AM = parseFloat(b4AM.High);
+    var low4AM  = parseFloat(b4AM.Low);
+    var current = parseFloat(b11AM.Close);
+    var direction = current > midpoint ? 'PUTS' : 'CALLS';
+    return {
+      strategy: '7HR LIQUIDITY SWEEP', symbol: symbol, direction: direction,
+      trigger: midpoint, high4AM: high4AM, low4AM: low4AM,
+      current: current, valid: true,
+      note: 'Wait for sweep of ' + (direction === 'CALLS' ? 'low' : 'high') + ' then retest on 5/15min'
+    };
+  } catch(e) { return null; }
+}
+
+// ================================================================
+// STRATEGY 5: FAILED 9 (8AM/9AM manipulation reversal)
+// 1HR candles: mark 8AM high/low/50%
+// 9AM goes 2D or 2U before open
+// After open, 9AM triggers 50% and reverses into outside 3
+// Stop = 10AM 2-2 continuation (opposite of 9AM direction)
+// ================================================================
+async function scanFailed9(symbol) {
+  try {
+    var bars = await getBars(symbol, 'Minute', '60', 5);
+    if (bars.length < 4) return null;
+    var b10AM = bars[bars.length - 1];
+    var b9AM  = bars[bars.length - 2];
+    var b8AM  = bars[bars.length - 3];
+    var bPrev = bars[bars.length - 4];
+    var type9AM = getCandleType(b9AM, b8AM);
+    var type10AM = getCandleType(b10AM, b9AM);
+    var mid8AM = parseFloat(((parseFloat(b8AM.High) + parseFloat(b8AM.Low)) / 2).toFixed(2));
+    if (type9AM === '2U' && type10AM === '3') {
+      var close10 = parseFloat(b10AM.Close);
+      if (close10 < mid8AM) {
+        return {
+          strategy: 'FAILED 9', symbol: symbol, direction: 'PUTS',
+          entryLevel: parseFloat(b9AM.Low).toFixed(2),
+          stopLevel: parseFloat(b10AM.High).toFixed(2),
+          target: parseFloat(b8AM.Low).toFixed(2),
+          mid8AM: mid8AM, current: close10, valid: true
+        };
+      }
+    }
+    if (type9AM === '2D' && type10AM === '3') {
+      var close10b = parseFloat(b10AM.Close);
+      if (close10b > mid8AM) {
+        return {
+          strategy: 'FAILED 9', symbol: symbol, direction: 'CALLS',
+          entryLevel: parseFloat(b9AM.High).toFixed(2),
+          stopLevel: parseFloat(b10AM.Low).toFixed(2),
+          target: parseFloat(b8AM.High).toFixed(2),
+          mid8AM: mid8AM, current: close10b, valid: true
+        };
+      }
+    }
+    return null;
+  } catch(e) { return null; }
+}
+
+// ================================================================
 // BUILD SETUP CARD
 // ================================================================
 function buildSetupCard(setup) {
@@ -223,6 +302,32 @@ function buildSetupCard(setup) {
     lines2.push('Execute at 10AM session');
     lines2.push('Exit       60-min flip = immediate exit');
   }
+  if (setup.strategy === '7HR LIQUIDITY SWEEP') {
+    lines2.push('7HR LIQUIDITY SWEEP -- ' + setup.symbol + ' ' + setup.direction);
+    lines2.push('Pattern: 1-3 Confirmed (Inside -> Outside)');
+    lines2.push('===============================');
+    lines2.push('50% Trigger $' + setup.trigger + '  <-- midpoint of 4AM 3-bar');
+    lines2.push('4AM High    $' + setup.high4AM);
+    lines2.push('4AM Low     $' + setup.low4AM);
+    lines2.push('Current     $' + setup.current);
+    lines2.push('-------------------------------');
+    lines2.push('WAIT until AFTER 11AM ET');
+    lines2.push(setup.note || 'Enter on sweep + retest on 5/15min');
+    lines2.push('Exit        60-min flip = immediate exit');
+  }
+  if (setup.strategy === 'FAILED 9') {
+    lines2.push('FAILED 9 -- ' + setup.symbol + ' ' + setup.direction);
+    lines2.push('Pattern: 9AM Failed -> 10AM Outside 3');
+    lines2.push('===============================');
+    lines2.push('Entry      $' + setup.entryLevel);
+    lines2.push('Stop       $' + setup.stopLevel);
+    lines2.push('Target     $' + setup.target + '  (8AM bar extreme)');
+    lines2.push('8AM 50%    $' + setup.mid8AM);
+    lines2.push('Current    $' + setup.current);
+    lines2.push('-------------------------------');
+    lines2.push('Fast move -- usually first 5 min after open');
+    lines2.push('Exit        60-min flip = immediate exit');
+  }
   lines2.push('Time       ' + time + ' ET');
   return lines2.join('\n');
 }
@@ -237,8 +342,10 @@ async function runPreMarketScan() {
     var ticker  = SCAN_TICKERS[i];
     var miyagi  = await scanMiyagi(ticker);
     var retrig  = await scan4HRRetrigger(ticker);
+    var sevenHR = await scan7HR(ticker);
     if (miyagi) setups.push(miyagi);
     if (retrig) setups.push(retrig);
+    if (sevenHR) setups.push(sevenHR);
   }
   var date = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' });
   if (setups.length === 0) {
@@ -263,14 +370,31 @@ async function runPreMarketScan() {
 
 // 3-2-2 scanner runs at 10AM after 9AM candle closes
 async function run322Scan() {
-  console.log('[322 SCAN] Running 10AM check...');
+  console.log('[322 SCAN] Running 10AM check (322 + Failed 9)...');
   for (var i = 0; i < SCAN_TICKERS.length; i++) {
     var setup = await scan322(SCAN_TICKERS[i]);
     if (setup) {
       var card = buildSetupCard(setup);
       if (card) await postCard(STRAT_WEBHOOK, card, 'Stratum Scanner');
     }
+    var f9 = await scanFailed9(SCAN_TICKERS[i]);
+    if (f9) {
+      var f9card = buildSetupCard(f9);
+      if (f9card) await postCard(STRAT_WEBHOOK, f9card, 'Stratum Scanner');
+    }
   }
 }
 
-module.exports = { runPreMarketScan: runPreMarketScan, run322Scan: run322Scan };
+module.exports = {
+  runPreMarketScan: runPreMarketScan,
+  run322Scan: run322Scan,
+  scanMiyagi: scanMiyagi,
+  scan4HRRetrigger: scan4HRRetrigger,
+  scan322: scan322,
+  scan7HR: scan7HR,
+  scanFailed9: scanFailed9,
+  getCandleType: getCandleType,
+  getBars: getBars,
+  buildSetupCard: buildSetupCard,
+  SCAN_TICKERS: SCAN_TICKERS,
+};
