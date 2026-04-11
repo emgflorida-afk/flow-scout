@@ -15,23 +15,40 @@
 function scoreConfluence(data) {
   // data shape:
   // {
-  //   ema13: number,        // from data_get_study_values
-  //   ema48: number,        // from data_get_study_values
-  //   ema200: number|null,  // from data_get_study_values (may not be on chart)
-  //   price: number,        // from quote_get
+  //   ema13: number,        // 2-min EMA 13 (from data_get_study_values)
+  //   ema48: number,        // 2-min EMA 48 (from data_get_study_values)
+  //   ema200: number|null,  // 2-min EMA 200
+  //   price: number,        // current price (from quote_get)
   //   volume: number,       // current bar volume
   //   avgVolume: number,    // 20-bar avg volume
-  //   momPanel: string,     // raw MOM row from data_get_pine_tables e.g. "MOM | 15m + | 30m + | 55m - | ..."
-  //   sqzPanel: string,     // raw SQZ row from data_get_pine_tables e.g. "SQZ | 30m SQZ | 55m --- | ..."
+  //   momPanel: string,     // raw MOM row from data_get_pine_tables
+  //   sqzPanel: string,     // raw SQZ row from data_get_pine_tables
   //   biasPanel: string,    // raw BIAS row e.g. "BIAS | BULL 6/7 | SQZ 1/3"
   //   brainLabels: array,   // from data_get_pine_labels [{text, price}, ...]
-  //   pdh: number|null,     // previous day high (from scanner or labels)
+  //   pdh: number|null,     // previous day high
   //   pdl: number|null,     // previous day low
   //   pmh: number|null,     // pre-market high
   //   pml: number|null,     // pre-market low
-  //   vwap: number|null,    // VWAP value (from study values)
+  //   vwap: number|null,    // VWAP value
   //   atr: number|null,     // ATR for stop calculation
-  //   direction: string,    // 'CALLS' or 'PUTS' (which direction we're evaluating)
+  //   direction: string,    // 'CALLS' or 'PUTS'
+  //
+  //   === 4-HOUR DATA (WealthPrince method) ===
+  //   fourHr: {
+  //     ema9: number,       // 4hr 9 EMA
+  //     ema21: number,      // 4hr 21 EMA
+  //     trend: string,      // 'BULLISH', 'BEARISH', or 'NEUTRAL'
+  //     candle: string,     // last 4hr candle: 'HAMMER', 'BEARISH_ENGULFING', 'DOJI', 'INSIDE', 'NORMAL'
+  //     priceVsEma: string, // 'ABOVE_BOTH', 'BETWEEN', 'BELOW_BOTH'
+  //   },
+  //
+  //   === FLOW DATA (SevenStar/Bullflow method) ===
+  //   flow: {
+  //     checklistScore: number, // 0-7, how many boxes checked on Bullflow checklist
+  //     direction: string,      // 'BULLISH', 'BEARISH', 'MIXED'
+  //     totalValue: number,     // total $ flow on this ticker
+  //     ratio: number,          // call/put ratio (>1 = bullish)
+  //   },
   // }
 
   var score = 0;
@@ -40,8 +57,57 @@ function scoreConfluence(data) {
   var isCalls = direction === 'CALLS';
 
   // ---------------------------------------------------------------
-  // 1. EMA 13/48 RELATIONSHIP (0-3 points)
-  // This is the CORE of Casey's method
+  // 0. FOUR-HOUR CHART BIAS (0-3 points) — WealthPrince method
+  // This is the DIRECTION layer. Checked FIRST.
+  // "The 4hr tells me the overall trend. That's the foundation."
+  // ---------------------------------------------------------------
+  var fourHrScore = 0;
+  var fourHrState = 'UNKNOWN';
+
+  if (data.fourHr) {
+    var fh = data.fourHr;
+
+    // EMA 9 vs 21 alignment
+    if (fh.ema9 && fh.ema21) {
+      var fhAligned = isCalls ? (fh.ema9 > fh.ema21) : (fh.ema9 < fh.ema21);
+
+      if (fhAligned) {
+        fourHrScore += 1.5;
+        fourHrState = isCalls ? '4HR BULLISH (9>21)' : '4HR BEARISH (9<21)';
+      } else {
+        fourHrState = '4HR AGAINST';
+      }
+    }
+
+    // Price vs EMAs
+    if (fh.priceVsEma === 'ABOVE_BOTH' && isCalls) fourHrScore += 0.5;
+    if (fh.priceVsEma === 'BELOW_BOTH' && !isCalls) fourHrScore += 0.5;
+
+    // Reversal candle patterns (WealthPrince bread and butter)
+    if (fh.candle === 'HAMMER' && isCalls) {
+      fourHrScore += 1; // "Hammer off EMAs — that's THE setup"
+      fourHrState += ' + HAMMER';
+    }
+    if (fh.candle === 'BEARISH_ENGULFING' && !isCalls) {
+      fourHrScore += 1; // "Bearish engulfing confirms the flip"
+      fourHrState += ' + ENGULFING';
+    }
+  }
+
+  score += fourHrScore;
+  checklist.push({
+    item: '4HR bias: ' + fourHrState,
+    pass: fourHrScore >= 1.5,
+    score: fourHrScore,
+    max: 3,
+    detail: data.fourHr
+      ? 'EMA9=' + (data.fourHr.ema9 || '?') + ' EMA21=' + (data.fourHr.ema21 || '?') + ' Candle=' + (data.fourHr.candle || '?')
+      : '4HR data not provided — check TradingView on 240 timeframe'
+  });
+
+  // ---------------------------------------------------------------
+  // 1. EMA 13/48 RELATIONSHIP on 2-MIN (0-2 points)
+  // Casey entry timing — 4hr carries direction, 2-min is just timing
   // ---------------------------------------------------------------
   var emaScore = 0;
   var emaState = 'AGAINST';
@@ -52,19 +118,15 @@ function scoreConfluence(data) {
     var emaAligned = isCalls ? (emaSpread > 0) : (emaSpread < 0);
 
     if (emaAligned && emaSpreadPct > 0.05) {
-      // Fanned out -- strong momentum
-      emaScore = 3;
+      emaScore = 2;
       emaState = 'FANNED';
     } else if (emaAligned && emaSpreadPct > 0.01) {
-      // Just crossed, starting to fan
-      emaScore = 2.5;
+      emaScore = 1.5;
       emaState = 'CROSSED';
     } else if (emaAligned) {
-      // Barely aligned, flat
-      emaScore = 1.5;
+      emaScore = 1;
       emaState = 'FLAT';
     } else {
-      // Against our direction
       emaScore = 0;
       emaState = 'AGAINST';
     }
@@ -72,10 +134,10 @@ function scoreConfluence(data) {
 
   score += emaScore;
   checklist.push({
-    item: 'EMA 13/48 ' + emaState + (isCalls ? ' bullish' : ' bearish'),
-    pass: emaScore >= 2,
+    item: '2-min EMA 13/48 ' + emaState + (isCalls ? ' bullish' : ' bearish'),
+    pass: emaScore >= 1.5,
     score: emaScore,
-    max: 3,
+    max: 2,
     detail: data.ema13 && data.ema48
       ? 'EMA13=' + data.ema13.toFixed(2) + ' EMA48=' + data.ema48.toFixed(2)
       : 'EMA data missing'
@@ -237,6 +299,43 @@ function scoreConfluence(data) {
     score: vwapScore,
     max: 1,
     detail: data.vwap ? 'VWAP=' + data.vwap.toFixed(2) + ' Price=' + (data.price || 0).toFixed(2) : 'No VWAP'
+  });
+
+  // ---------------------------------------------------------------
+  // 7. FLOW CHECKLIST (0-2 points) — SevenStar/Bullflow method
+  // Institutional flow confirmation. Enter on flow, exit on chart.
+  // ---------------------------------------------------------------
+  var flowScore = 0;
+  var flowNote = 'No flow data';
+
+  if (data.flow) {
+    var fl = data.flow;
+    var flowAligned = isCalls ? (fl.direction === 'BULLISH') : (fl.direction === 'BEARISH');
+
+    if (flowAligned && fl.checklistScore >= 5) {
+      flowScore = 2; // High probability flow — 5+ boxes on 7-box checklist
+      flowNote = 'HIGH PROB FLOW: ' + fl.checklistScore + '/7 checklist, $' + Math.round((fl.totalValue || 0) / 1000) + 'K';
+    } else if (flowAligned && fl.checklistScore >= 3) {
+      flowScore = 1;
+      flowNote = 'Moderate flow: ' + fl.checklistScore + '/7 checklist';
+    } else if (fl.direction === 'MIXED') {
+      flowScore = 0;
+      flowNote = 'Mixed flow — no clear direction';
+    } else if (!flowAligned && fl.checklistScore >= 4) {
+      flowScore = -1; // VETO — heavy flow AGAINST our direction
+      flowNote = 'FLOW AGAINST: ' + fl.direction + ' flow contradicts ' + direction;
+    }
+  }
+
+  score += flowScore;
+  checklist.push({
+    item: 'Flow: ' + flowNote,
+    pass: flowScore >= 1,
+    score: Math.max(0, flowScore),
+    max: 2,
+    detail: data.flow
+      ? 'Checklist=' + (data.flow.checklistScore || 0) + '/7 Dir=' + (data.flow.direction || '?') + ' Val=$' + Math.round((data.flow.totalValue || 0) / 1000) + 'K'
+      : 'No Bullflow data — scrape from Chrome tab'
   });
 
   // ---------------------------------------------------------------
