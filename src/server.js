@@ -1312,6 +1312,17 @@ app.post('/api/spreads/evaluate', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/api/spreads/close-legacy', async function(req, res) {
+  if (!creditSpreadEngine) return res.json({ error: 'Spread engine not loaded' });
+  try {
+    var shortSym = req.body.shortSymbol || 'SPX 260417P6700';
+    var longSym = req.body.longSymbol || 'SPX 260417P6695';
+    var qty = req.body.qty || 1;
+    var result = await creditSpreadEngine.closeLegacySpread(shortSym, longSym, qty);
+    res.json({ status: 'OK', result: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/spreads/execute', async function(req, res) {
   if (!creditSpreadEngine) return res.json({ error: 'Spread engine not loaded' });
   try {
@@ -1414,6 +1425,16 @@ cron.schedule('* 9-16 * * 1-5', function() {
     brainEngine.runBrainCycle().catch(function(e) {
       console.error('[BRAIN] Cycle error:', e.message);
     });
+  }
+}, { timezone: 'America/New_York' });
+
+// MONDAY 9:31AM -- Close legacy SPX 6700/6695 bull put spread (bad risk/reward)
+cron.schedule('31 9 13 4 *', async function() {
+  console.log('[CRON] 9:31AM Monday -- Closing legacy SPX spread...');
+  if (creditSpreadEngine && creditSpreadEngine.closeLegacySpread) {
+    try {
+      await creditSpreadEngine.closeLegacySpread('SPX 260417P6700', 'SPX 260417P6695', 1);
+    } catch(e) { console.error('[SPREAD-LEGACY]', e.message); }
   }
 }, { timezone: 'America/New_York' });
 

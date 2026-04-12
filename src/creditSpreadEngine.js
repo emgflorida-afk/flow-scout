@@ -918,6 +918,97 @@ async function executeFullFlow() {
 // ================================================================
 // MODULE EXPORTS
 // ================================================================
+// CLOSE LEGACY SPREAD -- closes a specific SPX spread by symbol
+// Used for positions placed outside the engine (e.g. by previous agent)
+// ================================================================
+async function closeLegacySpread(shortSymbol, longSymbol, qty) {
+  log('CLOSING LEGACY SPREAD: short=' + shortSymbol + ' long=' + longSymbol + ' qty=' + qty);
+
+  var token = await tradestation.getAccessToken();
+  if (!token) { log('Cannot close legacy -- no token'); return null; }
+
+  // Close as market order multi-leg
+  var closePayload = {
+    AccountID: ACCOUNT_ID,
+    Symbol: shortSymbol,
+    Quantity: String(qty || 1),
+    OrderType: 'Market',
+    TradeAction: 'BUYTOCLOSE',
+    TimeInForce: { Duration: 'DAY' },
+    Legs: [
+      { Symbol: shortSymbol, Quantity: String(qty || 1), TradeAction: 'BUYTOCLOSE' },
+      { Symbol: longSymbol, Quantity: String(qty || 1), TradeAction: 'SELLTOCLOSE' },
+    ],
+  };
+
+  try {
+    var res = await fetch(TS_BASE + '/orderexecution/orders', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(closePayload),
+    });
+
+    var result = await res.json();
+
+    if (result.Orders && result.Orders.length > 0) {
+      log('LEGACY SPREAD CLOSED: ' + shortSymbol + ' / ' + longSymbol);
+      var discordMsg = '```\n' +
+        'LEGACY SPREAD CLOSED\n' +
+        '========================\n' +
+        'Short (bought back): ' + shortSymbol + '\n' +
+        'Long (sold): ' + longSymbol + '\n' +
+        'Qty: ' + qty + '\n' +
+        'Reason: Bad risk/reward -- repositioning with proper credits\n' +
+        'Order: ' + JSON.stringify(result.Orders[0].OrderID || result.Orders[0]) + '\n' +
+        '========================\n' +
+        '```';
+      await postDiscord(discordMsg);
+      return { closed: true, order: result.Orders[0] };
+    } else {
+      var errMsg = result.Message || result.Error || JSON.stringify(result).slice(0, 300);
+      log('LEGACY CLOSE FAILED: ' + errMsg);
+
+      // Fallback: try closing legs individually
+      log('Attempting individual leg close...');
+      try {
+        // Buy back short leg
+        var shortClose = await fetch(TS_BASE + '/orderexecution/orders', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            AccountID: ACCOUNT_ID, Symbol: shortSymbol, Quantity: String(qty || 1),
+            OrderType: 'Market', TradeAction: 'BUYTOCLOSE', TimeInForce: { Duration: 'DAY' },
+          }),
+        });
+        var shortResult = await shortClose.json();
+        log('Short leg close: ' + JSON.stringify(shortResult.Orders ? 'OK' : shortResult.Message || 'failed').slice(0, 200));
+
+        // Sell long leg
+        var longClose = await fetch(TS_BASE + '/orderexecution/orders', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            AccountID: ACCOUNT_ID, Symbol: longSymbol, Quantity: String(qty || 1),
+            OrderType: 'Market', TradeAction: 'SELLTOCLOSE', TimeInForce: { Duration: 'DAY' },
+          }),
+        });
+        var longResult = await longClose.json();
+        log('Long leg close: ' + JSON.stringify(longResult.Orders ? 'OK' : longResult.Message || 'failed').slice(0, 200));
+
+        await postDiscord('```\nLEGACY SPREAD -- individual leg close attempted\nShort: ' + (shortResult.Orders ? 'CLOSED' : 'FAILED') + '\nLong: ' + (longResult.Orders ? 'CLOSED' : 'FAILED') + '\n```');
+        return { closed: true, individual: true };
+      } catch(e2) {
+        log('Individual leg close error: ' + e2.message);
+        return null;
+      }
+    }
+  } catch(e) {
+    log('Legacy close error: ' + e.message);
+    return null;
+  }
+}
+
+// ================================================================
 module.exports = {
   evaluateSpreadOpportunity: evaluateSpreadOpportunity,
   findOptimalStrikes:        findOptimalStrikes,
@@ -925,6 +1016,7 @@ module.exports = {
   monitorSpreads:            monitorSpreads,
   getSpreadStatus:           getSpreadStatus,
   closeSpread:               closeSpread,
+  closeLegacySpread:         closeLegacySpread,
   startMonitor:              startMonitor,
   stopMonitor:               stopMonitor,
   executeFullFlow:           executeFullFlow,
