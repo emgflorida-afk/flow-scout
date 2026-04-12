@@ -574,6 +574,21 @@ async function checkSundayFutures() {
       timestamp: new Date().toISOString(),
     };
 
+    // Fetch VIX level for volatility awareness
+    try {
+      var vixRes = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EVIX?range=1d&interval=1d', {
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      if (vixRes.ok) {
+        var vixData = await vixRes.json();
+        var vixMeta = vixData && vixData.chart && vixData.chart.result && vixData.chart.result[0] && vixData.chart.result[0].meta;
+        if (vixMeta && vixMeta.regularMarketPrice) {
+          sundayBias.vix = vixMeta.regularMarketPrice;
+          console.log('[FUTURES] VIX: ' + sundayBias.vix.toFixed(2));
+        }
+      }
+    } catch(e) { console.log('[FUTURES] VIX fetch error:', e.message); }
+
     // Post to Discord
     var msg = 'SUNDAY FUTURES OPEN\n' +
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
@@ -582,7 +597,8 @@ async function checkSundayFutures() {
       '/CL (Crude):    $' + (cl.last || '?') + '  (' + (clMove >= 0 ? '+' : '') + clMove.toFixed(2) + '%)\n' +
       '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
       'OVERNIGHT BIAS: ' + direction + '\n' +
-      'OIL READ: ' + oilBias + '\n';
+      'OIL READ: ' + oilBias + '\n' +
+      'VIX: ' + (sundayBias.vix ? sundayBias.vix.toFixed(2) + (sundayBias.vix > 25 ? ' ⚠️ ELEVATED' : sundayBias.vix > 20 ? ' (moderate)' : ' (calm)') : 'N/A') + '\n';
 
     if (sectors.length > 0) {
       msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
@@ -1120,16 +1136,98 @@ function evaluateEntry(signal) {
   // Tag entry source
   var source = signal.isAYCESignal ? 'AYCE_STRAT' : (signal.isCaseySignal ? 'CASEY_EMA' : (signal.setupType ? 'SCANNER' : 'FLOW'));
 
+  // ---------------------------------------------------------------
+  // GAP-DOWN REVERSAL PROTECTION
+  // After a big up day, a gap-down morning often reverses.
+  // If we detect this pattern:
+  //   1. DELAY puts until 10:30 AM (let the reversal show itself)
+  //   2. RAISE confluence threshold to 6 for puts (need higher conviction)
+  //   3. CALLS get a boost (reversal = mean reversion back up)
+  // Also checks VIX: high VIX (>25) = more volatile = more reversals
+  // This would have saved us on April 9, 2026.
+  // ---------------------------------------------------------------
+  var gapCaution = false;
+  var gapCautionReason = '';
+  var confluenceFloor = 4; // default minimum confluence score
+
+  if (signal.tvData) {
+    var td = signal.tvData;
+    // Detect gap-down: price below PDL = gapped below prior day's range
+    var isPriceGapped = false;
+    if (td.pdl && td.price && td.price < td.pdl) {
+      isPriceGapped = true;
+    }
+    // Detect gap-up: price above PDH = gapped above prior day's range
+    var isGapUp = false;
+    if (td.pdh && td.price && td.price > td.pdh) {
+      isGapUp = true;
+    }
+
+    // Check if higher timeframes disagree with the gap direction
+    // Daily+ bullish but morning gap down = potential reversal day
+    var higherTFBullish = false;
+    var higherTFBearish = false;
+    if (td.fourHr && td.fourHr.trend === 'BULLISH') higherTFBullish = true;
+    if (td.strat && td.strat.ftfc === 'BULL') higherTFBullish = true;
+    if (td.sixHr && td.sixHr.direction === 'BULLISH') higherTFBullish = true;
+    if (td.fourHr && td.fourHr.trend === 'BEARISH') higherTFBearish = true;
+    if (td.strat && td.strat.ftfc === 'BEAR') higherTFBearish = true;
+    if (td.sixHr && td.sixHr.direction === 'BEARISH') higherTFBearish = true;
+
+    // GAP DOWN + HIGHER TFs BULLISH + PUTTING = REVERSAL DANGER
+    if (isPriceGapped && higherTFBullish && direction === 'BEARISH') {
+      gapCaution = true;
+      gapCautionReason = 'GAP-DOWN REVERSAL RISK: price below PDL but higher TFs bullish';
+
+      // Before 10:30 AM: BLOCK puts entirely (let reversal play out)
+      if (etNow.total < 10 * 60 + 30) {
+        logBrain('ENTRY BLOCKED: ' + gapCautionReason + ' -- no puts before 10:30 AM on gap-down reversal mornings');
+        return { approved: false, reason: gapCautionReason + ' -- wait until 10:30 AM' };
+      }
+
+      // After 10:30 AM: raise the bar to 6+ confluence
+      confluenceFloor = 6;
+      logBrain('GAP CAUTION: ' + gapCautionReason + ' -- raising confluence threshold to 6');
+    }
+
+    // GAP UP + HIGHER TFs BEARISH + CALLING = same danger in reverse
+    if (isGapUp && higherTFBearish && direction === 'BULLISH') {
+      gapCaution = true;
+      gapCautionReason = 'GAP-UP REVERSAL RISK: price above PDH but higher TFs bearish';
+
+      if (etNow.total < 10 * 60 + 30) {
+        logBrain('ENTRY BLOCKED: ' + gapCautionReason + ' -- no calls before 10:30 AM on gap-up reversal mornings');
+        return { approved: false, reason: gapCautionReason + ' -- wait until 10:30 AM' };
+      }
+
+      confluenceFloor = 6;
+      logBrain('GAP CAUTION: ' + gapCautionReason + ' -- raising confluence threshold to 6');
+    }
+
+    // VIX CHECK: High VIX = more volatile = more mean-reversion traps
+    // Fetch VIX from Sunday bias or dynamic bias
+    var vixLevel = null;
+    if (sundayBias && sundayBias.vix) vixLevel = sundayBias.vix;
+
+    if (vixLevel && vixLevel > 25) {
+      // High VIX environment: raise floor by 1 for ALL trades
+      confluenceFloor = Math.max(confluenceFloor, 5);
+      logBrain('HIGH VIX (' + vixLevel.toFixed(1) + '): elevated volatility -- confluence floor raised to ' + confluenceFloor);
+    }
+  }
+
   // CONFLUENCE CHECK -- if we have TradingView data, score it
   var confluenceResult = null;
   if (signal.tvData && caseyConfluence) {
     confluenceResult = caseyConfluence.scoreConfluence(signal.tvData);
-    logBrain('CONFLUENCE SCORE: ' + confluenceResult.score + '/10 (' + confluenceResult.conviction + ')');
+    logBrain('CONFLUENCE SCORE: ' + confluenceResult.score + '/10 (' + confluenceResult.conviction + ')' +
+      (gapCaution ? ' [GAP CAUTION: need ' + confluenceFloor + '+]' : ''));
 
-    // REQUIRE minimum score for entry (4+ = valid setup, even if only 2 contracts)
-    if (confluenceResult.score < 4) {
-      logBrain('ENTRY REJECTED: Confluence score ' + confluenceResult.score + '/10 -- too low (need 4+)');
-      return { approved: false, reason: 'Confluence too low: ' + confluenceResult.score + '/10' };
+    // REQUIRE minimum score for entry (default 4, raised to 6 on gap-reversal days)
+    if (confluenceResult.score < confluenceFloor) {
+      logBrain('ENTRY REJECTED: Confluence score ' + confluenceResult.score + '/10 -- too low (need ' + confluenceFloor + '+)' +
+        (gapCaution ? ' [GAP REVERSAL PROTECTION]' : ''));
+      return { approved: false, reason: 'Confluence too low: ' + confluenceResult.score + '/10 (need ' + confluenceFloor + ')' };
     }
 
     // Use confluence-based sizing instead of default
