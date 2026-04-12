@@ -20,11 +20,13 @@ async function rateLimit() {
 const MODES = {
   DAY: {
     label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
-    minDTE: 0, maxDTE: 2, stopPct: 0.35, t1Pct: 0.25, maxRisk: 120,
+    minDTE: 0, maxDTE: 2, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
+    // R:R = 1.6:1 -- risk 25% to make 40%. NEVER risk more than reward.
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
-    minDTE: 5, maxDTE: 14, stopPct: 0.40, t1Pct: 0.30, maxRisk: 140,
+    minDTE: 5, maxDTE: 14, stopPct: 0.30, t1Pct: 0.50, maxRisk: 140,
+    // R:R = 1.67:1 -- risk 30% to make 50%. Swings need room + bigger target.
   },
 };
 
@@ -578,7 +580,13 @@ function calculatePositionSize(premium, mode, accountSize) {
   var t1Profit=parseFloat(((t1Price-premium)*100*contracts).toFixed(0));
   var totalCost=parseFloat((premium*100*contracts).toFixed(0));
   var riskPct=parseFloat((stopLoss/accountSize*100).toFixed(1));
-  return {viable:true,mode,contracts,premium,totalCost,stopPrice,t1Price,stopLoss,t1Profit,riskPct};
+  // RISK:REWARD GATE -- NEVER risk more than reward
+  var riskRewardRatio = t1Profit > 0 ? parseFloat((t1Profit / stopLoss).toFixed(2)) : 0;
+  if (riskRewardRatio < 1.0) {
+    console.log('[SIZING] REJECTED -- R:R ' + riskRewardRatio + ':1 (need 1.0+ minimum). Risk:$' + stopLoss + ' Reward:$' + t1Profit);
+    return {viable:false,reason:'Bad R:R ' + riskRewardRatio + ':1 -- risk $' + stopLoss + ' for only $' + t1Profit + ' reward'};
+  }
+  return {viable:true,mode,contracts,premium,totalCost,stopPrice,t1Price,stopLoss,t1Profit,riskPct,riskRewardRatio};
 }
 
 // -- GET OPTION SNAPSHOT ------------------------------------------

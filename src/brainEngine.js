@@ -1090,6 +1090,22 @@ function evaluateEntry(signal) {
     }
   }
 
+  // -- RISK:REWARD GATE -- NON-NEGOTIABLE --
+  // NEVER enter a trade where the risk exceeds the reward
+  if (entry && stop && trim1) {
+    var riskPerContract = Math.abs(entry - stop);
+    var rewardPerContract = Math.abs(trim1 - entry);
+    var tradeRR = rewardPerContract > 0 ? parseFloat((rewardPerContract / riskPerContract).toFixed(2)) : 0;
+    logBrain('RISK:REWARD CHECK -- Risk: $' + riskPerContract.toFixed(2) + ' | Reward: $' + rewardPerContract.toFixed(2) + ' | R:R = ' + tradeRR + ':1');
+    if (tradeRR < 1.0) {
+      logBrain('ENTRY REJECTED: R:R ' + tradeRR + ':1 -- risk exceeds reward. NEVER take this trade.');
+      return { approved: false, reason: 'Bad R:R ' + tradeRR + ':1 -- risk $' + riskPerContract.toFixed(2) + ' to make $' + rewardPerContract.toFixed(2) };
+    }
+    if (tradeRR >= 2.0) {
+      logBrain('EXCELLENT R:R ' + tradeRR + ':1 -- high conviction setup');
+    }
+  }
+
   var result = {
     approved: true,
     ticker: ticker,
@@ -1113,8 +1129,9 @@ function evaluateEntry(signal) {
     confluenceChecklist: confluenceResult ? confluenceResult.checklist : null,
     retestLevel: confluenceResult ? confluenceResult.retestLevel : null,
     invalidationPrice: confluenceResult ? confluenceResult.invalidationPrice : null,
+    riskRewardRatio: (entry && stop && trim1) ? parseFloat((Math.abs(trim1 - entry) / Math.abs(entry - stop)).toFixed(2)) : null,
     signal: signal,
-    reason: 'All checks passed -- ' + strategies[currentStrategy] +
+    reason: 'All checks passed -- R:R ' + ((entry && stop && trim1) ? parseFloat((Math.abs(trim1 - entry) / Math.abs(entry - stop)).toFixed(2)) + ':1' : 'N/A') + ' -- ' + strategies[currentStrategy] +
       (signal.isCaseySignal ? ' (CASEY EMA SIGNAL)' : '') +
       (confluenceResult ? ' | Confluence ' + confluenceResult.score + '/10' : ''),
   };
