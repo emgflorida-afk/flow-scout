@@ -492,8 +492,43 @@ async function checkSundayFutures() {
       } catch(e) { console.log('[FUTURES] Error fetching ' + symbols[i] + ':', e.message); }
     }
 
+    // FALLBACK: If TS doesn't return futures (equities-only account),
+    // fetch from Yahoo Finance API
     if (Object.keys(quotes).length === 0) {
-      console.log('[FUTURES] No quotes returned -- market may not be open yet');
+      console.log('[FUTURES] No TS futures -- falling back to Yahoo Finance...');
+      var yahooSymbols = [
+        { yahoo: 'ES%3DF', key: '/ESM26', name: 'ES' },
+        { yahoo: 'NQ%3DF', key: '/NQM26', name: 'NQ' },
+        { yahoo: 'CL%3DF', key: '/CLK26', name: 'CL' },
+      ];
+      for (var y = 0; y < yahooSymbols.length; y++) {
+        try {
+          var yUrl = 'https://query1.finance.yahoo.com/v8/finance/chart/' + yahooSymbols[y].yahoo + '?range=1d&interval=1d';
+          var yRes = await fetch(yUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+          if (yRes.ok) {
+            var yData = await yRes.json();
+            var meta = yData && yData.chart && yData.chart.result && yData.chart.result[0] && yData.chart.result[0].meta;
+            if (meta && meta.regularMarketPrice) {
+              var prevClose = meta.chartPreviousClose || meta.previousClose || 0;
+              var last = meta.regularMarketPrice;
+              var changePctY = prevClose > 0 ? ((last - prevClose) / prevClose * 100) : 0;
+              quotes[yahooSymbols[y].key] = {
+                last: last,
+                prevClose: prevClose,
+                change: last - prevClose,
+                changePct: changePctY,
+                high: last,
+                low: last,
+              };
+              console.log('[FUTURES] Yahoo ' + yahooSymbols[y].name + ': $' + last + ' (' + changePctY.toFixed(2) + '%)');
+            }
+          }
+        } catch(e) { console.log('[FUTURES] Yahoo fallback error for ' + yahooSymbols[y].name + ':', e.message); }
+      }
+    }
+
+    if (Object.keys(quotes).length === 0) {
+      console.log('[FUTURES] No quotes from TS or Yahoo -- market may not be open yet');
       return;
     }
 
