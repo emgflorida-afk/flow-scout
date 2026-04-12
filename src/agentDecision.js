@@ -5,6 +5,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
 // Agent decision cache -- prevent duplicate decisions on same ticker
@@ -24,8 +27,7 @@ async function agentDecide(signal, context) {
 
   // Build context for agent
   var now = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et.hour; var etMin = _et.min;
   var timeET = (etHour > 12 ? etHour - 12 : etHour) + ':' + (etMin < 10 ? '0' : '') + etMin + (etHour >= 12 ? 'PM' : 'AM') + ' ET';
   var isPrimeTime = (etHour * 60 + etMin) >= (9 * 60 + 45) && (etHour * 60 + etMin) <= (11 * 60);
 

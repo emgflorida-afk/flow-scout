@@ -105,6 +105,28 @@ async function placeOrder(params) {
     note,        // for logging
   } = params;
 
+  // ================================================================
+  // MARKET HOURS GATE -- block orders outside RTH (9:30AM-4PM ET)
+  // Only applies to BUYTOOPEN (new entries). Close orders always allowed.
+  // ================================================================
+  if (action === 'BUYTOOPEN') {
+    var etStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var timePart = etStr.split(', ')[1] || etStr;
+    var tParts = timePart.split(':');
+    var etH = parseInt(tParts[0], 10);
+    var etM = parseInt(tParts[1], 10);
+    var etTotal = etH * 60 + etM;
+    var dayOfWeek = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+    if (dayOfWeek === 'Sat' || dayOfWeek === 'Sun') {
+      console.log('[EXECUTOR] BLOCKED -- weekend order attempted on', dayOfWeek);
+      return { error: 'Market closed -- weekend. No orders allowed.' };
+    }
+    if (etTotal < (9 * 60 + 30) || etTotal >= (16 * 60)) {
+      console.log('[EXECUTOR] BLOCKED -- outside RTH:', etH + ':' + (etM < 10 ? '0' : '') + etM, 'ET');
+      return { error: 'Market closed -- outside 9:30AM-4PM ET. Current time: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+    }
+  }
+
   // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility
   // High vol (TSLA, COIN, NVDA, MRVL) = 50% target
   // Medium vol (AAPL, AMZN, MSFT, GOOGL) = 40% target
@@ -146,9 +168,9 @@ async function placeOrder(params) {
           ' -- premium $' + premium + ' risk limit $' + maxRisk2pct.toFixed(0));
         qty = maxAllowed;
       }
-    } catch(e) { /* sizing check skipped */ }
+    } catch(e) { console.log('[EXECUTOR] Static sizing check skipped:', e.message); }
 
-    // DAILY EXPOSURE CHECK
+    // DAILY EXPOSURE CHECK -- HARD BLOCK on failure
     try {
       var riskPerContract = stop
         ? Math.abs(parseFloat(limit) - parseFloat(stop)) * 100
@@ -163,9 +185,12 @@ async function placeOrder(params) {
         console.log('[EXECUTOR] BLOCKED --', msg);
         return { error: msg };
       }
-    } catch(e) { console.log('[RISK] Exposure check skipped:', e.message); }
+    } catch(e) {
+      console.error('[RISK] EXPOSURE CHECK FAILED -- BLOCKING ORDER:', e.message);
+      return { error: 'Safety gate failed (exposure check): ' + e.message };
+    }
 
-    // MAX POSITIONS CHECK
+    // MAX POSITIONS CHECK -- HARD BLOCK on failure
     try {
       var posMgr   = require('./positionManager');
       var maxCheck = await posMgr.checkMaxPositions(account);
@@ -173,9 +198,12 @@ async function placeOrder(params) {
         console.log('[EXECUTOR] BLOCKED -- max positions hit:', maxCheck.current, '/', maxCheck.max);
         return { error: 'Max positions hit -- ' + maxCheck.current + '/' + maxCheck.max + ' open. Close a position first.' };
       }
-    } catch(e) { /* position manager not loaded -- continue */ }
+    } catch(e) {
+      console.error('[EXECUTOR] POSITION CHECK FAILED -- BLOCKING ORDER:', e.message);
+      return { error: 'Safety gate failed (position check): ' + e.message };
+    }
 
-    // CONFLICT CHECK -- no opposite side same ticker
+    // CONFLICT CHECK -- no opposite side same ticker -- HARD BLOCK on failure
     try {
       var posMgr2  = require('./positionManager');
       var ticker2  = symbol.split(' ')[0].replace(/[0-9]/g, '').toUpperCase();
@@ -185,9 +213,12 @@ async function placeOrder(params) {
         console.log('[EXECUTOR] BLOCKED -- conflict:', ticker2, 'already have', conflict.conflict, 'cannot open', dir2);
         return { error: 'Conflict block -- already have ' + conflict.conflict + ' on ' + ticker2 + '. Cannot open ' + dir2 };
       }
-    } catch(e) { /* position manager not loaded -- continue */ }
+    } catch(e) {
+      console.error('[EXECUTOR] CONFLICT CHECK FAILED -- BLOCKING ORDER:', e.message);
+      return { error: 'Safety gate failed (conflict check): ' + e.message };
+    }
 
-    // DYNAMIC BIAS CHECK
+    // DYNAMIC BIAS CHECK -- soft fail OK (bias is supplementary)
     try {
       var dynamicBias = require('./dynamicBias');
       var direction   = (action === 'BUYTOOPEN')
@@ -198,16 +229,19 @@ async function placeOrder(params) {
         console.log('[EXECUTOR] BLOCKED -- trading against bias:', bias.bias, bias.strength, 'direction:', direction);
         return { error: 'Bias block -- current bias is ' + bias.bias + ' (' + bias.strength + '), cannot open ' + direction };
       }
-    } catch(e) { /* dynamic bias not loaded -- continue */ }
+    } catch(e) { console.log('[EXECUTOR] Dynamic bias check skipped:', e.message); }
 
-    // DAILY LOSS LIMIT CHECK
+    // DAILY LOSS LIMIT CHECK -- HARD BLOCK on failure
     try {
       var lossLimit = require('./dailyLossLimit');
       if (lossLimit.isBlocked(account)) {
         console.log('[EXECUTOR] BLOCKED -- daily loss limit hit for account:', account);
         return { error: 'Daily loss limit hit -- no new positions allowed today' };
       }
-    } catch(e) { /* loss limit module not loaded -- continue */ }
+    } catch(e) {
+      console.error('[EXECUTOR] LOSS LIMIT CHECK FAILED -- BLOCKING ORDER:', e.message);
+      return { error: 'Safety gate failed (loss limit check): ' + e.message };
+    }
 
     // CONVERT OPRA FORMAT TO TRADESTATION FORMAT
     // NVDA260406C00175000 -> NVDA 260406C175

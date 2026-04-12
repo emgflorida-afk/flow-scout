@@ -6,6 +6,9 @@
 var fetch = require('node-fetch');
 var resolver = require('./contractResolver');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var EXECUTE_NOW_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
 var CONVICTION_WEBHOOK  = process.env.DISCORD_CONVICTION_WEBHOOK;
@@ -124,13 +127,12 @@ function isIndex(ticker) {
 // ============================================================
 function isEntryWindow() {
   var now = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
-  var etTime = etHour * 60 + etMin;
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et.hour; var etMin = _et.min;
+  var etTimeVal = etHour * 60 + etMin;
 
   // SCALP MODE -- tighter window: first 30 min of market only (9:30-10:00 AM)
   if (SCALP_MODE) {
-    if (etTime >= SCALP_WINDOW_START && etTime <= SCALP_WINDOW_END) {
+    if (etTimeVal >= SCALP_WINDOW_START && etTimeVal <= SCALP_WINDOW_END) {
       return { ok: true, window: 'SCALP' };
     }
     return { ok: false, window: 'SCALP_CLOSED' };
@@ -141,8 +143,8 @@ function isEntryWindow() {
   var PM_START = 14 * 60 + 45;  // 2:45 PM -- pre-power hour for catalyst setups
   var PM_END   = 15 * 60 + 30;  // 3:30 PM -- hard close deadline
 
-  if (etTime >= AM_START && etTime <= AM_END) return { ok: true, window: 'AM' };
-  if (etTime >= PM_START && etTime <= PM_END) return { ok: true, window: 'PM' };
+  if (etTimeVal >= AM_START && etTimeVal <= AM_END) return { ok: true, window: 'AM' };
+  if (etTimeVal >= PM_START && etTimeVal <= PM_END) return { ok: true, window: 'PM' };
   return { ok: false, window: 'CLOSED' };
 }
 
@@ -567,7 +569,7 @@ async function cancelStaleOrders() {
 async function hardCloseAllPositions() {
   try {
     var now = new Date();
-    var etH = ((now.getUTCHours()-4)+24)%24, etM = now.getUTCMinutes();
+    var _etHC = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours()-4)+24)%24, min: now.getUTCMinutes() }; var etH = _etHC.hour, etM = _etHC.min;
     if (etH !== 15 || etM < 25 || etM > 35) return;
     console.log('[HARD-CLOSE] 3:30 PM -- closing all positions');
     var ts = require('./tradestation');

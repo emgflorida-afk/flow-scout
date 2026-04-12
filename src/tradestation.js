@@ -5,6 +5,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var TS_BASE     = 'https://api.tradestation.com/v3';
 var TS_AUTH_URL = 'https://signin.tradestation.com/oauth/token';
 var TS_LOGIN    = 'https://signin.tradestation.com/authorize';
@@ -46,7 +49,7 @@ async function getAccessToken() {
       }
       console.error('[TS] Refresh failed:', data.error_description || data.error);
       // Only alert during market hours (9AM-4:30PM ET) to avoid false alarms
-      var etHourNow = ((new Date().getUTCHours() - 4) + 24) % 24;
+      var _et = etTime ? etTime.getETTime() : { hour: ((new Date().getUTCHours() - 4) + 24) % 24, min: new Date().getUTCMinutes(), total: 0 }; var etHourNow = _et.hour;
       var isDuringMarketHours = etHourNow >= 9 && etHourNow < 17;
       if (isDuringMarketHours) {
       // Post to Discord ONCE per hour max -- use strat-alerts not execute-now

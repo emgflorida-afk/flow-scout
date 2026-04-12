@@ -6,6 +6,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var preMarketScanner = null;
 var dynamicBias = null;
 var bullflow = null;
@@ -303,7 +306,7 @@ async function enrichSignal(signal) {
         var bTime = barsPremarket[p].TimeStamp || '';
         if (bTime) {
           var barDate = new Date(bTime);
-          var barHourET = ((barDate.getUTCHours() - 4) + 24) % 24;
+          var _etBar = etTime ? etTime.getETTime(barDate) : { hour: ((barDate.getUTCHours() - 4) + 24) % 24 }; var barHourET = _etBar.hour;
           if (barHourET >= 4 && barHourET < 9.5) {
             var bh = parseFloat(barsPremarket[p].High);
             var bl = parseFloat(barsPremarket[p].Low);

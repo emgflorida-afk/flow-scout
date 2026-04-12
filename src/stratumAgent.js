@@ -9,6 +9,9 @@
 var fetch   = require('node-fetch');
 var cron    = require('node-cron');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var ANTHROPIC_KEY  = process.env.ANTHROPIC_API_KEY;
 var TS_BASE        = 'https://api.tradestation.com/v3';
 var ACCOUNT_ID     = '11975462';
@@ -147,9 +150,8 @@ async function claudeDecide(signal, context) {
   if (!ANTHROPIC_KEY) return ruleDecide(signal, context);
 
   var now    = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
-  var etTime = etHour + ':' + (etMin < 10 ? '0' : '') + etMin + ' ET';
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et.hour; var etMin = _et.min;
+  var etTimeStr = etHour + ':' + (etMin < 10 ? '0' : '') + etMin + ' ET';
   var isPrime = (etHour * 60 + etMin) >= (9 * 60 + 45) && (etHour * 60 + etMin) <= (11 * 60);
 
   var prompt = [
@@ -161,7 +163,7 @@ async function claudeDecide(signal, context) {
     ' strategy=' + (signal.strategy || 'STRAT') +
     ' hasFlow=' + (signal.hasFlow || false),
     '',
-    'MARKET: time=' + etTime + ' primeTime=' + isPrime +
+    'MARKET: time=' + etTimeStr + ' primeTime=' + isPrime +
     ' spyPrice=$' + (context.spyPrice || 0) +
     ' macroBias=' + context.macroBias +
     ' h6Bias=' + context.h6Bias +
@@ -221,8 +223,7 @@ function ruleDecide(signal, context) {
   var bp      = context.buyingPower || 0;
   var hasFlow = signal.hasFlow || false;
   var now     = new Date();
-  var etHour  = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin   = now.getUTCMinutes();
+  var _et2 = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et2.hour; var etMin = _et2.min;
   var isPrime = (etHour * 60 + etMin) >= (9 * 60 + 45) && (etHour * 60 + etMin) <= (11 * 60);
   var isIndex = ['SPY','QQQ','IWM'].includes((signal.ticker||'').toUpperCase());
 
@@ -252,8 +253,7 @@ function buildCard(signal, decision, resolved) {
   var contracts = decision.contracts || 1;
   var entryTF   = decision.entryTF === '60' ? '1HR candle (INDEX)' : '15-min candle';
   var now       = new Date();
-  var etHour    = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin     = now.getUTCMinutes();
+  var _et3 = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et3.hour; var etMin = _et3.min;
   var cancelMin = Math.min(etHour * 60 + etMin + 90, 11 * 60);
   var cH = Math.floor(cancelMin / 60);
   var cM = cancelMin % 60;

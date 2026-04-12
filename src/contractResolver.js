@@ -20,8 +20,9 @@ async function rateLimit() {
 const MODES = {
   DAY: {
     label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
-    minDTE: 0, maxDTE: 2, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
+    minDTE: 1, maxDTE: 3, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
     // R:R = 1.6:1 -- risk 25% to make 40%. NEVER risk more than reward.
+    // minDTE: 1 -- NO 0DTE EVER. Doctrine rule. Changed from 0.
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
@@ -124,7 +125,9 @@ async function getExpirations(ticker, token) {
     if (!exps.length) return [];
     var mapped = exps.map(function(e){
       var dateStr = (e.Date||e.date||'').slice(0,10);
-      var dte = dateStr ? Math.ceil((new Date(dateStr+'T16:00:00-04:00') - new Date()) / (1000*60*60*24)) : 0;
+      var _expCl = new Date(dateStr+'T16:00:00');
+      var _etNowStr = new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
+      var dte = dateStr ? Math.ceil((_expCl - new Date(_etNowStr)) / (1000*60*60*24)) : 0;
       return { date:dateStr, dte:Math.max(0,dte), type:e.Type||'Weekly' };
     }).filter(function(e){ return e.date && e.dte >= 0; });
     console.log('[EXPIRY] Valid:', mapped.length, mapped.slice(0,3).map(function(e){ return e.date+'('+e.dte+'DTE)'; }).join(', '));
@@ -134,12 +137,13 @@ async function getExpirations(ticker, token) {
 
 function selectExpiry(expirations, mode) {
   var config = MODES[mode] || MODES.SWING;
-  var valid = expirations.filter(function(e){ return e.dte>=config.minDTE && e.dte<=config.maxDTE; });
+  // HARD RULE: NEVER select 0DTE -- filter them out completely
+  var nonZero = expirations.filter(function(e){ return e.dte >= 1; });
+  if (nonZero.length === 0) { console.log('[EXPIRY] BLOCKED -- all expirations are 0DTE. NO 0DTE EVER.'); return null; }
+  var valid = nonZero.filter(function(e){ return e.dte>=config.minDTE && e.dte<=config.maxDTE; });
   if (valid.length > 0) { console.log('[EXPIRY] Selected:',valid[0].date+'('+valid[0].dte+'DTE)'); return valid[0]; }
-  var future = expirations.filter(function(e){ return e.dte>0; });
-  if (future.length > 0) { console.log('[EXPIRY] Fallback:',future[0].date+'('+future[0].dte+'DTE)'); return future[0]; }
-  if (expirations.length > 0) { console.log('[EXPIRY] Emergency:',expirations[0].date); return expirations[0]; }
-  return null;
+  // Fallback: nearest non-zero DTE
+  console.log('[EXPIRY] Fallback:',nonZero[0].date+'('+nonZero[0].dte+'DTE)'); return nonZero[0];
 }
 
 function formatExpiry(dateStr) {
@@ -412,11 +416,18 @@ function selectBestContract(contracts, price, config, lvls, type) {
 
 function calcDTE(dateStr) {
   if (!dateStr) return 0;
-  return Math.max(0,Math.ceil((new Date(dateStr+'T16:00:00-04:00')-new Date())/(1000*60*60*24)));
+  // Use market close 4PM ET -- DST-aware (EDT=-04:00, EST=-05:00)
+  var expClose = new Date(dateStr + 'T16:00:00');
+  var etNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  var etNow = new Date(etNowStr);
+  return Math.max(0, Math.ceil((expClose - etNow) / (1000 * 60 * 60 * 24)));
 }
 
 function getTimeContext() {
-  var now=new Date(), etH=((now.getUTCHours()-4)+24)%24, etM=now.getUTCMinutes(), t=etH*60+etM;
+  var now=new Date();
+  var _etCR=now.toLocaleString('en-US',{timeZone:'America/New_York',hour12:false});
+  var _etCRp=(_etCR.split(', ')[1]||_etCR).split(':');
+  var etH=parseInt(_etCRp[0],10), etM=parseInt(_etCRp[1],10), t=etH*60+etM;
   if (t<9*60+30)  return {window:'PREMARKET',ok:false};
   if (t<9*60+45)  return {window:'EARLY',ok:false};
   if (t>=15*60+30) return {window:'LATE',ok:false};

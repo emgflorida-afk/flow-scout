@@ -11,16 +11,24 @@ var fetch = require('node-fetch');
 
 // -- SAFE REQUIRES -----------------------------------------------
 var tradestation = null;
-var brainEngine = null;
 var dynamicBias = null;
 var econCalendar = null;
 var signalEnricher = null;
 
 try { tradestation = require('./tradestation'); } catch(e) { console.log('[SPREAD] tradestation not loaded:', e.message); }
-try { brainEngine = require('./brainEngine'); } catch(e) { console.log('[SPREAD] brainEngine not loaded:', e.message); }
+// NOTE: brainEngine is loaded LAZILY inside getSundayBiasLazy() to avoid circular dependency
 try { dynamicBias = require('./dynamicBias'); } catch(e) { console.log('[SPREAD] dynamicBias not loaded:', e.message); }
 try { econCalendar = require('./economicCalendar'); } catch(e) { console.log('[SPREAD] economicCalendar not loaded:', e.message); }
 try { signalEnricher = require('./signalEnricher'); } catch(e) { console.log('[SPREAD] signalEnricher not loaded:', e.message); }
+
+// Lazy brainEngine accessor -- avoids circular require at module load
+function getSundayBiasLazy() {
+  try {
+    var brain = require('./brainEngine');
+    if (brain && brain.getSundayBias) return brain.getSundayBias();
+  } catch(e) { log('brainEngine lazy load failed: ' + e.message); }
+  return null;
+}
 
 // -- CONSTANTS ---------------------------------------------------
 var ACCOUNT_ID = '11975462';
@@ -248,10 +256,7 @@ async function evaluateSpreadOpportunity() {
   // -- Gather directional signals --
   var ftfc = await fetchFTFC();
 
-  var sundayBias = null;
-  if (brainEngine && brainEngine.getSundayBias) {
-    sundayBias = brainEngine.getSundayBias();
-  }
+  var sundayBias = getSundayBiasLazy();
   var sundayDir = null;
   if (sundayBias && sundayBias.direction) {
     sundayDir = sundayBias.direction.toUpperCase();
@@ -536,13 +541,15 @@ async function placeSpreadOrder(spreadConfig) {
     longAction  = 'BUYTOOPEN';   // buy the higher call (protection)
   }
 
+  // TradeStation multi-leg order format:
+  // No Symbol/TradeAction at root -- each leg defines its own
+  // LimitPrice (not Price) for credit spreads (positive value = net credit)
   var orderPayload = {
     AccountID: ACCOUNT_ID,
-    Symbol: spreadConfig.shortSymbol,
-    Quantity: String(spreadConfig.quantity),
     OrderType: 'Limit',
-    TradeAction: shortAction,
+    LimitPrice: round2(spreadConfig.netCredit),
     TimeInForce: { Duration: 'DAY' },
+    Route: 'Intelligent',
     Legs: [
       {
         Symbol: spreadConfig.shortSymbol,
@@ -555,7 +562,6 @@ async function placeSpreadOrder(spreadConfig) {
         TradeAction: longAction,
       },
     ],
-    Price: round2(spreadConfig.netCredit),
   };
 
   log('Order payload: ' + JSON.stringify(orderPayload, null, 2));

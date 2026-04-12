@@ -8,6 +8,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var LIVE_ACCOUNT = '11975462';
 var SIM_ACCOUNT  = 'SIM3142118M';
 var MAX_POSITIONS_LIVE = 4;
@@ -167,7 +170,7 @@ async function eodCloseAll(account) {
       var atOrPastT1 = lastPrice >= t1Price && avgPrice > 0;
 
       var etNow  = new Date();
-      var etMins = ((etNow.getUTCHours() - 4 + 24) % 24) * 60 + etNow.getUTCMinutes();
+      var _etPm = etTime ? etTime.getETTime(etNow) : { total: ((etNow.getUTCHours() - 4 + 24) % 24) * 60 + etNow.getUTCMinutes() }; var etMins = _etPm.total;
       var isFinalClose = etMins >= (15 * 60 + 55); // after 3:55PM
 
       // DECISION:

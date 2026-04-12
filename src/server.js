@@ -959,7 +959,7 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {
     if (cancelManager) await cancelManager.checkPendingOrders();
   } catch(e) { console.error('[CANCEL-MGR] Cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // TS TOKEN HEALTH CHECK -- every 30 min 24/7
 // Proactively tests token before market opens
@@ -975,7 +975,7 @@ cron.schedule('*/30 * * * *', async function() {
       console.log('[TS-HEALTH] Token check OK');
     }
   } catch(e) { console.error('[TS-HEALTH] Health check error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // MORNING BIAS RESET -- 9:30AM ET every trading day
 // Pulls fresh SPY bar and resets bias before first trade fires
@@ -1008,19 +1008,19 @@ cron.schedule('30 9 * * 1-5', async function() {
       body: JSON.stringify({ content: '```\n' + msg + '\n```', username: 'Stratum Morning Bias' }),
     });
   } catch(e) { console.error('[DYNAMIC-BIAS] Morning reset error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // MOVE STOPS TO BREAKEVEN -- every 5 min during RTH
 cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {
     if (!positionManager) return;
-    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
-    var etMin  = new Date().getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
     if (etTime < (9 * 60 + 45) || etTime > (15 * 60 + 30)) return;
     await positionManager.checkAndMoveStops('11975462');
   } catch(e) { console.error('[POS-MGR] Stop monitor error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // SIM PROMOTION CHECK -- every day at 4:30PM ET
 cron.schedule('30 16 * * 1-5', async function() {
@@ -1028,7 +1028,7 @@ cron.schedule('30 16 * * 1-5', async function() {
     if (!positionManager) return;
     await positionManager.checkSimPromotion();
   } catch(e) { console.error('[POS-MGR] SIM promotion error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // EOD CLOSE ALL -- 3:45PM ET: try limit orders first
 cron.schedule('45 15 * * 1-5', async function() {
@@ -1037,7 +1037,7 @@ cron.schedule('45 15 * * 1-5', async function() {
     console.log('[POS-MGR] 3:45PM ET -- EOD limit close attempt');
     await positionManager.eodCloseAll('11975462');
   } catch(e) { console.error('[POS-MGR] EOD cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // EOD BACKUP -- 3:55PM ET: market orders for anything not filled
 cron.schedule('55 15 * * 1-5', async function() {
@@ -1046,7 +1046,7 @@ cron.schedule('55 15 * * 1-5', async function() {
     console.log('[POS-MGR] 3:55PM ET -- EOD market close backup');
     await positionManager.eodCloseAll('11975462');
   } catch(e) { console.error('[POS-MGR] EOD backup cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // ORPHAN ORDER SWEEP -- every 30 min during RTH
 // Cancels ALL unfilled BUYTOOPEN orders older than 90 min
@@ -1054,137 +1054,130 @@ cron.schedule('55 15 * * 1-5', async function() {
 cron.schedule('*/30 9-16 * * 1-5', async function() {
   try {
     if (!cancelManager || !cancelManager.sweepOrphanOrders) return;
-    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
-    var etMin  = new Date().getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
     if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
     await cancelManager.sweepOrphanOrders('SIM3142118M');
     await cancelManager.sweepOrphanOrders('11975462');
   } catch(e) { console.error('[CANCEL-MGR] Orphan sweep cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // DYNAMIC BIAS UPDATE -- every 5 min during RTH
 cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {
     if (!dynamicBias) return;
-    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
-    var etMin  = new Date().getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
     if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
     await dynamicBias.updateBias();
   } catch(e) { console.error('[DYNAMIC-BIAS] Cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // DAILY LOSS LIMIT CHECK -- every 5 min during RTH
 cron.schedule('*/5 9-16 * * 1-5', async function() {
   try {
     if (!dailyLossLimit) return;
-    var etHour = ((new Date().getUTCHours() - 4) + 24) % 24;
-    var etMin  = new Date().getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
     if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
     // Check both accounts
     await dailyLossLimit.checkDailyLoss('11975462');
     await dailyLossLimit.checkDailyLoss('SIM3142118M');
   } catch(e) { console.error('[LOSS-LIMIT] Cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
-// IDEA WATCHLIST CHECK -- every 5 min during RTH (9:30AM - 4PM ET)
+// IDEA WATCHLIST CHECK -- every 5 min during RTH (9:00AM - 5PM ET)
 // THIS IS THE CRITICAL CRON -- checks if John's ideas have triggered
-// Runs every 5 min 13:00-21:00 UTC = 9:00AM-5PM ET (covers full market hours)
-cron.schedule('*/5 13-21 * * 1-5', async function() {
+cron.schedule('*/5 9-17 * * 1-5', async function() {
   try {
     if (!ideaIngestor) return;
-    var now    = new Date();
-    var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-    var etMin  = now.getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
-    // Only check during market hours 9:30AM - 4:00PM ET
-    if (etTime < (9 * 60 + 30) || etTime > (16 * 60)) return;
     console.log('[IDEA] Checking watchlist -- ' + Object.keys(ideaIngestor.getWatchlist()).length + ' ideas');
     await ideaIngestor.checkWatchlist();
   } catch(e) { console.error('[IDEA] Watchlist cron error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // 12:00AM ET -- reset daily execute-now counter
-cron.schedule('0 4 * * 1-5', function() {
+cron.schedule('0 0 * * 1-5', function() {
   if (executeNow) executeNow.resetDailySetups();
   console.log('[EXECUTE-NOW] Daily reset at midnight');
-});
+}, { timezone: 'America/New_York' });
 
 // Every 10 min -- cancel stale unfilled orders older than 30 min
-cron.schedule('*/10 13-20 * * 1-5', function() {
+cron.schedule('*/10 9-16 * * 1-5', function() {
   if (executeNow && executeNow.cancelStaleOrders) {
     executeNow.cancelStaleOrders().catch(function(e) { console.error('[CANCEL-STALE]', e.message); });
   }
-});
+}, { timezone: 'America/New_York' });
 
 // 3:30 PM ET (19:30 UTC) -- hard close all day trade positions
-cron.schedule('30 19 * * 1-5', function() {
+cron.schedule('30 15 * * 1-5', function() {
   if (executeNow && executeNow.hardCloseAllPositions) {
     console.log('[CRON] 3:30 PM -- hard close triggered');
     executeNow.hardCloseAllPositions().catch(function(e) { console.error('[HARD-CLOSE]', e.message); });
   }
-});
+}, { timezone: 'America/New_York' });
 
 // SUNDAY 6:00PM ET -- Futures open, check /ES /NQ /CL for overnight gap bias
 // Sets Monday morning direction before brain wakes up
-cron.schedule('0 22 * * 0', async function() {
+cron.schedule('0 18 * * 0', async function() {
   console.log('[CRON] Sunday 6:00PM ET -- Futures open, checking overnight bias...');
   if (brainEngine && brainEngine.checkSundayFutures) {
     try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // SUNDAY 8:00PM ET -- Re-check futures after 2 hours of trading
-cron.schedule('0 0 * * 1', async function() {
+cron.schedule('0 20 * * 0', async function() {
   console.log('[CRON] Sunday 8:00PM ET -- Futures re-check...');
   if (brainEngine && brainEngine.checkSundayFutures) {
     try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // MONDAY 4:00AM ET -- Pre-market futures check (gap confirmation)
-cron.schedule('0 8 * * 1', async function() {
+cron.schedule('0 4 * * 1', async function() {
   console.log('[CRON] Monday 4:00AM ET -- Pre-market futures check...');
   if (brainEngine && brainEngine.checkSundayFutures) {
     try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // 4:00AM ET -- AYCE pre-market scan (catches overnight 12HR Miyagi setups)
-cron.schedule('0 8 * * 1-5', async function() {
+cron.schedule('0 4 * * 1-5', async function() {
   console.log('[CRON] 4:00AM -- AYCE pre-market scan...');
   if (preMarketScanner) {
     try { await preMarketScanner.runPreMarketScan(); } catch(e) { console.error('[SCANNER]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // 7:30AM ET -- AUTONOMOUS MORNING ROUTINE
 // Pulls live positions, sets 6HR bias, resets goal, posts brief
 // Zero manual steps needed
-cron.schedule('30 11 * * 1-5', async function() {
+cron.schedule('30 7 * * 1-5', async function() {
   console.log('[CRON] 7:30AM -- Auto morning routine...');
   if (autoMorning) {
     try { await autoMorning.runAutoMorning(); } catch(e) { console.error('[AUTO-MORNING]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // 8:00AM ET -- pre-market report
-cron.schedule('0 12 * * 1-5', async function() {
+cron.schedule('0 8 * * 1-5', async function() {
   console.log('[CRON] 8:00AM -- pre-market report...');
   if (preMarketReport) { try { await preMarketReport.postPreMarketReport(); } catch(e) { console.error('[PMR]', e.message); } }
   if (econCalendar)    { try { await econCalendar.postDailyBrief();         } catch(e) { console.error('[CAL]', e.message); } }
-});
+}, { timezone: 'America/New_York' });
 
 // 8:30AM ET -- CATALYST SCANNER (upgrades/downgrades/news before market open)
-cron.schedule('30 12 * * 1-5', async function() {
+cron.schedule('30 8 * * 1-5', async function() {
   console.log('[CRON] 8:30AM -- catalyst scanner...');
   if (catalystScanner) { try { await catalystScanner.postCatalystBrief(); } catch(e) { console.error('[CATALYST]', e.message); } }
-});
+}, { timezone: 'America/New_York' });
 
 // 9:15AM ET -- morning brief + screener + goal + capitol + AYCE scan + OFFSET ANALYZER
-cron.schedule('15 13 * * 1-5', async function() {
+cron.schedule('15 9 * * 1-5', async function() {
   console.log('[CRON] 9:15AM -- morning brief + pre-market scan + offset analysis...');
   try { await alerter.sendMorningBrief(); } catch(e) { console.error('[BRIEF]', e.message); }
   if (positionOffset)   { try { await positionOffset.runOffsetAnalysis();      } catch(e) { console.error('[OFFSET]', e.message); } }
@@ -1193,22 +1186,22 @@ cron.schedule('15 13 * * 1-5', async function() {
   if (capitol)          { try { await capitol.fetchCongressTrades();            } catch(e) { console.error('[CAPITOL]', e.message); } }
   if (preMarketScanner) { try { await preMarketScanner.runPreMarketScan();      } catch(e) { console.error('[SCANNER]', e.message); } }
   if (econCalendar)     { try { await econCalendar.postDailyBrief();            } catch(e) { console.error('[CAL]', e.message); } }
-});
+}, { timezone: 'America/New_York' });
 
 // 9:30AM ET -- market open goal post
-cron.schedule('30 13 * * 1-5', function() {
+cron.schedule('30 9 * * 1-5', function() {
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
-});
+}, { timezone: 'America/New_York' });
 
 // Every 30 min during market hours -- check for breaking geopolitical news
-cron.schedule('*/30 13-20 * * 1-5', async function() {
+cron.schedule('*/30 9-16 * * 1-5', async function() {
   if (econCalendar) { try { await econCalendar.checkBreakingNews(); } catch(e) { console.error('[CAL]', e.message); } }
-});
+}, { timezone: 'America/New_York' });
 
 // Every 30 min during market hours -- BOTTOM TICK SCANNER
 // Scans 30min/2HR bars for Failed 2U/2D, 3-1, 2-1-2 setups
 // Posts setups to Discord and stores for API access
-cron.schedule('*/30 13-20 * * 1-5', async function() {
+cron.schedule('*/30 9-16 * * 1-5', async function() {
   if (!bottomTick) return;
   try {
     console.log('[CRON] Running bottom tick scanner...');
@@ -1239,18 +1232,18 @@ cron.schedule('*/30 13-20 * * 1-5', async function() {
       console.log('[CRON] Scanner found', withSetups.length, 'tickers with setups');
     }
   } catch(e) { console.error('[CRON] Scanner error:', e.message); }
-});
+}, { timezone: 'America/New_York' });
 
 // 10:00AM ET -- 3-2-2 First Live scan
-cron.schedule('0 14 * * 1-5', async function() {
+cron.schedule('0 10 * * 1-5', async function() {
   console.log('[CRON] 10:00AM -- 3-2-2 scan...');
   if (preMarketScanner) { try { await preMarketScanner.run322Scan(); } catch(e) { console.error('[322]', e.message); } }
-});
+}, { timezone: 'America/New_York' });
 
 // 4:00PM ET -- AUTONOMOUS EOD JOURNAL
 // Pulls live P&L, positions, orders from TradeStation
 // Posts full journal to Discord -- zero manual steps
-cron.schedule('0 20 * * 1-5', async function() {
+cron.schedule('0 16 * * 1-5', async function() {
   console.log('[CRON] 4:00PM -- Auto EOD journal...');
   if (goalTracker) goalTracker.postGoalUpdate().catch(console.error);
   if (autoJournal) {
@@ -1258,7 +1251,7 @@ cron.schedule('0 20 * * 1-5', async function() {
   } else if (tradingJournal) {
     try { await tradingJournal.writeJournal({}); } catch(e) { console.error('[JOURNAL]', e.message); }
   }
-});
+}, { timezone: 'America/New_York' });
 
 // -- SCALP MODE ENDPOINTS ----------------------------------------
 app.get('/api/scalp/status', function(req, res) {

@@ -5,6 +5,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var TS_LIVE = 'https://api.tradestation.com/v3';
 var TS_SIM  = 'https://sim-api.tradestation.com/v3';
 
@@ -22,8 +25,8 @@ function getBaseUrl(account) {
 
 function getETMinutes() {
   var now    = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  return etHour * 60 + now.getUTCMinutes();
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et.hour;
+  return etHour * 60 + _et.min;
 }
 
 // Register an order for cancel tracking

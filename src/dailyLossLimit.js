@@ -5,6 +5,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 // LOSS LIMITS BY ACCOUNT
 var LIMITS = {
   '11975462':    -500,   // Live account -- stop at -$500 realized
@@ -97,7 +100,7 @@ function override(account) {
 // Reset all blocks at midnight
 setInterval(function() {
   var now    = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24 }; var etHour = _et.hour;
   if (etHour === 0) {
     blocked = {};
     console.log('[LOSS-LIMIT] Reset for new trading day');

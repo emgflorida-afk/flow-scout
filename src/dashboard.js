@@ -6,6 +6,9 @@
 
 const fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 const POLY_BASE   = 'https://api.polygon.io';
 const PUB_AUTH    = 'https://api.public.com/userapiauthservice/personal/access-tokens';
 const PUB_GATEWAY = 'https://api.public.com/userapigateway';
@@ -119,8 +122,10 @@ function scoreBreadth(sectors) {
 function scoreMacro() {
   // Time-based macro score — market session quality
   const now    = new Date();
-  const etHour = now.getUTCHours() - 4;
-  const etMin  = now.getUTCMinutes();
+  const _etDash = now.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  const _etDashParts = (_etDash.split(', ')[1] || _etDash).split(':');
+  const etHour = parseInt(_etDashParts[0], 10);
+  const etMin  = parseInt(_etDashParts[1], 10);
   const etTime = etHour * 60 + etMin;
 
   const OPEN        = 9  * 60 + 30;

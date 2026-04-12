@@ -7,6 +7,9 @@ const fetch             = require('node-fetch');
 const optionChartReader = require('./optionChartReader');
 const lvlFramework      = require('./lvlFramework');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 // DISCORD CHANNELS
 var INDICES_WEBHOOK = process.env.DISCORD_INDICES_WEBHOOK ||
   'https://discord.com/api/webhooks/1489297759248056513/U9w2yLf7qr3skwZuu6-mwMpVcB5Y1HQtLx5ulNQvugcWARG1HGagsoxUhrnX_f_GHsk5';
@@ -16,7 +19,7 @@ var INDEX_TICKERS = ['SPY', 'QQQ', 'IWM'];
 var executedToday = {};
 setInterval(function() {
   var now    = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
+  var _et = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24 }; var etHour = _et.hour;
   if (etHour === 0) { executedToday = {}; console.log('[DEDUP] Reset for new day'); }
 }, 60 * 60 * 1000);
 
@@ -113,8 +116,10 @@ async function sendToChannel(channel, message, ticker) {
 async function sendDiscordRaw(msg) { await sendToChannel('strat', msg); }
 
 function calcDTE(expiryDateStr) {
-  const diff = Math.ceil((new Date(expiryDateStr + 'T16:00:00-04:00') - new Date()) / (1000 * 60 * 60 * 24));
-  return Math.max(0, diff);
+  var expClose = new Date(expiryDateStr + 'T16:00:00');
+  var etNowStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York' });
+  var etNow = new Date(etNowStr);
+  return Math.max(0, Math.ceil((expClose - etNow) / (1000 * 60 * 60 * 24)));
 }
 
 function getRsiLabel(rsi) {
@@ -242,7 +247,7 @@ function buildEdgeSection(resolved) {
   }
   if (resolved.dte === 0) {
     const now    = new Date();
-    const etHour = now.getUTCHours() - 4;
+    var _et2 = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24 }; const etHour = _et2.hour;
     if (etHour >= 14) lines.push('🚫 0DTE after 2PM -- DO NOT ENTER');
   }
   if (lines.length > 0) lines.push('-------------------------------');
@@ -288,8 +293,7 @@ function formatTime(totalMin) {
 // -- CANCEL BY LINE -----------------------------------------------
 function buildCancelByLine() {
   var now = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
+  var _et3 = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et3.hour; var etMin = _et3.min;
   var etTime = etHour * 60 + etMin;
   var PRIME_END   = 11 * 60;
   var CAUTION_END = 12 * 60;
@@ -311,8 +315,7 @@ function buildCancelByLine() {
 // -- IS WITHIN TRADING HOURS --------------------------------------
 function isWithinTradingHours() {
   var now = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
+  var _et4 = etTime ? etTime.getETTime(now) : { hour: ((now.getUTCHours() - 4) + 24) % 24, min: now.getUTCMinutes(), total: 0 }; var etHour = _et4.hour; var etMin = _et4.min;
   var etTime = etHour * 60 + etMin;
   return etTime >= (9 * 60 + 45) && etTime <= (15 * 60 + 30);
 }

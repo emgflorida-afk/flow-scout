@@ -37,6 +37,9 @@ function loadWatchlist() {
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var TS_BASE          = 'https://api.tradestation.com/v3';
 var EXECUTE_NOW_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
@@ -626,13 +629,15 @@ function removeIdea(ticker, triggerPrice) {
 // IS MARKET OPEN -- only monitor during RTH 9:30AM-4PM ET
 // ================================================================
 function isMarketOpen() {
-  var now    = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin  = now.getUTCMinutes();
+  var now = new Date();
+  var etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  var timePart = etStr.split(', ')[1] || etStr;
+  var parts = timePart.split(':');
+  var etHour = parseInt(parts[0], 10);
+  var etMin  = parseInt(parts[1], 10);
   var etTime = etHour * 60 + etMin;
-  var day    = now.getUTCDay();
-  // Mon-Fri only, 9:30AM-4:00PM ET
-  if (day === 0 || day === 6) return false;
+  var dayStr = now.toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
+  if (dayStr === 'Sat' || dayStr === 'Sun') return false;
   return etTime >= (9 * 60 + 30) && etTime <= (16 * 60);
 }
 

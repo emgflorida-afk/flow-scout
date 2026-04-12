@@ -117,7 +117,7 @@ var dailyTarget = 500;
 var minTarget = 300;
 var maxDailyLoss = -200;
 var tradesOpened = 0;
-var maxTrades = 3;
+var maxTrades = 2; // DOCTRINE: max 2 trades per day. Was 3 -- FIXED.
 var activePositions = [];
 var contractSize = 3; // default 3 contracts per trade
 var trimPlan = { first: 0.50, second: 1.00 }; // +50%, +100%
@@ -244,7 +244,11 @@ async function executeAutonomous(entry) {
 
   try {
     // Step 1: Resolve the option contract
-    var tradeType = entry.earningsWithin3Days ? 'DAY' : 'DAY'; // always day trade for now
+    // SWING detection: WealthPrince 4HR signals, daily TF signals, and high-confluence setups
+    // with 5+ DTE should be swung. Earnings within 3 days = always day trade.
+    var isSwingSignal = (entry.source === 'WEALTH_PRINCE_4HR' || entry.source === 'JSMITH_REVERSAL' ||
+      entry.source === 'STRAT_DAILY' || entry.timeframe === 'DAILY' || entry.timeframe === '4HR');
+    var tradeType = entry.earningsWithin3Days ? 'DAY' : (isSwingSignal ? 'SWING' : 'DAY');
     var contract = await resolver.resolveContract(
       entry.ticker,
       entry.type, // 'call' or 'put'
@@ -403,8 +407,11 @@ var MAX_LOG = 50;
 // ===================================================================
 function getETTime() {
   var now = new Date();
-  var etHour = ((now.getUTCHours() - 4) + 24) % 24;
-  var etMin = now.getUTCMinutes();
+  var etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  var timePart = etStr.split(', ')[1] || etStr;
+  var parts = timePart.split(':');
+  var etHour = parseInt(parts[0], 10);
+  var etMin = parseInt(parts[1], 10);
   var etTime = etHour * 60 + etMin;
   return { hour: etHour, min: etMin, total: etTime, now: now };
 }
@@ -825,7 +832,7 @@ function evaluateFlowSignal() {
 // Runs all 5 AYCE strategies across watchlist tickers
 // Time-aware: 4HR Re-Trigger at 9:30, 322+Failed9 at 10AM, 7HR after 11AM
 // ===================================================================
-async function evaluateAYCESignal() {
+async function evaluateAYCESignal(deadZoneOnly) {
   if (!preMarketScanner) {
     logBrain('AYCE not available -- preMarketScanner not loaded');
     return { triggered: false, reason: 'preMarketScanner not loaded' };
@@ -839,29 +846,33 @@ async function evaluateAYCESignal() {
       var ticker = tickers[i];
       var setup = null;
 
-      // 4HR Re-Trigger: fires at 9:30 bell (earliest AYCE signal)
-      if (et.total >= 9 * 60 + 30) {
-        setup = await preMarketScanner.scan4HRRetrigger(ticker);
-        if (setup) { setup._source = '4HR_RETRIGGER'; }
+      // During dead zone (11:30AM-2:30PM), ONLY run 7HR scan
+      // 7HR liquidity sweeps are the ONLY valid dead zone strategy
+      if (!deadZoneOnly) {
+        // 4HR Re-Trigger: fires at 9:30 bell (earliest AYCE signal)
+        if (et.total >= 9 * 60 + 30) {
+          setup = await preMarketScanner.scan4HRRetrigger(ticker);
+          if (setup) { setup._source = '4HR_RETRIGGER'; }
+        }
+
+        // 12HR Miyagi: fires at open, setup detected pre-market
+        if (!setup && et.total >= 9 * 60 + 30) {
+          setup = await preMarketScanner.scanMiyagi(ticker);
+          if (setup) { setup._source = 'MIYAGI'; }
+        }
+
+        // 322 + Failed 9: need 9AM candle closed (10AM+)
+        if (!setup && et.total >= 10 * 60) {
+          setup = await preMarketScanner.scan322(ticker);
+          if (setup) { setup._source = '322_FIRST_LIVE'; }
+        }
+        if (!setup && et.total >= 10 * 60) {
+          setup = await preMarketScanner.scanFailed9(ticker);
+          if (setup) { setup._source = 'FAILED_9'; }
+        }
       }
 
-      // 12HR Miyagi: fires at open, setup detected pre-market
-      if (!setup && et.total >= 9 * 60 + 30) {
-        setup = await preMarketScanner.scanMiyagi(ticker);
-        if (setup) { setup._source = 'MIYAGI'; }
-      }
-
-      // 322 + Failed 9: need 9AM candle closed (10AM+)
-      if (!setup && et.total >= 10 * 60) {
-        setup = await preMarketScanner.scan322(ticker);
-        if (setup) { setup._source = '322_FIRST_LIVE'; }
-      }
-      if (!setup && et.total >= 10 * 60) {
-        setup = await preMarketScanner.scanFailed9(ticker);
-        if (setup) { setup._source = 'FAILED_9'; }
-      }
-
-      // 7HR: ONLY after 11AM (liquidity sweep window)
+      // 7HR: ONLY after 11AM (liquidity sweep window) -- ALLOWED in dead zone
       if (!setup && et.total >= 11 * 60) {
         setup = await preMarketScanner.scan7HR(ticker);
         if (setup) { setup._source = '7HR_SWEEP'; }
@@ -932,9 +943,9 @@ function evaluateEntry(signal) {
 
   // Check: no entries before 9:45 AM ET (first 15 min = noise/false breakouts)
   // EXCEPTION: AYCE 4HR Re-Trigger fires at 9:30 -- structural pattern, not noise
-  var etNow = getETTime ? getETTime() : new Date();
-  var etHour = typeof etNow === 'object' ? etNow.getHours() : parseInt(String(etNow).split(':')[0]);
-  var etMin = typeof etNow === 'object' ? etNow.getMinutes() : parseInt(String(etNow).split(':')[1]);
+  var etNow = getETTime();
+  var etHour = etNow.hour;
+  var etMin = etNow.min;
   var isAYCE = signal.isAYCESignal || false;
   if (etHour === 9 && etMin < 45 && !isAYCE) {
     logBrain('ENTRY REJECTED: Before 9:45 AM ET (' + etHour + ':' + etMin + ') -- opening volatility');
@@ -1622,7 +1633,8 @@ async function runBrainCycle() {
     var strat = strategies[currentStrategy];
 
     if (strat === 'AYCE_STRAT') {
-      signal = await evaluateAYCESignal();
+      var inDeadZone = (et.total > amEnd && et.total < powerHourStart);
+      signal = await evaluateAYCESignal(inDeadZone);
     } else if (strat === 'SCANNER_BREAKOUT') {
       signal = await evaluateScannerSignal();
     } else if (strat === 'FLOW_CONVICTION') {
@@ -1925,12 +1937,14 @@ async function runBrainCycle() {
       for (var cl = 0; cl < activePositions.length; cl++) {
         var closePos = activePositions[cl];
         var closeResult = null;
-        if (BYPASS_MODE && closePos.liveOrder && closePos.contractSymbol) {
+        // Close ALL tracked positions, not just liveOrder ones
+        // Positions from manual entry or previous agents still need to be closed at EOD
+        if (BYPASS_MODE && closePos.contractSymbol) {
           closeResult = await closeAutonomous(closePos);
         }
         var closeStatus = (closeResult && closeResult.closed)
           ? 'CLOSED | Order ID: ' + closeResult.orderId
-          : (BYPASS_MODE && closePos.liveOrder ? 'CLOSE FAILED: ' + (closeResult ? closeResult.reason : '?') : 'RECOMMENDATION -- close this position');
+          : (BYPASS_MODE && closePos.contractSymbol ? 'CLOSE FAILED: ' + (closeResult ? closeResult.reason : '?') : 'RECOMMENDATION -- close this position');
         await postToDiscord(
           'CLOSE OUT: ' + closePos.ticker + ' ' + closePos.type.toUpperCase() + ' x' + closePos.contracts + '\n' +
           'Entry: $' + (closePos.entry ? closePos.entry.toFixed(2) : '?') + '\n' +

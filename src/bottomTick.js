@@ -6,6 +6,9 @@
 
 var fetch = require('node-fetch');
 
+var etTime = null;
+try { etTime = require('./etTime'); } catch(e) {}
+
 var SCAN_TICKERS = ['SPY','QQQ','IWM','TSLA','NVDA','AMD','META','AAPL','AMZN','MSFT','GOOGL','HUM','LLY'];
 
 // -- GET TOKEN ----------------------------------------------------
@@ -150,11 +153,10 @@ function detectPremarketLevels(bars5min, currentPrice) {
   for (var i = 0; i < bars5min.length; i++) {
     var ts = bars5min[i].TimeStamp || bars5min[i].Timestamp || '';
     var d = new Date(ts);
-    var etHour = ((d.getUTCHours() - 4) + 24) % 24;
-    var etMin = d.getUTCMinutes();
-    var etTime = etHour * 60 + etMin;
+    var _etBT = etTime ? etTime.getETTime(d) : { hour: ((d.getUTCHours() - 4) + 24) % 24, min: d.getUTCMinutes(), total: 0 }; var etHour = _etBT.hour; var etMin = _etBT.min;
+    var etTimeVal = etHour * 60 + etMin;
     // 9:30 AM = 570, 10:00 AM = 600
-    if (etTime >= 570 && etTime < 600) {
+    if (etTimeVal >= 570 && etTimeVal < 600) {
       openingBars.push(bars5min[i]);
     }
   }
