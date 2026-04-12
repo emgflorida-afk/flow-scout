@@ -215,8 +215,9 @@ function detectVolumeExhaustion(bars5min, direction) {
 // -- BYPASS MODE: FULL AUTONOMOUS EXECUTION -------------------------
 // When true, brain places LIVE orders via orderExecutor instead of logging
 // Account: 11975462 (LIVE TradeStation)
-var BYPASS_MODE = false;
+var BYPASS_MODE = process.env.BYPASS_MODE === 'true' || false;
 var LIVE_ACCOUNT = '11975462';
+if (BYPASS_MODE) console.log('[BRAIN] BYPASS MODE ON at startup (env var)');
 
 function setBypassMode(enabled) {
   BYPASS_MODE = !!enabled;
