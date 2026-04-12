@@ -63,6 +63,9 @@ try { simMode = require('./simMode'); console.log('[SIM-MODE] Loaded OK'); } cat
 var orderExecutor = null;
 try { orderExecutor = require('./orderExecutor'); console.log('[EXECUTOR] Loaded OK'); } catch(e) { console.log('[EXECUTOR] Skipped:', e.message); }
 
+var creditSpreadEngine = null;
+try { creditSpreadEngine = require('./creditSpreadEngine'); console.log('[SPREAD] Loaded OK'); } catch(e) { console.log('[SPREAD] Skipped:', e.message); }
+
 var cancelManager = null;
 try { cancelManager = require('./cancelManager'); console.log('[CANCEL-MGR] Loaded OK'); } catch(e) { console.log('[CANCEL-MGR] Skipped:', e.message); }
 
@@ -1295,6 +1298,28 @@ app.post('/api/brain/start', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- CREDIT SPREAD ENGINE API ------------------------------------
+app.get('/api/spreads/status', function(req, res) {
+  if (!creditSpreadEngine) return res.json({ error: 'Spread engine not loaded' });
+  res.json({ status: 'OK', spreads: creditSpreadEngine.getSpreadStatus() });
+});
+
+app.post('/api/spreads/evaluate', async function(req, res) {
+  if (!creditSpreadEngine) return res.json({ error: 'Spread engine not loaded' });
+  try {
+    var result = await creditSpreadEngine.evaluateSpreadOpportunity();
+    res.json({ status: 'OK', evaluation: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/spreads/execute', async function(req, res) {
+  if (!creditSpreadEngine) return res.json({ error: 'Spread engine not loaded' });
+  try {
+    var result = await creditSpreadEngine.executeFullFlow();
+    res.json({ status: 'OK', result: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/stop', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
@@ -1389,6 +1414,21 @@ cron.schedule('* 9-16 * * 1-5', function() {
     brainEngine.runBrainCycle().catch(function(e) {
       console.error('[BRAIN] Cycle error:', e.message);
     });
+  }
+}, { timezone: 'America/New_York' });
+
+// CREDIT SPREAD CRON -- evaluate at 10:00AM ET, monitor every 5 min
+cron.schedule('0 10 * * 1-5', async function() {
+  console.log('[CRON] 10:00AM -- Credit spread evaluation...');
+  if (creditSpreadEngine) {
+    try { await creditSpreadEngine.executeFullFlow(); } catch(e) { console.error('[SPREAD]', e.message); }
+  }
+}, { timezone: 'America/New_York' });
+
+// Monitor open spreads every 5 min during market hours
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  if (creditSpreadEngine) {
+    try { await creditSpreadEngine.monitorSpreads(); } catch(e) { console.error('[SPREAD-MON]', e.message); }
   }
 }, { timezone: 'America/New_York' });
 
