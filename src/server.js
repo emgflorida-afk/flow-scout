@@ -208,6 +208,24 @@ app.post('/webhook/tv-brain', function(req, res) {
       if (/call|long|buy|bull/i.test(body.action || body.order || text)) direction = 'CALLS';
       if (/put|short|sell|bear/i.test(body.action || body.order || text)) direction = 'PUTS';
     }
+    // Format 4: JSmith REVERSAL — "Bullish Setup" / "Bearish Setup" or "TRADE IDEA: 260 Calls"
+    if (!ticker && text) {
+      var bullSetup = text.match(/bullish\s*setup/i);
+      var bearSetup = text.match(/bearish\s*setup/i);
+      var tradeIdea = text.match(/TRADE\s*IDEA[:\s]*(\d+)\s*(calls?|puts?)/i);
+      var jsTicker = (body.ticker || '').toUpperCase() || (text.match(/([A-Z]{1,5})/) || [])[1];
+      if (bullSetup && jsTicker) { ticker = jsTicker; direction = 'CALLS'; source = 'JSMITH_REVERSAL'; }
+      if (bearSetup && jsTicker) { ticker = jsTicker; direction = 'PUTS'; source = 'JSMITH_REVERSAL'; }
+      if (!ticker && tradeIdea) { ticker = jsTicker || 'SPY'; direction = /call/i.test(tradeIdea[2]) ? 'CALLS' : 'PUTS'; source = 'JSMITH_REVERSAL'; }
+    }
+    // Format 5: JSmith Failed 2s — "Failed 2 Up" / "Failed 2 Down"
+    if (!ticker && text) {
+      var f2u = text.match(/failed\s*2\s*(up|u)/i);
+      var f2d = text.match(/failed\s*2\s*(down|d)/i);
+      var f2Ticker = (body.ticker || '').toUpperCase() || (text.match(/([A-Z]{1,5})/) || [])[1];
+      if (f2u && f2Ticker) { ticker = f2Ticker; direction = 'PUTS'; source = 'JSMITH_FAILED2'; }
+      if (f2d && f2Ticker) { ticker = f2Ticker; direction = 'CALLS'; source = 'JSMITH_FAILED2'; }
+    }
 
     if (!ticker || !direction) {
       return res.status(400).json({ error: 'Could not parse ticker/direction', received: body });
