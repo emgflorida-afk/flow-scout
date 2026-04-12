@@ -1081,6 +1081,31 @@ cron.schedule('30 19 * * 1-5', function() {
   }
 });
 
+// SUNDAY 6:00PM ET -- Futures open, check /ES /NQ /CL for overnight gap bias
+// Sets Monday morning direction before brain wakes up
+cron.schedule('0 22 * * 0', async function() {
+  console.log('[CRON] Sunday 6:00PM ET -- Futures open, checking overnight bias...');
+  if (brainEngine && brainEngine.checkSundayFutures) {
+    try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
+  }
+});
+
+// SUNDAY 8:00PM ET -- Re-check futures after 2 hours of trading
+cron.schedule('0 0 * * 1', async function() {
+  console.log('[CRON] Sunday 8:00PM ET -- Futures re-check...');
+  if (brainEngine && brainEngine.checkSundayFutures) {
+    try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
+  }
+});
+
+// MONDAY 4:00AM ET -- Pre-market futures check (gap confirmation)
+cron.schedule('0 8 * * 1', async function() {
+  console.log('[CRON] Monday 4:00AM ET -- Pre-market futures check...');
+  if (brainEngine && brainEngine.checkSundayFutures) {
+    try { await brainEngine.checkSundayFutures(); } catch(e) { console.error('[FUTURES]', e.message); }
+  }
+});
+
 // 4:00AM ET -- AYCE pre-market scan (catches overnight 12HR Miyagi setups)
 cron.schedule('0 8 * * 1-5', async function() {
   console.log('[CRON] 4:00AM -- AYCE pre-market scan...');
@@ -1256,6 +1281,23 @@ app.get('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
     res.json({ status: 'OK', bypassMode: brainEngine.getBypassMode() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// FUTURES CHECK -- trigger manually or check Sunday bias
+app.get('/api/brain/futures', async function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var bias = brainEngine.getSundayBias();
+    res.json({ status: 'OK', bias: bias });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/futures', async function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var result = await brainEngine.checkSundayFutures();
+    res.json({ status: 'OK', bias: result });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

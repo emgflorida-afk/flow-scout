@@ -447,6 +447,119 @@ async function postToDiscord(message) {
   } catch(e) { console.error('[BRAIN] Discord post error:', e.message); }
 }
 
+// -- SUNDAY FUTURES CHECK: reads /ES /NQ /CL when futures open ------
+// Runs Sunday 6PM ET, posts gap direction + sector bias to Discord
+// Sets pre-market bias so Monday brain wakes up with conviction
+var sundayBias = { direction: null, oilMove: null, esGap: null, nqGap: null, clMove: null, timestamp: null };
+
+async function checkSundayFutures() {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) { console.log('[FUTURES] No TS token'); return; }
+
+    // Fetch futures quotes: /ES (S&P), /NQ (Nasdaq), /CL (Crude Oil)
+    var symbols = ['/ESM26', '/NQM26', '/CLK26'];  // June S&P, June NQ, May Crude
+    var quotes = {};
+
+    for (var i = 0; i < symbols.length; i++) {
+      try {
+        var res = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(symbols[i]), {
+          headers: { 'Authorization': 'Bearer ' + token },
+        });
+        if (res.ok) {
+          var data = await res.json();
+          var q = (data.Quotes || [])[0];
+          if (q) {
+            quotes[symbols[i]] = {
+              last: parseFloat(q.Last || q.Close || 0),
+              prevClose: parseFloat(q.PreviousClose || q.PreviousDayClose || 0),
+              change: parseFloat(q.NetChange || 0),
+              changePct: parseFloat(q.NetChangePct || 0),
+              high: parseFloat(q.High || 0),
+              low: parseFloat(q.Low || 0),
+            };
+          }
+        }
+      } catch(e) { console.log('[FUTURES] Error fetching ' + symbols[i] + ':', e.message); }
+    }
+
+    if (Object.keys(quotes).length === 0) {
+      console.log('[FUTURES] No quotes returned -- market may not be open yet');
+      return;
+    }
+
+    // Analyze
+    var es = quotes['/ESM26'] || {};
+    var nq = quotes['/NQM26'] || {};
+    var cl = quotes['/CLK26'] || {};
+
+    var esGap = es.changePct || 0;
+    var nqGap = nq.changePct || 0;
+    var clMove = cl.changePct || 0;
+
+    // Determine bias
+    var direction = 'NEUTRAL';
+    if (esGap > 0.3 && nqGap > 0.3) direction = 'BULLISH';
+    if (esGap > 0.8 && nqGap > 0.8) direction = 'STRONG BULLISH';
+    if (esGap < -0.3 && nqGap < -0.3) direction = 'BEARISH';
+    if (esGap < -0.8 && nqGap < -0.8) direction = 'STRONG BEARISH';
+
+    // Oil impact
+    var oilBias = 'NEUTRAL';
+    if (clMove > 2) oilBias = 'OIL SPIKING -- energy CALLS, airline PUTS';
+    else if (clMove > 1) oilBias = 'OIL UP -- lean energy calls';
+    else if (clMove < -2) oilBias = 'OIL DUMPING -- energy PUTS, airline CALLS';
+    else if (clMove < -1) oilBias = 'OIL DOWN -- lean airline calls';
+
+    // Sector rotation guidance
+    var sectors = [];
+    if (clMove > 1.5) { sectors.push('ENERGY: XOM CVX OXY XLE → CALLS'); sectors.push('DEFENSE: LMT RTX NOC → CALLS'); sectors.push('AIRLINES: DAL UAL LUV AAL → PUTS'); }
+    if (clMove < -1.5) { sectors.push('AIRLINES: DAL UAL LUV AAL → CALLS'); sectors.push('ENERGY: XOM CVX OXY XLE → PUTS'); }
+    if (esGap > 0.5) { sectors.push('TECH: NVDA TSLA META AMZN → CALLS'); }
+    if (esGap < -0.5) { sectors.push('INDICES: SPY QQQ IWM → PUTS on bounce'); }
+
+    // Store bias for Monday
+    sundayBias = {
+      direction: direction,
+      oilMove: clMove,
+      oilBias: oilBias,
+      esGap: esGap,
+      nqGap: nqGap,
+      clMove: clMove,
+      sectors: sectors,
+      timestamp: new Date().toISOString(),
+    };
+
+    // Post to Discord
+    var msg = 'SUNDAY FUTURES OPEN\n' +
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      '/ES (S&P 500):  $' + (es.last || '?') + '  (' + (esGap >= 0 ? '+' : '') + esGap.toFixed(2) + '%)\n' +
+      '/NQ (Nasdaq):   $' + (nq.last || '?') + '  (' + (nqGap >= 0 ? '+' : '') + nqGap.toFixed(2) + '%)\n' +
+      '/CL (Crude):    $' + (cl.last || '?') + '  (' + (clMove >= 0 ? '+' : '') + clMove.toFixed(2) + '%)\n' +
+      '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      'OVERNIGHT BIAS: ' + direction + '\n' +
+      'OIL READ: ' + oilBias + '\n';
+
+    if (sectors.length > 0) {
+      msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n';
+      msg += 'SECTOR ROTATION PLAYS:\n';
+      for (var s = 0; s < sectors.length; s++) { msg += '  → ' + sectors[s] + '\n'; }
+    }
+
+    msg += '━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
+      'Monday brain will use this bias for first-look entries.\n' +
+      'Will re-check futures at 4AM, 7:30AM, and 9:15AM pre-market.';
+
+    await postToDiscord(msg);
+    console.log('[FUTURES] Sunday bias posted: ' + direction + ' | Oil: ' + clMove.toFixed(2) + '%');
+    return sundayBias;
+
+  } catch(e) { console.error('[FUTURES] Sunday check error:', e.message); return null; }
+}
+
+function getSundayBias() { return sundayBias; }
+
 // ===================================================================
 // STATE TRANSITION
 // ===================================================================
@@ -879,6 +992,35 @@ function evaluateEntry(signal) {
       }
     }
   } catch(e) {}
+
+  // Sunday futures bias -- extra confluence for Monday morning
+  if (sundayBias && sundayBias.direction && sundayBias.timestamp) {
+    var biasAge = (Date.now() - new Date(sundayBias.timestamp).getTime()) / 3600000; // hours
+    if (biasAge < 18) { // only use if less than 18 hours old (Sunday evening → Monday morning)
+      var futuresBullish = sundayBias.direction.indexOf('BULLISH') >= 0;
+      var futuresBearish = sundayBias.direction.indexOf('BEARISH') >= 0;
+      var signalBull = direction === 'BULLISH';
+      if (futuresBullish && signalBull) {
+        logBrain('FUTURES ALIGNED: Sunday futures ' + sundayBias.direction + ' + signal BULLISH = HIGH CONVICTION');
+        score += 1;
+      } else if (futuresBearish && !signalBull) {
+        logBrain('FUTURES ALIGNED: Sunday futures ' + sundayBias.direction + ' + signal BEARISH = HIGH CONVICTION');
+        score += 1;
+      } else if (futuresBullish && !signalBull) {
+        logBrain('FUTURES CONFLICT: Sunday futures BULLISH but signal BEARISH -- caution');
+      } else if (futuresBearish && signalBull) {
+        logBrain('FUTURES CONFLICT: Sunday futures BEARISH but signal BULLISH -- caution');
+      }
+      // Oil-specific sector boost
+      if (sundayBias.oilMove && Math.abs(sundayBias.oilMove) > 1.5) {
+        var oilTickers = ['XOM', 'CVX', 'OXY', 'XLE', 'DAL', 'UAL', 'LUV', 'AAL'];
+        if (oilTickers.indexOf(ticker) >= 0) {
+          logBrain('OIL CATALYST: Crude ' + (sundayBias.oilMove > 0 ? '+' : '') + sundayBias.oilMove.toFixed(1) + '% -- sector play on ' + ticker);
+          score += 1;
+        }
+      }
+    }
+  }
 
   var gexrDirection = global.gexrDirection || null;
   if (gexrDirection) {
@@ -1838,4 +1980,6 @@ module.exports = {
   getEarningsCache: function() { return earningsCache; },
   pushTVSignal: pushTVSignal,
   popTVSignal: popTVSignal,
+  checkSundayFutures: checkSundayFutures,
+  getSundayBias: getSundayBias,
 };
