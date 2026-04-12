@@ -218,13 +218,14 @@ app.post('/webhook/tv-brain', function(req, res) {
       if (bearSetup && jsTicker) { ticker = jsTicker; direction = 'PUTS'; source = 'JSMITH_REVERSAL'; }
       if (!ticker && tradeIdea) { ticker = jsTicker || 'SPY'; direction = /call/i.test(tradeIdea[2]) ? 'CALLS' : 'PUTS'; source = 'JSMITH_REVERSAL'; }
     }
-    // Format 5: JSmith Failed 2s — "Failed 2 Up" / "Failed 2 Down"
+    // Format 5: JSmith Failed 2s — "F2U/F2D Standard" or "F2U/F2D + 50% Close"
     if (!ticker && text) {
-      var f2u = text.match(/failed\s*2\s*(up|u)/i);
-      var f2d = text.match(/failed\s*2\s*(down|d)/i);
-      var f2Ticker = (body.ticker || '').toUpperCase() || (text.match(/([A-Z]{1,5})/) || [])[1];
-      if (f2u && f2Ticker) { ticker = f2Ticker; direction = 'PUTS'; source = 'JSMITH_FAILED2'; }
-      if (f2d && f2Ticker) { ticker = f2Ticker; direction = 'CALLS'; source = 'JSMITH_FAILED2'; }
+      var f2u = text.match(/f2u|failed\s*2\s*(up|u)/i);
+      var f2d = text.match(/f2d|failed\s*2\s*(down|d)/i);
+      var fiftyPct = /50%/i.test(text);
+      var f2Ticker = (body.ticker || '').toUpperCase() || (text.match(/\b([A-Z]{1,5})\b/) || [])[1];
+      if (f2u && f2Ticker) { ticker = f2Ticker; direction = 'PUTS'; source = fiftyPct ? 'JSMITH_F2U_50PCT' : 'JSMITH_FAILED2'; }
+      if (f2d && f2Ticker) { ticker = f2Ticker; direction = 'CALLS'; source = fiftyPct ? 'JSMITH_F2D_50PCT' : 'JSMITH_FAILED2'; }
     }
 
     if (!ticker || !direction) {
