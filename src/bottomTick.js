@@ -386,6 +386,45 @@ function detectSetups(bars) {
         low: cL,
       });
     }
+
+    // CRT HIGH (Candle Range Theory): swept prior high, reversed and closed below it
+    // John JSmith method — liquidity sweep above prior candle high, then rejection
+    if (cH > p1H && cC < p1H && cC < parseFloat(curr.Open)) {
+      setups.push({
+        type: 'CRT_HIGH',
+        direction: 'BEARISH',
+        action: 'PUT',
+        bar: i,
+        timestamp: curr.TimeStamp,
+        trigger: p1H, // prior high is now resistance
+        stop: cH,     // above the sweep high
+        description: 'CRT High Sweep: swept $' + p1H.toFixed(2) + ' high, reversed. PUT entry.',
+        close: cC,
+        high: cH,
+        low: cL,
+        sweepLevel: cH,
+        priorLevel: p1H,
+      });
+    }
+
+    // CRT LOW: swept prior low, reversed and closed above it
+    if (cL < p1L && cC > p1L && cC > parseFloat(curr.Open)) {
+      setups.push({
+        type: 'CRT_LOW',
+        direction: 'BULLISH',
+        action: 'CALL',
+        bar: i,
+        timestamp: curr.TimeStamp,
+        trigger: p1L, // prior low is now support
+        stop: cL,     // below the sweep low
+        description: 'CRT Low Sweep: swept $' + p1L.toFixed(2) + ' low, reversed. CALL entry.',
+        close: cC,
+        high: cH,
+        low: cL,
+        sweepLevel: cL,
+        priorLevel: p1L,
+      });
+    }
   }
 
   return setups;

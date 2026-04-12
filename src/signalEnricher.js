@@ -344,6 +344,49 @@ async function enrichSignal(signal) {
       tvData.avgVolume = volSum / dailyBars.length;
     }
 
+    // -- 11. 6HR CONFIRMATION (John JSmith / 3-1 method) --
+    // 6HR candles complete at: 4AM, 10AM, 4PM, 10PM ET
+    // Check for 3-1 pattern and direction alignment
+    var bars6h = await getBars(ticker, 'Minute', '360', 6);
+    if (bars6h && bars6h.length >= 3) {
+      var last6h = bars6h[bars6h.length - 1];
+      var prev6h = bars6h[bars6h.length - 2];
+      var prev26h = bars6h[bars6h.length - 3];
+      var type6hCurr = getBarType(last6h, prev6h);
+      var type6hPrev = getBarType(prev6h, prev26h);
+      var close6h = parseFloat(last6h.Close);
+      var open6h = parseFloat(last6h.Open);
+      var high6h = parseFloat(last6h.High);
+      var low6h = parseFloat(last6h.Low);
+      var prevHigh6h = parseFloat(prev6h.High);
+      var prevLow6h = parseFloat(prev6h.Low);
+
+      // 6HR direction: bullish if close > open and above prior high, etc.
+      var dir6h = 'MIXED';
+      if (close6h > open6h && close6h > prevHigh6h) dir6h = 'BULLISH';
+      else if (close6h < open6h && close6h < prevLow6h) dir6h = 'BEARISH';
+      else if (close6h > open6h) dir6h = 'BULLISH';
+      else if (close6h < open6h) dir6h = 'BEARISH';
+
+      // Check for 3-1 pattern: outside bar → inside bar (high-probability compression)
+      var has31 = (type6hPrev === '3' && type6hCurr === '1');
+      // Check for CRT on 6HR
+      var crt6h = null;
+      if (high6h > prevHigh6h && close6h < prevHigh6h && close6h < open6h) crt6h = 'CRT_HIGH';
+      if (low6h < prevLow6h && close6h > prevLow6h && close6h > open6h) crt6h = 'CRT_LOW';
+
+      tvData.sixHr = {
+        direction: dir6h,
+        barType: type6hCurr,
+        prevBarType: type6hPrev,
+        has31: has31,
+        crt: crt6h,
+        high: high6h,
+        low: low6h,
+        midpoint: parseFloat(((high6h + low6h) / 2).toFixed(2)),
+      };
+    }
+
   } catch(e) {
     console.error('[ENRICHER] Error enriching ' + ticker + ':', e.message);
   }

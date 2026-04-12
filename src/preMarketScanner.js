@@ -260,6 +260,171 @@ async function scanFailed9(symbol) {
 }
 
 // ================================================================
+// STRATEGY 6: ORB (Opening Range Breakout) — CardDave method
+// ETFs (SPY, QQQ, IWM): 90-min range (9:30-11:00AM) → breakout after 11AM
+// Mag 7 stocks: 15-min range (9:30-9:45AM) → breakout after 9:45AM
+// Entry on break of range high (CALLS) or low (PUTS) with volume
+// Stop = opposite side of the range OR midpoint
+// ================================================================
+var ORB_ETFS = ['SPY', 'QQQ', 'IWM'];
+var ORB_MAG7 = ['NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META'];
+
+async function scanORB(symbol) {
+  try {
+    var isETF = ORB_ETFS.indexOf(symbol) !== -1;
+    var isMag7 = ORB_MAG7.indexOf(symbol) !== -1;
+    if (!isETF && !isMag7) return null;
+
+    // Fetch 5-min bars for today's session
+    var barsNeeded = isETF ? 25 : 10; // extra bars for context
+    var bars = await getBars(symbol, 'Minute', '5', barsNeeded);
+    if (!bars || bars.length < 5) return null;
+
+    // Find session open (9:30 AM ET) and calculate range bars
+    var rangeBars = isETF ? 18 : 3; // 90min/5min = 18, 15min/5min = 3
+    var rangeLabel = isETF ? '90-MIN' : '15-MIN';
+
+    // Filter bars to only intraday (after 9:30 AM ET)
+    var etTime = require('./etTime');
+    var todayBars = [];
+    for (var i = 0; i < bars.length; i++) {
+      var barTime = new Date(bars[i].TimeStamp);
+      var barET = barTime.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+      var timePart = (barET.split(', ')[1] || barET).split(':');
+      var barHour = parseInt(timePart[0], 10);
+      var barMin = parseInt(timePart[1], 10);
+      var barTotal = barHour * 60 + barMin;
+      if (barTotal >= 9 * 60 + 30) todayBars.push(bars[i]);
+    }
+
+    if (todayBars.length < rangeBars + 1) return null; // need range bars + at least 1 breakout bar
+
+    // Calculate opening range (first N bars)
+    var rangeHigh = -Infinity;
+    var rangeLow = Infinity;
+    var rangeVolume = 0;
+    for (var j = 0; j < rangeBars && j < todayBars.length; j++) {
+      var h = parseFloat(todayBars[j].High);
+      var l = parseFloat(todayBars[j].Low);
+      if (h > rangeHigh) rangeHigh = h;
+      if (l < rangeLow) rangeLow = l;
+      rangeVolume += parseFloat(todayBars[j].TotalVolume || todayBars[j].Volume || 0);
+    }
+
+    if (rangeHigh === -Infinity || rangeLow === Infinity) return null;
+
+    // Get current bar (latest)
+    var currentBar = todayBars[todayBars.length - 1];
+    var current = parseFloat(currentBar.Close);
+    var currentHigh = parseFloat(currentBar.High);
+    var currentLow = parseFloat(currentBar.Low);
+    var midpoint = parseFloat(((rangeHigh + rangeLow) / 2).toFixed(2));
+    var rangeSize = rangeHigh - rangeLow;
+
+    // Check for breakout — price must be OUTSIDE the range
+    var direction = null;
+    var trigger = null;
+    var stop = null;
+
+    if (currentHigh > rangeHigh && current > rangeHigh) {
+      // Bullish breakout — closed above range high
+      direction = 'CALLS';
+      trigger = parseFloat(rangeHigh.toFixed(2));
+      stop = parseFloat(midpoint.toFixed(2)); // stop at midpoint
+    } else if (currentLow < rangeLow && current < rangeLow) {
+      // Bearish breakout — closed below range low
+      direction = 'PUTS';
+      trigger = parseFloat(rangeLow.toFixed(2));
+      stop = parseFloat(midpoint.toFixed(2));
+    }
+
+    if (!direction) return null;
+
+    // Target = range size extension from breakout level
+    var target = direction === 'CALLS'
+      ? parseFloat((rangeHigh + rangeSize).toFixed(2))
+      : parseFloat((rangeLow - rangeSize).toFixed(2));
+
+    return {
+      strategy: 'ORB ' + rangeLabel, symbol: symbol, direction: direction,
+      entryLevel: trigger.toFixed(2),
+      stopLevel: stop.toFixed(2),
+      target: target.toFixed(2),
+      rangeHigh: rangeHigh.toFixed(2),
+      rangeLow: rangeLow.toFixed(2),
+      midpoint: midpoint.toFixed(2),
+      rangeSize: rangeSize.toFixed(2),
+      current: current,
+      valid: true,
+      isETF: isETF,
+      note: (isETF ? 'ETF 90-min ORB' : 'Mag 7 15-min ORB') + ' — CardDave method'
+    };
+  } catch(e) { return null; }
+}
+
+// ================================================================
+// STRATEGY 7: CRT (Candle Range Theory) — John JSmith method
+// Sweep of prior candle high/low then reversal close
+// CRT_HIGH: swept prior high, closed back below → BEARISH
+// CRT_LOW: swept prior low, closed back above → BULLISH
+// Works on 60-min, 4HR, and daily timeframes
+// ================================================================
+async function scanCRT(symbol) {
+  try {
+    // Check 60-min bars for CRT
+    var bars60 = await getBars(symbol, 'Minute', '60', 5);
+    if (!bars60 || bars60.length < 3) return null;
+
+    var curr = bars60[bars60.length - 1];
+    var prev = bars60[bars60.length - 2];
+    var prev2 = bars60[bars60.length - 3];
+
+    var cH = parseFloat(curr.High), cL = parseFloat(curr.Low);
+    var cO = parseFloat(curr.Open), cC = parseFloat(curr.Close);
+    var pH = parseFloat(prev.High), pL = parseFloat(prev.Low);
+    var pC = parseFloat(prev.Close);
+
+    // CRT HIGH: current bar swept prior high (High > prevHigh)
+    // but closed below prior high AND closed bearish (Close < Open)
+    if (cH > pH && cC < pH && cC < cO) {
+      return {
+        strategy: 'CRT HIGH (60M)', symbol: symbol, direction: 'PUTS',
+        entryLevel: pH.toFixed(2), // entry at prior high (now resistance)
+        stopLevel: cH.toFixed(2),  // stop above the sweep high
+        target: pL.toFixed(2),     // target prior low
+        sweepHigh: cH.toFixed(2),
+        priorHigh: pH.toFixed(2),
+        current: cC,
+        valid: true,
+        crtType: 'HIGH',
+        timeframe: '60M',
+        note: 'Swept prior high, reversed. Classic CRT short setup.'
+      };
+    }
+
+    // CRT LOW: current bar swept prior low (Low < prevLow)
+    // but closed above prior low AND closed bullish (Close > Open)
+    if (cL < pL && cC > pL && cC > cO) {
+      return {
+        strategy: 'CRT LOW (60M)', symbol: symbol, direction: 'CALLS',
+        entryLevel: pL.toFixed(2), // entry at prior low (now support)
+        stopLevel: cL.toFixed(2),  // stop below the sweep low
+        target: pH.toFixed(2),     // target prior high
+        sweepLow: cL.toFixed(2),
+        priorLow: pL.toFixed(2),
+        current: cC,
+        valid: true,
+        crtType: 'LOW',
+        timeframe: '60M',
+        note: 'Swept prior low, reversed. Classic CRT long setup.'
+      };
+    }
+
+    return null;
+  } catch(e) { return null; }
+}
+
+// ================================================================
 // BUILD SETUP CARD
 // ================================================================
 function buildSetupCard(setup) {
@@ -328,6 +493,43 @@ function buildSetupCard(setup) {
     lines2.push('Fast move -- usually first 5 min after open');
     lines2.push('Exit        60-min flip = immediate exit');
   }
+  if (setup.strategy && setup.strategy.indexOf('ORB') === 0) {
+    lines2.push(setup.strategy + ' -- ' + setup.symbol + ' ' + setup.direction);
+    lines2.push('Pattern: Opening Range Breakout');
+    lines2.push('===============================');
+    lines2.push('Range High  $' + setup.rangeHigh);
+    lines2.push('Range Low   $' + setup.rangeLow);
+    lines2.push('Midpoint    $' + setup.midpoint);
+    lines2.push('Range Size  $' + setup.rangeSize);
+    lines2.push('-------------------------------');
+    lines2.push('Entry      $' + setup.entryLevel + '  <-- Range breakout');
+    lines2.push('Stop       $' + setup.stopLevel + '  (midpoint of range)');
+    lines2.push('Target     $' + setup.target + '  (1x range extension)');
+    lines2.push('Current    $' + setup.current);
+    lines2.push('-------------------------------');
+    lines2.push(setup.note || 'ORB breakout');
+    lines2.push('Exit       Failure to hold breakout = immediate exit');
+  }
+  if (setup.strategy && setup.strategy.indexOf('CRT') === 0) {
+    lines2.push(setup.strategy + ' -- ' + setup.symbol + ' ' + setup.direction);
+    lines2.push('Pattern: Candle Range Theory Sweep & Reverse');
+    lines2.push('===============================');
+    if (setup.crtType === 'HIGH') {
+      lines2.push('Sweep High  $' + setup.sweepHigh + '  <-- swept prior high');
+      lines2.push('Prior High  $' + setup.priorHigh + '  <-- now resistance');
+    } else {
+      lines2.push('Sweep Low   $' + setup.sweepLow + '  <-- swept prior low');
+      lines2.push('Prior Low   $' + setup.priorLow + '  <-- now support');
+    }
+    lines2.push('Entry      $' + setup.entryLevel);
+    lines2.push('Stop       $' + setup.stopLevel);
+    lines2.push('Target     $' + setup.target);
+    lines2.push('Current    $' + setup.current);
+    lines2.push('-------------------------------');
+    lines2.push(setup.note || 'CRT reversal');
+    lines2.push('Timeframe  ' + (setup.timeframe || '60M'));
+    lines2.push('Exit       60-min flip = immediate exit');
+  }
   lines2.push('Time       ' + time + ' ET');
   return lines2.join('\n');
 }
@@ -393,6 +595,8 @@ module.exports = {
   scan322: scan322,
   scan7HR: scan7HR,
   scanFailed9: scanFailed9,
+  scanORB: scanORB,
+  scanCRT: scanCRT,
   getCandleType: getCandleType,
   getBars: getBars,
   buildSetupCard: buildSetupCard,

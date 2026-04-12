@@ -408,6 +408,65 @@ function scoreConfluence(data) {
   });
 
   // ---------------------------------------------------------------
+  // 8. 6HR CONFIRMATION — John JSmith / 3-1 method (0-2 points)
+  // 6HR candles give higher-TF context. 3-1 pattern = compression ready
+  // to explode. CRT on 6HR = institutional sweep reversal.
+  // Direction alignment boosts confidence significantly.
+  // ---------------------------------------------------------------
+  var sixHrScore = 0;
+  var sixHrNote = 'No 6HR data';
+
+  if (data.sixHr) {
+    var sh = data.sixHr;
+    var sixHrAligned = (isCalls && sh.direction === 'BULLISH') || (!isCalls && sh.direction === 'BEARISH');
+
+    if (sixHrAligned) {
+      sixHrScore += 0.5; // direction alignment
+      sixHrNote = '6HR ' + sh.direction;
+    } else if (sh.direction !== 'MIXED') {
+      sixHrNote = '6HR AGAINST (' + sh.direction + ')';
+    } else {
+      sixHrNote = '6HR MIXED';
+    }
+
+    // 3-1 pattern on 6HR = high-probability compression
+    if (sh.has31) {
+      sixHrScore += 1;
+      sixHrNote += ' + 3-1 COMPRESSION';
+    }
+
+    // CRT on 6HR = institutional sweep reversal — strong confirmation
+    if (sh.crt === 'CRT_LOW' && isCalls) {
+      sixHrScore += 1;
+      sixHrNote += ' + CRT LOW (sweep reversal)';
+    }
+    if (sh.crt === 'CRT_HIGH' && !isCalls) {
+      sixHrScore += 1;
+      sixHrNote += ' + CRT HIGH (sweep reversal)';
+    }
+    // CRT AGAINST direction = warning
+    if (sh.crt === 'CRT_LOW' && !isCalls) {
+      sixHrScore -= 0.5;
+      sixHrNote += ' + CRT LOW AGAINST (caution)';
+    }
+    if (sh.crt === 'CRT_HIGH' && isCalls) {
+      sixHrScore -= 0.5;
+      sixHrNote += ' + CRT HIGH AGAINST (caution)';
+    }
+  }
+
+  score += sixHrScore;
+  checklist.push({
+    item: '6HR: ' + sixHrNote,
+    pass: sixHrScore >= 1,
+    score: Math.max(0, sixHrScore),
+    max: 2,
+    detail: data.sixHr
+      ? '6HR=' + (data.sixHr.direction || '?') + ' Bar=' + (data.sixHr.barType || '?') + ' 3-1=' + (data.sixHr.has31 ? 'YES' : 'no') + ' CRT=' + (data.sixHr.crt || 'none')
+      : 'No 6HR data — check TradeStation 360-min bars'
+  });
+
+  // ---------------------------------------------------------------
   // STRUCTURE LEVELS -- find retest level and invalidation
   // This is critical for the stop calculation
   // ---------------------------------------------------------------

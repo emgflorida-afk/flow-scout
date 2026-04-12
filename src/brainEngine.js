@@ -878,6 +878,27 @@ async function evaluateAYCESignal(deadZoneOnly) {
         if (setup) { setup._source = '7HR_SWEEP'; }
       }
 
+      // ORB: ETFs after 11AM (90-min range established), Mag 7 after 9:45AM (15-min range)
+      // CardDave method — Opening Range Breakout
+      if (!setup && preMarketScanner.scanORB) {
+        var isORBReady = false;
+        var orbETFs = ['SPY', 'QQQ', 'IWM'];
+        var orbMag7 = ['NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META'];
+        if (orbETFs.indexOf(ticker) !== -1 && et.total >= 11 * 60) isORBReady = true;
+        if (orbMag7.indexOf(ticker) !== -1 && et.total >= 9 * 60 + 45) isORBReady = true;
+        if (isORBReady) {
+          setup = await preMarketScanner.scanORB(ticker);
+          if (setup) { setup._source = 'ORB'; }
+        }
+      }
+
+      // CRT: After 10AM — Candle Range Theory sweep reversals on 60-min
+      // John JSmith method — institutional liquidity sweep then reversal
+      if (!setup && et.total >= 10 * 60 && preMarketScanner.scanCRT) {
+        setup = await preMarketScanner.scanCRT(ticker);
+        if (setup) { setup._source = 'CRT'; }
+      }
+
       if (setup && setup.valid) {
         var direction = setup.direction === 'CALLS' ? 'BULLISH' : 'BEARISH';
         var action = setup.direction === 'CALLS' ? 'CALL' : 'PUT';
@@ -1655,6 +1676,7 @@ async function runBrainCycle() {
             ' | 4HR=' + (tvData.fourHr ? tvData.fourHr.trend + ' ' + tvData.fourHr.candle : 'N/A') +
             ' | FTFC=' + (tvData.strat ? tvData.strat.ftfc + ' ' + tvData.strat.tfAligned + '/4' : 'N/A') +
             ' | Strat=' + (tvData.strat && tvData.strat.signal ? tvData.strat.signal : 'none') +
+            ' | 6HR=' + (tvData.sixHr ? tvData.sixHr.direction + (tvData.sixHr.has31 ? ' 3-1' : '') + (tvData.sixHr.crt ? ' ' + tvData.sixHr.crt : '') : 'N/A') +
             ' | Bias=' + (tvData.dynamicBias ? tvData.dynamicBias.bias : 'N/A'));
         } catch(e) {
           logBrain('ENRICHMENT FAILED: ' + e.message + ' -- proceeding without full data');
