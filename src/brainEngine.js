@@ -360,6 +360,35 @@ async function closeAutonomous(position) {
   }
 }
 
+// -- TRADINGVIEW SIGNAL QUEUE ----------------------------------------
+// TradingView alerts (GO CALLS/GO PUTS from Brain indicator) push here
+// Brain picks them up on next cycle as highest-priority signals
+var tvSignalQueue = [];
+
+function pushTVSignal(signal) {
+  tvSignalQueue.push({
+    ticker: signal.ticker,
+    direction: signal.direction,
+    source: signal.source || 'TV_BRAIN',
+    confluence: signal.confluence || null,
+    momCount: signal.momCount || null,
+    sqzFiring: signal.sqzFiring || null,
+    vwap: signal.vwap || null,
+    timestamp: Date.now(),
+  });
+  logBrain('TV SIGNAL QUEUED: ' + signal.ticker + ' ' + signal.direction + ' from ' + (signal.source || 'TV_BRAIN'));
+}
+
+function popTVSignal() {
+  if (tvSignalQueue.length === 0) return null;
+  // Only use signals from last 10 minutes
+  var cutoff = Date.now() - (10 * 60 * 1000);
+  while (tvSignalQueue.length > 0 && tvSignalQueue[0].timestamp < cutoff) {
+    tvSignalQueue.shift(); // discard stale
+  }
+  return tvSignalQueue.shift() || null;
+}
+
 // -- BRAIN ACTIVE FLAG (must be started explicitly) -----------------
 var brainActive = false;
 var cycleCount = 0;
@@ -1357,6 +1386,77 @@ async function runBrainCycle() {
       }
     }
 
+    // CHECK TRADINGVIEW SIGNALS FIRST (highest priority — comes from your chart)
+    var tvSig = popTVSignal();
+    if (tvSig) {
+      var tvDirection = tvSig.direction === 'CALLS' ? 'BULLISH' : 'BEARISH';
+      var tvAction = tvSig.direction === 'CALLS' ? 'CALL' : 'PUT';
+      var signal = {
+        triggered: true,
+        ticker: tvSig.ticker,
+        direction: tvDirection,
+        action: tvAction,
+        trigger: null,
+        stop: null,
+        price: null,
+        setupType: 'TV_BRAIN_SIGNAL',
+        isTVSignal: true,
+        tvSource: tvSig.source,
+        description: 'TradingView Brain: ' + tvSig.ticker + ' ' + tvSig.direction,
+      };
+
+      logBrain('TV BRAIN SIGNAL: ' + tvSig.ticker + ' ' + tvSig.direction + ' — PRIORITY ENTRY');
+
+      // Enrich and evaluate
+      if (signalEnricher) {
+        try {
+          var tvData = await signalEnricher.enrichSignal(signal);
+          signal.tvData = tvData;
+          // Add the TV-provided data to enrich further
+          if (tvSig.momCount) tvData.biasPanel = 'BIAS | ' + (tvDirection === 'BULLISH' ? 'BULL' : 'BEAR') + ' ' + tvSig.momCount + '/7';
+          if (tvSig.vwap) tvData.vwap = parseFloat(tvSig.vwap);
+        } catch(e) {}
+      }
+
+      transitionTo('ENTRY_SIGNAL', 'TV Brain signal: ' + signal.ticker + ' ' + signal.direction);
+      var entry = evaluateEntry(signal);
+      if (entry.approved) {
+        var execResult = null;
+        if (BYPASS_MODE) {
+          execResult = await executeAutonomous(entry);
+        }
+        var statusLine = (BYPASS_MODE && execResult && execResult.executed)
+          ? 'LIVE ORDER PLACED | ID: ' + execResult.orderId
+          : (BYPASS_MODE ? 'EXECUTION FAILED: ' + (execResult ? execResult.reason : '?') : 'RECOMMENDATION ONLY');
+        await postToDiscord(
+          'TRADINGVIEW BRAIN SIGNAL\n' +
+          '================================\n' +
+          signal.ticker + ' ' + signal.direction + '\n' +
+          'Source: ' + (tvSig.source || 'Brain Indicator') + '\n' +
+          'STATUS: ' + statusLine
+        );
+
+        activePositions.push({
+          ticker: entry.ticker, type: entry.type, direction: entry.direction,
+          contracts: (execResult && execResult.executed) ? execResult.qty : entry.contracts,
+          entry: (execResult && execResult.executed) ? execResult.limit : entry.entry,
+          stop: (execResult && execResult.executed) ? execResult.stop : entry.stop,
+          contractSymbol: (execResult && execResult.contract) ? execResult.contract.symbol : null,
+          orderId: execResult ? execResult.orderId : null,
+          trim1Target: entry.trim1, trim2Target: entry.trim2,
+          trim1Done: false, trim2Done: false, trailStop: null,
+          openTime: new Date().toISOString(), currentPrice: entry.entry,
+          strategy: 'TV_BRAIN', liveOrder: !!(execResult && execResult.executed),
+        });
+        tradesOpened++;
+        transitionTo('POSITION_OPEN', 'TV Brain: ' + entry.ticker);
+      } else {
+        logBrain('TV signal rejected: ' + entry.reason);
+        transitionTo('WATCHING', 'TV signal rejected');
+      }
+      return;
+    }
+
     // Try current strategy
     var signal = null;
     var strat = strategies[currentStrategy];
@@ -1736,4 +1836,6 @@ module.exports = {
   tickerHasEarningsWithin3Days: tickerHasEarningsWithin3Days,
   getNextEarningsDate: getNextEarningsDate,
   getEarningsCache: function() { return earningsCache; },
+  pushTVSignal: pushTVSignal,
+  popTVSignal: popTVSignal,
 };

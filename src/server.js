@@ -174,6 +174,65 @@ app.post('/webhook/tradingview', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// ---------------------------------------------------------------
+// TRADINGVIEW BRAIN ALERT WEBHOOK
+// Receives GO CALLS/GO PUTS from Brain indicator on TradingView
+// Pushes signal into brain engine queue for immediate processing
+// Alert message format: {"ticker":"SPY","direction":"CALLS","source":"GO_CALLS"}
+// Or plain text: "GO CALLS SPY" / "GO PUTS QQQ"
+// ---------------------------------------------------------------
+app.post('/webhook/tv-brain', function(req, res) {
+  try {
+    var body = req.body || {};
+    var text = typeof body === 'string' ? body : (body.message || body.text || '');
+    var ticker = null;
+    var direction = null;
+    var source = 'TV_BRAIN';
+
+    // Format 1: JSON {"ticker":"SPY","direction":"CALLS"}
+    if (body.ticker && body.direction) {
+      ticker = body.ticker.toUpperCase();
+      direction = body.direction.toUpperCase();
+      source = body.source || 'TV_BRAIN';
+    }
+    // Format 2: Plain text "GO CALLS SPY" or "GO PUTS QQQ"
+    if (!ticker && text) {
+      var callMatch = text.match(/GO\s*CALLS?\s+([A-Z]{1,5})/i);
+      var putMatch = text.match(/GO\s*PUTS?\s+([A-Z]{1,5})/i);
+      if (callMatch) { ticker = callMatch[1].toUpperCase(); direction = 'CALLS'; source = 'GO_CALLS'; }
+      if (putMatch) { ticker = putMatch[1].toUpperCase(); direction = 'PUTS'; source = 'GO_PUTS'; }
+    }
+    // Format 3: TradingView alert format {{ticker}} {{strategy.order.action}}
+    if (!ticker && body.ticker) {
+      ticker = body.ticker.toUpperCase();
+      if (/call|long|buy|bull/i.test(body.action || body.order || text)) direction = 'CALLS';
+      if (/put|short|sell|bear/i.test(body.action || body.order || text)) direction = 'PUTS';
+    }
+
+    if (!ticker || !direction) {
+      return res.status(400).json({ error: 'Could not parse ticker/direction', received: body });
+    }
+
+    if (brainEngine) {
+      brainEngine.pushTVSignal({
+        ticker: ticker,
+        direction: direction,
+        source: source,
+        momCount: body.momCount || null,
+        sqzFiring: body.sqzFiring || null,
+        vwap: body.vwap || null,
+        confluence: body.confluence || null,
+      });
+    }
+
+    console.log('[TV-BRAIN] Signal received: ' + ticker + ' ' + direction + ' from ' + source);
+    res.json({ status: 'queued', ticker: ticker, direction: direction, source: source });
+  } catch(e) {
+    console.error('[TV-BRAIN] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/webhook/bullflow', async function(req, res) {
   try {
     var opra = req.body.opra || req.body.symbol || null;
