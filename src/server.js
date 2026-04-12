@@ -769,6 +769,49 @@ app.get('/api/scan/:symbol', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -- LIVE POSITIONS FROM TRADESTATION ----------------------------
+app.get('/api/positions/live', async function(req, res) {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.json({ error: 'No TS token' });
+    var account = '11975462';
+    var r = await require('node-fetch')('https://api.tradestation.com/v3/brokerage/accounts/' + account + '/positions', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    var data = await r.json();
+    res.json({ status: 'OK', positions: data.Positions || data });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/orders/live', async function(req, res) {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.json({ error: 'No TS token' });
+    var account = '11975462';
+    var r = await require('node-fetch')('https://api.tradestation.com/v3/brokerage/accounts/' + account + '/orders', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    var data = await r.json();
+    res.json({ status: 'OK', orders: data.Orders || data });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/balances', async function(req, res) {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.json({ error: 'No TS token' });
+    var account = '11975462';
+    var r = await require('node-fetch')('https://api.tradestation.com/v3/brokerage/accounts/' + account + '/balances', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    var data = await r.json();
+    res.json({ status: 'OK', balances: data.Balances || data });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // -- RAW RECENT FLOW ENDPOINT ------------------------------------
 // GET /api/flow/recent?symbol=NVDA&type=sweep&direction=call&minPremium=100000
 app.get('/api/flow/recent', function(req, res) {
