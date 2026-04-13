@@ -506,14 +506,18 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
     }
   }
 
-  if (!rawChain.length) { console.error('[RESOLVE] No chain found for',ticker,type); return null; }
+  if (!rawChain.length) { console.error('[RESOLVE] No chain found for',ticker,type,'expiry:',expiry); return null; }
 
   var contracts=rawChain.map(function(c){return parseContract(c,expiry,type);}).filter(Boolean);
-  console.log('[RESOLVE] Parsed contracts:',contracts.length);
-  if (!contracts.length) { console.error('[RESOLVE] No parseable contracts'); return null; }
+  console.log('[RESOLVE] Parsed contracts:',contracts.length,'maxPremium:$'+config.maxPremium);
+  if (contracts.length) {
+    var mids=contracts.slice(0,5).map(function(c){return '$'+c.mid.toFixed(2);}).join(', ');
+    console.log('[RESOLVE] First 5 mids:',mids);
+  }
+  if (!contracts.length) { console.error('[RESOLVE] No parseable contracts from',rawChain.length,'raw'); return null; }
 
   var best=selectBestContract(contracts, price, config, lvls, type);
-  if (!best) { console.error('[RESOLVE] No contract passed selection'); return null; }
+  if (!best) { console.error('[RESOLVE] No contract passed selection -- maxPremium:$'+config.maxPremium+' contracts checked:',contracts.length); return null; }
 
   var t1Pct=getT1Target(ticker), stopPct=config.stopPct;
   var entryPrice=entryMode==='BREAKOUT'?best.ask:parseFloat((best.ask*0.875).toFixed(2));
