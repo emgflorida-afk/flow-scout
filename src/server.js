@@ -1343,6 +1343,31 @@ app.post('/api/brain/reset', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Refresh dynamic bias from live SPY data
+app.post('/api/bias/refresh', async function(req, res) {
+  try {
+    if (!dynamicBias) return res.json({ error: 'Dynamic bias not loaded' });
+    await dynamicBias.updateBias();
+    var bias = dynamicBias.getBias();
+    res.json({ status: 'OK', bias: bias });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Override bias manually (for when SPY bias conflicts with ticker direction)
+app.post('/api/bias/override', function(req, res) {
+  try {
+    if (!dynamicBias) return res.json({ error: 'Dynamic bias not loaded' });
+    var direction = req.body.bias || 'NEUTRAL';
+    var strength = req.body.strength || 'WEAK';
+    // Direct state override
+    var state = dynamicBias.getBias();
+    state.bias = direction.toUpperCase();
+    state.strength = strength.toUpperCase();
+    state.updatedAt = new Date().toISOString();
+    res.json({ status: 'OK', bias: state, message: 'Bias overridden to ' + state.bias + ' (' + state.strength + ')' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
