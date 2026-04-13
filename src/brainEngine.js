@@ -155,6 +155,25 @@ var weeklyPace = {
 };
 
 var PACE_FILE = '/tmp/weekly_pace.json';
+var COOLDOWN_FILE = '/tmp/ticker_cooldowns.json';
+
+function saveCooldowns() {
+  try { require('fs').writeFileSync(COOLDOWN_FILE, JSON.stringify(tickerCooldowns)); } catch(e) {}
+}
+function loadCooldowns() {
+  try {
+    var data = JSON.parse(require('fs').readFileSync(COOLDOWN_FILE, 'utf8'));
+    // Only load cooldowns that haven't expired
+    var now = Date.now();
+    Object.keys(data).forEach(function(k) {
+      if (now - data[k] < COOLDOWN_MS) tickerCooldowns[k] = data[k];
+    });
+    if (Object.keys(tickerCooldowns).length > 0) {
+      logBrain('COOLDOWNS LOADED: ' + Object.keys(tickerCooldowns).join(', '));
+    }
+  } catch(e) {}
+}
+loadCooldowns();
 
 function getWeekStartDate() {
   var now = new Date();
@@ -2562,7 +2581,7 @@ async function runBrainCycle() {
                   'P&L: $' + reconPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
                 );
 
-                tickerCooldowns[reconPos.ticker] = Date.now();
+                tickerCooldowns[reconPos.ticker] = Date.now(); saveCooldowns();
                 activePositions.splice(rc, 1);
                 logBrain('RECONCILE: Removed ' + reconPos.ticker + ' from active positions | Cooldown set | Daily P&L: $' + dailyPL.toFixed(2));
               }
@@ -2708,7 +2727,7 @@ async function runBrainCycle() {
 
         // If all contracts sold, remove position
         if (pos.contracts <= 0) {
-          tickerCooldowns[pos.ticker] = Date.now();
+          tickerCooldowns[pos.ticker] = Date.now(); saveCooldowns();
           activePositions.splice(p, 1);
           p--;
           if (activePositions.length === 0) {
@@ -2778,7 +2797,7 @@ async function runBrainCycle() {
           '\uD83D\uDD34'
         );
 
-        tickerCooldowns[pos.ticker] = Date.now();
+        tickerCooldowns[pos.ticker] = Date.now(); saveCooldowns();
         activePositions.splice(p, 1);
         p--;
 
@@ -2823,7 +2842,7 @@ async function runBrainCycle() {
           'TRAIL STOPPED: ' + trailPos.ticker + '\n' +
           'P&L: $' + trailLoss.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
         );
-        tickerCooldowns[trailPos.ticker] = Date.now();
+        tickerCooldowns[trailPos.ticker] = Date.now(); saveCooldowns();
         activePositions.splice(t, 1);
         t--;
       }
@@ -2978,4 +2997,5 @@ module.exports = {
   executeApproval: executeApproval,
   getPendingApprovals: getPendingApprovals,
   getExecutionMode: function() { return EXECUTION_MODE; },
+  setCooldown: function(ticker) { tickerCooldowns[ticker] = Date.now(); saveCooldowns(); logBrain('COOLDOWN SET: ' + ticker + ' (30 min)'); },
 };

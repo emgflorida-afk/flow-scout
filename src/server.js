@@ -1381,6 +1381,17 @@ app.post('/api/brain/pace', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Set ticker cooldown manually -- prevents brain from re-entering after we override
+app.post('/api/brain/cooldown', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var ticker = (req.body.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ error: 'Need ticker' });
+    brainEngine.setCooldown(ticker);
+    res.json({ status: 'OK', ticker: ticker, cooldownMinutes: 30 });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
