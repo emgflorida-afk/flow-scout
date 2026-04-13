@@ -352,8 +352,8 @@ function detectVolumeExhaustion(bars5min, direction) {
 //   3. BYPASS (full auto) — brain executes immediately, no approval needed.
 //
 // Start on APPROVE mode Monday. Graduate to BYPASS when you trust it.
-var EXECUTION_MODE = process.env.EXECUTION_MODE || 'APPROVE'; // OFF, APPROVE, or BYPASS
-var BYPASS_MODE = EXECUTION_MODE === 'BYPASS' || process.env.BYPASS_MODE === 'true' || false;
+var EXECUTION_MODE = process.env.EXECUTION_MODE || 'BYPASS'; // OFF, APPROVE, or BYPASS
+var BYPASS_MODE = EXECUTION_MODE === 'BYPASS' || process.env.BYPASS_MODE === 'true' || true;
 var APPROVE_MODE = EXECUTION_MODE === 'APPROVE';
 var LIVE_ACCOUNT = '11975462';
 var RAILWAY_BASE = process.env.RAILWAY_URL || 'https://flow-scout-production-f021.up.railway.app';
