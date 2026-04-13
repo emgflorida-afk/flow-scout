@@ -71,7 +71,10 @@ function getNextEarningsDate(ticker) {
   return match ? { date: match.date, hour: match.hour } : null;
 }
 
-// -- DISCORD WEBHOOK ------------------------------------------------
+// -- DISCORD WEBHOOKS -----------------------------------------------
+// GO-MODE: Clean channel for ONLY actionable signals. Mute everything else.
+var GO_MODE_WEBHOOK = 'https://discord.com/api/webhooks/1493056141125488740/MbMOqZ8yclJfuwNB8wIs77y-9EKxPdi2HjQ7Auc6ZGGYXC4RUWEY4v6czLUSLPG-Q1cp';
+// Legacy channel for debug/noise
 var BRAIN_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
   'https://discord.com/api/webhooks/1489007440501538949/Lm7EAa9zEXG6Uh3gEG7Flnw378sMmmeupCHG2yLceDmHCQQZO5TI4Z3jkujQGaZdCWPx';
 
@@ -455,6 +458,15 @@ async function executeAutonomous(entry) {
       'LIVE AUTONOMOUS EXECUTION'
     );
 
+    // GO-MODE: Order filled
+    await postToGoMode(
+      '**ORDER PLACED: ' + entry.ticker + ' ' + entry.type.toUpperCase() + '**\n' +
+      '`' + contract.symbol + '` x' + qty + ' @ $' + limitPrice + '\n' +
+      'Stop: $' + (stopPrice || 'auto') + ' | DTE: ' + contract.dte + ' | Delta: ' + (contract.delta ? contract.delta.toFixed(2) : '?') + '\n' +
+      'Order ID: ' + result.orderId,
+      '\u2705' // checkmark
+    );
+
     return {
       executed: true,
       orderId: result.orderId,
@@ -570,7 +582,7 @@ function logBrain(msg) {
 }
 
 // ===================================================================
-// POST TO DISCORD
+// POST TO DISCORD (legacy — debug/noise channel)
 // ===================================================================
 async function postToDiscord(message) {
   try {
@@ -583,6 +595,21 @@ async function postToDiscord(message) {
       body: JSON.stringify({ content: '```\n' + fullMsg + '\n```', username: 'Stratum Brain' }),
     });
   } catch(e) { console.error('[BRAIN] Discord post error:', e.message); }
+}
+
+// ===================================================================
+// POST TO GO-MODE (clean channel — ONLY actionable signals)
+// This is the ONLY channel you need to watch. Everything else = mute.
+// ===================================================================
+async function postToGoMode(message, emoji) {
+  try {
+    var prefix = (emoji || '\uD83D\uDFE2') + ' '; // default green circle
+    await fetch(GO_MODE_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: prefix + message, username: 'GO MODE' }),
+    });
+  } catch(e) { console.error('[GO-MODE] Discord post error:', e.message); }
 }
 
 // -- SUNDAY FUTURES CHECK: reads /ES /NQ /CL when futures open ------
@@ -1461,6 +1488,30 @@ function evaluateEntry(signal) {
     ' | T2 ~$' + (trim2 ? trim2.toFixed(2) : '?') +
     ' | Strategy: ' + strategies[currentStrategy]);
 
+  // GO-MODE: Entry signal
+  var strat = signal.tvData && signal.tvData.strat ? signal.tvData.strat : {};
+  var ftfcLabel = strat.ftfc || '?';
+  var rrLabel = (entry && stop && trim1) ? parseFloat((Math.abs(trim1 - entry) / Math.abs(entry - stop)).toFixed(1)) + ':1' : '?';
+  var paceInfo = weeklyPace.adjustments.contractBoost > 0
+    ? '\nPACE BOOST: +' + weeklyPace.adjustments.contractBoost + ' contracts (' + weeklyPace.pace + ')'
+    : '';
+  postToGoMode(
+    '**ENTRY SIGNAL: ' + ticker + ' ' + type.toUpperCase() + '**\n' +
+    '```\n' +
+    'Pattern:    ' + (signal.ayceStrategy || strat.signal || source || 'Casey EMA') + '\n' +
+    'FTFC:       ' + ftfcLabel + ' (' + (strat.continuity ? Object.values(strat.continuity).map(function(v){return v[0];}).join('') : '????') + ')\n' +
+    'Confluence: ' + (confluenceResult ? confluenceResult.score + '/10 (' + confluenceResult.conviction + ')' : 'N/A') + '\n' +
+    'Entry:      $' + (entry ? entry.toFixed(2) : '?') + '\n' +
+    'Stop:       $' + (stop ? stop.toFixed(2) : '?') + '\n' +
+    'T1:         $' + (trim1 ? trim1.toFixed(2) : '?') + '\n' +
+    'T2:         $' + (trim2 ? trim2.toFixed(2) : '?') + '\n' +
+    'R:R:        ' + rrLabel + '\n' +
+    'Contracts:  ' + contractSize + paceInfo + '\n' +
+    'Weekly:     $' + weeklyPace.totalPL.toFixed(0) + ' / $' + WEEKLY_TARGET + ' (' + weeklyPace.tradingDaysLeft + ' days left)\n' +
+    '```',
+    '\uD83D\uDFE2' // green circle
+  );
+
   return result;
 }
 
@@ -1764,6 +1815,21 @@ function setBrainActive(active) {
   if (brainActive) {
     postToDiscord('Brain Engine ACTIVATED -- monitoring for signals\nState: ' + STATE + '\nTarget: $' + dailyTarget)
       .catch(function(e) { console.error('[BRAIN] Activation post error:', e.message); });
+    // GO-MODE: Morning wake-up
+    recalcPace();
+    postToGoMode(
+      '**BRAIN ONLINE**\n' +
+      '```\n' +
+      'Daily target: $' + dailyTarget + '\n' +
+      'Weekly:       $' + weeklyPace.totalPL.toFixed(2) + ' / $' + WEEKLY_TARGET + '\n' +
+      'Pace:         ' + weeklyPace.pace + '\n' +
+      'Days left:    ' + weeklyPace.tradingDaysLeft + '\n' +
+      'Bypass:       ' + (BYPASS_MODE ? 'LIVE EXECUTION' : 'ALERTS ONLY') + '\n' +
+      'Scanning:     ' + FULL_WATCHLIST.length + ' tickers\n' +
+      (weeklyPace.adjustments.contractBoost > 0 ? 'Boost:        +' + weeklyPace.adjustments.contractBoost + ' contracts\n' : '') +
+      '```',
+      '\uD83E\uDDE0' // brain emoji
+    ).catch(function(e) { console.error('[GO-MODE] Activation post error:', e.message); });
   } else {
     postToDiscord('Brain Engine DEACTIVATED -- standing down')
       .catch(function(e) { console.error('[BRAIN] Deactivation post error:', e.message); });
@@ -1863,6 +1929,11 @@ async function runBrainCycle() {
     await postToDiscord(
       'MAX DAILY LOSS HIT: $' + dailyPL.toFixed(2) + '\n' +
       'Trades: ' + tradesOpened + ' | SHUTTING DOWN for the day.'
+    );
+    // GO-MODE: Max loss
+    await postToGoMode(
+      '**MAX DAILY LOSS: $' + dailyPL.toFixed(2) + '**\nBrain shutting down for the day. ' + tradesOpened + ' trades taken.\nWeekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
+      '\uD83D\uDED1' // stop sign
     );
     return;
   }
@@ -2178,8 +2249,15 @@ async function runBrainCycle() {
         transitionTo('TRIMMING', pos.ticker + ' trimmed -- ' + pos.contracts + ' remaining');
         await postToDiscord(
           'TRIM: ' + pos.ticker + ' at +' + action.pctChange.toFixed(1) + '%\n' +
-          'Sold 1 contract | ' + pos.contracts + ' remaining\n' +
+          'Sold ' + (action.trimQty || 1) + ' contract | ' + pos.contracts + ' remaining\n' +
           'Trim P&L: +$' + trimPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
+        );
+        // GO-MODE: Trim
+        await postToGoMode(
+          '**TRIM: ' + pos.ticker + ' +' + action.pctChange.toFixed(1) + '%**\n' +
+          'Sold ' + (action.trimQty || 1) + ' | ' + pos.contracts + ' remaining\n' +
+          'P&L: +$' + trimPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2) + ' | Weekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
+          '\uD83D\uDCB0' // money bag
         );
       } else if (action.action === 'TRAIL') {
         pos.trailStop = action.trailStop;
@@ -2193,6 +2271,12 @@ async function runBrainCycle() {
         await postToDiscord(
           'STOPPED OUT: ' + pos.ticker + ' at ' + action.pctChange.toFixed(1) + '%\n' +
           'Loss: $' + stopLoss.toFixed(2) + ' | Daily P&L: $' + dailyPL.toFixed(2)
+        );
+        // GO-MODE: Stop loss
+        await postToGoMode(
+          '**STOPPED OUT: ' + pos.ticker + ' ' + action.pctChange.toFixed(1) + '%**\n' +
+          'Loss: $' + stopLoss.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2) + ' | Weekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
+          '\uD83D\uDD34' // red circle
         );
 
         // Remove position
@@ -2319,6 +2403,21 @@ async function runBrainCycle() {
         'Week total: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + ' / $' + WEEKLY_TARGET + '\n' +
         'Remaining: $' + weeklyRemaining.toFixed(2) + ' in ' + (weeklyPace.tradingDaysLeft - 1) + ' days' +
         (weeklyPace.adjustments.contractBoost > 0 ? '\nTomorrow: +' + weeklyPace.adjustments.contractBoost + ' contract boost active' : '')
+      );
+      // GO-MODE: EOD Summary
+      var eodEmoji = dailyPL >= minTarget ? '\uD83C\uDFC6' : (dailyPL >= 0 ? '\uD83D\uDFE1' : '\uD83D\uDD34');
+      await postToGoMode(
+        '**END OF DAY**\n' +
+        '```\n' +
+        'Daily P&L:  $' + dailyPL.toFixed(2) + (dailyPL >= minTarget ? ' TARGET HIT' : '') + '\n' +
+        'Trades:     ' + tradesOpened + '\n' +
+        '----------------------------\n' +
+        'WEEKLY:     $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + ' / $' + WEEKLY_TARGET + '\n' +
+        'Pace:       ' + paceLabel + '\n' +
+        'Remaining:  $' + weeklyRemaining.toFixed(2) + ' in ' + (weeklyPace.tradingDaysLeft - 1) + ' days\n' +
+        (weeklyPace.adjustments.contractBoost > 0 ? 'Tomorrow:   +' + weeklyPace.adjustments.contractBoost + ' contract boost\n' : '') +
+        '```',
+        eodEmoji
       );
     }
     return;
