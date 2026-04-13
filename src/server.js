@@ -1453,11 +1453,15 @@ app.get('/api/resolve/:ticker/:type', async function(req, res) {
     var priceData = await priceRes.json();
     var price = priceData && priceData.Quotes ? parseFloat(priceData.Quotes[0].Last) : null;
 
-    // Get expirations
-    var expRes = await fetch('https://api.tradestation.com/v3/marketdata/options/expirations/' + ticker, {
+    // Get expirations — return RAW response for debugging
+    var expUrl = 'https://api.tradestation.com/v3/marketdata/options/expirations/' + ticker;
+    var expRes = await fetch(expUrl, {
       headers: { 'Authorization': 'Bearer ' + token }
     });
-    var expData = await expRes.json();
+    var expStatus = expRes.status;
+    var expRaw = await expRes.text();
+    var expData = null;
+    try { expData = JSON.parse(expRaw); } catch(e) { /* not json */ }
     var expirations = expData && expData.Expirations ? expData.Expirations.slice(0, 5) : [];
 
     // Try full resolve
@@ -1466,6 +1470,9 @@ app.get('/api/resolve/:ticker/:type', async function(req, res) {
     res.json({
       status: 'OK',
       price: price,
+      expUrl: expUrl,
+      expStatus: expStatus,
+      expRaw: expRaw ? expRaw.slice(0, 500) : null,
       expirations: expirations,
       contract: result,
       tokenOK: !!token,
