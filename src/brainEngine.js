@@ -1911,12 +1911,29 @@ function managePosition(position) {
   // TRIM LOGIC — scales with position size
   // EXTENDED runner mode (when behind on weekly pace): delay first trim to +75% to let winners run bigger
   // NORMAL mode: standard +50%/+100% trim schedule
+  // 1 contract: NO trim possible. Go straight to trail. This IS the runner.
   // 2 contracts: NO trim at +50%. Hold both. Trail on structure. Exit all when structure breaks.
   // 3 contracts: trim 1 at +50%, trim 1 at +100%, trail 1 runner
   // 4-5 contracts: trim 2 at +50%, trim 1-2 at +100%, trail rest
   var isExtendedRunner = weeklyPace.adjustments.runnerMode === 'EXTENDED';
   var trim1Threshold = isExtendedRunner ? 75 : 50;   // delay first trim when behind
   var trim2Threshold = isExtendedRunner ? 150 : 100;  // push T2 out too
+
+  // 1 CONTRACT: Can't trim — this IS the runner. Mark trim1Done so trail logic activates.
+  // Use trailing stop to protect profits while letting it run (Casey style).
+  if (contracts === 1 && !position.trim1Done) {
+    if (pctChange >= 20) {
+      // Once +20%, activate trailing. Don't sell — let it run with a trail.
+      logBrain('SINGLE CONTRACT TRAIL ACTIVE: ' + position.ticker + ' at +' + pctChange.toFixed(1) +
+        '% -- no trim possible, activating trail stop to let it run');
+      position.trim1Done = true;  // unlocks trail logic below
+      var initialTrail = current * 0.75;  // 25% trail from current price
+      return { action: 'TRAIL', trailStop: initialTrail,
+        reason: '1-contract runner -- trailing at 25% below peak ($' + initialTrail.toFixed(2) + ')', pctChange: pctChange };
+    }
+    // Under +20%: just hold, structural stop protects downside
+    return { action: 'HOLD', reason: '1-contract position at +' + pctChange.toFixed(1) + '% -- holding for run, trail activates at +20%', pctChange: pctChange };
+  }
 
   if (contracts === 2 && !position.trim1Done) {
     // 2 CONTRACTS: Don't trim early. Hold for the full move.
@@ -2376,7 +2393,10 @@ async function runBrainCycle() {
   // or power hour. If it didn't trigger by 11:30, mark it EXPIRED and move on.
   var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
   var queuedWindowEnd = 11 * 60 + 30; // 11:30 AM ET
-  if (pendingQueued.length > 0 && et.total >= 570 && et.total < queuedWindowEnd && tradesOpened < maxTrades) {
+  // Queued trades bypass maxTrades cap — these are pre-screened, flow-confirmed picks.
+  // The maxTrades limit protects against brain scanning/churning, NOT pre-loaded setups.
+  // If NVDA + CHWY + HCA all trigger, all 3 should fire to stack toward daily goal.
+  if (pendingQueued.length > 0 && et.total >= 570 && et.total < queuedWindowEnd) {
     try {
       var ts3 = require('./tradestation');
       var qtToken = await ts3.getAccessToken();
@@ -2392,7 +2412,8 @@ async function runBrainCycle() {
 
           for (var qi = 0; qi < pendingQueued.length; qi++) {
             var qt = pendingQueued[qi];
-            if (tradesOpened >= maxTrades) break;
+            // Queued trades are pre-screened — don't cap them with maxTrades.
+            // maxTrades only limits brain's own scanning/entries.
 
             var alreadyInQt = activePositions.some(function(p) { return p.ticker === qt.ticker; });
             if (alreadyInQt) continue;
@@ -2452,9 +2473,17 @@ async function runBrainCycle() {
                   var qtT1 = parseFloat((limitPrice * (1 + qt.targets[0])).toFixed(2));
                   var qtT2 = qt.targets.length > 1 ? parseFloat((limitPrice * (1 + qt.targets[1])).toFixed(2)) : null;
 
+                  // DON'T send T1 to TradeStation for queued trades.
+                  // The OSO T1 sells ALL contracts at +25% before brain's smart logic can run.
+                  // Brain holds 2-lots until +100% (or +150% in EXTENDED mode) then trails runner.
+                  // Brain trails 1-lots with 25% below peak. Let it run Casey style.
+                  // Only send the stop for downside protection — brain handles profit-taking.
+                  var sendT1 = null;
+
                   logBrain('QUEUED EXECUTING: ' + qt.contractSymbol + ' x' + qt.contracts +
                     ' @ LIMIT $' + limitPrice.toFixed(2) + ' (ask $' + optPrice.toFixed(2) + ')' +
-                    ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
+                    ' | Stop $' + qtStop.toFixed(2) +
+                    (sendT1 ? ' | T1 $' + sendT1.toFixed(2) : ' | NO T1 (1-lot runner, brain trails)'));
 
                   var qtExec = await orderExecutor.placeOrder({
                     account: LIVE_ACCOUNT,
@@ -2463,7 +2492,7 @@ async function runBrainCycle() {
                     qty: qt.contracts,
                     limit: limitPrice,
                     stop: qtStop,
-                    t1: qtT1,
+                    t1: sendT1,
                     duration: 'DAY',
                     note: 'QUEUED ' + qt.source + ': ' + qt.ticker,
                   });
