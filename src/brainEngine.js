@@ -660,6 +660,19 @@ var brainLog = []; // rolling log of brain decisions (last 50)
 var MAX_LOG = 50;
 
 // ===================================================================
+// UTILITY: Calculate Exponential Moving Average
+// ===================================================================
+function calcEMA(closes, period) {
+  if (!closes || closes.length === 0) return 0;
+  if (closes.length < period) period = closes.length;
+  var multiplier = 2 / (period + 1);
+  var ema = closes[0]; // seed with first value
+  for (var i = 1; i < closes.length; i++) {
+    ema = (closes[i] - ema) * multiplier + ema;
+  }
+  return ema;
+}
+
 // UTILITY: Get current ET time info
 // ===================================================================
 function getETTime() {
@@ -1220,6 +1233,122 @@ async function evaluateAYCESignal(deadZoneOnly) {
       if (!setup && et.total >= 10 * 60 && preMarketScanner.scanCRT) {
         setup = await preMarketScanner.scanCRT(ticker);
         if (setup) { setup._source = 'CRT'; }
+      }
+
+      // CASEY PDH/PDL BREAK: The missing link — Casey's core method
+      // Scans for: price breaks PDH/PDL + 13 EMA above/below 48 EMA + fan-out
+      // This is what Casey's students use to hit 100%+ runners
+      if (!setup && et.total >= 9 * 60 + 45) {
+        try {
+          var ts = require('./tradestation');
+          var caseyToken = await ts.getAccessToken();
+          if (caseyToken) {
+            // Fetch yesterday's daily bar for PDH/PDL + today's 5-min bars for EMA/price
+            var dailyUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=2&sessiontemplate=Default';
+            var fiveMinUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=5&unit=Minute&barsback=30&sessiontemplate=Default';
+            var headers = { 'Authorization': 'Bearer ' + caseyToken };
+
+            var dailyRes = await fetch(dailyUrl, { headers: headers });
+            var fiveRes = await fetch(fiveMinUrl, { headers: headers });
+
+            if (dailyRes.ok && fiveRes.ok) {
+              var dailyData = await dailyRes.json();
+              var fiveData = await fiveRes.json();
+              var dailyBars = dailyData.Bars || [];
+              var fiveBars = fiveData.Bars || [];
+
+              if (dailyBars.length >= 2 && fiveBars.length >= 15) {
+                // PDH/PDL from yesterday (second-to-last bar since today may be partial)
+                var prevDay = dailyBars[dailyBars.length - 2];
+                var PDH = parseFloat(prevDay.High);
+                var PDL = parseFloat(prevDay.Low);
+
+                // Current price and EMAs from 5-min bars
+                var currentBar = fiveBars[fiveBars.length - 1];
+                var currentPrice = parseFloat(currentBar.Close);
+
+                // Calculate 13 and 48 EMA from 5-min bars
+                var closes = fiveBars.map(function(b) { return parseFloat(b.Close); });
+                var ema13 = calcEMA(closes, 13);
+                var ema48 = calcEMA(closes, Math.min(48, closes.length));
+
+                // Casey conditions
+                var abovePDH = currentPrice > PDH;
+                var belowPDL = currentPrice < PDL;
+                var bullEMA = ema13 > ema48; // 13 above 48 = bullish fan
+                var bearEMA = ema13 < ema48;
+                var emaSpread = Math.abs(ema13 - ema48) / ema48 * 100;
+                var fanOut = emaSpread > 0.05; // EMAs spreading apart
+                var priceAboveEMA = currentPrice > ema13;
+                var priceBelowEMA = currentPrice < ema13;
+
+                // CASEY BULL: Price broke PDH + bullish EMA + price above 13 EMA
+                if (abovePDH && bullEMA && priceAboveEMA && fanOut) {
+                  setup = {
+                    valid: true,
+                    strategy: 'CASEY PDH BREAK',
+                    direction: 'CALLS',
+                    current: currentPrice,
+                    entryLevel: currentPrice,
+                    stopLevel: Math.max(PDH - 0.10, ema13), // Stop just below PDH or 13 EMA
+                    target: currentPrice + (currentPrice - PDH) * 2, // 2x the breakout distance
+                    _source: 'CASEY_PDH',
+                    pdh: PDH,
+                    pdl: PDL,
+                    ema13: ema13,
+                    ema48: ema48,
+                  };
+                  logBrain('CASEY PDH BREAK: ' + ticker + ' CALLS | Price $' + currentPrice.toFixed(2) + ' > PDH $' + PDH.toFixed(2) + ' | 13EMA $' + ema13.toFixed(2) + ' > 48EMA $' + ema48.toFixed(2) + ' | Fan: ' + emaSpread.toFixed(2) + '%');
+                }
+
+                // CASEY BEAR: Price broke PDL + bearish EMA + price below 13 EMA
+                if (!setup && belowPDL && bearEMA && priceBelowEMA && fanOut) {
+                  setup = {
+                    valid: true,
+                    strategy: 'CASEY PDL BREAK',
+                    direction: 'PUTS',
+                    current: currentPrice,
+                    entryLevel: currentPrice,
+                    stopLevel: Math.min(PDL + 0.10, ema13), // Stop just above PDL or 13 EMA
+                    target: currentPrice - (PDL - currentPrice) * 2,
+                    _source: 'CASEY_PDL',
+                    pdh: PDH,
+                    pdl: PDL,
+                    ema13: ema13,
+                    ema48: ema48,
+                  };
+                  logBrain('CASEY PDL BREAK: ' + ticker + ' PUTS | Price $' + currentPrice.toFixed(2) + ' < PDL $' + PDL.toFixed(2) + ' | 13EMA $' + ema13.toFixed(2) + ' < 48EMA $' + ema48.toFixed(2) + ' | Fan: ' + emaSpread.toFixed(2) + '%');
+                }
+
+                // CASEY RETEST: Price retesting PDH from above (pulled back, bouncing)
+                if (!setup && bullEMA && fanOut && priceAboveEMA) {
+                  var nearPDH = Math.abs(currentPrice - PDH) / PDH < 0.003; // Within 0.3% of PDH
+                  var prevBar = fiveBars[fiveBars.length - 2];
+                  var bouncingUp = parseFloat(prevBar.Close) <= PDH && currentPrice > PDH;
+                  if (nearPDH || bouncingUp) {
+                    setup = {
+                      valid: true,
+                      strategy: 'CASEY PDH RETEST',
+                      direction: 'CALLS',
+                      current: currentPrice,
+                      entryLevel: currentPrice,
+                      stopLevel: PDH - (PDH - PDL) * 0.1, // 10% of prev day range below PDH
+                      target: PDH + (PDH - PDL) * 0.5, // 50% extension
+                      _source: 'CASEY_RETEST',
+                      pdh: PDH,
+                      pdl: PDL,
+                      ema13: ema13,
+                      ema48: ema48,
+                    };
+                    logBrain('CASEY PDH RETEST: ' + ticker + ' CALLS | Price $' + currentPrice.toFixed(2) + ' retesting PDH $' + PDH.toFixed(2) + ' | EMA aligned');
+                  }
+                }
+              }
+            }
+          }
+        } catch(caseyErr) {
+          // Silent fail — don't block other strategies
+        }
       }
 
       if (setup && setup.valid) {
