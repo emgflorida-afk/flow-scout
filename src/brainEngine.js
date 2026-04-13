@@ -2463,6 +2463,101 @@ async function runBrainCycle() {
 
   // ---- STATE: POSITION_OPEN ----
   if (STATE === 'POSITION_OPEN') {
+    // RECONCILE: Check TradeStation for actual position state
+    // Bracket orders (OSO BRK) auto-fill stops/targets -- brain must detect this
+    if (BYPASS_MODE && activePositions.length > 0) {
+      try {
+        var ts = require('./tradestation');
+        var reconToken = await ts.getAccessToken();
+        if (reconToken) {
+          var reconRes = await fetch('https://api.tradestation.com/v3/brokerage/accounts/' + LIVE_ACCOUNT + '/positions', {
+            headers: { 'Authorization': 'Bearer ' + reconToken },
+          });
+          if (reconRes.ok) {
+            var reconData = await reconRes.json();
+            var tsPositions = reconData.Positions || reconData.positions || [];
+            if (!Array.isArray(tsPositions)) tsPositions = [];
+            var tsSymbols = tsPositions.map(function(p) { return (p.Symbol || p.symbol || '').toUpperCase(); });
+
+            for (var rc = activePositions.length - 1; rc >= 0; rc--) {
+              var reconPos = activePositions[rc];
+              var reconSym = (reconPos.contractSymbol || '').toUpperCase();
+              if (!reconSym || !reconPos.liveOrder) continue;
+
+              if (!tsSymbols.includes(reconSym)) {
+                // Position gone from TradeStation -- bracket order filled
+                logBrain('RECONCILE: ' + reconSym + ' no longer in TradeStation positions');
+
+                // Check order to determine if profit target or stop filled
+                var reconPL = 0;
+                try {
+                  var orderRes = await fetch('https://api.tradestation.com/v3/brokerage/accounts/' + LIVE_ACCOUNT + '/orders/' + reconPos.orderId, {
+                    headers: { 'Authorization': 'Bearer ' + reconToken },
+                  });
+                  if (orderRes.ok) {
+                    var orderData = await orderRes.json();
+                    var allOrders = orderData.Orders || [orderData];
+                    // Look for the filled sell order in the bracket group
+                    for (var oi = 0; oi < allOrders.length; oi++) {
+                      var ord = allOrders[oi];
+                      var legs = ord.Legs || ord.legs || [];
+                      for (var li = 0; li < legs.length; li++) {
+                        if ((legs[li].BuyOrSell === 'Sell' || legs[li].buyOrSell === 'Sell') &&
+                            (ord.Status === 'FLL' || ord.StatusDescription === 'Filled' || ord.status === 'FLL')) {
+                          var fillPx = parseFloat(ord.FilledPrice || ord.filledPrice || 0);
+                          if (fillPx > 0) {
+                            reconPL = (fillPx - (reconPos.entry || 0)) * (reconPos.contracts || 1) * 100;
+                            logBrain('RECONCILE: Found fill at $' + fillPx.toFixed(2) + ' | Entry was $' + (reconPos.entry || 0).toFixed(2) + ' | P&L: $' + reconPL.toFixed(2));
+                          }
+                        }
+                      }
+                    }
+                  }
+                } catch(oe) {
+                  logBrain('RECONCILE: Order lookup error: ' + oe.message);
+                  // Estimate P&L from trim target if we can't get order data
+                  if (reconPos.trim1Target && reconPos.entry) {
+                    reconPL = (reconPos.trim1Target - reconPos.entry) * (reconPos.contracts || 1) * 100;
+                    logBrain('RECONCILE: Estimated P&L from T1: $' + reconPL.toFixed(2));
+                  }
+                }
+
+                dailyPL += reconPL;
+                var reconMsg = reconPL >= 0 ?
+                  '**BRACKET FILLED: ' + reconPos.ticker + ' +$' + reconPL.toFixed(2) + '**' :
+                  '**BRACKET FILLED: ' + reconPos.ticker + ' $' + reconPL.toFixed(2) + '**';
+                await postToGoMode(
+                  reconMsg + '\n' +
+                  'Daily P&L: $' + dailyPL.toFixed(2) + ' | Weekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
+                  reconPL >= 0 ? '\u2705' : '\uD83D\uDD34'
+                );
+                await postToDiscord(
+                  'BRACKET CLOSED: ' + reconPos.ticker + ' ' + (reconPos.type || '').toUpperCase() + '\n' +
+                  'P&L: $' + reconPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
+                );
+
+                activePositions.splice(rc, 1);
+                logBrain('RECONCILE: Removed ' + reconPos.ticker + ' from active positions | Daily P&L: $' + dailyPL.toFixed(2));
+              }
+            }
+          }
+        }
+      } catch(reconErr) {
+        logBrain('RECONCILE ERROR: ' + reconErr.message);
+      }
+    }
+
+    // If reconciliation cleared all positions, transition
+    if (activePositions.length === 0 && STATE === 'POSITION_OPEN') {
+      if (dailyPL >= minTarget) {
+        transitionTo('TARGET_HIT', 'Daily target hit after bracket fill: $' + dailyPL.toFixed(2));
+        await postToGoMode('**TARGET HIT! $' + dailyPL.toFixed(2) + '** -- standing down', '\uD83C\uDFC6');
+        return;
+      }
+      transitionTo('WATCHING', 'All positions closed (reconciled)');
+      return;
+    }
+
     // Manage all active positions
     for (var p = 0; p < activePositions.length; p++) {
       var pos = activePositions[p];

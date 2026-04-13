@@ -44,10 +44,16 @@ var CORE_WATCHLIST = [
   'WMT','COST','HD','TGT',
   // Momentum
   'COIN','MSTR','PLTR','DKNG','RIVN',
+  // JSmith Strat picks
+  'U','ABNB','UBER','BIDU',
+  // Market brief
+  'MCD','FAST',
   // Sector ETFs
   'XLK','XLF','XLV','GLD','TLT',
   // Defensive
   'KO','PEP',
+  // Other
+  'NFLX','INTC','BA','AVGO',
   // Legacy
   'MRNA','GUSH','UVXY'
 ];
