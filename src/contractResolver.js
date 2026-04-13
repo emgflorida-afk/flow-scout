@@ -47,7 +47,8 @@ const WATCHLIST = new Set([
   'XLE','XOM','CVX','COP',
   'UNH','MRK','LLY','ABBV',
   'WMT','COST','HD','TGT',
-  'COIN','MSTR','PLTR','DKNG','RIVN',
+  'COIN','MSTR','PLTR','DKNG','RIVN','U','ABNB','UBER','BIDU',
+  'MCD','FAST',
   'XLK','XLF','XLV','GLD','TLT',
   'KO','PEP','MRNA','GUSH','UVXY'
 ]);
@@ -131,9 +132,13 @@ async function getExpirations(ticker, token) {
     if (!exps.length) return [];
     var mapped = exps.map(function(e){
       var dateStr = (e.Date||e.date||'').slice(0,10);
-      var _expCl = new Date(dateStr+'T16:00:00');
-      var _etNowStr = new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
-      var dte = dateStr ? Math.ceil((_expCl - new Date(_etNowStr)) / (1000*60*60*24)) : 0;
+      // Calculate DTE by calendar days in ET timezone (not milliseconds)
+      // This prevents today's expiry from showing as 1DTE due to rounding
+      var etNow = new Date().toLocaleString('en-US',{timeZone:'America/New_York'});
+      var etToday = new Date(etNow).toISOString().slice(0,10); // YYYY-MM-DD in ET
+      var todayMs = new Date(etToday+'T00:00:00Z').getTime();
+      var expMs   = new Date(dateStr+'T00:00:00Z').getTime();
+      var dte = dateStr ? Math.round((expMs - todayMs) / (1000*60*60*24)) : 0;
       return { date:dateStr, dte:Math.max(0,dte), type:e.Type||'Weekly' };
     }).filter(function(e){ return e.date && e.dte >= 0; });
     console.log('[EXPIRY] Valid:', mapped.length, mapped.slice(0,3).map(function(e){ return e.date+'('+e.dte+'DTE)'; }).join(', '));
