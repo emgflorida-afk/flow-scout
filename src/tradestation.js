@@ -123,7 +123,9 @@ async function getPrice(ticker) {
 
 function setRefreshToken(token) {
   _refreshToken = token;
-  console.log('[TS] Refresh token set in memory');
+  _accessToken = null;
+  _tokenExpiresAt = 0;
+  console.log('[TS] Refresh token set + access token cleared -- will re-auth on next call');
 }
 
 async function exchangeCodeWithRedirect(code, redirect) {
