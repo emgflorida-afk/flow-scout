@@ -345,16 +345,109 @@ function detectVolumeExhaustion(bars5min, direction) {
   return { exhausted: exhausted, reason: reasons.join(' | '), confidence: confidence, signals: signals };
 }
 
-// -- BYPASS MODE: FULL AUTONOMOUS EXECUTION -------------------------
-// When true, brain places LIVE orders via orderExecutor instead of logging
-// Account: 11975462 (LIVE TradeStation)
-var BYPASS_MODE = process.env.BYPASS_MODE === 'true' || false;
+// -- EXECUTION MODES ------------------------------------------------
+// THREE MODES:
+//   1. OFF (default)    — brain posts alerts, does nothing. You trade manually.
+//   2. APPROVE          — brain posts alert + approval link. You tap APPROVE, brain executes.
+//   3. BYPASS (full auto) — brain executes immediately, no approval needed.
+//
+// Start on APPROVE mode Monday. Graduate to BYPASS when you trust it.
+var EXECUTION_MODE = process.env.EXECUTION_MODE || 'APPROVE'; // OFF, APPROVE, or BYPASS
+var BYPASS_MODE = EXECUTION_MODE === 'BYPASS' || process.env.BYPASS_MODE === 'true' || false;
+var APPROVE_MODE = EXECUTION_MODE === 'APPROVE';
 var LIVE_ACCOUNT = '11975462';
-if (BYPASS_MODE) console.log('[BRAIN] BYPASS MODE ON at startup (env var)');
+var RAILWAY_BASE = process.env.RAILWAY_URL || 'https://flow-scout-production-f021.up.railway.app';
+
+// -- PENDING APPROVALS: entries waiting for user to say GO -----------
+// Each entry gets a short ID and expires after 15 minutes
+var pendingApprovals = {};
+var APPROVAL_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
+
+function createPendingApproval(entry) {
+  // Short 4-char ID for easy tapping
+  var id = Math.random().toString(36).substring(2, 6).toUpperCase();
+  pendingApprovals[id] = {
+    entry: entry,
+    createdAt: Date.now(),
+    status: 'PENDING',
+  };
+  // Auto-expire after 15 min
+  setTimeout(function() {
+    if (pendingApprovals[id] && pendingApprovals[id].status === 'PENDING') {
+      pendingApprovals[id].status = 'EXPIRED';
+      logBrain('APPROVAL EXPIRED: ' + id + ' (' + entry.ticker + ') -- 15 min window closed');
+      postToGoMode(
+        '**EXPIRED: ' + entry.ticker + ' ' + entry.type.toUpperCase() + '** (ID: ' + id + ')\n15-minute approval window closed. Setup may no longer be valid.',
+        '\u23F0' // alarm clock
+      );
+    }
+  }, APPROVAL_EXPIRY_MS);
+
+  logBrain('PENDING APPROVAL: ' + id + ' -- ' + entry.ticker + ' ' + entry.type + ' x' + entry.contracts);
+  return id;
+}
+
+async function executeApproval(approvalId) {
+  var pending = pendingApprovals[approvalId];
+  if (!pending) {
+    return { executed: false, reason: 'No pending approval with ID: ' + approvalId };
+  }
+  if (pending.status === 'EXPIRED') {
+    return { executed: false, reason: 'Approval ' + approvalId + ' expired (15 min window)' };
+  }
+  if (pending.status === 'EXECUTED') {
+    return { executed: false, reason: 'Approval ' + approvalId + ' already executed' };
+  }
+
+  pending.status = 'EXECUTED';
+  logBrain('APPROVAL GRANTED: ' + approvalId + ' -- executing ' + pending.entry.ticker);
+
+  // Force bypass for this one execution
+  var wasBypass = BYPASS_MODE;
+  BYPASS_MODE = true;
+  var result = await executeAutonomous(pending.entry);
+  BYPASS_MODE = wasBypass;
+
+  if (result.executed) {
+    await postToGoMode(
+      '**APPROVED & EXECUTED: ' + pending.entry.ticker + ' ' + pending.entry.type.toUpperCase() + '**\n' +
+      'Order ID: ' + result.orderId + ' | ' + result.qty + 'x @ $' + result.limit,
+      '\u2705' // checkmark
+    );
+  } else {
+    await postToGoMode(
+      '**APPROVED BUT FAILED: ' + pending.entry.ticker + '**\n' + result.reason,
+      '\u274C' // red X
+    );
+  }
+  return result;
+}
+
+function getPendingApprovals() {
+  var active = {};
+  for (var id in pendingApprovals) {
+    if (pendingApprovals[id].status === 'PENDING') {
+      var elapsed = Math.round((Date.now() - pendingApprovals[id].createdAt) / 1000);
+      active[id] = {
+        ticker: pendingApprovals[id].entry.ticker,
+        type: pendingApprovals[id].entry.type,
+        contracts: pendingApprovals[id].entry.contracts,
+        elapsed: elapsed + 's ago',
+        remaining: Math.max(0, Math.round((APPROVAL_EXPIRY_MS - (Date.now() - pendingApprovals[id].createdAt)) / 1000)) + 's left',
+      };
+    }
+  }
+  return active;
+}
+
+if (EXECUTION_MODE === 'BYPASS') console.log('[BRAIN] EXECUTION MODE: BYPASS (full auto)');
+if (EXECUTION_MODE === 'APPROVE') console.log('[BRAIN] EXECUTION MODE: APPROVE (tap to execute)');
+if (EXECUTION_MODE === 'OFF') console.log('[BRAIN] EXECUTION MODE: OFF (alerts only)');
 
 function setBypassMode(enabled) {
   BYPASS_MODE = !!enabled;
-  logBrain('BYPASS MODE: ' + (BYPASS_MODE ? 'ENABLED -- LIVE AUTONOMOUS EXECUTION' : 'DISABLED -- recommendation only'));
+  EXECUTION_MODE = enabled ? 'BYPASS' : 'APPROVE';
+  logBrain('EXECUTION MODE: ' + EXECUTION_MODE + (BYPASS_MODE ? ' -- LIVE AUTONOMOUS EXECUTION' : ' -- approval required'));
   return BYPASS_MODE;
 }
 
@@ -2013,10 +2106,27 @@ async function runBrainCycle() {
         var execResult = null;
         if (BYPASS_MODE) {
           execResult = await executeAutonomous(entry);
+        } else if (APPROVE_MODE) {
+          // APPROVE MODE: queue for user approval, don't execute yet
+          var approvalId = createPendingApproval(entry);
+          var approveUrl = RAILWAY_BASE + '/api/brain/approve/' + approvalId;
+          await postToGoMode(
+            '**APPROVE TRADE? ' + entry.ticker + ' ' + entry.type.toUpperCase() + '** (ID: `' + approvalId + '`)\n' +
+            '```\n' +
+            'Contracts:  ' + entry.contracts + '\n' +
+            'Entry:      $' + (entry.entry ? entry.entry.toFixed(2) : '?') + '\n' +
+            'Stop:       $' + (entry.stop ? entry.stop.toFixed(2) : '?') + '\n' +
+            'T1:         $' + (entry.trim1 ? entry.trim1.toFixed(2) : '?') + '\n' +
+            'R:R:        ' + (entry.riskRewardRatio || '?') + ':1\n' +
+            '```\n' +
+            '\u27A1\uFE0F **TAP TO APPROVE:** ' + approveUrl + '\n' +
+            '\u23F0 Expires in 15 minutes',
+            '\uD83D\uDFE1' // yellow circle = waiting
+          );
         }
         var statusLine = (BYPASS_MODE && execResult && execResult.executed)
           ? 'LIVE ORDER PLACED | ID: ' + execResult.orderId
-          : (BYPASS_MODE ? 'EXECUTION FAILED: ' + (execResult ? execResult.reason : '?') : 'RECOMMENDATION ONLY');
+          : (APPROVE_MODE ? 'AWAITING APPROVAL' : 'RECOMMENDATION ONLY');
         await postToDiscord(
           'TRADINGVIEW BRAIN SIGNAL\n' +
           '================================\n' +
@@ -2086,6 +2196,26 @@ async function runBrainCycle() {
         var execResult = null;
         if (BYPASS_MODE) {
           execResult = await executeAutonomous(entry);
+        } else if (APPROVE_MODE) {
+          // APPROVE MODE: queue for user approval
+          var approvalId2 = createPendingApproval(entry);
+          var approveUrl2 = RAILWAY_BASE + '/api/brain/approve/' + approvalId2;
+          await postToGoMode(
+            '**APPROVE TRADE? ' + entry.ticker + ' ' + entry.type.toUpperCase() + '** (ID: `' + approvalId2 + '`)\n' +
+            '```\n' +
+            'Strategy:   ' + (entry.ayceStrategy || entry.source || entry.strategy) + '\n' +
+            'Contracts:  ' + entry.contracts + '\n' +
+            'Entry:      $' + (entry.entry ? entry.entry.toFixed(2) : '?') + '\n' +
+            'Stop:       $' + (entry.stop ? entry.stop.toFixed(2) : '?') + '\n' +
+            'T1:         $' + (entry.trim1 ? entry.trim1.toFixed(2) : '?') + '\n' +
+            'T2:         $' + (entry.trim2 ? entry.trim2.toFixed(2) : '?') + '\n' +
+            'R:R:        ' + (entry.riskRewardRatio || '?') + ':1\n' +
+            'Confluence: ' + (entry.confluenceScore || '?') + '/10\n' +
+            '```\n' +
+            '\u27A1\uFE0F **TAP TO APPROVE:** ' + approveUrl2 + '\n' +
+            '\u23F0 Expires in 15 minutes',
+            '\uD83D\uDFE1' // yellow circle = waiting
+          );
         }
 
         var entryLines = [
@@ -2191,10 +2321,19 @@ async function runBrainCycle() {
           var phExec = null;
           if (BYPASS_MODE) {
             phExec = await executeAutonomous(phEntry);
+          } else if (APPROVE_MODE) {
+            var phApprovalId = createPendingApproval(phEntry);
+            var phApproveUrl = RAILWAY_BASE + '/api/brain/approve/' + phApprovalId;
+            await postToGoMode(
+              '**APPROVE TRADE? ' + phEntry.ticker + ' ' + phEntry.type.toUpperCase() + '** (ID: `' + phApprovalId + '`)\n' +
+              'Power Hour setup | ' + phEntry.contracts + 'x @ $' + (phEntry.entry ? phEntry.entry.toFixed(2) : '?') + '\n' +
+              '\u27A1\uFE0F **TAP TO APPROVE:** ' + phApproveUrl,
+              '\uD83D\uDFE1'
+            );
           }
           var phStatus = (BYPASS_MODE && phExec && phExec.executed)
             ? 'LIVE ORDER PLACED | ID: ' + phExec.orderId
-            : (BYPASS_MODE ? 'EXECUTION FAILED: ' + (phExec ? phExec.reason : '?') : 'RECOMMENDATION ONLY');
+            : (APPROVE_MODE ? 'AWAITING APPROVAL' : 'RECOMMENDATION ONLY');
           await postToDiscord(
             'POWER HOUR ENTRY SIGNAL\n' +
             phEntry.ticker + ' ' + phEntry.type.toUpperCase() + ' x' + phEntry.contracts + '\n' +
@@ -2472,4 +2611,7 @@ module.exports = {
   getWeeklyPace: function() { return weeklyPace; },
   recordDailyResult: recordDailyResult,
   recalcPace: recalcPace,
+  executeApproval: executeApproval,
+  getPendingApprovals: getPendingApprovals,
+  getExecutionMode: function() { return EXECUTION_MODE; },
 };

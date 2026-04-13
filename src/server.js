@@ -1356,6 +1356,27 @@ app.get('/api/brain/bypass', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// APPROVE TRADE -- tap the link from #go-mode to execute
+app.get('/api/brain/approve/:id', async function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var result = await brainEngine.executeApproval(req.params.id);
+    if (result.executed) {
+      res.json({ status: 'EXECUTED', orderId: result.orderId, qty: result.qty, limit: result.limit });
+    } else {
+      res.json({ status: 'NOT EXECUTED', reason: result.reason });
+    }
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// LIST PENDING APPROVALS
+app.get('/api/brain/pending', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    res.json({ status: 'OK', pending: brainEngine.getPendingApprovals(), mode: brainEngine.getExecutionMode() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // FUTURES CHECK -- trigger manually or check Sunday bias
 app.get('/api/brain/futures', async function(req, res) {
   try {
