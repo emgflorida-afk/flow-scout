@@ -100,7 +100,7 @@ function getLoginUrl() {
     client_id:     clientId(),
     redirect_uri:  redirectUri(),
     audience:      'https://api.tradestation.com',
-    scope:         'openid offline_access profile MarketData ReadAccount Trade',
+    scope:         'openid offline_access profile MarketData ReadAccount Trade OptionSpreads Matrix',
   });
   return TS_LOGIN + '?' + params.toString();
 }
