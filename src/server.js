@@ -1569,15 +1569,9 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
-// MONDAY 9:31AM -- Close legacy SPX 6700/6695 bull put spread (bad risk/reward)
-cron.schedule('31 9 13 4 *', async function() {
-  console.log('[CRON] 9:31AM Monday -- Closing legacy SPX spread...');
-  if (creditSpreadEngine && creditSpreadEngine.closeLegacySpread) {
-    try {
-      await creditSpreadEngine.closeLegacySpread('SPX 260417P6700', 'SPX 260417P6695', 1);
-    } catch(e) { console.error('[SPREAD-LEGACY]', e.message); }
-  }
-}, { timezone: 'America/New_York' });
+// REMOVED: Legacy close cron that auto-closed SPX spread at open for a loss on Apr 13.
+// LESSON: Never auto-close existing spreads at open. Let them run to profit target or expiry.
+// The spread monitor (every 5 min) handles exits at 50% profit or 150% stop loss.
 
 // CREDIT SPREAD CRON -- evaluate at 10:00AM ET, monitor every 5 min
 cron.schedule('0 10 * * 1-5', async function() {

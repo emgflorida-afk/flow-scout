@@ -34,7 +34,7 @@ function getSundayBiasLazy() {
 var ACCOUNT_ID = '11975462';
 var TS_BASE    = 'https://api.tradestation.com/v3';
 var SPREAD_WIDTH = 5;            // $5 wide spreads
-var MIN_CREDIT   = 1.50;         // minimum credit to accept
+var MIN_CREDIT   = 0.30;         // minimum credit to accept (real XSP/SPX credits are $0.15-$0.70)
 var PROFIT_TARGET_PCT = 0.50;    // close at 50% of max profit
 var STOP_LOSS_PCT     = 1.50;    // close at 150% of credit received in loss
 var MAX_OPEN_SPREADS  = 3;
