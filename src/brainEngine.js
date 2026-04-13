@@ -1589,20 +1589,19 @@ function evaluateEntry(signal) {
   var paceInfo = weeklyPace.adjustments.contractBoost > 0
     ? '\nPACE BOOST: +' + weeklyPace.adjustments.contractBoost + ' contracts (' + weeklyPace.pace + ')'
     : '';
+  // NOTE: entry/stop/trim1/trim2 here are STOCK prices from the signal.
+  // Real option prices come from executeAutonomous() after contract resolution.
+  // The "ORDER PLACED" alert in executeAutonomous shows actual option prices.
   postToGoMode(
     '**ENTRY SIGNAL: ' + ticker + ' ' + type.toUpperCase() + '**\n' +
     '```\n' +
     'Pattern:    ' + (signal.ayceStrategy || strat.signal || source || 'Casey EMA') + '\n' +
     'FTFC:       ' + ftfcLabel + ' (' + (strat.continuity ? Object.values(strat.continuity).map(function(v){return v[0];}).join('') : '????') + ')\n' +
     'Confluence: ' + (confluenceResult ? confluenceResult.score + '/10 (' + confluenceResult.conviction + ')' : 'N/A') + '\n' +
-    'Entry:      $' + (entry ? entry.toFixed(2) : '?') + '\n' +
-    'Stop:       $' + (stop ? stop.toFixed(2) : '?') + '\n' +
-    'T1:         $' + (trim1 ? trim1.toFixed(2) : '?') + '\n' +
-    'T2:         $' + (trim2 ? trim2.toFixed(2) : '?') + '\n' +
-    'R:R:        ' + rrLabel + '\n' +
     'Contracts:  ' + contractSize + paceInfo + '\n' +
     'Weekly:     $' + weeklyPace.totalPL.toFixed(0) + ' / $' + WEEKLY_TARGET + ' (' + weeklyPace.tradingDaysLeft + ' days left)\n' +
-    '```',
+    '```\n' +
+    '_Resolving option contract..._',
     '\uD83D\uDFE2' // green circle
   );
 
@@ -2162,14 +2161,29 @@ async function runBrainCycle() {
           // APPROVE MODE: queue for user approval, don't execute yet
           var approvalId = createPendingApproval(entry);
           var approveUrl = RAILWAY_BASE + '/api/brain/approve/' + approvalId;
+          // Resolve contract first to show real option prices in approval
+          var approvalContract = null;
+          try {
+            if (resolver) {
+              approvalContract = await resolver.resolveContract(entry.ticker, entry.type, 'DAY', {});
+            }
+          } catch(e) {}
+          var aEntry = approvalContract ? approvalContract.entryPrice : null;
+          var aStop  = approvalContract ? approvalContract.optionStop : null;
+          var aT1    = approvalContract ? approvalContract.t1Price : null;
+          var aDTE   = approvalContract ? approvalContract.dte : '?';
+          var aDelta = approvalContract && approvalContract.delta ? approvalContract.delta.toFixed(2) : '?';
+          var aSym   = approvalContract ? approvalContract.symbol : '?';
           await postToGoMode(
             '**APPROVE TRADE? ' + entry.ticker + ' ' + entry.type.toUpperCase() + '** (ID: `' + approvalId + '`)\n' +
             '```\n' +
+            'Contract:   ' + aSym + '\n' +
             'Contracts:  ' + entry.contracts + '\n' +
-            'Entry:      $' + (entry.entry ? entry.entry.toFixed(2) : '?') + '\n' +
-            'Stop:       $' + (entry.stop ? entry.stop.toFixed(2) : '?') + '\n' +
-            'T1:         $' + (entry.trim1 ? entry.trim1.toFixed(2) : '?') + '\n' +
-            'R:R:        ' + (entry.riskRewardRatio || '?') + ':1\n' +
+            'Entry:      $' + (aEntry ? aEntry.toFixed(2) : '?') + '\n' +
+            'Stop:       $' + (aStop ? aStop.toFixed(2) : '?') + '\n' +
+            'T1:         $' + (aT1 ? aT1.toFixed(2) : '?') + '\n' +
+            'DTE:        ' + aDTE + '\n' +
+            'Delta:      ' + aDelta + '\n' +
             '```\n' +
             '\u27A1\uFE0F **TAP TO APPROVE:** ' + approveUrl + '\n' +
             '\u23F0 Expires in 15 minutes',
@@ -2257,16 +2271,28 @@ async function runBrainCycle() {
           // APPROVE MODE: queue for user approval
           var approvalId2 = createPendingApproval(entry);
           var approveUrl2 = RAILWAY_BASE + '/api/brain/approve/' + approvalId2;
+          // Resolve contract for real option prices in approval alert
+          var approvalContract2 = null;
+          try {
+            if (resolver) {
+              approvalContract2 = await resolver.resolveContract(entry.ticker, entry.type, 'DAY', {});
+            }
+          } catch(e2) {}
+          var a2Entry = approvalContract2 ? approvalContract2.entryPrice : null;
+          var a2Stop  = approvalContract2 ? approvalContract2.optionStop : null;
+          var a2T1    = approvalContract2 ? approvalContract2.t1Price : null;
+          var a2DTE   = approvalContract2 ? approvalContract2.dte : '?';
+          var a2Sym   = approvalContract2 ? approvalContract2.symbol : '?';
           await postToGoMode(
             '**APPROVE TRADE? ' + entry.ticker + ' ' + entry.type.toUpperCase() + '** (ID: `' + approvalId2 + '`)\n' +
             '```\n' +
+            'Contract:   ' + a2Sym + '\n' +
             'Strategy:   ' + (entry.ayceStrategy || entry.source || entry.strategy) + '\n' +
             'Contracts:  ' + entry.contracts + '\n' +
-            'Entry:      $' + (entry.entry ? entry.entry.toFixed(2) : '?') + '\n' +
-            'Stop:       $' + (entry.stop ? entry.stop.toFixed(2) : '?') + '\n' +
-            'T1:         $' + (entry.trim1 ? entry.trim1.toFixed(2) : '?') + '\n' +
-            'T2:         $' + (entry.trim2 ? entry.trim2.toFixed(2) : '?') + '\n' +
-            'R:R:        ' + (entry.riskRewardRatio || '?') + ':1\n' +
+            'Entry:      $' + (a2Entry ? a2Entry.toFixed(2) : '?') + '\n' +
+            'Stop:       $' + (a2Stop ? a2Stop.toFixed(2) : '?') + '\n' +
+            'T1:         $' + (a2T1 ? a2T1.toFixed(2) : '?') + '\n' +
+            'DTE:        ' + a2DTE + '\n' +
             'Confluence: ' + (entry.confluenceScore || '?') + '/10\n' +
             '```\n' +
             '\u27A1\uFE0F **TAP TO APPROVE:** ' + approveUrl2 + '\n' +
