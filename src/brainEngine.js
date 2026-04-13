@@ -2542,59 +2542,201 @@ async function runBrainCycle() {
       return;
     }
 
+    // LIVE PRICE UPDATE: Fetch current option quotes so managePosition() has real data
+    // Without this, position.currentPrice stays at entry price and trim/trail never fires
+    if (BYPASS_MODE && activePositions.length > 0) {
+      try {
+        var ts2 = require('./tradestation');
+        var priceToken = await ts2.getAccessToken();
+        if (priceToken) {
+          // Build comma-separated symbol list for batch quote
+          var quoteSymbols = activePositions
+            .filter(function(pp) { return pp.contractSymbol; })
+            .map(function(pp) { return encodeURIComponent(pp.contractSymbol); })
+            .join(',');
+
+          if (quoteSymbols) {
+            var quoteRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + quoteSymbols, {
+              headers: { 'Authorization': 'Bearer ' + priceToken },
+            });
+            if (quoteRes.ok) {
+              var quoteData = await quoteRes.json();
+              var quotes = quoteData.Quotes || quoteData.quotes || [];
+              if (!Array.isArray(quotes)) quotes = [quotes];
+
+              for (var qi = 0; qi < quotes.length; qi++) {
+                var q = quotes[qi];
+                var qSym = (q.Symbol || q.symbol || '').toUpperCase();
+                var qLast = parseFloat(q.Last || q.last || q.LastPrice || q.lastPrice || 0);
+                var qBid = parseFloat(q.Bid || q.bid || 0);
+                var qAsk = parseFloat(q.Ask || q.ask || 0);
+                // Use mid-price if last is 0 (illiquid option), otherwise use last
+                var qPrice = qLast > 0 ? qLast : ((qBid + qAsk) / 2);
+
+                if (qPrice > 0) {
+                  for (var qi2 = 0; qi2 < activePositions.length; qi2++) {
+                    if ((activePositions[qi2].contractSymbol || '').toUpperCase() === qSym) {
+                      var oldPrice = activePositions[qi2].currentPrice || activePositions[qi2].entry;
+                      activePositions[qi2].currentPrice = qPrice;
+                      var pctNow = ((qPrice - activePositions[qi2].entry) / activePositions[qi2].entry * 100).toFixed(1);
+                      logBrain('PRICE UPDATE: ' + activePositions[qi2].ticker + ' $' + oldPrice.toFixed(2) + ' -> $' + qPrice.toFixed(2) + ' (' + pctNow + '%)');
+                    }
+                  }
+                }
+              }
+            } else {
+              logBrain('PRICE UPDATE: Quote fetch failed ' + quoteRes.status);
+            }
+          }
+        }
+      } catch(priceErr) {
+        logBrain('PRICE UPDATE ERROR: ' + priceErr.message);
+      }
+    }
+
     // Manage all active positions
     for (var p = 0; p < activePositions.length; p++) {
       var pos = activePositions[p];
       var action = managePosition(pos);
 
       if (action.action === 'TRIM') {
-        pos.contracts -= (action.trimQty || 1);
+        var trimQty = action.trimQty || 1;
+
+        // EXECUTE REAL SELL ORDER on TradeStation for brain-tracked positions
+        if (BYPASS_MODE && pos.contractSymbol) {
+          try {
+            var tsTrim = require('./tradestation');
+            var trimToken = await tsTrim.getAccessToken();
+            if (trimToken) {
+              var trimOrder = {
+                AccountID: LIVE_ACCOUNT,
+                Symbol: pos.contractSymbol,
+                Quantity: String(trimQty),
+                OrderType: 'Market',
+                TradeAction: 'SellToClose',
+                TimeInForce: { Duration: 'DAY' },
+                Route: 'Intelligent',
+              };
+              logBrain('TRIM SELL: Placing market sell for ' + trimQty + 'x ' + pos.contractSymbol);
+              var trimRes = await fetch('https://api.tradestation.com/v3/orderexecution/orders', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + trimToken, 'Content-Type': 'application/json' },
+                body: JSON.stringify(trimOrder),
+              });
+              var trimData = await trimRes.json();
+              var trimOrdId = (trimData.Orders && trimData.Orders[0]) ? trimData.Orders[0].OrderID : 'unknown';
+              logBrain('TRIM SELL PLACED: OrderID=' + trimOrdId + ' | Status=' + trimRes.status);
+
+              // Confirm the order
+              if (trimOrdId !== 'unknown') {
+                await fetch('https://api.tradestation.com/v3/orderexecution/orders/' + trimOrdId, {
+                  method: 'PUT',
+                  headers: { 'Authorization': 'Bearer ' + trimToken, 'Content-Type': 'application/json' },
+                });
+                logBrain('TRIM SELL CONFIRMED: ' + trimOrdId);
+              }
+            }
+          } catch(trimErr) {
+            logBrain('TRIM SELL ERROR: ' + trimErr.message);
+          }
+        }
+
+        pos.contracts -= trimQty;
         if (!pos.trim1Done) pos.trim1Done = true;
         else if (!pos.trim2Done) pos.trim2Done = true;
 
-        // Calculate simulated P&L from trim
-        var trimPL = (action.pctChange / 100) * (pos.entry || 0) * (action.trimQty || 1) * 100;
+        // Calculate P&L from trim using live price
+        var trimPL = ((pos.currentPrice || pos.entry) - pos.entry) * trimQty * 100;
         dailyPL += trimPL;
 
         logBrain('TRIM P&L: +$' + trimPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2));
         transitionTo('TRIMMING', pos.ticker + ' trimmed -- ' + pos.contracts + ' remaining');
         await postToDiscord(
-          'TRIM: ' + pos.ticker + ' at +' + action.pctChange.toFixed(1) + '%\n' +
-          'Sold ' + (action.trimQty || 1) + ' contract | ' + pos.contracts + ' remaining\n' +
+          'TRIM: ' + pos.ticker + ' at +' + action.pctChange.toFixed(1) + '% ($' + (pos.currentPrice || 0).toFixed(2) + ')\n' +
+          'Sold ' + trimQty + ' contract | ' + pos.contracts + ' remaining\n' +
           'Trim P&L: +$' + trimPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
         );
-        // GO-MODE: Trim
         await postToGoMode(
-          '**TRIM: ' + pos.ticker + ' +' + action.pctChange.toFixed(1) + '%**\n' +
-          'Sold ' + (action.trimQty || 1) + ' | ' + pos.contracts + ' remaining\n' +
+          '**TRIM: ' + pos.ticker + ' +' + action.pctChange.toFixed(1) + '% @ $' + (pos.currentPrice || 0).toFixed(2) + '**\n' +
+          'Sold ' + trimQty + ' | ' + pos.contracts + ' remaining\n' +
           'P&L: +$' + trimPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2) + ' | Weekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
-          '\uD83D\uDCB0' // money bag
+          '\uD83D\uDCB0'
         );
+
+        // If all contracts sold, remove position
+        if (pos.contracts <= 0) {
+          activePositions.splice(p, 1);
+          p--;
+          if (activePositions.length === 0) {
+            if (dailyPL >= minTarget) {
+              transitionTo('TARGET_HIT', 'All trimmed out -- target hit $' + dailyPL.toFixed(2));
+            } else {
+              transitionTo('WATCHING', 'All positions closed via trim');
+            }
+          }
+        }
       } else if (action.action === 'TRAIL') {
         pos.trailStop = action.trailStop;
+        logBrain('TRAIL STOP SET: ' + pos.ticker + ' trail=$' + action.trailStop.toFixed(2) + ' | current=$' + (pos.currentPrice || 0).toFixed(2));
         transitionTo('TRAILING', pos.ticker + ' trailing at $' + action.trailStop.toFixed(2));
       } else if (action.action === 'STOP') {
-        // Stopped out
-        var stopLoss = (action.pctChange / 100) * (pos.entry || 0) * pos.contracts * 100;
-        dailyPL += stopLoss; // stopLoss is negative
+        var stopQty = pos.contracts || 1;
+
+        // EXECUTE REAL SELL ORDER for stop-out
+        if (BYPASS_MODE && pos.contractSymbol) {
+          try {
+            var tsStop = require('./tradestation');
+            var stopToken = await tsStop.getAccessToken();
+            if (stopToken) {
+              var stopOrder = {
+                AccountID: LIVE_ACCOUNT,
+                Symbol: pos.contractSymbol,
+                Quantity: String(stopQty),
+                OrderType: 'Market',
+                TradeAction: 'SellToClose',
+                TimeInForce: { Duration: 'DAY' },
+                Route: 'Intelligent',
+              };
+              logBrain('STOP SELL: Placing market sell for ' + stopQty + 'x ' + pos.contractSymbol);
+              var stopRes = await fetch('https://api.tradestation.com/v3/orderexecution/orders', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + stopToken, 'Content-Type': 'application/json' },
+                body: JSON.stringify(stopOrder),
+              });
+              var stopData = await stopRes.json();
+              var stopOrdId = (stopData.Orders && stopData.Orders[0]) ? stopData.Orders[0].OrderID : 'unknown';
+              logBrain('STOP SELL PLACED: OrderID=' + stopOrdId);
+
+              if (stopOrdId !== 'unknown') {
+                await fetch('https://api.tradestation.com/v3/orderexecution/orders/' + stopOrdId, {
+                  method: 'PUT',
+                  headers: { 'Authorization': 'Bearer ' + stopToken, 'Content-Type': 'application/json' },
+                });
+                logBrain('STOP SELL CONFIRMED: ' + stopOrdId);
+              }
+            }
+          } catch(stopErr) {
+            logBrain('STOP SELL ERROR: ' + stopErr.message);
+          }
+        }
+
+        var stopLoss = ((pos.currentPrice || pos.entry) - pos.entry) * stopQty * 100;
+        dailyPL += stopLoss;
 
         logBrain('STOP LOSS: $' + stopLoss.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2));
         await postToDiscord(
-          'STOPPED OUT: ' + pos.ticker + ' at ' + action.pctChange.toFixed(1) + '%\n' +
+          'STOPPED OUT: ' + pos.ticker + ' at ' + action.pctChange.toFixed(1) + '% ($' + (pos.currentPrice || 0).toFixed(2) + ')\n' +
           'Loss: $' + stopLoss.toFixed(2) + ' | Daily P&L: $' + dailyPL.toFixed(2)
         );
-        // GO-MODE: Stop loss
         await postToGoMode(
           '**STOPPED OUT: ' + pos.ticker + ' ' + action.pctChange.toFixed(1) + '%**\n' +
           'Loss: $' + stopLoss.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2) + ' | Weekly: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + '/$' + WEEKLY_TARGET,
-          '\uD83D\uDD34' // red circle
+          '\uD83D\uDD34'
         );
 
-        // Remove position
         activePositions.splice(p, 1);
         p--;
 
-        // Go to FALLBACK
         transitionTo('FALLBACK', pos.ticker + ' stopped out');
         fallbackStrategy();
       }
