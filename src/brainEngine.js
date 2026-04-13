@@ -2147,20 +2147,25 @@ async function runBrainCycle() {
           'STATUS: ' + statusLine
         );
 
-        activePositions.push({
-          ticker: entry.ticker, type: entry.type, direction: entry.direction,
-          contracts: (execResult && execResult.executed) ? execResult.qty : entry.contracts,
-          entry: (execResult && execResult.executed) ? execResult.limit : entry.entry,
-          stop: (execResult && execResult.executed) ? execResult.stop : entry.stop,
-          contractSymbol: (execResult && execResult.contract) ? execResult.contract.symbol : null,
-          orderId: execResult ? execResult.orderId : null,
-          trim1Target: entry.trim1, trim2Target: entry.trim2,
-          trim1Done: false, trim2Done: false, trailStop: null,
-          openTime: new Date().toISOString(), currentPrice: entry.entry,
-          strategy: 'TV_BRAIN', liveOrder: !!(execResult && execResult.executed),
-        });
-        tradesOpened++;
-        transitionTo('POSITION_OPEN', 'TV Brain: ' + entry.ticker);
+        if (execResult && execResult.executed) {
+          activePositions.push({
+            ticker: entry.ticker, type: entry.type, direction: entry.direction,
+            contracts: execResult.qty,
+            entry: execResult.limit,
+            stop: execResult.stop,
+            contractSymbol: execResult.contract ? execResult.contract.symbol : null,
+            orderId: execResult.orderId || null,
+            trim1Target: execResult.t1 || entry.trim1, trim2Target: entry.trim2,
+            trim1Done: false, trim2Done: false, trailStop: null,
+            openTime: new Date().toISOString(), currentPrice: execResult.limit,
+            strategy: 'TV_BRAIN', liveOrder: true,
+          });
+          tradesOpened++;
+          transitionTo('POSITION_OPEN', 'TV Brain: ' + entry.ticker);
+        } else {
+          logBrain('TV BRAIN EXECUTION FAILED -- NOT tracking. Reason: ' + (execResult ? execResult.reason : 'no exec result'));
+          transitionTo('WATCHING', 'TV execution failed -- back to watching');
+        }
       } else {
         logBrain('TV signal rejected: ' + entry.reason);
         transitionTo('WATCHING', 'TV signal rejected');
@@ -2273,29 +2278,34 @@ async function runBrainCycle() {
         var entryMsg = entryLines.join('\n');
         await postToDiscord(entryMsg);
 
-        // Track position (with contract info if executed)
-        var newPos = {
-          ticker: entry.ticker,
-          type: entry.type,
-          direction: entry.direction,
-          contracts: execResult && execResult.executed ? execResult.qty : entry.contracts,
-          entry: execResult && execResult.executed ? execResult.limit : entry.entry,
-          stop: execResult && execResult.executed ? execResult.stop : entry.stop,
-          contractSymbol: execResult && execResult.contract ? execResult.contract.symbol : null,
-          orderId: execResult ? execResult.orderId : null,
-          trim1Target: entry.trim1,
-          trim2Target: entry.trim2,
-          trim1Done: false,
-          trim2Done: false,
-          trailStop: null,
-          openTime: new Date().toISOString(),
-          currentPrice: entry.entry,
-          strategy: entry.strategy,
-          liveOrder: !!(execResult && execResult.executed),
-        };
-        activePositions.push(newPos);
-        tradesOpened++;
-        transitionTo('POSITION_OPEN', 'Tracking ' + entry.ticker + ' ' + entry.type.toUpperCase());
+        // Only track position if execution actually succeeded
+        if (execResult && execResult.executed) {
+          var newPos = {
+            ticker: entry.ticker,
+            type: entry.type,
+            direction: entry.direction,
+            contracts: execResult.qty,
+            entry: execResult.limit,
+            stop: execResult.stop,
+            contractSymbol: execResult.contract ? execResult.contract.symbol : null,
+            orderId: execResult.orderId || null,
+            trim1Target: execResult.t1 || entry.trim1,
+            trim2Target: entry.trim2,
+            trim1Done: false,
+            trim2Done: false,
+            trailStop: null,
+            openTime: new Date().toISOString(),
+            currentPrice: execResult.limit,
+            strategy: entry.strategy,
+            liveOrder: true,
+          };
+          activePositions.push(newPos);
+          tradesOpened++;
+          transitionTo('POSITION_OPEN', 'Tracking ' + entry.ticker + ' ' + entry.type.toUpperCase());
+        } else {
+          logBrain('EXECUTION FAILED -- NOT tracking position. Reason: ' + (execResult ? execResult.reason : 'no exec result'));
+          transitionTo('WATCHING', 'Execution failed -- back to watching');
+        }
       } else {
         logBrain('Entry rejected: ' + entry.reason);
         transitionTo('WATCHING', 'Entry rejected -- back to watching');
@@ -2353,27 +2363,32 @@ async function runBrainCycle() {
             'STATUS: ' + phStatus
           );
 
-          activePositions.push({
-            ticker: phEntry.ticker,
-            type: phEntry.type,
-            direction: phEntry.direction,
-            contracts: (phExec && phExec.executed) ? phExec.qty : phEntry.contracts,
-            entry: (phExec && phExec.executed) ? phExec.limit : phEntry.entry,
-            stop: (phExec && phExec.executed) ? phExec.stop : phEntry.stop,
-            contractSymbol: (phExec && phExec.contract) ? phExec.contract.symbol : null,
-            orderId: phExec ? phExec.orderId : null,
-            trim1Target: phEntry.trim1,
-            trim2Target: phEntry.trim2,
-            trim1Done: false,
-            trim2Done: false,
-            trailStop: null,
-            openTime: new Date().toISOString(),
-            currentPrice: phEntry.entry,
-            strategy: phEntry.strategy,
-            liveOrder: !!(phExec && phExec.executed),
-          });
-          tradesOpened++;
-          transitionTo('POSITION_OPEN', 'Power hour: ' + phEntry.ticker);
+          if (phExec && phExec.executed) {
+            activePositions.push({
+              ticker: phEntry.ticker,
+              type: phEntry.type,
+              direction: phEntry.direction,
+              contracts: phExec.qty,
+              entry: phExec.limit,
+              stop: phExec.stop,
+              contractSymbol: phExec.contract ? phExec.contract.symbol : null,
+              orderId: phExec.orderId || null,
+              trim1Target: phExec.t1 || phEntry.trim1,
+              trim2Target: phEntry.trim2,
+              trim1Done: false,
+              trim2Done: false,
+              trailStop: null,
+              openTime: new Date().toISOString(),
+              currentPrice: phExec.limit,
+              strategy: phEntry.strategy,
+              liveOrder: true,
+            });
+            tradesOpened++;
+            transitionTo('POSITION_OPEN', 'Power hour: ' + phEntry.ticker);
+          } else {
+            logBrain('POWER HOUR EXECUTION FAILED -- NOT tracking. Reason: ' + (phExec ? phExec.reason : 'no exec result'));
+            transitionTo('WATCHING', 'Power hour execution failed -- back to watching');
+          }
         }
       }
     }
