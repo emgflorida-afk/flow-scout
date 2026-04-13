@@ -1433,6 +1433,15 @@ app.post('/api/alert', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// DEBUG: Test contract resolver directly
+app.get('/api/resolve/:ticker/:type', async function(req, res) {
+  try {
+    var r = require('./contractResolver');
+    var result = await r.resolveContract(req.params.ticker.toUpperCase(), req.params.type, 'DAY', { confluence: 6 });
+    res.json({ status: 'OK', contract: result });
+  } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
+});
+
 // Brain Engine cron: every 60 seconds during market hours (weekdays)
 cron.schedule('* 9-16 * * 1-5', function() {
   if (brainEngine) {
