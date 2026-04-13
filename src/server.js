@@ -1433,12 +1433,43 @@ app.post('/api/alert', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// DEBUG: Test contract resolver directly
+// DEBUG: Test contract resolver + raw chain access
 app.get('/api/resolve/:ticker/:type', async function(req, res) {
   try {
     var r = require('./contractResolver');
-    var result = await r.resolveContract(req.params.ticker.toUpperCase(), req.params.type, 'DAY', { confluence: 6 });
-    res.json({ status: 'OK', contract: result });
+    var ticker = req.params.ticker.toUpperCase();
+    var type = req.params.type;
+
+    // Step-by-step debug
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.json({ error: 'No TS token' });
+
+    var fetch = require('node-fetch');
+    // Get price
+    var priceRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var priceData = await priceRes.json();
+    var price = priceData && priceData.Quotes ? parseFloat(priceData.Quotes[0].Last) : null;
+
+    // Get expirations
+    var expRes = await fetch('https://api.tradestation.com/v3/marketdata/options/expirations/' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    var expData = await expRes.json();
+    var expirations = expData && expData.Expirations ? expData.Expirations.slice(0, 5) : [];
+
+    // Try full resolve
+    var result = await r.resolveContract(ticker, type, 'DAY', { confluence: 6 });
+
+    res.json({
+      status: 'OK',
+      price: price,
+      expirations: expirations,
+      contract: result,
+      tokenOK: !!token,
+    });
   } catch(e) { res.status(500).json({ error: e.message, stack: e.stack }); }
 });
 
