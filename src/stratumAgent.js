@@ -217,7 +217,7 @@ async function claudeDecide(signal, context) {
 
 // Rule-based fallback
 function ruleDecide(signal, context) {
-  var conf    = parseInt((signal.confluence || '0').split('/')[0]) || 0;
+  var conf    = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
   var type    = signal.type;
   var h6      = context.h6Bias || 'MIXED';
   var bp      = context.buyingPower || 0;

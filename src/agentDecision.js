@@ -114,7 +114,7 @@ async function agentDecide(signal, context) {
 
 // Rule-based fallback when Anthropic API unavailable
 function ruleBasedDecision(signal, context, isPrimeTime) {
-  var confluence = parseInt((signal.confluence || '0').split('/')[0]) || 0;
+  var confluence = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
   var type       = signal.type;
   var h6Bias     = context.h6Bias || 'MIXED';
   var macroBias  = context.macroBias || 'MIXED';

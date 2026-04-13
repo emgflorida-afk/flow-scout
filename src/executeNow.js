@@ -281,7 +281,7 @@ function calcStructuralStop(ticker, type, premium, lvls, price, delta) {
 async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyingPower) {
   var ticker     = (signal.ticker || '').toUpperCase();
   var type       = (signal.type || 'call').toLowerCase();
-  var confluence = parseInt((signal.confluence || '0').split('/')[0]) || 0;
+  var confluence = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
   var price      = signal.close ? parseFloat(signal.close) : null;
 
   console.log('[EXECUTE-NOW] Evaluating ' + ticker + ' ' + type + ' conf:' + confluence + '/6');

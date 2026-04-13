@@ -145,7 +145,7 @@ app.post('/webhook/tradingview', async function(req, res) {
     var confluence = body.confluence || '0/6';
     var tradeType  = body.tradeType  || 'SWING';
     if (!ticker) return res.status(400).json({ error: 'Missing ticker' });
-    var score = parseInt(confluence.split('/')[0]) || 0;
+    var score = parseInt(String(confluence).split('/')[0]) || 0;
     if (score < 3) return res.json({ status: 'skipped', reason: 'Below 3/6' });
     var resolved = await resolver.resolveContract(ticker, type, tradeType);
     if (!resolved) return res.json({ status: 'skipped', reason: 'No contract' });

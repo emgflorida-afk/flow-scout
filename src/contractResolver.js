@@ -376,7 +376,7 @@ function parseContract(c, expiry, type) {
 
 // -- ENTRY MODE ---------------------------------------------------
 function getEntryMode(confluence, strategy) {
-  var score=parseInt((confluence||'0').split('/')[0])||0;
+  var score=parseInt(String(confluence||'0').split('/')[0])||0;
   var isORB=(strategy||'').toUpperCase().includes('ORB')||(strategy||'').toUpperCase().includes('3-2-2');
   return (score>=5||isORB) ? 'BREAKOUT' : 'RETRACEMENT';
 }

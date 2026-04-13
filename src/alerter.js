@@ -190,7 +190,7 @@ function scoreFlow(flowData) {
 
 // -- GRADE STRAT ALERT --------------------------------------------
 function gradeStratAlert(confluence, hasFlow) {
-  var score = parseInt((confluence || '0').split('/')[0]) || 0;
+  var score = parseInt(String(confluence || '0').split('/')[0]) || 0;
   if (score >= 6) return 'A+';
   if (score >= 5) return 'A';
   if (score >= 4) return 'B';
@@ -403,7 +403,7 @@ async function buildStratCard(opraSymbol, tvData, resolved, ss) {
   const tfLine = tfParts.join('  ');
   const edgeLines       = resolved ? buildEdgeSection(resolved) : [];
   const technicalsLines = buildTechnicalsSection(tvData);
-  const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
+  const confluenceScore = parseInt(String(tvData.confluence || '0').split('/')[0]) || 0;
   const flowConfirmed   = tvData.hasFlow || false;
   const grade           = gradeStratAlert(tvData.confluence, flowConfirmed);
   const gradeLabel = grade === 'A+' ? 'GRADE  A+ -- EXECUTE IMMEDIATELY'
@@ -548,7 +548,7 @@ async function sendStratAlert(opraSymbol, tvData, resolved) {
   recentStratTickers.set(key, Date.now());
   setTimeout(function() { recentStratTickers.delete(key); }, 30 * 60 * 1000);
 
-  const confluenceScore = parseInt((tvData.confluence || '0').split('/')[0]) || 0;
+  const confluenceScore = parseInt(String(tvData.confluence || '0').split('/')[0]) || 0;
   const flowMatch       = recentFlowTickers.has(key);
 
   // FRESHNESS CHECK
