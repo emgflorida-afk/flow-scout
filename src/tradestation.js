@@ -37,6 +37,7 @@ async function getAccessToken() {
           client_id:     clientId(),
           client_secret: clientSecret(),
           refresh_token: rt,
+          scope:         'openid offline_access profile MarketData ReadAccount Trade OptionSpreads Matrix',
         }),
       });
       var data = await res.json();
