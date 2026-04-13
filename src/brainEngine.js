@@ -124,6 +124,132 @@ var trimPlan = { first: 0.50, second: 1.00 }; // +50%, +100%
 var strategies = ['AYCE_STRAT', 'SCANNER_BREAKOUT', 'FLOW_CONVICTION', 'SCALP'];
 var currentStrategy = 0;
 
+// ===================================================================
+// WEEKLY PACE TRACKER
+// Tracks cumulative P&L across the week so the brain can adjust
+// sizing and runner management to close gaps toward $2,500 target.
+// Persists to /tmp/weekly_pace.json so Railway redeploys don't lose it.
+// ===================================================================
+var WEEKLY_TARGET = 2500;
+var weeklyPace = {
+  weekStart: null,        // Monday date string e.g. '2026-04-13'
+  dailyResults: {},       // { '2026-04-13': 450, '2026-04-14': -50, ... }
+  totalPL: 0,
+  tradingDaysLeft: 5,
+  pace: 'ON_TRACK',       // ON_TRACK, BEHIND, AHEAD, CRITICAL
+  adjustments: {
+    contractBoost: 0,     // extra contracts to add (0-3)
+    maxTradesBoost: 0,    // extra trade slots (0-1)
+    runnerMode: 'NORMAL', // NORMAL or EXTENDED (hold runners longer)
+  },
+};
+
+var PACE_FILE = '/tmp/weekly_pace.json';
+
+function getWeekStartDate() {
+  var now = new Date();
+  // Get Monday of current week in ET
+  var et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var day = et.getDay(); // 0=Sun, 1=Mon, ...
+  var diff = day === 0 ? -6 : 1 - day; // days to subtract to get Monday
+  var monday = new Date(et);
+  monday.setDate(et.getDate() + diff);
+  return monday.getFullYear() + '-' + String(monday.getMonth() + 1).padStart(2, '0') + '-' + String(monday.getDate()).padStart(2, '0');
+}
+
+function getTradingDaysLeft() {
+  var et = getETTime();
+  var dayOfWeek = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'long' });
+  var daysMap = { 'Monday': 5, 'Tuesday': 4, 'Wednesday': 3, 'Thursday': 2, 'Friday': 1 };
+  return daysMap[dayOfWeek] || 0;
+}
+
+function loadWeeklyPace() {
+  try {
+    var fs = require('fs');
+    if (fs.existsSync(PACE_FILE)) {
+      var data = JSON.parse(fs.readFileSync(PACE_FILE, 'utf8'));
+      var currentWeek = getWeekStartDate();
+      if (data.weekStart === currentWeek) {
+        weeklyPace = data;
+        console.log('[PACE] Loaded weekly pace: $' + weeklyPace.totalPL.toFixed(2) + ' / $' + WEEKLY_TARGET);
+        return;
+      }
+      // New week — archive old, start fresh
+      console.log('[PACE] New week detected. Last week: $' + (data.totalPL || 0).toFixed(2));
+    }
+  } catch(e) { console.log('[PACE] No saved pace file, starting fresh'); }
+  // Initialize new week
+  weeklyPace.weekStart = getWeekStartDate();
+  weeklyPace.dailyResults = {};
+  weeklyPace.totalPL = 0;
+  saveWeeklyPace();
+}
+
+function saveWeeklyPace() {
+  try {
+    var fs = require('fs');
+    fs.writeFileSync(PACE_FILE, JSON.stringify(weeklyPace, null, 2));
+  } catch(e) { console.error('[PACE] Save error:', e.message); }
+}
+
+function recordDailyResult(dateStr, pnl) {
+  weeklyPace.dailyResults[dateStr] = pnl;
+  weeklyPace.totalPL = 0;
+  var keys = Object.keys(weeklyPace.dailyResults);
+  for (var i = 0; i < keys.length; i++) {
+    weeklyPace.totalPL += weeklyPace.dailyResults[keys[i]];
+  }
+  recalcPace();
+  saveWeeklyPace();
+  logBrain('WEEKLY PACE: $' + weeklyPace.totalPL.toFixed(2) + ' / $' + WEEKLY_TARGET +
+    ' | Pace: ' + weeklyPace.pace +
+    ' | Days left: ' + weeklyPace.tradingDaysLeft +
+    ' | Adj: +' + weeklyPace.adjustments.contractBoost + ' contracts, ' +
+    (weeklyPace.adjustments.maxTradesBoost > 0 ? '+1 trade slot, ' : '') +
+    'runners=' + weeklyPace.adjustments.runnerMode);
+}
+
+function recalcPace() {
+  var daysLeft = getTradingDaysLeft();
+  weeklyPace.tradingDaysLeft = daysLeft;
+  var remaining = WEEKLY_TARGET - weeklyPace.totalPL;
+  var neededPerDay = daysLeft > 0 ? remaining / daysLeft : remaining;
+
+  // Reset adjustments
+  weeklyPace.adjustments = { contractBoost: 0, maxTradesBoost: 0, runnerMode: 'NORMAL' };
+
+  if (weeklyPace.totalPL >= WEEKLY_TARGET) {
+    // Already hit target — play house money, be conservative
+    weeklyPace.pace = 'AHEAD';
+    weeklyPace.adjustments.runnerMode = 'NORMAL';
+    // Could reduce size here but let's keep standard
+  } else if (neededPerDay <= dailyTarget) {
+    // On track — standard operations
+    weeklyPace.pace = 'ON_TRACK';
+  } else if (neededPerDay <= dailyTarget * 1.5) {
+    // Behind — need ~$600-750/day. Size up on A+ setups.
+    weeklyPace.pace = 'BEHIND';
+    weeklyPace.adjustments.contractBoost = 2;      // 3→5 contracts on quality
+    weeklyPace.adjustments.runnerMode = 'EXTENDED'; // hold runners to T2
+  } else if (neededPerDay <= dailyTarget * 2.5) {
+    // Significantly behind — need ~$750-1250/day. Max safe aggression.
+    weeklyPace.pace = 'CRITICAL';
+    weeklyPace.adjustments.contractBoost = 3;       // 3→6 contracts on A+ only
+    weeklyPace.adjustments.maxTradesBoost = 1;      // allow 3rd trade
+    weeklyPace.adjustments.runnerMode = 'EXTENDED';
+  } else {
+    // Way behind — don't revenge trade. Accept the week and protect capital.
+    weeklyPace.pace = 'CRITICAL';
+    weeklyPace.adjustments.contractBoost = 2;       // still size up but DON'T force
+    weeklyPace.adjustments.runnerMode = 'EXTENDED';
+    // NOT adding trade slots — that leads to overtrading
+  }
+}
+
+// Initialize pace on module load
+loadWeeklyPace();
+
 // -- EXIT MODE: 'TRAIL' or 'STRENGTH' -------------------------------
 // TRAIL = traditional trail stop (sell on pullback)
 // STRENGTH = detect volume exhaustion and sell into the push
@@ -1024,10 +1150,12 @@ function evaluateEntry(signal) {
     return { approved: false, reason: 'Before 9:45 AM -- opening 15 min is noise' };
   }
 
-  // Check: are we under max trades?
-  if (tradesOpened >= maxTrades) {
-    logBrain('ENTRY REJECTED: Max trades reached (' + tradesOpened + '/' + maxTrades + ')');
-    return { approved: false, reason: 'Max trades reached (' + tradesOpened + '/' + maxTrades + ')' };
+  // Check: are we under max trades? (pace boost may add +1 slot)
+  var effectiveMaxTrades = maxTrades + (weeklyPace.adjustments.maxTradesBoost || 0);
+  if (tradesOpened >= effectiveMaxTrades) {
+    logBrain('ENTRY REJECTED: Max trades reached (' + tradesOpened + '/' + effectiveMaxTrades + ')' +
+      (weeklyPace.adjustments.maxTradesBoost > 0 ? ' [PACE: +1 slot active]' : ''));
+    return { approved: false, reason: 'Max trades reached (' + tradesOpened + '/' + effectiveMaxTrades + ')' };
   }
 
   // Check: have we hit max daily loss?
@@ -1236,6 +1364,20 @@ function evaluateEntry(signal) {
       logBrain('SIZING: ' + confluenceResult.contracts + ' contracts based on conviction ' + confluenceResult.conviction);
     }
 
+    // WEEKLY PACE BOOST: add contracts if behind on weekly target
+    // Only on high-conviction setups (score >= 6) — never size up on mediocre trades
+    if (weeklyPace.adjustments.contractBoost > 0 && confluenceResult.score >= 6) {
+      var boosted = contractSize + weeklyPace.adjustments.contractBoost;
+      var maxContracts = 8; // absolute ceiling — never more than 8
+      boosted = Math.min(boosted, maxContracts);
+      logBrain('PACE BOOST: ' + weeklyPace.pace + ' — sizing up from ' + contractSize + ' to ' + boosted +
+        ' contracts (weekly: $' + weeklyPace.totalPL.toFixed(0) + '/$' + WEEKLY_TARGET +
+        ', need $' + (WEEKLY_TARGET - weeklyPace.totalPL).toFixed(0) + ' more, ' + weeklyPace.tradingDaysLeft + ' days left)');
+      contractSize = boosted;
+    } else if (weeklyPace.adjustments.contractBoost > 0) {
+      logBrain('PACE: Behind but confluence ' + confluenceResult.score + '/10 too low for boost (need 6+) — standard sizing');
+    }
+
     // Use Casey structure-based stop if available
     if (confluenceResult.retestLevel && smartStop) {
       var caseyStop = smartStop.calcCaseyStop({
@@ -1376,26 +1518,35 @@ function managePosition(position) {
   }
 
   // TRIM LOGIC — scales with position size
+  // EXTENDED runner mode (when behind on weekly pace): delay first trim to +75% to let winners run bigger
+  // NORMAL mode: standard +50%/+100% trim schedule
   // 2 contracts: NO trim at +50%. Hold both. Trail on structure. Exit all when structure breaks.
   // 3 contracts: trim 1 at +50%, trim 1 at +100%, trail 1 runner
   // 4-5 contracts: trim 2 at +50%, trim 1-2 at +100%, trail rest
+  var isExtendedRunner = weeklyPace.adjustments.runnerMode === 'EXTENDED';
+  var trim1Threshold = isExtendedRunner ? 75 : 50;   // delay first trim when behind
+  var trim2Threshold = isExtendedRunner ? 150 : 100;  // push T2 out too
+
   if (contracts === 2 && !position.trim1Done) {
     // 2 CONTRACTS: Don't trim early. Hold for the full move.
-    // Only trim 1 at +100% to lock in breakeven, then trail the runner.
-    if (pctChange >= 100) {
-      logBrain('TRIM (2-lot): ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 of 2, trail runner');
-      return { action: 'TRIM', trimQty: 1, reason: '+100% on 2-lot -- trim 1, runner on house money', pctChange: pctChange };
+    var twoLotThreshold = isExtendedRunner ? 150 : 100;
+    if (pctChange >= twoLotThreshold) {
+      logBrain('TRIM (2-lot): ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 of 2, trail runner' +
+        (isExtendedRunner ? ' [EXTENDED RUNNER: delayed trim]' : ''));
+      return { action: 'TRIM', trimQty: 1, reason: '+' + twoLotThreshold + '% on 2-lot -- trim 1, runner on house money', pctChange: pctChange };
     }
   } else if (contracts > 2) {
-    // 3+ CONTRACTS: Standard trim schedule
-    if (pctChange >= 50 && !position.trim1Done) {
+    // 3+ CONTRACTS: Trim schedule adjusted by pace
+    if (pctChange >= trim1Threshold && !position.trim1Done) {
       var trimQty = contracts >= 4 ? 2 : 1;
-      logBrain('TRIM 1: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell ' + trimQty);
-      return { action: 'TRIM', trimQty: trimQty, reason: '+50% hit -- trim ' + trimQty + ' of ' + contracts, pctChange: pctChange };
+      logBrain('TRIM 1: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell ' + trimQty +
+        (isExtendedRunner ? ' [EXTENDED: trimmed at +' + trim1Threshold + '% vs normal +50%]' : ''));
+      return { action: 'TRIM', trimQty: trimQty, reason: '+' + trim1Threshold + '% hit -- trim ' + trimQty + ' of ' + contracts, pctChange: pctChange };
     }
-    if (pctChange >= 100 && contracts > 1 && !position.trim2Done) {
-      logBrain('TRIM 2: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 more');
-      return { action: 'TRIM', trimQty: 1, reason: '+100% hit -- trim 1 more, runner left', pctChange: pctChange };
+    if (pctChange >= trim2Threshold && contracts > 1 && !position.trim2Done) {
+      logBrain('TRIM 2: ' + position.ticker + ' at +' + pctChange.toFixed(1) + '% -- sell 1 more' +
+        (isExtendedRunner ? ' [EXTENDED]' : ''));
+      return { action: 'TRIM', trimQty: 1, reason: '+' + trim2Threshold + '% hit -- trim 1 more, runner left', pctChange: pctChange };
     }
   }
 
@@ -1497,6 +1648,16 @@ function getDailyBrief() {
     'Cycles:     ' + cycleCount,
     'Last Cycle: ' + (lastCycleTime ? lastCycleTime : 'Never'),
     'Time:       ' + formatET(),
+    '--------------------------------',
+    'WEEKLY PACE:',
+    '  Target:    $' + WEEKLY_TARGET,
+    '  This week: $' + weeklyPace.totalPL.toFixed(2),
+    '  Remaining: $' + (WEEKLY_TARGET - weeklyPace.totalPL).toFixed(2),
+    '  Days left: ' + weeklyPace.tradingDaysLeft,
+    '  Pace:      ' + weeklyPace.pace,
+    '  Boost:     +' + weeklyPace.adjustments.contractBoost + ' contracts' +
+      (weeklyPace.adjustments.maxTradesBoost > 0 ? ', +1 trade slot' : '') +
+      ', runners=' + weeklyPace.adjustments.runnerMode,
     '================================',
   ];
 
@@ -1535,6 +1696,15 @@ function getBrainStatus() {
     lastCycleTime: lastCycleTime,
     recentLog: brainLog.slice(-10),
     time: formatET(),
+    weeklyPace: {
+      pace: weeklyPace.pace,
+      totalPL: weeklyPace.totalPL,
+      target: WEEKLY_TARGET,
+      remaining: WEEKLY_TARGET - weeklyPace.totalPL,
+      tradingDaysLeft: weeklyPace.tradingDaysLeft,
+      dailyResults: weeklyPace.dailyResults,
+      adjustments: weeklyPace.adjustments,
+    },
   };
 }
 
@@ -1549,6 +1719,18 @@ function getState() {
 // RESET DAILY STATE
 // ===================================================================
 function resetDaily() {
+  // Record yesterday's P&L to weekly tracker BEFORE resetting
+  if (dailyPL !== 0 || tradesOpened > 0) {
+    var yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    var dateStr = yesterday.toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+    // Use ET date formatted as YYYY-MM-DD
+    var etDate = new Date(yesterday.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    var dateKey = etDate.getFullYear() + '-' + String(etDate.getMonth() + 1).padStart(2, '0') + '-' + String(etDate.getDate()).padStart(2, '0');
+    recordDailyResult(dateKey, dailyPL);
+    logBrain('WEEKLY PACE UPDATE: Recorded $' + dailyPL.toFixed(2) + ' for ' + dateKey);
+  }
+
   logBrain('DAILY RESET -- clearing all state');
   STATE = 'PRE_MARKET';
   dailyPL = 0;
@@ -1559,7 +1741,14 @@ function resetDaily() {
   lastCycleTime = null;
   todayCatalysts = null;
   brainLog = [];
-  logBrain('Daily state reset complete');
+
+  // Recalculate pace adjustments for today
+  recalcPace();
+  logBrain('Daily state reset complete | Weekly pace: ' + weeklyPace.pace +
+    ' ($' + weeklyPace.totalPL.toFixed(0) + '/$' + WEEKLY_TARGET + ')' +
+    ' | Adjustments: +' + weeklyPace.adjustments.contractBoost + ' contracts' +
+    (weeklyPace.adjustments.maxTradesBoost > 0 ? ', +1 trade slot' : '') +
+    ', runners=' + weeklyPace.adjustments.runnerMode);
 }
 
 // ===================================================================
@@ -2109,15 +2298,23 @@ async function runBrainCycle() {
       activePositions = [];
     }
 
-    // Post EOD summary
+    // Post EOD summary with weekly pace
     if (cycleCount % 60 === 0) { // Once per hour after close
+      var weeklyRemaining = WEEKLY_TARGET - weeklyPace.totalPL - dailyPL; // include today's unreported PL
+      var paceLabel = weeklyPace.pace;
+      if (weeklyPace.totalPL + dailyPL >= WEEKLY_TARGET) paceLabel = 'GOAL HIT';
       await postToDiscord(
         'END OF DAY SUMMARY\n' +
         '================================\n' +
         'Daily P&L: $' + dailyPL.toFixed(2) + '\n' +
         'Trades: ' + tradesOpened + '\n' +
         'Strategy: ' + strategies[currentStrategy] + '\n' +
-        'Target: $' + dailyTarget + ' | ' + (dailyPL >= minTarget ? 'HIT' : 'MISSED')
+        'Target: $' + dailyTarget + ' | ' + (dailyPL >= minTarget ? 'HIT' : 'MISSED') + '\n' +
+        '--------------------------------\n' +
+        'WEEKLY PACE: ' + paceLabel + '\n' +
+        'Week total: $' + (weeklyPace.totalPL + dailyPL).toFixed(2) + ' / $' + WEEKLY_TARGET + '\n' +
+        'Remaining: $' + weeklyRemaining.toFixed(2) + ' in ' + (weeklyPace.tradingDaysLeft - 1) + ' days' +
+        (weeklyPace.adjustments.contractBoost > 0 ? '\nTomorrow: +' + weeklyPace.adjustments.contractBoost + ' contract boost active' : '')
       );
     }
     return;
@@ -2169,4 +2366,7 @@ module.exports = {
   popTVSignal: popTVSignal,
   checkSundayFutures: checkSundayFutures,
   getSundayBias: getSundayBias,
+  getWeeklyPace: function() { return weeklyPace; },
+  recordDailyResult: recordDailyResult,
+  recalcPace: recalcPace,
 };
