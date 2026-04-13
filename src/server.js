@@ -362,9 +362,12 @@ app.get('/ts-auth', function(req, res) {
 app.get('/ts-callback', async function(req, res) {
   if (!ts) return res.send('<h2>TradeStation module not loaded</h2>');
   var code = req.query.code;
+  var overrideRedirect = req.query.redirect_uri || null;
   if (!code) return res.send('<h2>Error: No code received</h2>');
   try {
-    var data = await ts.exchangeCode(code);
+    var data = overrideRedirect
+      ? await ts.exchangeCodeWithRedirect(code, overrideRedirect)
+      : await ts.exchangeCode(code);
     if (data.refresh_token) {
       ts.setRefreshToken(data.refresh_token);
       res.send('<h2>TradeStation Connected!</h2><p>Add this as TS_REFRESH_TOKEN in Railway:</p><textarea rows=4 cols=80 onclick=this.select()>' + data.refresh_token + '</textarea>');

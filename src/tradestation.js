@@ -126,4 +126,19 @@ function setRefreshToken(token) {
   console.log('[TS] Refresh token set in memory');
 }
 
-module.exports = { getLoginUrl: getLoginUrl, exchangeCode: exchangeCode, getAccessToken: getAccessToken, getPrice: getPrice, setRefreshToken: setRefreshToken };
+async function exchangeCodeWithRedirect(code, redirect) {
+  var res = await fetch(TS_AUTH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type:    'authorization_code',
+      client_id:     clientId(),
+      client_secret: clientSecret(),
+      code:          code,
+      redirect_uri:  redirect,
+    }),
+  });
+  return await res.json();
+}
+
+module.exports = { getLoginUrl: getLoginUrl, exchangeCode: exchangeCode, exchangeCodeWithRedirect: exchangeCodeWithRedirect, getAccessToken: getAccessToken, getPrice: getPrice, setRefreshToken: setRefreshToken };
