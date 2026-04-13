@@ -81,7 +81,7 @@ var BRAIN_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
 // -- WATCHLISTS (priority order) ------------------------------------
 var CORE_WATCHLIST = ['SPY', 'QQQ', 'IWM']; // Casey method -- indices first
 var FLOW_WATCHLIST = ['NVDA', 'AMZN', 'META', 'TSLA', 'AAPL', 'INTC', 'MRVL', 'AMD'];
-var JSMITH_WATCHLIST = ['COIN', 'U', 'ABNB', 'UBER', 'BIDU']; // JSmith Apr 12 -- hammers + shooters
+var JSMITH_WATCHLIST = ['COIN', 'U', 'ABNB', 'UBER', 'BIDU', 'PPG', 'CHWY', 'HCA']; // JSmith Apr 12-14
 var CATALYST_WATCHLIST = ['MCD', 'FAST']; // Market brief Apr 14
 var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST).concat(CATALYST_WATCHLIST);
 
@@ -156,6 +156,82 @@ var weeklyPace = {
 
 var PACE_FILE = '/tmp/weekly_pace.json';
 var COOLDOWN_FILE = '/tmp/ticker_cooldowns.json';
+
+// ===================================================================
+// QUEUED TRADES — Pre-loaded setups from JohnJSmith / Discord picks
+// Brain monitors trigger prices and auto-executes when conditions hit.
+// Persisted to /tmp/queued_trades.json so Railway redeploys don't lose them.
+// ===================================================================
+var QUEUED_FILE = '/tmp/queued_trades.json';
+var queuedTrades = [];
+
+function loadQueuedTrades() {
+  try {
+    var fs = require('fs');
+    if (fs.existsSync(QUEUED_FILE)) {
+      var data = JSON.parse(fs.readFileSync(QUEUED_FILE, 'utf8'));
+      // Only load trades for today or future dates
+      var today = new Date().toISOString().slice(0, 10);
+      queuedTrades = (data || []).filter(function(t) {
+        return t.tradeDate >= today && t.status === 'PENDING';
+      });
+      if (queuedTrades.length > 0) {
+        logBrain('QUEUED TRADES LOADED: ' + queuedTrades.length + ' pending');
+        queuedTrades.forEach(function(t) {
+          logBrain('  → ' + t.ticker + ' ' + t.direction + ' | trigger $' + t.triggerPrice + ' | ' + t.contractSymbol);
+        });
+      }
+    }
+  } catch(e) { console.log('[QUEUE] Load error:', e.message); }
+}
+
+function saveQueuedTrades() {
+  try {
+    var fs = require('fs');
+    fs.writeFileSync(QUEUED_FILE, JSON.stringify(queuedTrades, null, 2));
+  } catch(e) { console.error('[QUEUE] Save error:', e.message); }
+}
+
+function addQueuedTrade(trade) {
+  var qt = {
+    id: 'QT_' + Date.now(),
+    ticker: (trade.ticker || '').toUpperCase(),
+    direction: (trade.direction || 'CALLS').toUpperCase(),
+    triggerPrice: parseFloat(trade.triggerPrice),     // stock price that triggers entry
+    contractSymbol: trade.contractSymbol || null,      // e.g. 'PPG 260501C110'
+    strike: parseFloat(trade.strike || 0),
+    expiration: trade.expiration || null,               // e.g. '05-01-2026'
+    contractType: (trade.contractType || 'Call'),
+    maxEntryPrice: parseFloat(trade.maxEntryPrice || 0), // max price to pay for contract (0 = market)
+    stopPct: parseFloat(trade.stopPct || -25) / 100,   // -25% default
+    targets: trade.targets || [0.25, 0.50, 1.00],      // +25%, +50%, +100%
+    contracts: parseInt(trade.contracts || 2),           // number of contracts
+    management: trade.management || 'JSMITH',           // JSMITH = 80% off at 20%, leave runners
+    tradeDate: trade.tradeDate || new Date().toISOString().slice(0, 10),
+    source: trade.source || 'JSMITH',
+    status: 'PENDING',                                  // PENDING, TRIGGERED, FILLED, EXPIRED, CANCELLED
+    note: trade.note || '',
+    createdAt: new Date().toISOString(),
+  };
+  queuedTrades.push(qt);
+  saveQueuedTrades();
+  logBrain('QUEUED TRADE ADDED: ' + qt.ticker + ' ' + qt.direction + ' | trigger $' + qt.triggerPrice + ' | ' + qt.contractSymbol + ' | ' + qt.source);
+  return qt;
+}
+
+function cancelQueuedTrade(id) {
+  for (var i = 0; i < queuedTrades.length; i++) {
+    if (queuedTrades[i].id === id) {
+      queuedTrades[i].status = 'CANCELLED';
+      saveQueuedTrades();
+      logBrain('QUEUED TRADE CANCELLED: ' + queuedTrades[i].ticker);
+      return true;
+    }
+  }
+  return false;
+}
+
+loadQueuedTrades();
 
 function saveCooldowns() {
   try { require('fs').writeFileSync(COOLDOWN_FILE, JSON.stringify(tickerCooldowns)); } catch(e) {}
@@ -2042,6 +2118,9 @@ function getBrainStatus() {
       dailyResults: weeklyPace.dailyResults,
       adjustments: weeklyPace.adjustments,
     },
+    queuedTrades: queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; }).map(function(qt) {
+      return { id: qt.id, ticker: qt.ticker, direction: qt.direction, trigger: qt.triggerPrice, contract: qt.contractSymbol, source: qt.source, status: qt.status };
+    }),
   };
 }
 
@@ -2399,6 +2478,177 @@ async function runBrainCycle() {
         transitionTo('WATCHING', 'TV signal rejected');
       }
       return;
+    }
+
+    // ---- CHECK QUEUED TRADES (JohnJSmith / Discord picks) ----
+    // These are pre-loaded setups with specific trigger prices.
+    // When stock hits trigger, we enter the exact contract specified.
+    var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
+    if (pendingQueued.length > 0 && tradesOpened < maxTrades) {
+      try {
+        var ts3 = require('./tradestation');
+        var qtToken = await ts3.getAccessToken();
+        if (qtToken) {
+          // Batch quote all queued tickers
+          var qtSymbols = pendingQueued.map(function(qt) { return qt.ticker; }).join(',');
+          var qtRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + qtSymbols, {
+            headers: { 'Authorization': 'Bearer ' + qtToken },
+          });
+          if (qtRes.ok) {
+            var qtData = await qtRes.json();
+            var qtQuotes = qtData.Quotes || qtData.quotes || [];
+            if (!Array.isArray(qtQuotes)) qtQuotes = [qtQuotes];
+
+            for (var qi = 0; qi < pendingQueued.length; qi++) {
+              var qt = pendingQueued[qi];
+              if (tradesOpened >= maxTrades) break;
+
+              // Already in this ticker?
+              var alreadyInQt = activePositions.some(function(p) { return p.ticker === qt.ticker; });
+              if (alreadyInQt) continue;
+
+              // Cooldown check
+              if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
+
+              // Find the quote for this ticker
+              var qtQuote = null;
+              for (var qj = 0; qj < qtQuotes.length; qj++) {
+                if ((qtQuotes[qj].Symbol || '').toUpperCase() === qt.ticker) {
+                  qtQuote = qtQuotes[qj]; break;
+                }
+              }
+              if (!qtQuote) continue;
+
+              var qtLast = parseFloat(qtQuote.Last || qtQuote.last || 0);
+              if (qtLast <= 0) continue;
+
+              // CHECK TRIGGER: stock price >= trigger price (for calls) or <= trigger price (for puts)
+              var triggered = false;
+              if (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) triggered = true;
+              if (qt.direction === 'PUTS' && qtLast <= qt.triggerPrice) triggered = true;
+
+              if (triggered) {
+                logBrain('QUEUED TRADE TRIGGERED! ' + qt.ticker + ' @ $' + qtLast.toFixed(2) +
+                  ' (trigger $' + qt.triggerPrice + ') | ' + qt.contractSymbol + ' | Source: ' + qt.source);
+
+                qt.status = 'TRIGGERED';
+                saveQueuedTrades();
+
+                // Execute the trade with the specific contract
+                if (BYPASS_MODE && orderExecutor) {
+                  try {
+                    // Get option quote for the specific contract
+                    var optRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(qt.contractSymbol), {
+                      headers: { 'Authorization': 'Bearer ' + qtToken },
+                    });
+                    var optPrice = 0;
+                    if (optRes.ok) {
+                      var optData = await optRes.json();
+                      var optQ = (optData.Quotes || optData.quotes || [])[0] || {};
+                      var optAsk = parseFloat(optQ.Ask || optQ.ask || 0);
+                      var optBid = parseFloat(optQ.Bid || optQ.bid || 0);
+                      var optLast = parseFloat(optQ.Last || optQ.last || 0);
+                      optPrice = optAsk > 0 ? optAsk : (optLast > 0 ? optLast : ((optBid + optAsk) / 2));
+                    }
+
+                    if (optPrice <= 0) {
+                      logBrain('QUEUED TRADE SKIP: Could not get option price for ' + qt.contractSymbol);
+                      qt.status = 'PENDING'; // retry next cycle
+                      saveQueuedTrades();
+                      continue;
+                    }
+
+                    // Check max entry price if set
+                    if (qt.maxEntryPrice > 0 && optPrice > qt.maxEntryPrice) {
+                      logBrain('QUEUED TRADE SKIP: ' + qt.contractSymbol + ' ask $' + optPrice.toFixed(2) + ' > max $' + qt.maxEntryPrice.toFixed(2));
+                      qt.status = 'PENDING';
+                      saveQueuedTrades();
+                      continue;
+                    }
+
+                    // Calculate stop and target based on contract price
+                    var qtStop = parseFloat((optPrice * (1 + qt.stopPct)).toFixed(2)); // -25% = 0.75x
+                    var qtT1 = parseFloat((optPrice * (1 + qt.targets[0])).toFixed(2)); // +25%
+                    var qtT2 = qt.targets.length > 1 ? parseFloat((optPrice * (1 + qt.targets[1])).toFixed(2)) : null; // +50%
+
+                    logBrain('QUEUED EXECUTING: ' + qt.contractSymbol + ' x' + qt.contracts +
+                      ' @ $' + optPrice.toFixed(2) + ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
+
+                    var qtExec = await orderExecutor.placeOrder({
+                      symbol: qt.contractSymbol,
+                      qty: qt.contracts,
+                      action: 'BuyToOpen',
+                      type: 'Market',
+                      duration: 'Day',
+                    });
+
+                    if (qtExec && qtExec.orderId) {
+                      // Confirm the order
+                      try { await orderExecutor.confirmOrder(qtExec.orderId); } catch(ce) {}
+
+                      qt.status = 'FILLED';
+                      saveQueuedTrades();
+
+                      activePositions.push({
+                        ticker: qt.ticker,
+                        type: qt.direction === 'CALLS' ? 'call' : 'put',
+                        direction: qt.direction === 'CALLS' ? 'BULLISH' : 'BEARISH',
+                        contracts: qt.contracts,
+                        entry: optPrice,
+                        stop: qtStop,
+                        contractSymbol: qt.contractSymbol,
+                        orderId: qtExec.orderId,
+                        trim1Target: qtT1,
+                        trim2Target: qtT2,
+                        trim1Done: false, trim2Done: false, trailStop: null,
+                        openTime: new Date().toISOString(),
+                        currentPrice: optPrice,
+                        strategy: 'QUEUED_' + qt.source,
+                        liveOrder: true,
+                        management: qt.management,
+                      });
+                      tradesOpened++;
+                      transitionTo('POSITION_OPEN', 'QUEUED: ' + qt.ticker + ' ' + qt.direction);
+
+                      await postToDiscord(
+                        'QUEUED TRADE EXECUTED\n' +
+                        '================================\n' +
+                        'Source: ' + qt.source + '\n' +
+                        'Ticker: ' + qt.ticker + ' ' + qt.direction + '\n' +
+                        'Contract: ' + qt.contractSymbol + ' x' + qt.contracts + '\n' +
+                        'Entry: $' + optPrice.toFixed(2) + '\n' +
+                        'Stop: $' + qtStop.toFixed(2) + ' (' + (qt.stopPct * 100).toFixed(0) + '%)\n' +
+                        'T1: $' + qtT1.toFixed(2) + ' (+' + (qt.targets[0] * 100).toFixed(0) + '%)\n' +
+                        'Trigger: Stock @ $' + qtLast.toFixed(2) + ' (level: $' + qt.triggerPrice + ')'
+                      );
+
+                      await postToGoMode(
+                        '**QUEUED TRADE FIRED** ' + qt.ticker + ' ' + qt.direction + '\n' +
+                        qt.contractSymbol + ' x' + qt.contracts + ' @ $' + optPrice.toFixed(2) + '\n' +
+                        'Source: ' + qt.source + ' | Stop: $' + qtStop.toFixed(2),
+                        '\uD83D\uDFE2' // green circle
+                      );
+
+                      logBrain('QUEUED TRADE FILLED: ' + qt.ticker + ' ' + qt.contractSymbol + ' x' + qt.contracts +
+                        ' @ $' + optPrice.toFixed(2) + ' | OrderID: ' + qtExec.orderId);
+                    } else {
+                      logBrain('QUEUED TRADE ORDER FAILED: ' + qt.ticker + ' -- ' + (qtExec ? qtExec.reason : 'no result'));
+                      qt.status = 'PENDING'; // retry
+                      saveQueuedTrades();
+                    }
+                  } catch(qtErr) {
+                    logBrain('QUEUED TRADE ERROR: ' + qt.ticker + ' -- ' + qtErr.message);
+                    qt.status = 'PENDING';
+                    saveQueuedTrades();
+                  }
+                }
+              }
+            }
+          }
+        }
+      } catch(qtScanErr) {
+        logBrain('QUEUED SCAN ERROR: ' + qtScanErr.message);
+      }
     }
 
     // Try current strategy
@@ -3127,4 +3377,7 @@ module.exports = {
   getPendingApprovals: getPendingApprovals,
   getExecutionMode: function() { return EXECUTION_MODE; },
   setCooldown: function(ticker) { tickerCooldowns[ticker] = Date.now(); saveCooldowns(); logBrain('COOLDOWN SET: ' + ticker + ' (30 min)'); },
+  addQueuedTrade: addQueuedTrade,
+  cancelQueuedTrade: cancelQueuedTrade,
+  getQueuedTrades: function() { return queuedTrades; },
 };

@@ -1392,6 +1392,34 @@ app.post('/api/brain/cooldown', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// QUEUED TRADES — Pre-load JohnJSmith / Discord picks for auto-execution
+app.post('/api/brain/queue', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var trade = req.body;
+    if (!trade.ticker || !trade.triggerPrice || !trade.contractSymbol) {
+      return res.status(400).json({ error: 'Need ticker, triggerPrice, and contractSymbol' });
+    }
+    var qt = brainEngine.addQueuedTrade(trade);
+    res.json({ status: 'OK', queued: qt });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/brain/queue', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    res.json({ status: 'OK', queuedTrades: brainEngine.getQueuedTrades() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.delete('/api/brain/queue/:id', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var cancelled = brainEngine.cancelQueuedTrade(req.params.id);
+    res.json({ status: cancelled ? 'OK' : 'NOT_FOUND', id: req.params.id });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
