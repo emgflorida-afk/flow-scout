@@ -2566,25 +2566,33 @@ async function runBrainCycle() {
                       continue;
                     }
 
-                    // Calculate stop and target based on contract price
-                    var qtStop = parseFloat((optPrice * (1 + qt.stopPct)).toFixed(2)); // -25% = 0.75x
-                    var qtT1 = parseFloat((optPrice * (1 + qt.targets[0])).toFixed(2)); // +25%
-                    var qtT2 = qt.targets.length > 1 ? parseFloat((optPrice * (1 + qt.targets[1])).toFixed(2)) : null; // +50%
+                    // Use LIMIT at ASK price — instant fill like market but capped
+                    // Avoids terrible fills on wide-spread options
+                    // Add $0.05 cushion above ask for fast-moving entries
+                    var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
+
+                    // Calculate stop and target based on limit price (what we'll actually pay)
+                    var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2)); // -25% = 0.75x
+                    var qtT1 = parseFloat((limitPrice * (1 + qt.targets[0])).toFixed(2)); // +25%
+                    var qtT2 = qt.targets.length > 1 ? parseFloat((limitPrice * (1 + qt.targets[1])).toFixed(2)) : null; // +50%
 
                     logBrain('QUEUED EXECUTING: ' + qt.contractSymbol + ' x' + qt.contracts +
-                      ' @ $' + optPrice.toFixed(2) + ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
+                      ' @ LIMIT $' + limitPrice.toFixed(2) + ' (ask $' + optPrice.toFixed(2) + ')' +
+                      ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
 
                     var qtExec = await orderExecutor.placeOrder({
+                      account: LIVE_ACCOUNT,
                       symbol: qt.contractSymbol,
+                      action: 'BUYTOOPEN',
                       qty: qt.contracts,
-                      action: 'BuyToOpen',
-                      type: 'Market',
-                      duration: 'Day',
+                      limit: limitPrice,
+                      stop: qtStop,
+                      t1: qtT1,
+                      duration: 'DAY',
+                      note: 'QUEUED ' + qt.source + ': ' + qt.ticker,
                     });
 
                     if (qtExec && qtExec.orderId) {
-                      // Confirm the order
-                      try { await orderExecutor.confirmOrder(qtExec.orderId); } catch(ce) {}
 
                       qt.status = 'FILLED';
                       saveQueuedTrades();
@@ -2594,7 +2602,7 @@ async function runBrainCycle() {
                         type: qt.direction === 'CALLS' ? 'call' : 'put',
                         direction: qt.direction === 'CALLS' ? 'BULLISH' : 'BEARISH',
                         contracts: qt.contracts,
-                        entry: optPrice,
+                        entry: limitPrice,
                         stop: qtStop,
                         contractSymbol: qt.contractSymbol,
                         orderId: qtExec.orderId,
@@ -2602,7 +2610,7 @@ async function runBrainCycle() {
                         trim2Target: qtT2,
                         trim1Done: false, trim2Done: false, trailStop: null,
                         openTime: new Date().toISOString(),
-                        currentPrice: optPrice,
+                        currentPrice: limitPrice,
                         strategy: 'QUEUED_' + qt.source,
                         liveOrder: true,
                         management: qt.management,
