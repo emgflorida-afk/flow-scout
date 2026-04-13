@@ -25,6 +25,8 @@ var SCAN_TICKERS = [
   'XOM', 'CVX', 'OXY', 'XLE',
   // JSmith Apr 12 -- daily hammers (CALLS) + weekly shooters (PUTS)
   'U', 'ABNB', 'UBER', 'BIDU',
+  // Market brief Apr 14 -- earnings + catalysts
+  'MCD', 'FAST',
 ];
 
 // Pre-market flow threshold -- lower to catch setups early

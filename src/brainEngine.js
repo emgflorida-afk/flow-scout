@@ -82,7 +82,8 @@ var BRAIN_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
 var CORE_WATCHLIST = ['SPY', 'QQQ', 'IWM']; // Casey method -- indices first
 var FLOW_WATCHLIST = ['NVDA', 'AMZN', 'META', 'TSLA', 'AAPL', 'INTC', 'MRVL', 'AMD'];
 var JSMITH_WATCHLIST = ['COIN', 'U', 'ABNB', 'UBER', 'BIDU']; // JSmith Apr 12 -- hammers + shooters
-var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST);
+var CATALYST_WATCHLIST = ['MCD', 'FAST']; // Market brief Apr 14
+var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST).concat(CATALYST_WATCHLIST);
 
 // -- CORRELATION GROUPS (max 1 position per group, max 2 total) ------
 var CORRELATION_GROUPS = {
