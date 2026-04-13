@@ -127,6 +127,8 @@ var maxDailyLoss = -200;
 var tradesOpened = 0;
 var maxTrades = 2; // DOCTRINE: max 2 trades per day. Was 3 -- FIXED.
 var activePositions = [];
+var tickerCooldowns = {}; // { 'SPY': timestamp } -- don't re-enter within 30 min of closing
+var COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
 var contractSize = 3; // default 3 contracts per trade
 var trimPlan = { first: 0.50, second: 1.00 }; // +50%, +100%
 var strategies = ['AYCE_STRAT', 'SCANNER_BREAKOUT', 'FLOW_CONVICTION', 'SCALP'];
@@ -1296,6 +1298,23 @@ function evaluateEntry(signal) {
     return { approved: false, reason: 'Already have position in ' + ticker };
   }
 
+  // Check: ticker cooldown -- don't re-enter a ticker within 30 min of closing it
+  if (tickerCooldowns[ticker] && (Date.now() - tickerCooldowns[ticker]) < COOLDOWN_MS) {
+    var cooldownRemain = Math.ceil((COOLDOWN_MS - (Date.now() - tickerCooldowns[ticker])) / 60000);
+    logBrain('ENTRY REJECTED: ' + ticker + ' on cooldown -- closed ' + cooldownRemain + ' min ago');
+    return { approved: false, reason: ticker + ' on cooldown (' + cooldownRemain + ' min remaining)' };
+  }
+
+  // Check: 1DTE caution -- require higher confluence for 1DTE entries
+  // 1DTE = theta eats you alive, need high conviction
+  if (signal.dte !== undefined && signal.dte <= 1) {
+    var minScoreFor1DTE = 6; // normally need 4, 1DTE needs 6
+    if (signal.confluenceScore && signal.confluenceScore < minScoreFor1DTE) {
+      logBrain('ENTRY REJECTED: 1DTE requires confluence ' + minScoreFor1DTE + '+ (got ' + signal.confluenceScore + ')');
+      return { approved: false, reason: '1DTE needs higher conviction (' + signal.confluenceScore + '/' + minScoreFor1DTE + ')' };
+    }
+  }
+
   // Check: correlation group limit (max 1 per group, max 2 total)
   var corrCheck = isCorrelationAllowed(ticker);
   if (!corrCheck.allowed) {
@@ -1838,6 +1857,28 @@ function getBrainStatus() {
     strategyIndex: currentStrategy,
     totalStrategies: strategies.length,
     activePositions: activePositions,
+    tickerCooldowns: Object.keys(tickerCooldowns).reduce(function(acc, k) {
+      var remaining = Math.max(0, Math.ceil((COOLDOWN_MS - (Date.now() - tickerCooldowns[k])) / 60000));
+      if (remaining > 0) acc[k] = remaining + ' min';
+      return acc;
+    }, {}),
+    portfolioRisk: (function() {
+      var calls = 0, puts = 0, tickers = [];
+      activePositions.forEach(function(p) {
+        if (p.type === 'call') calls++;
+        else if (p.type === 'put') puts++;
+        tickers.push(p.ticker);
+      });
+      return {
+        longCalls: calls,
+        longPuts: puts,
+        netDirection: calls > 0 && puts === 0 ? 'ALL_BULL' : puts > 0 && calls === 0 ? 'ALL_BEAR' : calls > 0 && puts > 0 ? 'HEDGED' : 'FLAT',
+        hedged: calls > 0 && puts > 0,
+        tickers: tickers,
+        warning: (calls >= 2 && puts === 0) ? 'UNHEDGED: ' + calls + ' long calls, 0 puts' :
+                 (puts >= 2 && calls === 0) ? 'UNHEDGED: ' + puts + ' long puts, 0 calls' : null,
+      };
+    })(),
     exitMode: exitMode,
     contractSize: contractSize,
     cycleCount: cycleCount,
@@ -1884,6 +1925,7 @@ function resetDaily() {
   dailyPL = 0;
   tradesOpened = 0;
   activePositions = [];
+  tickerCooldowns = {};
   currentStrategy = 0;
   cycleCount = 0;
   lastCycleTime = null;
@@ -2520,8 +2562,9 @@ async function runBrainCycle() {
                   'P&L: $' + reconPL.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
                 );
 
+                tickerCooldowns[reconPos.ticker] = Date.now();
                 activePositions.splice(rc, 1);
-                logBrain('RECONCILE: Removed ' + reconPos.ticker + ' from active positions | Daily P&L: $' + dailyPL.toFixed(2));
+                logBrain('RECONCILE: Removed ' + reconPos.ticker + ' from active positions | Cooldown set | Daily P&L: $' + dailyPL.toFixed(2));
               }
             }
           }
@@ -2665,6 +2708,7 @@ async function runBrainCycle() {
 
         // If all contracts sold, remove position
         if (pos.contracts <= 0) {
+          tickerCooldowns[pos.ticker] = Date.now();
           activePositions.splice(p, 1);
           p--;
           if (activePositions.length === 0) {
@@ -2734,6 +2778,7 @@ async function runBrainCycle() {
           '\uD83D\uDD34'
         );
 
+        tickerCooldowns[pos.ticker] = Date.now();
         activePositions.splice(p, 1);
         p--;
 
@@ -2778,6 +2823,7 @@ async function runBrainCycle() {
           'TRAIL STOPPED: ' + trailPos.ticker + '\n' +
           'P&L: $' + trailLoss.toFixed(2) + ' | Daily: $' + dailyPL.toFixed(2)
         );
+        tickerCooldowns[trailPos.ticker] = Date.now();
         activePositions.splice(t, 1);
         t--;
       }
