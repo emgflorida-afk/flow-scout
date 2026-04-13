@@ -34,6 +34,12 @@ const MODES = {
 const MIN_PREMIUM = 0.30;
 const MAX_PREMIUM = 2.40;
 
+// HIGH-PRICED STOCKS: ATM options on $100+ stocks exceed $2.40.
+// Allow higher premiums but CAP at 1 contract to keep risk defined.
+// e.g. NVDA $187 -> ATM call ~$6-8 -> 1 contract = $600-800 risk (within 2% of $19K)
+var HIGH_PRICE_TICKERS = new Set(['NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'NFLX', 'AVGO', 'MSFT']);
+var HIGH_PRICE_MAX_PREMIUM = 5.00; // 1 contract × $5 = $500 risk max
+
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM',
   'NVDA','TSLA','META','GOOGL','AMZN','MSFT','AMD','AAPL','MRVL',
@@ -441,7 +447,12 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   tradeType=(tradeType||'SWING').toUpperCase();
   signalMeta=signalMeta||{};
   var mode=tradeType.includes('DAY')?'DAY':'SWING';
-  var config=MODES[mode];
+  var config=Object.assign({}, MODES[mode]); // copy so we can adjust per-ticker
+  // HIGH-PRICED STOCKS: raise premium cap, force 1 contract
+  if (HIGH_PRICE_TICKERS.has(ticker.toUpperCase())) {
+    config.maxPremium = HIGH_PRICE_MAX_PREMIUM;
+    console.log('[RESOLVE] High-price ticker '+ticker+' -- maxPremium raised to $'+HIGH_PRICE_MAX_PREMIUM);
+  }
   console.log('[RESOLVE] '+ticker+' '+type+' '+mode);
 
   var token=await getTSToken();
@@ -519,6 +530,8 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   var optionStop=parseFloat((best.mid*(1-optionStopPct)).toFixed(2));
   var t1Price=parseFloat((best.mid*(1+t1Pct)).toFixed(2));
   var qty=best.mid<=1.20?2:1;
+  // HIGH-PRICED: force 1 contract when premium > $2.40 to cap risk
+  if (best.mid > 2.40) qty = 1;
   var timeCtx=getTimeContext();
 
   console.log('[OPRA] '+ticker+' '+best.symbol+' $'+best.strike+' mid:$'+best.mid+' '+dte+'DTE entry:'+entryMode+' T1:+'+(t1Pct*100).toFixed(0)+'% source:'+best.source);
