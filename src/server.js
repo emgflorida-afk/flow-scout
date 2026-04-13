@@ -1368,6 +1368,19 @@ app.post('/api/bias/override', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Update weekly pace tracker -- feed in daily P&L after redeploys wipe memory
+app.post('/api/brain/pace', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var date = req.body.date; // 'YYYY-MM-DD'
+    var pnl = parseFloat(req.body.pnl || 0);
+    if (!date || isNaN(pnl)) return res.status(400).json({ error: 'Need date (YYYY-MM-DD) and pnl (number)' });
+    brainEngine.recordDailyResult(date, pnl);
+    var status = brainEngine.getBrainStatus();
+    res.json({ status: 'OK', recorded: { date: date, pnl: pnl }, weeklyPace: status.brain.weeklyPace });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
