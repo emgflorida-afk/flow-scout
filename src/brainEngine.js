@@ -2102,24 +2102,8 @@ async function runBrainCycle() {
 
   // ---- STATE: WATCHING (9:30-11:30 AM window) ----
   if (STATE === 'WATCHING') {
-    // Only scan for new entries during AM window or POWER_HOUR
-    // EXCEPTION: AYCE 7HR strategy fires AFTER 11AM (liquidity sweep window)
-    if (et.total > amEnd && et.total < powerHourStart) {
-      if (strategies[currentStrategy] === 'AYCE_STRAT') {
-        // 7HR scans during dead zone -- this IS the strategy's window
-        if (cycleCount % 30 === 0) {
-          logBrain('WATCHING: Dead zone but AYCE 7HR active -- scanning for liquidity sweeps');
-        }
-      } else {
-        // Dead zone: 11:30 AM - 2:30 PM -- just monitor positions
-        if (cycleCount % 30 === 0) {
-          logBrain('WATCHING: In dead zone (11:30AM-2:30PM) -- monitoring only');
-        }
-        return;
-      }
-    }
-
-    // CHECK TRADINGVIEW SIGNALS FIRST (highest priority — comes from your chart)
+    // CHECK TRADINGVIEW SIGNALS FIRST — ALWAYS, even during dead zone
+    // These are priority signals from your chart/webhooks — never block them
     var tvSig = popTVSignal();
     if (tvSig) {
       var tvDirection = tvSig.direction === 'CALLS' ? 'BULLISH' : 'BEARISH';
