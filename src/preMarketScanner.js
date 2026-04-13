@@ -119,8 +119,23 @@ function getCandleType(candle, prev) {
   return 'unknown';
 }
 
+// -- BARS CACHE: prevent hammering TS API (500+ calls/min kills rate limit) --
+// Cache key = symbol:unit:interval:barsback, TTL = 60 seconds
+var _barsCache = {};
+var _barsCacheTTL = 60000; // 60 seconds
+
+function _barsCacheKey(symbol, unit, interval, barsback) {
+  return symbol + ':' + unit + ':' + interval + ':' + (barsback || 10);
+}
+
 // -- GET BARS FROM TRADESTATION API -----------------------------
 async function getBars(symbol, unit, interval, barsback) {
+  var cacheKey = _barsCacheKey(symbol, unit, interval, barsback);
+  var cached = _barsCache[cacheKey];
+  if (cached && (Date.now() - cached.time) < _barsCacheTTL) {
+    return cached.bars;
+  }
+
   try {
     var ts    = require('./tradestation');
     var token = await ts.getAccessToken();
@@ -130,10 +145,12 @@ async function getBars(symbol, unit, interval, barsback) {
       + '&unit=' + unit
       + '&barsback=' + (barsback || 10)
       + '&sessiontemplate=USEQPreAndPost';
-    var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    var res  = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
     if (!res.ok) return [];
     var data = await res.json();
-    return (data && data.Bars) ? data.Bars : [];
+    var bars = (data && data.Bars) ? data.Bars : [];
+    _barsCache[cacheKey] = { bars: bars, time: Date.now() };
+    return bars;
   } catch(e) { console.error('[SCANNER] getBars error:', e.message); return []; }
 }
 

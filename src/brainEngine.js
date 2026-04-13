@@ -1949,9 +1949,20 @@ function getExitMode() { return exitMode; }
 // RUN BRAIN CYCLE -- Called every 60 seconds during market hours
 // The main loop: checks state, evaluates conditions, transitions
 // ===================================================================
+var _cycleRunning = false;
+
 async function runBrainCycle() {
   // Guard: must be active
   if (!brainActive) return;
+
+  // Guard: prevent overlapping cycles (AYCE scans 37 tickers = can exceed 60s)
+  if (_cycleRunning) {
+    console.log('[BRAIN] Cycle still running -- skipping this tick');
+    return;
+  }
+  _cycleRunning = true;
+
+  try {
 
   cycleCount++;
   lastCycleTime = formatET();
@@ -2561,6 +2572,10 @@ async function runBrainCycle() {
       );
     }
     return;
+  }
+
+  } finally {
+    _cycleRunning = false;
   }
 }
 
