@@ -1907,6 +1907,46 @@ function setBrainActive(active) {
   brainActive = !!active;
   logBrain('Brain ' + (brainActive ? 'ACTIVATED' : 'DEACTIVATED'));
   if (brainActive) {
+    // HEALTH CHECK: verify option resolution works BEFORE accepting trades
+    (async function() {
+      try {
+        var ts = require('./tradestation');
+        var token = await ts.getAccessToken();
+        if (!token) {
+          logBrain('HEALTH CHECK FAILED: No TS access token. Re-auth needed.');
+          postToGoMode('**BRAIN HEALTH CHECK FAILED**\nNo TS access token. Visit /ts-auth to re-authenticate.', '\u274C').catch(function(){});
+          return;
+        }
+        var testRes = await fetch('https://api.tradestation.com/v3/marketdata/options/expirations/SPY', {
+          headers: { 'Authorization': 'Bearer ' + token },
+        });
+        if (testRes.status === 403) {
+          logBrain('HEALTH CHECK FAILED: OptionSpreads scope missing (403). Token cannot resolve contracts. RE-AUTH REQUIRED.');
+          postToGoMode(
+            '**BRAIN HEALTH CHECK FAILED**\n' +
+            '```\n' +
+            'ERROR: OptionSpreads scope missing (403)\n' +
+            'The brain CANNOT resolve option contracts.\n' +
+            'Fix: Re-auth at /ts-auth with correct scopes.\n' +
+            'Brain will scan but CANNOT execute until fixed.\n' +
+            '```',
+            '\u274C' // red X
+          ).catch(function(){});
+          postToDiscord('CRITICAL: OptionSpreads scope missing. Brain cannot execute trades. Re-auth needed.').catch(function(){});
+        } else if (testRes.ok) {
+          var testData = await testRes.json();
+          var expCount = (testData.Expirations || []).length;
+          logBrain('HEALTH CHECK PASSED: SPY has ' + expCount + ' expirations. Option resolution working.');
+          postToGoMode(
+            '**HEALTH CHECK PASSED** -- Option resolution verified (' + expCount + ' SPY expirations)',
+            '\u2705' // green check
+          ).catch(function(){});
+        }
+      } catch(e) {
+        logBrain('HEALTH CHECK ERROR: ' + e.message);
+      }
+    })();
+
     postToDiscord('Brain Engine ACTIVATED -- monitoring for signals\nState: ' + STATE + '\nTarget: $' + dailyTarget)
       .catch(function(e) { console.error('[BRAIN] Activation post error:', e.message); });
     // GO-MODE: Morning wake-up
