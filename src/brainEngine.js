@@ -2369,6 +2369,183 @@ async function runBrainCycle() {
     }
   }
 
+  // ---- QUEUED TRADES: Morning window ONLY (9:30-11:30 AM) ----
+  // JSmith/Discord picks are MORNING MOMENTUM plays. The trigger catches
+  // breakouts with volume. After 11:30 AM the setup is dead -- volume dries up,
+  // momentum fades, and you get chopped. DO NOT enter queued trades in dead zone
+  // or power hour. If it didn't trigger by 11:30, mark it EXPIRED and move on.
+  var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
+  var queuedWindowEnd = 11 * 60 + 30; // 11:30 AM ET
+  if (pendingQueued.length > 0 && et.total >= 570 && et.total < queuedWindowEnd && tradesOpened < maxTrades) {
+    try {
+      var ts3 = require('./tradestation');
+      var qtToken = await ts3.getAccessToken();
+      if (qtToken) {
+        var qtSymbols = pendingQueued.map(function(qt) { return qt.ticker; }).join(',');
+        var qtRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + qtSymbols, {
+          headers: { 'Authorization': 'Bearer ' + qtToken },
+        });
+        if (qtRes.ok) {
+          var qtData = await qtRes.json();
+          var qtQuotes = qtData.Quotes || qtData.quotes || [];
+          if (!Array.isArray(qtQuotes)) qtQuotes = [qtQuotes];
+
+          for (var qi = 0; qi < pendingQueued.length; qi++) {
+            var qt = pendingQueued[qi];
+            if (tradesOpened >= maxTrades) break;
+
+            var alreadyInQt = activePositions.some(function(p) { return p.ticker === qt.ticker; });
+            if (alreadyInQt) continue;
+            if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
+
+            var qtQuote = null;
+            for (var qj = 0; qj < qtQuotes.length; qj++) {
+              if ((qtQuotes[qj].Symbol || '').toUpperCase() === qt.ticker) { qtQuote = qtQuotes[qj]; break; }
+            }
+            if (!qtQuote) continue;
+
+            var qtLast = parseFloat(qtQuote.Last || qtQuote.last || 0);
+            if (qtLast <= 0) continue;
+
+            var triggered = false;
+            if (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) triggered = true;
+            if (qt.direction === 'PUTS' && qtLast <= qt.triggerPrice) triggered = true;
+
+            if (triggered) {
+              logBrain('QUEUED TRADE TRIGGERED! ' + qt.ticker + ' @ $' + qtLast.toFixed(2) +
+                ' (trigger $' + qt.triggerPrice + ') | ' + qt.contractSymbol + ' | Source: ' + qt.source);
+
+              qt.status = 'TRIGGERED';
+              saveQueuedTrades();
+
+              if (BYPASS_MODE && orderExecutor) {
+                try {
+                  var optRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(qt.contractSymbol), {
+                    headers: { 'Authorization': 'Bearer ' + qtToken },
+                  });
+                  var optPrice = 0;
+                  if (optRes.ok) {
+                    var optData = await optRes.json();
+                    var optQ = (optData.Quotes || optData.quotes || [])[0] || {};
+                    var optAsk = parseFloat(optQ.Ask || optQ.ask || 0);
+                    var optBid = parseFloat(optQ.Bid || optQ.bid || 0);
+                    var optLast = parseFloat(optQ.Last || optQ.last || 0);
+                    optPrice = optAsk > 0 ? optAsk : (optLast > 0 ? optLast : ((optBid + optAsk) / 2));
+                  }
+
+                  if (optPrice <= 0) {
+                    logBrain('QUEUED TRADE SKIP: Could not get option price for ' + qt.contractSymbol);
+                    qt.status = 'PENDING';
+                    saveQueuedTrades();
+                    continue;
+                  }
+
+                  if (qt.maxEntryPrice > 0 && optPrice > qt.maxEntryPrice) {
+                    logBrain('QUEUED TRADE SKIP: ' + qt.contractSymbol + ' ask $' + optPrice.toFixed(2) + ' > max $' + qt.maxEntryPrice.toFixed(2));
+                    qt.status = 'PENDING';
+                    saveQueuedTrades();
+                    continue;
+                  }
+
+                  var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
+                  var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+                  var qtT1 = parseFloat((limitPrice * (1 + qt.targets[0])).toFixed(2));
+                  var qtT2 = qt.targets.length > 1 ? parseFloat((limitPrice * (1 + qt.targets[1])).toFixed(2)) : null;
+
+                  logBrain('QUEUED EXECUTING: ' + qt.contractSymbol + ' x' + qt.contracts +
+                    ' @ LIMIT $' + limitPrice.toFixed(2) + ' (ask $' + optPrice.toFixed(2) + ')' +
+                    ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
+
+                  var qtExec = await orderExecutor.placeOrder({
+                    account: LIVE_ACCOUNT,
+                    symbol: qt.contractSymbol,
+                    action: 'BUYTOOPEN',
+                    qty: qt.contracts,
+                    limit: limitPrice,
+                    stop: qtStop,
+                    t1: qtT1,
+                    duration: 'DAY',
+                    note: 'QUEUED ' + qt.source + ': ' + qt.ticker,
+                  });
+
+                  if (qtExec && qtExec.orderId) {
+                    qt.status = 'FILLED';
+                    saveQueuedTrades();
+
+                    activePositions.push({
+                      ticker: qt.ticker,
+                      type: qt.direction === 'CALLS' ? 'call' : 'put',
+                      direction: qt.direction === 'CALLS' ? 'BULLISH' : 'BEARISH',
+                      contracts: qt.contracts,
+                      entry: limitPrice,
+                      stop: qtStop,
+                      contractSymbol: qt.contractSymbol,
+                      orderId: qtExec.orderId,
+                      trim1Target: qtT1,
+                      trim2Target: qtT2,
+                      trim1Done: false, trim2Done: false, trailStop: null,
+                      openTime: new Date().toISOString(),
+                      currentPrice: limitPrice,
+                      strategy: 'QUEUED_' + qt.source,
+                      liveOrder: true,
+                      management: qt.management,
+                    });
+                    tradesOpened++;
+
+                    await postToDiscord(
+                      'QUEUED TRADE EXECUTED\n' +
+                      '================================\n' +
+                      'Source: ' + qt.source + '\n' +
+                      'Ticker: ' + qt.ticker + ' ' + qt.direction + '\n' +
+                      'Contract: ' + qt.contractSymbol + ' x' + qt.contracts + '\n' +
+                      'Entry: $' + limitPrice.toFixed(2) + '\n' +
+                      'Stop: $' + qtStop.toFixed(2) + ' (' + (qt.stopPct * 100).toFixed(0) + '%)\n' +
+                      'T1: $' + qtT1.toFixed(2) + ' (+' + (qt.targets[0] * 100).toFixed(0) + '%)\n' +
+                      'Trigger: Stock @ $' + qtLast.toFixed(2) + ' (level: $' + qt.triggerPrice + ')'
+                    );
+
+                    await postToGoMode(
+                      '**QUEUED TRADE FIRED** ' + qt.ticker + ' ' + qt.direction + '\n' +
+                      qt.contractSymbol + ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2) + '\n' +
+                      'Source: ' + qt.source + ' | Stop: $' + qtStop.toFixed(2),
+                      '\uD83D\uDFE2'
+                    );
+
+                    logBrain('QUEUED TRADE FILLED: ' + qt.ticker + ' ' + qt.contractSymbol + ' x' + qt.contracts +
+                      ' @ $' + limitPrice.toFixed(2) + ' | OrderID: ' + qtExec.orderId);
+                  } else {
+                    logBrain('QUEUED TRADE ORDER FAILED: ' + qt.ticker + ' -- ' + (qtExec ? (qtExec.error || qtExec.reason) : 'no result'));
+                    qt.status = 'PENDING';
+                    saveQueuedTrades();
+                  }
+                } catch(qtErr) {
+                  logBrain('QUEUED TRADE ERROR: ' + qt.ticker + ' -- ' + qtErr.message);
+                  qt.status = 'PENDING';
+                  saveQueuedTrades();
+                }
+              }
+            }
+          }
+        }
+      }
+    } catch(qtScanErr) {
+      logBrain('QUEUED SCAN ERROR: ' + qtScanErr.message);
+    }
+  }
+
+  // EXPIRE unfired queued trades after morning window closes
+  if (pendingQueued.length > 0 && et.total >= queuedWindowEnd) {
+    var today = new Date().toISOString().slice(0, 10);
+    for (var qe = 0; qe < pendingQueued.length; qe++) {
+      if (pendingQueued[qe].tradeDate === today && pendingQueued[qe].status === 'PENDING') {
+        pendingQueued[qe].status = 'EXPIRED';
+        logBrain('QUEUED TRADE EXPIRED: ' + pendingQueued[qe].ticker + ' -- trigger $' + pendingQueued[qe].triggerPrice +
+          ' never hit by 11:30 AM. Setup is dead. Moving on.');
+      }
+    }
+    saveQueuedTrades();
+  }
+
   // ---- STATE: WATCHING (9:30-11:30 AM window) ----
   if (STATE === 'WATCHING') {
     // CHECK TRADINGVIEW SIGNALS FIRST — ALWAYS, even during dead zone
@@ -2478,185 +2655,6 @@ async function runBrainCycle() {
         transitionTo('WATCHING', 'TV signal rejected');
       }
       return;
-    }
-
-    // ---- CHECK QUEUED TRADES (JohnJSmith / Discord picks) ----
-    // These are pre-loaded setups with specific trigger prices.
-    // When stock hits trigger, we enter the exact contract specified.
-    var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
-    if (pendingQueued.length > 0 && tradesOpened < maxTrades) {
-      try {
-        var ts3 = require('./tradestation');
-        var qtToken = await ts3.getAccessToken();
-        if (qtToken) {
-          // Batch quote all queued tickers
-          var qtSymbols = pendingQueued.map(function(qt) { return qt.ticker; }).join(',');
-          var qtRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + qtSymbols, {
-            headers: { 'Authorization': 'Bearer ' + qtToken },
-          });
-          if (qtRes.ok) {
-            var qtData = await qtRes.json();
-            var qtQuotes = qtData.Quotes || qtData.quotes || [];
-            if (!Array.isArray(qtQuotes)) qtQuotes = [qtQuotes];
-
-            for (var qi = 0; qi < pendingQueued.length; qi++) {
-              var qt = pendingQueued[qi];
-              if (tradesOpened >= maxTrades) break;
-
-              // Already in this ticker?
-              var alreadyInQt = activePositions.some(function(p) { return p.ticker === qt.ticker; });
-              if (alreadyInQt) continue;
-
-              // Cooldown check
-              if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
-
-              // Find the quote for this ticker
-              var qtQuote = null;
-              for (var qj = 0; qj < qtQuotes.length; qj++) {
-                if ((qtQuotes[qj].Symbol || '').toUpperCase() === qt.ticker) {
-                  qtQuote = qtQuotes[qj]; break;
-                }
-              }
-              if (!qtQuote) continue;
-
-              var qtLast = parseFloat(qtQuote.Last || qtQuote.last || 0);
-              if (qtLast <= 0) continue;
-
-              // CHECK TRIGGER: stock price >= trigger price (for calls) or <= trigger price (for puts)
-              var triggered = false;
-              if (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) triggered = true;
-              if (qt.direction === 'PUTS' && qtLast <= qt.triggerPrice) triggered = true;
-
-              if (triggered) {
-                logBrain('QUEUED TRADE TRIGGERED! ' + qt.ticker + ' @ $' + qtLast.toFixed(2) +
-                  ' (trigger $' + qt.triggerPrice + ') | ' + qt.contractSymbol + ' | Source: ' + qt.source);
-
-                qt.status = 'TRIGGERED';
-                saveQueuedTrades();
-
-                // Execute the trade with the specific contract
-                if (BYPASS_MODE && orderExecutor) {
-                  try {
-                    // Get option quote for the specific contract
-                    var optRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(qt.contractSymbol), {
-                      headers: { 'Authorization': 'Bearer ' + qtToken },
-                    });
-                    var optPrice = 0;
-                    if (optRes.ok) {
-                      var optData = await optRes.json();
-                      var optQ = (optData.Quotes || optData.quotes || [])[0] || {};
-                      var optAsk = parseFloat(optQ.Ask || optQ.ask || 0);
-                      var optBid = parseFloat(optQ.Bid || optQ.bid || 0);
-                      var optLast = parseFloat(optQ.Last || optQ.last || 0);
-                      optPrice = optAsk > 0 ? optAsk : (optLast > 0 ? optLast : ((optBid + optAsk) / 2));
-                    }
-
-                    if (optPrice <= 0) {
-                      logBrain('QUEUED TRADE SKIP: Could not get option price for ' + qt.contractSymbol);
-                      qt.status = 'PENDING'; // retry next cycle
-                      saveQueuedTrades();
-                      continue;
-                    }
-
-                    // Check max entry price if set
-                    if (qt.maxEntryPrice > 0 && optPrice > qt.maxEntryPrice) {
-                      logBrain('QUEUED TRADE SKIP: ' + qt.contractSymbol + ' ask $' + optPrice.toFixed(2) + ' > max $' + qt.maxEntryPrice.toFixed(2));
-                      qt.status = 'PENDING';
-                      saveQueuedTrades();
-                      continue;
-                    }
-
-                    // Use LIMIT at ASK price — instant fill like market but capped
-                    // Avoids terrible fills on wide-spread options
-                    // Add $0.05 cushion above ask for fast-moving entries
-                    var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
-
-                    // Calculate stop and target based on limit price (what we'll actually pay)
-                    var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2)); // -25% = 0.75x
-                    var qtT1 = parseFloat((limitPrice * (1 + qt.targets[0])).toFixed(2)); // +25%
-                    var qtT2 = qt.targets.length > 1 ? parseFloat((limitPrice * (1 + qt.targets[1])).toFixed(2)) : null; // +50%
-
-                    logBrain('QUEUED EXECUTING: ' + qt.contractSymbol + ' x' + qt.contracts +
-                      ' @ LIMIT $' + limitPrice.toFixed(2) + ' (ask $' + optPrice.toFixed(2) + ')' +
-                      ' | Stop $' + qtStop.toFixed(2) + ' | T1 $' + qtT1.toFixed(2));
-
-                    var qtExec = await orderExecutor.placeOrder({
-                      account: LIVE_ACCOUNT,
-                      symbol: qt.contractSymbol,
-                      action: 'BUYTOOPEN',
-                      qty: qt.contracts,
-                      limit: limitPrice,
-                      stop: qtStop,
-                      t1: qtT1,
-                      duration: 'DAY',
-                      note: 'QUEUED ' + qt.source + ': ' + qt.ticker,
-                    });
-
-                    if (qtExec && qtExec.orderId) {
-
-                      qt.status = 'FILLED';
-                      saveQueuedTrades();
-
-                      activePositions.push({
-                        ticker: qt.ticker,
-                        type: qt.direction === 'CALLS' ? 'call' : 'put',
-                        direction: qt.direction === 'CALLS' ? 'BULLISH' : 'BEARISH',
-                        contracts: qt.contracts,
-                        entry: limitPrice,
-                        stop: qtStop,
-                        contractSymbol: qt.contractSymbol,
-                        orderId: qtExec.orderId,
-                        trim1Target: qtT1,
-                        trim2Target: qtT2,
-                        trim1Done: false, trim2Done: false, trailStop: null,
-                        openTime: new Date().toISOString(),
-                        currentPrice: limitPrice,
-                        strategy: 'QUEUED_' + qt.source,
-                        liveOrder: true,
-                        management: qt.management,
-                      });
-                      tradesOpened++;
-                      transitionTo('POSITION_OPEN', 'QUEUED: ' + qt.ticker + ' ' + qt.direction);
-
-                      await postToDiscord(
-                        'QUEUED TRADE EXECUTED\n' +
-                        '================================\n' +
-                        'Source: ' + qt.source + '\n' +
-                        'Ticker: ' + qt.ticker + ' ' + qt.direction + '\n' +
-                        'Contract: ' + qt.contractSymbol + ' x' + qt.contracts + '\n' +
-                        'Entry: $' + optPrice.toFixed(2) + '\n' +
-                        'Stop: $' + qtStop.toFixed(2) + ' (' + (qt.stopPct * 100).toFixed(0) + '%)\n' +
-                        'T1: $' + qtT1.toFixed(2) + ' (+' + (qt.targets[0] * 100).toFixed(0) + '%)\n' +
-                        'Trigger: Stock @ $' + qtLast.toFixed(2) + ' (level: $' + qt.triggerPrice + ')'
-                      );
-
-                      await postToGoMode(
-                        '**QUEUED TRADE FIRED** ' + qt.ticker + ' ' + qt.direction + '\n' +
-                        qt.contractSymbol + ' x' + qt.contracts + ' @ $' + optPrice.toFixed(2) + '\n' +
-                        'Source: ' + qt.source + ' | Stop: $' + qtStop.toFixed(2),
-                        '\uD83D\uDFE2' // green circle
-                      );
-
-                      logBrain('QUEUED TRADE FILLED: ' + qt.ticker + ' ' + qt.contractSymbol + ' x' + qt.contracts +
-                        ' @ $' + optPrice.toFixed(2) + ' | OrderID: ' + qtExec.orderId);
-                    } else {
-                      logBrain('QUEUED TRADE ORDER FAILED: ' + qt.ticker + ' -- ' + (qtExec ? qtExec.reason : 'no result'));
-                      qt.status = 'PENDING'; // retry
-                      saveQueuedTrades();
-                    }
-                  } catch(qtErr) {
-                    logBrain('QUEUED TRADE ERROR: ' + qt.ticker + ' -- ' + qtErr.message);
-                    qt.status = 'PENDING';
-                    saveQueuedTrades();
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch(qtScanErr) {
-        logBrain('QUEUED SCAN ERROR: ' + qtScanErr.message);
-      }
     }
 
     // Try current strategy
