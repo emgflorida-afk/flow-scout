@@ -1376,8 +1376,8 @@ app.post('/api/brain/pace', function(req, res) {
     var pnl = parseFloat(req.body.pnl || 0);
     if (!date || isNaN(pnl)) return res.status(400).json({ error: 'Need date (YYYY-MM-DD) and pnl (number)' });
     brainEngine.recordDailyResult(date, pnl);
-    var status = brainEngine.getBrainStatus();
-    res.json({ status: 'OK', recorded: { date: date, pnl: pnl }, weeklyPace: status.brain.weeklyPace });
+    var pace = brainEngine.getWeeklyPace();
+    res.json({ status: 'OK', recorded: { date: date, pnl: pnl }, weeklyPace: pace });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
