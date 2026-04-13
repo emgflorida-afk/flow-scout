@@ -46,6 +46,61 @@ function get6HRDirection(bars6HR) {
   return 'MIXED';
 }
 
+// -- FTFC (Full Time Frame Continuity) PRE-FILTER ----------------
+// Check monthly/weekly/daily/60m continuity before scanning.
+// If FTFC is strongly directional, skip setups that fight it.
+// Same logic as signalEnricher.getContinuity.
+function getContinuity(bars) {
+  if (!bars || bars.length < 2) return 'UNKNOWN';
+  var current = bars[bars.length - 1];
+  var prev = bars[bars.length - 2];
+  var close = parseFloat(current.Close);
+  var prevClose = parseFloat(prev.Close);
+  return close > prevClose ? 'BULL' : 'BEAR';
+}
+
+async function getFTFC(symbol) {
+  try {
+    var monthlyBars = await getBars(symbol, 'Monthly', '1', 3);
+    var weeklyBars  = await getBars(symbol, 'Weekly', '1', 3);
+    var dailyBars   = await getBars(symbol, 'Daily', '1', 3);
+    var sixtyBars   = await getBars(symbol, 'Minute', '60', 3);
+
+    var monthlyCont = getContinuity(monthlyBars);
+    var weeklyCont  = getContinuity(weeklyBars);
+    var dailyCont   = getContinuity(dailyBars);
+    var sixtyCont   = getContinuity(sixtyBars);
+
+    var tfs = [monthlyCont, weeklyCont, dailyCont, sixtyCont];
+    var bullCount = tfs.filter(function(t) { return t === 'BULL'; }).length;
+    var bearCount = tfs.filter(function(t) { return t === 'BEAR'; }).length;
+
+    var ftfc = 'MIXED';
+    if (bullCount === 4) ftfc = 'BULL';
+    else if (bearCount === 4) ftfc = 'BEAR';
+    else if (bullCount >= 3) ftfc = 'LEAN_BULL';
+    else if (bearCount >= 3) ftfc = 'LEAN_BEAR';
+
+    return {
+      ftfc: ftfc,
+      bullCount: bullCount,
+      bearCount: bearCount,
+      detail: monthlyCont[0] + weeklyCont[0] + dailyCont[0] + sixtyCont[0], // e.g. "BBBU"
+    };
+  } catch(e) {
+    console.error('[SCANNER] FTFC error for ' + symbol + ':', e.message);
+    return { ftfc: 'MIXED', bullCount: 0, bearCount: 0, detail: '????' };
+  }
+}
+
+// Returns true if setup direction fights strong FTFC
+function ftfcVetoes(ftfc, setupDirection) {
+  // setupDirection: 'CALLS' or 'PUTS'
+  if (ftfc === 'BULL' && setupDirection === 'PUTS') return true;
+  if (ftfc === 'BEAR' && setupDirection === 'CALLS') return true;
+  return false;
+}
+
 // -- CANDLE TYPE DETECTION ---------------------------------------
 function getCandleType(candle, prev) {
   if (!candle || !prev) return 'unknown';
@@ -530,6 +585,13 @@ function buildSetupCard(setup) {
     lines2.push('Timeframe  ' + (setup.timeframe || '60M'));
     lines2.push('Exit       60-min flip = immediate exit');
   }
+  // -- FTFC badge on every card --
+  if (setup.ftfc) {
+    var ftfcLabel = setup.ftfc;
+    if (ftfcLabel === 'BULL' || ftfcLabel === 'LEAN_BULL') ftfcLabel = 'BULLISH';
+    if (ftfcLabel === 'BEAR' || ftfcLabel === 'LEAN_BEAR') ftfcLabel = 'BEARISH';
+    lines2.push('FTFC       ' + ftfcLabel + ' (' + (setup.ftfcDetail || '????') + ')');
+  }
   lines2.push('Time       ' + time + ' ET');
   return lines2.join('\n');
 }
@@ -540,14 +602,31 @@ function buildSetupCard(setup) {
 async function runPreMarketScan() {
   console.log('[SCANNER] Running pre-market scan for ' + SCAN_TICKERS.length + ' tickers...');
   var setups = [];
+  var ftfcCache = {}; // cache FTFC per ticker so we don't re-fetch
   for (var i = 0; i < SCAN_TICKERS.length; i++) {
     var ticker  = SCAN_TICKERS[i];
+
+    // -- FTFC PRE-FILTER: check continuity FIRST --
+    var ftfcData = await getFTFC(ticker);
+    ftfcCache[ticker] = ftfcData;
+    console.log('[SCANNER] ' + ticker + ' FTFC=' + ftfcData.ftfc + ' (' + ftfcData.detail + ')');
+
     var miyagi  = await scanMiyagi(ticker);
     var retrig  = await scan4HRRetrigger(ticker);
     var sevenHR = await scan7HR(ticker);
-    if (miyagi) setups.push(miyagi);
-    if (retrig) setups.push(retrig);
-    if (sevenHR) setups.push(sevenHR);
+
+    // Tag each setup with FTFC and filter those that fight full continuity
+    var candidates = [miyagi, retrig, sevenHR].filter(Boolean);
+    for (var c = 0; c < candidates.length; c++) {
+      var setup = candidates[c];
+      setup.ftfc = ftfcData.ftfc;
+      setup.ftfcDetail = ftfcData.detail;
+      if (ftfcVetoes(ftfcData.ftfc, setup.direction)) {
+        console.log('[SCANNER] FTFC VETO: ' + ticker + ' ' + setup.strategy + ' ' + setup.direction + ' fights ' + ftfcData.ftfc + ' continuity — SKIPPED');
+        continue;
+      }
+      setups.push(setup);
+    }
   }
   var date = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York', weekday: 'long', month: 'short', day: 'numeric' });
   if (setups.length === 0) {
@@ -574,15 +653,33 @@ async function runPreMarketScan() {
 async function run322Scan() {
   console.log('[322 SCAN] Running 10AM check (322 + Failed 9)...');
   for (var i = 0; i < SCAN_TICKERS.length; i++) {
-    var setup = await scan322(SCAN_TICKERS[i]);
+    var ticker = SCAN_TICKERS[i];
+
+    // -- FTFC PRE-FILTER --
+    var ftfcData = await getFTFC(ticker);
+    console.log('[322 SCAN] ' + ticker + ' FTFC=' + ftfcData.ftfc + ' (' + ftfcData.detail + ')');
+
+    var setup = await scan322(ticker);
     if (setup) {
-      var card = buildSetupCard(setup);
-      if (card) await postCard(STRAT_WEBHOOK, card, 'Stratum Scanner');
+      setup.ftfc = ftfcData.ftfc;
+      setup.ftfcDetail = ftfcData.detail;
+      if (ftfcVetoes(ftfcData.ftfc, setup.direction)) {
+        console.log('[322 SCAN] FTFC VETO: ' + ticker + ' ' + setup.strategy + ' ' + setup.direction + ' fights ' + ftfcData.ftfc + ' — SKIPPED');
+      } else {
+        var card = buildSetupCard(setup);
+        if (card) await postCard(STRAT_WEBHOOK, card, 'Stratum Scanner');
+      }
     }
-    var f9 = await scanFailed9(SCAN_TICKERS[i]);
+    var f9 = await scanFailed9(ticker);
     if (f9) {
-      var f9card = buildSetupCard(f9);
-      if (f9card) await postCard(STRAT_WEBHOOK, f9card, 'Stratum Scanner');
+      f9.ftfc = ftfcData.ftfc;
+      f9.ftfcDetail = ftfcData.detail;
+      if (ftfcVetoes(ftfcData.ftfc, f9.direction)) {
+        console.log('[322 SCAN] FTFC VETO: ' + ticker + ' Failed9 ' + f9.direction + ' fights ' + ftfcData.ftfc + ' — SKIPPED');
+      } else {
+        var f9card = buildSetupCard(f9);
+        if (f9card) await postCard(STRAT_WEBHOOK, f9card, 'Stratum Scanner');
+      }
     }
   }
 }
@@ -600,5 +697,7 @@ module.exports = {
   getCandleType: getCandleType,
   getBars: getBars,
   buildSetupCard: buildSetupCard,
+  getFTFC: getFTFC,
+  ftfcVetoes: ftfcVetoes,
   SCAN_TICKERS: SCAN_TICKERS,
 };
