@@ -23,6 +23,8 @@ var SCAN_TICKERS = [
   'DAL', 'UAL', 'LUV', 'AAL',
   // Oil/Energy -- monitor direction
   'XOM', 'CVX', 'OXY', 'XLE',
+  // JSmith Apr 12 -- daily hammers (CALLS) + weekly shooters (PUTS)
+  'U', 'ABNB', 'UBER', 'BIDU',
 ];
 
 // Pre-market flow threshold -- lower to catch setups early
