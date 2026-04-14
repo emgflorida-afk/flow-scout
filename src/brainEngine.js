@@ -703,7 +703,18 @@ async function closeAutonomous(position) {
 // Brain picks them up on next cycle as highest-priority signals
 var tvSignalQueue = [];
 
+var tvSignalLastSeen = {}; // dedup: "TICKER:DIRECTION" → timestamp
+var TV_SIGNAL_DEDUP_MS = 5 * 60 * 1000; // ignore duplicate ticker+direction within 5 min
+
 function pushTVSignal(signal) {
+  var key = signal.ticker + ':' + signal.direction;
+  var now = Date.now();
+  var lastSeen = tvSignalLastSeen[key] || 0;
+  if (now - lastSeen < TV_SIGNAL_DEDUP_MS) {
+    logBrain('TV SIGNAL DEDUP: ' + key + ' — already processed ' + Math.round((now - lastSeen) / 1000) + 's ago, skipping');
+    return;
+  }
+  tvSignalLastSeen[key] = now;
   tvSignalQueue.push({
     ticker: signal.ticker,
     direction: signal.direction,
@@ -712,7 +723,7 @@ function pushTVSignal(signal) {
     momCount: signal.momCount || null,
     sqzFiring: signal.sqzFiring || null,
     vwap: signal.vwap || null,
-    timestamp: Date.now(),
+    timestamp: now,
   });
   logBrain('TV SIGNAL QUEUED: ' + signal.ticker + ' ' + signal.direction + ' from ' + (signal.source || 'TV_BRAIN'));
 }
