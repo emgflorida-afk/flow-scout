@@ -178,6 +178,39 @@ app.post('/webhook/tradingview', async function(req, res) {
     } catch(bridgeErr) {
       console.error('[tradingview webhook] early brain bridge error:', bridgeErr && bridgeErr.message);
     }
+    // AUTO-QUEUE: pre-market Stratum A+ (>=5/6) on liquid names auto-adds to daily queue.
+    // Survives redeploys via brainEngine's /tmp persistence. User reviews at 8:30 AM.
+    try {
+      var AUTO_QUEUE_LIQUID = ['SPY','QQQ','IWM','DIA','NVDA','TSLA','AAPL','MSFT','META','AMZN','GOOGL','GOOG','AMD','NFLX','AVGO','COIN','PLTR','SMCI','MU','MRVL','CRM','ORCL','ADBE','UBER','COST','HD','LOW','JPM','BAC','GS','XOM','CVX'];
+      var nowET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+      var etParts = nowET.match(/(\d{1,2}):(\d{2})/);
+      var etMin = etParts ? (parseInt(etParts[1]) * 60 + parseInt(etParts[2])) : 0;
+      var isPreMarket = etMin < (9 * 60 + 30);
+      if (isPreMarket && score >= 5 && AUTO_QUEUE_LIQUID.indexOf(ticker) !== -1 && brainEngine && brainEngine.addQueuedTrade) {
+        var existing = (brainEngine.getQueuedTrades ? brainEngine.getQueuedTrades() : [])
+          .filter(function(q) { return q.ticker === ticker && q.status === 'PENDING' && q.source && q.source.indexOf('STRATUM_AUTO') === 0; });
+        if (existing.length === 0) {
+          var trigPrice = body.price != null ? parseFloat(body.price) : null;
+          if (trigPrice) {
+            brainEngine.addQueuedTrade({
+              ticker: ticker,
+              direction: type === 'put' ? 'PUTS' : 'CALLS',
+              triggerPrice: trigPrice,
+              contracts: score >= 6 ? 3 : 2,
+              stopPct: -25,
+              targets: [0.20, 0.50, 1.00],
+              management: 'BILL_PAYING',
+              source: 'STRATUM_AUTO_' + score + 'of6',
+              tradeType: 'DAY',
+              note: 'Pre-market Stratum ' + confluence + ' auto-queue. Review at 8:30 AM.',
+            });
+            console.log('[AUTO-QUEUE] ' + ticker + ' ' + type + ' @ $' + trigPrice + ' | ' + confluence + ' | Stratum pre-market');
+          }
+        }
+      }
+    } catch(autoQErr) {
+      console.error('[tradingview webhook] auto-queue error:', autoQErr && autoQErr.message);
+    }
     var resolved = await resolver.resolveContract(ticker, type, tradeType);
     if (!resolved) return res.json({ status: 'brain-queued', reason: 'No immediate contract, brain will retry', brainBridged: true });
     var tvBias = {
@@ -1449,6 +1482,19 @@ app.get('/api/brain/queue', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
     res.json({ status: 'OK', queuedTrades: brainEngine.getQueuedTrades() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Review-only view of auto-queued Stratum pre-market picks. Use at 8:30 AM
+// to kill anything you don't want before the 9:30 bell.
+app.get('/api/brain/auto-queue', function(req, res) {
+  try {
+    if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });
+    var all = brainEngine.getQueuedTrades() || [];
+    var auto = all.filter(function(q) {
+      return q.source && String(q.source).indexOf('STRATUM_AUTO') === 0;
+    });
+    res.json({ status: 'OK', count: auto.length, autoQueued: auto });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
