@@ -1775,6 +1775,23 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
+// NEWS CATALYST cron (Plan 01) -- poll SEC EDGAR + FINRA every 60s
+// during RTH. Alert-only. Never auto-executes.
+var newsScanner = null;
+try { newsScanner = require('./newsScanner'); console.log('[SERVER] newsScanner loaded OK'); }
+catch(e) { console.log('[SERVER] newsScanner not loaded:', e.message); }
+cron.schedule('* 9-16 * * 1-5', function() {
+  if (newsScanner) {
+    newsScanner.scanAll().catch(function(e) { console.error('[NEWS]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.get('/api/news/scan', async function(req, res) {
+  if (!newsScanner) return res.status(500).json({ error: 'newsScanner not loaded' });
+  try { res.json(await newsScanner.scanAll()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // POSITION HEALTH cron (Plan 03) -- re-check open positions against 2HR/DAILY
 // counter-signals every 5 min during RTH. Alert-only. Never auto-closes.
 var positionHealth = null;

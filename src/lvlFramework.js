@@ -291,4 +291,26 @@ async function postHeadsUp(ticker, direction, currentPrice, htf, lockOn) {
   }
 }
 
-module.exports = { analyze25sense, getHTFCandle, checkLiquidity, checkValidation, getLockOnTargets, postHeadsUp };
+// ---------------------------------------------------------------
+// PLAN 02 GATES: gap filter + time window
+// 25sense breaks on gap days (prior range meaningless) and during
+// the open/close chop windows. Require:
+//   - gap < 1.5% from prior close
+//   - 11:00 AM - 3:00 PM ET only
+// ---------------------------------------------------------------
+function passesGapFilter(htf) {
+  if (!htf || !htf.priorClose || !htf.currentOpen) return true;
+  var gap = Math.abs(htf.currentOpen - htf.priorClose) / htf.priorClose;
+  return gap < 0.015;
+}
+
+function in25senseWindow(etTotalMin) {
+  if (typeof etTotalMin !== 'number') return false;
+  return etTotalMin >= 11 * 60 && etTotalMin < 15 * 60; // 11:00 - 3:00 PM ET
+}
+
+module.exports = {
+  analyze25sense, getHTFCandle, checkLiquidity, checkValidation,
+  getLockOnTargets, postHeadsUp,
+  passesGapFilter, in25senseWindow,
+};

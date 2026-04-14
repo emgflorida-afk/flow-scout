@@ -27,6 +27,8 @@ try { smartStop = require('./smartStop'); } catch(e) { console.log('[BRAIN] smar
 try { econCalendar = require('./economicCalendar'); } catch(e) { console.log('[BRAIN] economicCalendar not loaded:', e.message); }
 var orderExecutor = null;
 try { preMarketScanner = require('./preMarketScanner'); } catch(e) { console.log('[BRAIN] preMarketScanner not loaded:', e.message); }
+var lvlFramework = null;
+try { lvlFramework = require('./lvlFramework'); } catch(e) { console.log('[BRAIN] lvlFramework not loaded:', e.message); }
 var signalEnricher = null;
 try { orderExecutor = require('./orderExecutor'); } catch(e) { console.log('[BRAIN] orderExecutor not loaded:', e.message); }
 try { signalEnricher = require('./signalEnricher'); } catch(e) { console.log('[BRAIN] signalEnricher not loaded:', e.message); }
@@ -1694,6 +1696,64 @@ async function evaluateAYCESignal(deadZoneOnly) {
           }
         } catch(caseyErr) {
           // Silent fail — don't block other strategies
+        }
+      }
+
+      // ---------------------------------------------------------------
+      // 25SENSE RETRACE (Plan 02)
+      // Mean-reversion entry at 25%/75% retrace of prior daily candle.
+      // Structural stops (12.5% of range) and TP1 (50% mid) baked in.
+      // Gates:
+      //   - in 11:00 AM – 3:00 PM ET window
+      //   - gap from prior close < 1.5%
+      //   - grade must be A or A+
+      //   - liquidity.passed && validation.score >= 2
+      // ---------------------------------------------------------------
+      if (!setup && lvlFramework && lvlFramework.in25senseWindow(et.total)) {
+        try {
+          var tsLvl   = require('./tradestation');
+          var lvlTok  = await tsLvl.getAccessToken();
+          if (lvlTok) {
+            var htf   = await lvlFramework.getHTFCandle(ticker, lvlTok, false, 'Daily');
+            if (htf && lvlFramework.passesGapFilter(htf)) {
+              var curPx = htf.currentClose || htf.currentOpen;
+              // Try LONG first (price near 25% level), then SHORT (near 75%)
+              var dirs = [];
+              if (curPx <= htf.level50) dirs.push('call');
+              if (curPx >= htf.level50) dirs.push('put');
+              for (var di = 0; di < dirs.length && !setup; di++) {
+                var dirStr = dirs[di];
+                var a = await lvlFramework.analyze25sense(ticker, dirStr, curPx, lvlTok, false);
+                if (!a) continue;
+                if (a.grade !== 'A+' && a.grade !== 'A') continue;
+                if (!a.liquidity.passed) continue;
+                if (a.validation.score < 2) continue;
+                setup = {
+                  valid: true,
+                  strategy: '25SENSE ' + a.grade,
+                  direction: dirStr === 'call' ? 'CALLS' : 'PUTS',
+                  current: curPx,
+                  entryLevel: a.structuralEntry,
+                  stopLevel:  a.structuralStop,
+                  target:     a.structuralTP1, // TP1 = 50% midpoint
+                  _source:    '25SENSE',
+                  _lvlGrade:  a.grade,
+                  _lvlTP2:    a.structuralTP2,
+                };
+                logBrain('25SENSE SIGNAL: ' + ticker + ' ' + setup.direction +
+                  ' | Grade ' + a.grade +
+                  ' | Entry $' + a.structuralEntry +
+                  ' | Stop $'  + a.structuralStop +
+                  ' | TP1 $'   + a.structuralTP1 +
+                  ' | TP2 $'   + a.structuralTP2);
+              }
+            } else if (htf) {
+              var gapPct = Math.abs(htf.currentOpen - htf.priorClose) / htf.priorClose;
+              console.log('[25SENSE] gap reject:', ticker, 'gap:', (gapPct*100).toFixed(2)+'%');
+            }
+          }
+        } catch(lvlErr) {
+          console.error('[25SENSE]', ticker, lvlErr.message);
         }
       }
 
