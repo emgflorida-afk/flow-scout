@@ -29,22 +29,40 @@ async function runBacktest(opts) {
     simulated: [],
   };
 
-  var url = BULLFLOW_BASE + '/backtesting?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date);
-  console.log('[BACKTEST] Fetching ' + url.replace(apiKey, 'REDACTED'));
+  // Probe candidate URL patterns since Bullflow didn't publish exact path.
+  var candidates = [
+    BULLFLOW_BASE + '/backtesting?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+    BULLFLOW_BASE + '/streaming/backtesting?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+    'https://api.bullflow.io/backtesting?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+    BULLFLOW_BASE + '/backtest?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+    BULLFLOW_BASE + '/streaming/backtest?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+    'https://api.bullflow.io/v1/replay?key=' + encodeURIComponent(apiKey) + '&date=' + encodeURIComponent(date),
+  ];
 
-  var res;
-  try {
-    res = await fetch(url, { headers: { 'Accept': 'text/event-stream' } });
-  } catch(e) {
-    return { error: 'fetch failed: ' + e.message };
+  var res = null;
+  var winningUrl = null;
+  var probe = [];
+  for (var ci = 0; ci < candidates.length; ci++) {
+    var cu = candidates[ci];
+    try {
+      var r = await fetch(cu, { headers: { 'Accept': 'text/event-stream' } });
+      probe.push({ url: cu.replace(apiKey, 'REDACTED'), status: r.status });
+      if (r.ok) { res = r; winningUrl = cu; break; }
+    } catch(e) {
+      probe.push({ url: cu.replace(apiKey, 'REDACTED'), error: e.message });
+    }
   }
-  if (!res.ok) return { error: 'HTTP ' + res.status, body: await res.text().catch(function() { return ''; }) };
+  if (!res) return { error: 'no candidate URL returned 200', probe: probe };
+  console.log('[BACKTEST] Winning URL: ' + winningUrl.replace(apiKey, 'REDACTED'));
+  stats.winningUrl = winningUrl.replace(apiKey, 'REDACTED');
 
   // Read body as text (SSE stream as single shot — good enough for historical replay)
   var raw = '';
   try { raw = await res.text(); } catch(e) { return { error: 'body read failed: ' + e.message }; }
 
   // Parse SSE envelope. Events look like: "data: {...}\n\n"
+  stats.rawFirst500 = raw.slice(0, 500);
+  stats.sampleEvents = [];
   var chunks = raw.split('\n\n');
   for (var i = 0; i < chunks.length; i++) {
     var line = chunks[i].trim();
@@ -53,6 +71,7 @@ async function runBacktest(opts) {
     var evt;
     try { evt = JSON.parse(payload); } catch(e) { continue; }
     stats.eventsReceived++;
+    if (stats.sampleEvents.length < 3) stats.sampleEvents.push(evt);
 
     // Event shape guess: { type: 'algo'|'custom', symbol, ticker, alertType, premium, timestamp, ... }
     var etype = (evt.type || evt.event || '').toLowerCase();
