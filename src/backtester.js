@@ -57,7 +57,7 @@ async function runBacktest(opts) {
   // Read body as a stream with a soft timeout + terminal-event detection.
   // SSE stays open — we stop when we see event=end/complete/done or timeout.
   var raw = '';
-  var SOFT_TIMEOUT_MS = (opts && opts.timeoutMs) || 240000;
+  var SOFT_TIMEOUT_MS = (opts && opts.timeoutMs) || 360000;
   var startedAt = Date.now();
   try {
     await new Promise(function(resolve, reject) {
@@ -122,9 +122,23 @@ async function runBacktest(opts) {
     if (opraMatch && opraMatch[1] === 'P') direction = 'PUTS';
     else if (/put/i.test(alertType)) direction = 'PUTS';
 
-    // Classify: custom vs algo
-    if (etype === 'custom' || etype === 'custom-alert' || evt.matchedCustomAlert) {
+    // Classify: custom vs algo. alertType field on the payload is the source of truth.
+    // Bullflow wraps BOTH custom and algo in {event:"alert"} envelope — disambiguate
+    // via alertType: "custom" vs anything else (sweeps, blocks, grenades, etc.).
+    var isCustom = alertType === 'custom' || alertType === 'custom-alert';
+    if (isCustom) {
       stats.customAlerts++;
+      if (ticker) {
+        if (!stats.byTicker[ticker]) stats.byTicker[ticker] = { calls: 0, puts: 0, totalPremium: 0 };
+        stats.byTicker[ticker][direction === 'PUTS' ? 'puts' : 'calls']++;
+        stats.byTicker[ticker].totalPremium += premium;
+      }
+      stats.byDirection[direction]++;
+      if (premium < 50000) stats.premiumBuckets['<50K']++;
+      else if (premium < 100000) stats.premiumBuckets['50-100K']++;
+      else if (premium < 500000) stats.premiumBuckets['100-500K']++;
+      else if (premium < 1000000) stats.premiumBuckets['500K-1M']++;
+      else stats.premiumBuckets['1M+']++;
     } else if (etype === 'alert' || etype === 'algo' || alertType) {
       stats.algoAlerts++;
       if (ticker) {
@@ -157,7 +171,8 @@ async function runBacktest(opts) {
   });
   tickerEntries.sort(function(a, b) { return b.total - a.total; });
   stats.topTickers = tickerEntries.slice(0, 20);
-  delete stats.byTicker; // too verbose in response
+  // byTicker retained so flowConcentration can score the full universe.
+  // Endpoint handlers strip it on the wire if they want a slim response.
 
   return { status: 'OK', stats: stats };
 }

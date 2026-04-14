@@ -1353,6 +1353,47 @@ var brainEngine = null;
 try { brainEngine = require('./brainEngine'); console.log('[BRAIN] Loaded OK'); } catch(e) { console.log('[BRAIN] Skipped:', e.message); }
 var backtester = null;
 try { backtester = require('./backtester'); console.log('[BACKTEST] Loaded OK'); } catch(e) { console.log('[BACKTEST] Skipped:', e.message); }
+var flowConc = null;
+try { flowConc = require('./flowConcentration'); console.log('[FLOW-CONC] Loaded OK'); } catch(e) { console.log('[FLOW-CONC] Skipped:', e.message); }
+
+// GET /api/brain/flow-concentration?date=YYYY-MM-DD&queue=true&limit=5
+// Pulls the day's Bullflow concentration, scores tickers, optionally
+// auto-queues the top N into tomorrow's brain queue. Survives Railway
+// redeploys via the existing /tmp/queued_trades.json persistence.
+app.get('/api/brain/flow-concentration', async function(req, res) {
+  try {
+    if (!flowConc) return res.status(503).json({ error: 'flowConcentration not loaded' });
+    var date = req.query.date;
+    if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+    var autoQueue = String(req.query.queue || '').toLowerCase() === 'true';
+    var limit = parseInt(req.query.limit || '5', 10);
+    var result = await flowConc.runConcentration({ date: date, autoQueue: autoQueue, limit: limit });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Daily cron: 4:05 PM ET weekdays → pull today's concentration, auto-queue
+// top 5 liquid setups for tomorrow. This is the "list builds itself" loop.
+try {
+  var cron = require('node-cron');
+  cron.schedule('5 16 * * 1-5', async function() {
+    try {
+      if (!flowConc) return;
+      var today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+      console.log('[FLOW-CONC CRON] Running concentration for ' + today);
+      var result = await flowConc.runConcentration({ date: today, autoQueue: true, limit: 5 });
+      if (result && result.ranked) {
+        console.log('[FLOW-CONC CRON] Queued ' + (result.queued || []).length + ' of ' + result.ranked.length + ' ranked setups');
+        (result.ranked || []).forEach(function(r) {
+          console.log('  → ' + r.ticker + ' ' + r.direction + ' | ' + r.total + ' alerts ' + r.leanPct + '% | $' + Math.round(r.totalPremium / 1e6) + 'M | score ' + r.score);
+        });
+      } else if (result && result.error) {
+        console.log('[FLOW-CONC CRON] Error: ' + result.error);
+      }
+    } catch(e) { console.error('[FLOW-CONC CRON] Exception:', e.message); }
+  }, { timezone: 'America/New_York' });
+  console.log('[FLOW-CONC CRON] Scheduled: 4:05 PM ET weekdays');
+} catch(e) { console.log('[FLOW-CONC CRON] node-cron missing — manual trigger only'); }
 
 // POST /api/brain/backtest { date: "2026-04-11" }
 // Replays a historical day from Bullflow /backtesting, runs every algo alert
