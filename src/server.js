@@ -1775,6 +1775,23 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
+// POSITION HEALTH cron (Plan 03) -- re-check open positions against 2HR/DAILY
+// counter-signals every 5 min during RTH. Alert-only. Never auto-closes.
+var positionHealth = null;
+try { positionHealth = require('./positionHealth'); console.log('[SERVER] positionHealth loaded OK'); }
+catch(e) { console.log('[SERVER] positionHealth not loaded:', e.message); }
+cron.schedule('*/5 9-16 * * 1-5', function() {
+  if (positionHealth) {
+    positionHealth.checkAll().catch(function(e) { console.error('[HEALTH]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.get('/api/health/check', async function(req, res) {
+  if (!positionHealth) return res.status(500).json({ error: 'positionHealth not loaded' });
+  try { res.json(await positionHealth.checkAll()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // REMOVED: Legacy close cron that auto-closed SPX spread at open for a loss on Apr 13.
 // LESSON: Never auto-close existing spreads at open. Let them run to profit target or expiry.
 // The spread monitor (every 5 min) handles exits at 50% profit or 150% stop loss.

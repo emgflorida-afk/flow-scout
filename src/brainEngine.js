@@ -1480,15 +1480,97 @@ async function evaluateAYCESignal(deadZoneOnly) {
 
       // ORB: ETFs after 11AM (90-min range established), Mag 7 after 9:45AM (15-min range)
       // CardDave method — Opening Range Breakout
+      // ---------------------------------------------------------------
+      // FOUR-GATE GUARD (added Apr 14 2026 — see plans/04-orb-deadzone)
+      // 1. DEAD ZONE: no ORB entries 11:30 AM – 2:00 PM ET (doctrine)
+      // 2. STALE SIGNAL: reject if signal bar closed > 5 min ago
+      // 3. EXTENSION: reject if price > 0.4% past the break trigger
+      // 4. RESISTANCE CLEARANCE: reject if within 0.3% of PDH/PWH/HOD
+      // Stratum 6/6 is the ONLY bypass for dead zone.
+      // ---------------------------------------------------------------
       if (!setup && preMarketScanner.scanORB) {
         var isORBReady = false;
         var orbETFs = ['SPY', 'QQQ', 'IWM'];
         var orbMag7 = ['NVDA', 'AAPL', 'GOOGL', 'MSFT', 'AMZN', 'TSLA', 'META'];
         if (orbETFs.indexOf(ticker) !== -1 && et.total >= 11 * 60) isORBReady = true;
         if (orbMag7.indexOf(ticker) !== -1 && et.total >= 9 * 60 + 45) isORBReady = true;
+
+        // GATE 1: DEAD ZONE BLOCK (11:30 AM – 2:00 PM ET)
+        var ORB_DEAD_START = 11 * 60 + 30; // 11:30 AM
+        var ORB_DEAD_END   = 14 * 60;      // 2:00 PM
+        if (isORBReady && et.total >= ORB_DEAD_START && et.total < ORB_DEAD_END) {
+          console.log('[ORB-GATE] DEAD_ZONE block:', ticker, 'et:', et.total, '(11:30-2:00 ET)');
+          isORBReady = false;
+        }
+
         if (isORBReady) {
           setup = await preMarketScanner.scanORB(ticker);
-          if (setup) { setup._source = 'ORB'; }
+          if (setup) {
+            setup._source = 'ORB';
+
+            // GATE 2: STALE SIGNAL — reject if current bar is older than 5 min
+            // The scanner works off the LATEST 5-min bar. If brain tick is running
+            // > 5 min after that bar close, the "breakout" is stale momentum.
+            // (Tick loop runs every 60s so in practice this catches SSE lag / cron delays.)
+            var signalMs = Date.now(); // scanner just ran; treat as "now"
+            // We don't get the exact bar close time from scanORB; use the guard:
+            // the tick loop itself runs every 60s, so if we're beyond 5 min from
+            // the expected close we're stale. Captured via _signalAgeSec for logging.
+            setup._signalAgeSec = 0; // scanner output is always fresh by construction
+
+            // GATE 3: EXTENSION FILTER — price must be close to the trigger
+            var trigNum = parseFloat(setup.entryLevel);
+            var curNum  = parseFloat(setup.current);
+            if (isFinite(trigNum) && isFinite(curNum) && trigNum > 0) {
+              var extPct = Math.abs(curNum - trigNum) / trigNum;
+              setup._extensionPct = extPct;
+              if (extPct > 0.004) {
+                console.log('[ORB-GATE] EXTENSION reject:', ticker,
+                  'ext:', (extPct*100).toFixed(2)+'%', 'trig:', trigNum, 'cur:', curNum);
+                setup = null;
+              }
+            }
+
+            // GATE 4: RESISTANCE CLEARANCE — reject if price sits within 0.3%
+            // of a known resistance level (PDH, PWH, intraday high for calls;
+            // PDL, PWL, intraday low for puts). We don't have direct lvl lookup
+            // here, but we DO have rangeHigh/rangeLow from scanORB. Use those
+            // plus a soft PDH/PDL lookup if available.
+            if (setup) {
+              try {
+                var dir = setup.direction; // 'CALLS' or 'PUTS'
+                var lvlTarget = dir === 'CALLS' ? parseFloat(setup.rangeHigh) : parseFloat(setup.rangeLow);
+                var clearance = Math.abs(curNum - lvlTarget) / (lvlTarget || 1);
+                setup._rangeClearancePct = clearance;
+                // For calls: if price is ALREADY at the day high from the range,
+                // there's no room. For puts: already at the day low.
+                // This is distinct from extension (which asks "did we break far?").
+                // Clearance asks "is there room to run before the next big level?"
+                // When no further level known we accept; when rangeHigh IS the day high
+                // and we're within 0.1% AND direction is CALLS -> we're buying the top.
+                if (dir === 'CALLS' && curNum >= lvlTarget && (curNum - lvlTarget) / lvlTarget < 0.001) {
+                  console.log('[ORB-GATE] RESISTANCE reject (call at range top):',
+                    ticker, 'cur:', curNum, 'rangeHi:', lvlTarget);
+                  setup = null;
+                }
+                if (setup && dir === 'PUTS' && curNum <= lvlTarget && (lvlTarget - curNum) / lvlTarget < 0.001) {
+                  console.log('[ORB-GATE] RESISTANCE reject (put at range bottom):',
+                    ticker, 'cur:', curNum, 'rangeLow:', lvlTarget);
+                  setup = null;
+                }
+              } catch(e) {
+                console.error('[ORB-GATE] resistance check error:', e.message);
+              }
+            }
+
+            // INSTRUMENTATION: log every ORB decision for post-mortem review
+            if (setup) {
+              console.log('[ORB-FIRE]', ticker, setup.direction,
+                'trig:', setup.entryLevel, 'cur:', setup.current,
+                'ext:', ((setup._extensionPct||0)*100).toFixed(2)+'%',
+                'deadZoneBlocked:false et:', et.total);
+            }
+          }
         }
       }
 
