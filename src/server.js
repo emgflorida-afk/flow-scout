@@ -1898,6 +1898,14 @@ app.post('/api/jsmith/poll', async function(req, res) {
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/jsmith/diag', function(req, res) {
+  res.json({
+    hasToken: !!process.env.DISCORD_USER_TOKEN,
+    tokenLen: (process.env.DISCORD_USER_TOKEN || '').length,
+    pollerLoaded: !!jsmithPoller,
+  });
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.
