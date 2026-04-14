@@ -173,10 +173,36 @@ async function pollChannel(channelId, token) {
   var parsed = 0;
   var newIdeas = [];
 
+  // Staleness cutoff -- only parse messages posted since start-of-today ET.
+  // Prevents re-queueing old ideas after container restart (/tmp dedup wipes).
+  // Override with JSMITH_STALE_HOURS env var if you want a rolling window instead.
+  var staleHours = parseFloat(process.env.JSMITH_STALE_HOURS || '0');
+  var cutoffMs;
+  if (staleHours > 0) {
+    cutoffMs = Date.now() - staleHours * 3600 * 1000;
+  } else {
+    // start-of-today ET
+    var nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    nowET.setHours(0, 0, 0, 0);
+    // convert back to UTC ms -- nowET is a Date in local system tz representing ET wallclock,
+    // so its getTime() is already the correct ms when we reinterpret ET midnight as a UTC moment.
+    // Simpler: compute offset via Intl
+    var etOffsetMin = -new Date().toLocaleString('en-US', { timeZone: 'America/New_York', timeZoneName: 'longOffset' }).match(/GMT([+-]\d+)/);
+    var todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+    cutoffMs = new Date(todayStr + 'T00:00:00-04:00').getTime(); // ET is UTC-4 during DST (April)
+  }
+
   for (var i = 0; i < messages.length; i++) {
     var msg = messages[i];
     if (!msg || !msg.id) continue;
     if (seen.ids[msg.id]) continue;
+
+    // Stale check: skip anything posted before start-of-today ET
+    var msgMs = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+    if (msgMs && msgMs < cutoffMs) {
+      seen.ids[msg.id] = Date.now(); // mark seen so we don't re-check
+      continue;
+    }
 
     var text = parser.flattenMessage(msg);
     var result = parser.parseByChannel(channelId, text);
