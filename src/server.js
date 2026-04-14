@@ -1903,6 +1903,8 @@ app.get('/api/jsmith/diag', function(req, res) {
     hasToken: !!process.env.DISCORD_USER_TOKEN,
     tokenLen: (process.env.DISCORD_USER_TOKEN || '').length,
     pollerLoaded: !!jsmithPoller,
+    jsmithTest: process.env.JSMITH_TEST || null,
+    envKeysWithDiscord: Object.keys(process.env).filter(function(k){return k.indexOf('DISCORD')>=0 || k.indexOf('JSMITH')>=0;}),
   });
 });
 
