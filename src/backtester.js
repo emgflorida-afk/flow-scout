@@ -56,9 +56,40 @@ async function runBacktest(opts) {
   console.log('[BACKTEST] Winning URL: ' + winningUrl.replace(apiKey, 'REDACTED'));
   stats.winningUrl = winningUrl.replace(apiKey, 'REDACTED');
 
-  // Read body as text (SSE stream as single shot — good enough for historical replay)
+  // Read body as a stream with a soft timeout + terminal-event detection.
+  // SSE stays open — we stop when we see event=end/complete/done or timeout.
   var raw = '';
-  try { raw = await res.text(); } catch(e) { return { error: 'body read failed: ' + e.message }; }
+  var SOFT_TIMEOUT_MS = (opts && opts.timeoutMs) || 90000;
+  var startedAt = Date.now();
+  try {
+    await new Promise(function(resolve, reject) {
+      var settled = false;
+      function finish(reason) {
+        if (settled) return; settled = true;
+        stats.streamEndReason = reason;
+        try { res.body.destroy(); } catch(e) {}
+        resolve();
+      }
+      var timer = setTimeout(function() { finish('soft-timeout'); }, SOFT_TIMEOUT_MS);
+      res.body.on('data', function(chunk) {
+        raw += chunk.toString('utf8');
+        // Peek for terminal markers
+        if (/"event"\s*:\s*"(end|complete|done|finished)"/i.test(raw)) {
+          clearTimeout(timer);
+          finish('terminal-event');
+        }
+        // Hard cap raw buffer at 10MB to prevent runaway memory
+        if (raw.length > 10 * 1024 * 1024) {
+          clearTimeout(timer);
+          finish('buffer-cap');
+        }
+      });
+      res.body.on('end', function() { clearTimeout(timer); finish('stream-end'); });
+      res.body.on('error', function(e) { clearTimeout(timer); finish('stream-error:' + e.message); });
+    });
+  } catch(e) { return { error: 'stream read failed: ' + e.message }; }
+  stats.streamMs = Date.now() - startedAt;
+  stats.rawBytes = raw.length;
 
   // Parse SSE envelope. Events look like: "data: {...}\n\n"
   stats.rawFirst500 = raw.slice(0, 500);
@@ -73,10 +104,11 @@ async function runBacktest(opts) {
     stats.eventsReceived++;
     if (stats.sampleEvents.length < 3) stats.sampleEvents.push(evt);
 
-    // Event shape guess: { type: 'algo'|'custom', symbol, ticker, alertType, premium, timestamp, ... }
-    var etype = (evt.type || evt.event || '').toLowerCase();
-    if (etype === 'custom' || evt.matchedCustomAlert) stats.customAlerts++;
-    if (etype === 'algo' || evt.alertType) stats.algoAlerts++;
+    // Event envelope: { event: "init"|"status"|"error"|"alert"|"algo"|"custom"|... }
+    var etype = (evt.event || evt.type || '').toLowerCase();
+    if (etype === 'init' || etype === 'status' || etype === 'error' || etype === 'heartbeat') continue;
+    if (etype === 'custom' || etype === 'custom-alert' || evt.matchedCustomAlert) stats.customAlerts++;
+    if (etype === 'algo' || etype === 'alert' || evt.alertType) stats.algoAlerts++;
 
     // Simulate execution gate
     if (!executeNow || !executeNow.shouldExecute) continue;
