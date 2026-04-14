@@ -289,13 +289,25 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
   var type       = (signal.type || 'call').toLowerCase();
   var confluence = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
   var price      = signal.close ? parseFloat(signal.close) : null;
+  var source     = (signal.source || '').toUpperCase();
 
-  console.log('[EXECUTE-NOW] Evaluating ' + ticker + ' ' + type + ' conf:' + confluence + '/6');
+  // BILL-PAYING MODE: Stratum-sourced A+ signals (conf >= 5) earn special treatment.
+  // The alert itself is the edge — we trust Primo's 6-criteria Strat confluence.
+  var isStratumSource = source.indexOf('STRATUM') === 0 || source === 'STRAT' || source === 'TV_BRAIN';
+  var isStratumAPlus  = isStratumSource && confluence >= 5;
+  var isStratumAPlusPlus = isStratumSource && confluence >= 6;
 
-  // GATE 1: Watchlist
+  console.log('[EXECUTE-NOW] Evaluating ' + ticker + ' ' + type + ' conf:' + confluence + '/6' +
+    (isStratumAPlus ? ' [STRATUM A+]' : '') + (isStratumAPlusPlus ? '+' : ''));
+
+  // GATE 1: Watchlist — Stratum A+ bypasses CORE requirement (dynamic watchlist path)
   if (!CORE_WATCHLIST.includes(ticker)) {
-    console.log('[EXECUTE-NOW] BLOCKED: ' + ticker + ' not on watchlist');
-    return { execute: false, reason: ticker + ' not in core watchlist' };
+    if (isStratumAPlus) {
+      console.log('[EXECUTE-NOW] DYNAMIC WATCHLIST BYPASS: ' + ticker + ' accepted via STRATUM ' + confluence + '/6');
+    } else {
+      console.log('[EXECUTE-NOW] BLOCKED: ' + ticker + ' not on watchlist');
+      return { execute: false, reason: ticker + ' not in core watchlist (Stratum conf too low to bypass)' };
+    }
   }
 
   // GATE 2: Max positions
@@ -347,10 +359,27 @@ async function shouldExecute(signal, macroBias, h6Bias, hasFlow, positions, buyi
   }
 
   // GATE 5: Entry window
+  // BILL-PAYING MODE: 6/6 Stratum alerts bypass the window check except during
+  // hard lunch (11:30 AM - 1:30 PM ET) when liquidity dies. This lets real A++
+  // signals fire when they appear, not when the clock approves.
   var timeCheck = isEntryWindow();
   if (!timeCheck.ok) {
-    console.log('[EXECUTE-NOW] BLOCKED: Outside entry window');
-    return { execute: false, reason: 'Outside entry window (9:50-10:30AM or 3:00-3:30PM ET)' };
+    if (isStratumAPlusPlus) {
+      // Check hard lunch block
+      var nowForLunch = new Date();
+      var etLunch = etTime ? etTime.getETTime(nowForLunch) : { hour: ((nowForLunch.getUTCHours() - 4) + 24) % 24, min: nowForLunch.getUTCMinutes() };
+      var etMinLunch = etLunch.hour * 60 + etLunch.min;
+      var LUNCH_START = 11 * 60 + 30;  // 11:30 AM ET
+      var LUNCH_END   = 13 * 60 + 30;  // 1:30 PM ET
+      if (etMinLunch >= LUNCH_START && etMinLunch <= LUNCH_END) {
+        console.log('[EXECUTE-NOW] BLOCKED: Hard lunch block (11:30-1:30 ET) — even A++ waits');
+        return { execute: false, reason: 'Hard lunch block 11:30-1:30 ET — A++ Stratum waits' };
+      }
+      console.log('[EXECUTE-NOW] WINDOW BYPASS: A++ Stratum ' + confluence + '/6 overrides entry window');
+    } else {
+      console.log('[EXECUTE-NOW] BLOCKED: Outside entry window');
+      return { execute: false, reason: 'Outside entry window (9:35-11:00AM or 2:45-3:30PM ET)' };
+    }
   }
 
   // GATE 6: Macro bias -- allows contra-trend trades when ticker shows relative weakness/strength

@@ -723,11 +723,14 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
     var orderExecutor = require('./orderExecutor');
 
     // Build signal for gate check
+    // Pass Stratum source through so Bill-Paying Mode gates can trigger
+    // the dynamic-watchlist + window bypass paths.
     var signal = {
       ticker: parsed.ticker,
       type: parsed.type,
       confluence: tvData.confluence || parsed.confluence || '0/6',
       close: resolved.price || null,
+      source: (tvData && tvData.source) || 'STRATUM_' + (tvData && tvData.tf ? tvData.tf + 'M' : 'TV'),
     };
 
     // Get current positions (full list, not just count) for duplicate check
@@ -807,14 +810,25 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
       return;
     }
 
-    // 2-CONTRACT METHOD -- always buy 2, trim 1 at +25%, leave runner
-    qty = 2;
-    // Only reduce to 1 if premium is too high for 2 contracts within account limits
-    if (ep > 1.20) { qty = 1; }
+    // BILL-PAYING MODE sizing — A+ Stratum (conf >= 5) gets 3 contracts default
+    // for real income generation, capped by premium budget. Non-Stratum keeps
+    // the prior 2-contract method. Stop stays -25% regardless.
+    var confNumForSize = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
+    var isStratumForSize = (signal.source || '').toUpperCase().indexOf('STRATUM') === 0 && confNumForSize >= 5;
+    if (isStratumForSize) {
+      // 3 contracts on cheap premium, 2 on mid, 1 on expensive
+      if (ep <= 0.80) qty = 3;
+      else if (ep <= 1.50) qty = 2;
+      else qty = 1;
+    } else {
+      qty = 2;
+      if (ep > 1.20) { qty = 1; }
+    }
 
-    // 2-CT trim and runner targets
-    var trimTarget  = parseFloat((ep * 1.25).toFixed(2));  // Trim 1 contract at +25%
-    var runnerStop  = ep;                                   // Runner stop at breakeven (entry price)
+    // Trim target: Stratum A+ trims at +20% (bill money), others at +25%
+    var trimPct = isStratumForSize ? 0.20 : 0.25;
+    var trimTarget  = parseFloat((ep * (1 + trimPct)).toFixed(2));
+    var runnerStop  = ep;  // Runner stop at breakeven
 
     var er = await orderExecutor.placeOrder({
       account: 'SIM3142118M',

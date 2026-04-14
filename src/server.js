@@ -181,6 +181,8 @@ app.post('/webhook/tradingview', async function(req, res) {
     var resolved = await resolver.resolveContract(ticker, type, tradeType);
     if (!resolved) return res.json({ status: 'brain-queued', reason: 'No immediate contract, brain will retry', brainBridged: true });
     var tvBias = {
+      source: 'STRATUM_' + (body.tf ? body.tf + 'M' : 'TV'),
+      tf: body.tf || null,
       weekly: body.weekly || null, daily: body.daily || null,
       h4: body.h4 || null, h1: body.h1 || null, confluence: confluence,
       mid: resolved.mid, bid: resolved.bid, ask: resolved.ask,
