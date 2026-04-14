@@ -110,6 +110,9 @@ app.get('/flow/clusters', function(req, res) { res.json(flowCluster.getClusterSu
 app.get('/dashboard', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
 });
+app.get('/mobile', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'mobile.html'));
+});
 app.get('/dashboard/data', async function(req, res) {
   try { var data = await dashboard.getDashboardData((req.query.mode || 'DAY').toUpperCase()); res.json(data); }
   catch(e) { res.status(500).json({ error: e.message }); }

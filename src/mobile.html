@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Stratum Brain</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0f; color:#e0e0e0; font-family:-apple-system,BlinkMacSystemFont,sans-serif; font-size:14px; padding:12px; padding-bottom:80px; }
+h1 { font-size:18px; color:#00d4aa; margin-bottom:8px; }
+.status-bar { display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
+.badge { padding:4px 10px; border-radius:12px; font-size:12px; font-weight:600; }
+.badge-green { background:#0d3320; color:#00d4aa; border:1px solid #00d4aa40; }
+.badge-red { background:#331010; color:#ff4444; border:1px solid #ff444440; }
+.badge-yellow { background:#332d10; color:#ffcc00; border:1px solid #ffcc0040; }
+.badge-blue { background:#101833; color:#4488ff; border:1px solid #4488ff40; }
+.card { background:#12121a; border:1px solid #1e1e2e; border-radius:10px; padding:12px; margin-bottom:10px; }
+.card-title { font-size:13px; color:#888; text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+.pnl { font-size:28px; font-weight:700; }
+.pnl-pos { color:#00d4aa; }
+.pnl-neg { color:#ff4444; }
+.pnl-zero { color:#888; }
+.pace { font-size:12px; color:#888; margin-top:4px; }
+.queue-item { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid #1e1e2e; }
+.queue-item:last-child { border-bottom:none; }
+.ticker { font-size:16px; font-weight:700; }
+.ticker-bull { color:#00d4aa; }
+.ticker-bear { color:#ff4444; }
+.queue-meta { font-size:11px; color:#888; margin-top:2px; }
+.trigger-price { font-size:14px; font-weight:600; color:#ffcc00; text-align:right; }
+.trigger-label { font-size:10px; color:#666; }
+.position-item { padding:8px 0; border-bottom:1px solid #1e1e2e; }
+.position-item:last-child { border-bottom:none; }
+.pos-row { display:flex; justify-content:space-between; align-items:center; }
+.pos-ticker { font-size:15px; font-weight:700; }
+.pos-pnl { font-size:15px; font-weight:700; }
+.pos-detail { font-size:11px; color:#888; margin-top:2px; }
+.spread-item { padding:6px 0; }
+.empty { color:#555; font-style:italic; font-size:13px; padding:8px 0; }
+.refresh-bar { position:fixed; bottom:0; left:0; right:0; background:#12121a; border-top:1px solid #1e1e2e; padding:12px; display:flex; justify-content:space-between; align-items:center; }
+.refresh-btn { background:#00d4aa; color:#0a0a0f; border:none; padding:10px 20px; border-radius:8px; font-size:14px; font-weight:700; cursor:pointer; }
+.refresh-btn:active { background:#00b090; }
+.last-update { font-size:11px; color:#555; }
+.log-item { font-size:12px; padding:4px 0; border-bottom:1px solid #1a1a24; color:#aaa; }
+.log-item:last-child { border-bottom:none; }
+.section-toggle { cursor:pointer; display:flex; justify-content:space-between; align-items:center; }
+.section-toggle::after { content:'▼'; font-size:10px; color:#555; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.stat-val { font-size:20px; font-weight:700; color:#fff; }
+.stat-label { font-size:11px; color:#666; }
+</style>
+</head>
+<body>
+<h1>STRATUM BRAIN</h1>
+<div class="status-bar" id="statusBar"></div>
+
+<div class="card">
+  <div class="card-title">Today's P&L</div>
+  <div class="pnl pnl-zero" id="pnlDisplay">--</div>
+  <div class="pace" id="paceDisplay">Loading...</div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="stat-label">Trades Today</div>
+    <div class="stat-val" id="tradeCount">--</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Win Rate</div>
+    <div class="stat-val" id="winRate">--</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Queued Trades</div>
+  <div id="queueList"><div class="empty">Loading...</div></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Active Positions</div>
+  <div id="positionList"><div class="empty">Loading...</div></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Credit Spreads</div>
+  <div id="spreadList"><div class="empty">Loading...</div></div>
+</div>
+
+<div class="card">
+  <div class="card-title">Brain Log (last 10)</div>
+  <div id="brainLog"><div class="empty">Loading...</div></div>
+</div>
+
+<div class="refresh-bar">
+  <div class="last-update" id="lastUpdate">--</div>
+  <button class="refresh-btn" onclick="loadAll()">REFRESH</button>
+</div>
+
+<script>
+var BASE = '';
+var autoRefreshInterval = null;
+
+async function fetchJSON(url) {
+  try { var r = await fetch(BASE + url); return await r.json(); }
+  catch(e) { return null; }
+}
+
+function renderStatusBar(brain) {
+  var el = document.getElementById('statusBar');
+  if (!brain) { el.innerHTML = '<span class="badge badge-red">OFFLINE</span>'; return; }
+  var active = brain.active;
+  var state = brain.state || 'UNKNOWN';
+  var mode = brain.bypassMode ? 'BYPASS' : (brain.approveMode ? 'APPROVE' : 'MANUAL');
+  el.innerHTML =
+    '<span class="badge ' + (active ? 'badge-green' : 'badge-red') + '">' + (active ? 'BRAIN ON' : 'BRAIN OFF') + '</span>' +
+    '<span class="badge badge-blue">' + state + '</span>' +
+    '<span class="badge ' + (mode === 'BYPASS' ? 'badge-green' : 'badge-yellow') + '">' + mode + '</span>' +
+    '<span class="badge badge-blue">Cycle ' + (brain.cycleCount || 0) + '</span>';
+}
+
+function renderPnL(brain) {
+  var pnlEl = document.getElementById('pnlDisplay');
+  var paceEl = document.getElementById('paceDisplay');
+  var tradeEl = document.getElementById('tradeCount');
+  var winEl = document.getElementById('winRate');
+  var pace = brain && brain.pace ? brain.pace : null;
+  if (pace) {
+    var today = pace.todayPnl || 0;
+    var cls = today > 0 ? 'pnl-pos' : (today < 0 ? 'pnl-neg' : 'pnl-zero');
+    pnlEl.className = 'pnl ' + cls;
+    pnlEl.textContent = (today >= 0 ? '+' : '') + '$' + today.toFixed(2);
+    paceEl.textContent = 'Week: $' + (pace.weekPnl || 0).toFixed(0) + ' / $' + (pace.weekTarget || 2500) +
+      ' | Need $' + (pace.dailyNeeded || 500).toFixed(0) + '/day';
+    tradeEl.textContent = pace.tradesToday || 0;
+    winEl.textContent = pace.winRate ? (pace.winRate * 100).toFixed(0) + '%' : '--';
+  } else {
+    pnlEl.textContent = '$0.00';
+    paceEl.textContent = 'No pace data';
+    tradeEl.textContent = '0';
+    winEl.textContent = '--';
+  }
+}
+
+function renderQueue(trades) {
+  var el = document.getElementById('queueList');
+  if (!trades || trades.length === 0) { el.innerHTML = '<div class="empty">No queued trades</div>'; return; }
+  el.innerHTML = trades.map(function(t) {
+    var isBull = t.direction === 'BULLISH';
+    return '<div class="queue-item">' +
+      '<div>' +
+        '<div class="ticker ' + (isBull ? 'ticker-bull' : 'ticker-bear') + '">' +
+          (isBull ? '▲ ' : '▼ ') + t.ticker +
+        '</div>' +
+        '<div class="queue-meta">' + t.contractSymbol + ' x' + t.contracts + ' | ' + t.status + '</div>' +
+      '</div>' +
+      '<div style="text-align:right">' +
+        '<div class="trigger-price">$' + t.triggerPrice + '</div>' +
+        '<div class="trigger-label">TRIGGER</div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderPositions(positions) {
+  var el = document.getElementById('positionList');
+  if (!positions || positions.length === 0) { el.innerHTML = '<div class="empty">No active positions</div>'; return; }
+  el.innerHTML = positions.map(function(p) {
+    var pnl = p.unrealizedPnl || p.pnl || 0;
+    var pnlCls = pnl >= 0 ? 'ticker-bull' : 'ticker-bear';
+    return '<div class="position-item">' +
+      '<div class="pos-row">' +
+        '<div class="pos-ticker">' + (p.ticker || p.symbol || '?') + '</div>' +
+        '<div class="pos-pnl ' + pnlCls + '">' + (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2) + '</div>' +
+      '</div>' +
+      '<div class="pos-detail">' +
+        (p.contracts || p.quantity || '?') + ' contracts | ' +
+        'Entry: $' + (p.entryPrice || '?') + ' | Current: $' + (p.currentPrice || p.last || '?') +
+        (p.healthScore ? ' | Health: ' + p.healthScore + '/10' : '') +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderSpreads(data) {
+  var el = document.getElementById('spreadList');
+  if (!data || !data.openSpreads || data.openSpreads.length === 0) {
+    var status = data && data.enabled !== undefined ? (data.enabled ? 'Engine ON — no open spreads' : 'Engine OFF') : 'No data';
+    el.innerHTML = '<div class="empty">' + status + '</div>';
+    return;
+  }
+  el.innerHTML = data.openSpreads.map(function(s) {
+    return '<div class="spread-item">' +
+      '<div class="pos-row">' +
+        '<div class="pos-ticker">' + (s.symbol || s.type || 'XSP Spread') + '</div>' +
+        '<div class="pos-pnl ' + ((s.pnl || 0) >= 0 ? 'ticker-bull' : 'ticker-bear') + '">' +
+          (s.pnl >= 0 ? '+' : '') + '$' + (s.pnl || 0).toFixed(2) +
+        '</div>' +
+      '</div>' +
+      '<div class="pos-detail">Credit: $' + (s.credit || '?') + ' | ' + (s.dte || '?') + ' DTE</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderLog(brain) {
+  var el = document.getElementById('brainLog');
+  var log = brain && brain.log ? brain.log.slice(-10).reverse() : [];
+  if (log.length === 0) { el.innerHTML = '<div class="empty">No log entries</div>'; return; }
+  el.innerHTML = log.map(function(entry) {
+    var time = entry.time ? new Date(entry.time).toLocaleTimeString() : '';
+    return '<div class="log-item"><b>' + time + '</b> ' + (entry.msg || entry.message || JSON.stringify(entry)) + '</div>';
+  }).join('');
+}
+
+async function loadAll() {
+  var [brain, queue, positions, spreads] = await Promise.all([
+    fetchJSON('/api/brain/status'),
+    fetchJSON('/api/brain/queue'),
+    fetchJSON('/api/positions/live'),
+    fetchJSON('/api/spreads/status')
+  ]);
+
+  renderStatusBar(brain);
+  renderPnL(brain);
+  renderQueue(queue ? queue.queuedTrades : []);
+  renderPositions(positions ? (positions.positions || positions) : []);
+  renderSpreads(spreads);
+  renderLog(brain);
+
+  document.getElementById('lastUpdate').textContent = 'Updated: ' + new Date().toLocaleTimeString();
+}
+
+loadAll();
+autoRefreshInterval = setInterval(loadAll, 30000);
+</script>
+</body>
+</html>
