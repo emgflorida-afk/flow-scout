@@ -117,7 +117,10 @@ function renderStatusBar(brain) {
     '<span class="badge ' + (active ? 'badge-green' : 'badge-red') + '">' + (active ? 'BRAIN ON' : 'BRAIN OFF') + '</span>' +
     '<span class="badge badge-blue">' + state + '</span>' +
     '<span class="badge ' + (mode === 'BYPASS' ? 'badge-green' : 'badge-yellow') + '">' + mode + '</span>' +
-    '<span class="badge badge-blue">Cycle ' + (brain.cycleCount || 0) + '</span>';
+    '<span class="badge badge-blue">Cycle ' + (brain.cycleCount || 0) + '</span>' +
+    (brain.xspDirectional && brain.xspDirectional.enabled ?
+      '<span class="badge ' + (brain.xspDirectional.hasPosition ? 'badge-green' : 'badge-yellow') + '">XSP ' +
+      (brain.xspDirectional.hasPosition ? 'ACTIVE' : 'READY') + '</span>' : '');
 }
 
 function renderPnL(brain) {
@@ -153,7 +156,7 @@ function renderQueue(trades) {
         '<div class="ticker ' + (isBull ? 'ticker-bull' : 'ticker-bear') + '">' +
           (isBull ? '▲ ' : '▼ ') + t.ticker +
         '</div>' +
-        '<div class="queue-meta">' + t.contractSymbol + ' x' + t.contracts + ' | ' + t.status + '</div>' +
+        '<div class="queue-meta">' + t.contractSymbol + ' x' + t.contracts + ' | ' + (t.tradeType || 'DAY') + ' | ' + t.status + '</div>' +
       '</div>' +
       '<div style="text-align:right">' +
         '<div class="trigger-price">$' + t.triggerPrice + '</div>' +

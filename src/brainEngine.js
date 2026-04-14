@@ -87,7 +87,7 @@ var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLI
 
 // -- CORRELATION GROUPS (max 1 position per group, max 2 total) ------
 var CORRELATION_GROUPS = {
-  INDICES: ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'SPXL', 'TNA'],
+  INDICES: ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'SPXL', 'TNA', 'XSP', 'SPX'],
   MEGA_TECH: ['NVDA', 'AMZN', 'META', 'AAPL', 'AMD', 'MSFT', 'GOOGL'],
   HIGH_BETA: ['TSLA', 'MRVL', 'COIN', 'MSTR', 'INTC', 'WULF'],
   TRAVEL: ['ABNB', 'UBER', 'BKNG'],   // travel/gig economy -- correlated
@@ -209,6 +209,7 @@ function addQueuedTrade(trade) {
     management: trade.management || 'JSMITH',           // JSMITH = 80% off at 20%, leave runners
     tradeDate: trade.tradeDate || new Date().toISOString().slice(0, 10),
     source: trade.source || 'JSMITH',
+    tradeType: (trade.tradeType || 'DAY').toUpperCase(),  // DAY or SWING — swings can trigger all day
     status: 'PENDING',                                  // PENDING, TRIGGERED, FILLED, EXPIRED, CANCELLED
     note: trade.note || '',
     createdAt: new Date().toISOString(),
@@ -737,6 +738,27 @@ function popTVSignal() {
   }
   return tvSignalQueue.shift() || null;
 }
+
+// -- XSP DIRECTIONAL TRADING CONFIG -----------------------------------
+// When GO CALLS/GO PUTS fires on SPY, brain converts to XSP directional entry.
+// XSP = 1/10th SPX, affordable contracts ($2-5), cash settled, 1256 tax.
+// These are NOT credit spreads — these are directional put/call BUYS like trappytrades.
+var XSP_CONFIG = {
+  enabled: true,
+  maxContracts: 3,           // max 3 XSP contracts at a time
+  maxPositions: 1,           // only 1 XSP directional position at a time
+  stopPct: -0.35,            // -35% stop (XSP moves fast, need room)
+  trailActivate: 0.50,       // start trailing at +50% (not +20% like stocks)
+  trailPct: 0.25,            // trail 25% below peak
+  trimAt: 1.00,              // trim 1 contract at +100%
+  minDTE: 3,                 // minimum 3 DTE (no 0DTE, no 1DTE)
+  maxDTE: 10,                // max 10 DTE
+  minEntryPrice: 1.00,       // don't buy contracts under $1 (too far OTM, lottery)
+  maxEntryPrice: 6.00,       // don't buy contracts over $6 (too expensive for account)
+  triggerSources: ['GO_CALLS', 'GO_PUTS', 'STRATUM', 'STRATUM_CUSTOM'], // which TV signals trigger XSP
+  cooldownMs: 30 * 60 * 1000, // 30 min cooldown between XSP entries
+};
+var lastXSPEntry = 0; // timestamp of last XSP directional entry
 
 // -- BRAIN ACTIVE FLAG (must be started explicitly) -----------------
 var brainActive = false;
@@ -2147,8 +2169,14 @@ function getBrainStatus() {
       adjustments: weeklyPace.adjustments,
     },
     queuedTrades: queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; }).map(function(qt) {
-      return { id: qt.id, ticker: qt.ticker, direction: qt.direction, trigger: qt.triggerPrice, contract: qt.contractSymbol, source: qt.source, status: qt.status };
+      return { id: qt.id, ticker: qt.ticker, direction: qt.direction, trigger: qt.triggerPrice, contract: qt.contractSymbol, source: qt.source, status: qt.status, tradeType: qt.tradeType || 'DAY' };
     }),
+    xspDirectional: {
+      enabled: XSP_CONFIG.enabled,
+      maxContracts: XSP_CONFIG.maxContracts,
+      hasPosition: activePositions.some(function(p) { return p.ticker === 'XSP'; }),
+      cooldownRemaining: Math.max(0, Math.ceil((XSP_CONFIG.cooldownMs - (Date.now() - lastXSPEntry)) / 60000)),
+    },
   };
 }
 
@@ -2397,22 +2425,28 @@ async function runBrainCycle() {
     }
   }
 
-  // ---- QUEUED TRADES: Morning window ONLY (9:30-11:30 AM) ----
-  // JSmith/Discord picks are MORNING MOMENTUM plays. The trigger catches
-  // breakouts with volume. After 11:30 AM the setup is dead -- volume dries up,
-  // momentum fades, and you get chopped. DO NOT enter queued trades in dead zone
-  // or power hour. If it didn't trigger by 11:30, mark it EXPIRED and move on.
+  // ---- QUEUED TRADES: DAY trades morning only (9:30-11:30), SWING trades all day ----
+  // JSmith/Discord picks are MORNING MOMENTUM plays — 9:30-11:30 window.
+  // SWING trades (MRK puts, HD calls, etc.) can trigger anytime during market hours.
+  // Queued trades bypass maxTrades cap — pre-screened, high-conviction picks.
   var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
-  var queuedWindowEnd = 11 * 60 + 30; // 11:30 AM ET
-  // Queued trades bypass maxTrades cap — these are pre-screened, flow-confirmed picks.
-  // The maxTrades limit protects against brain scanning/churning, NOT pre-loaded setups.
-  // If NVDA + CHWY + HCA all trigger, all 3 should fire to stack toward daily goal.
-  if (pendingQueued.length > 0 && et.total >= 570 && et.total < queuedWindowEnd) {
+  var queuedWindowEnd = 11 * 60 + 30; // 11:30 AM ET for DAY trades
+  // Split into day trades and swing trades
+  var pendingDayQueued = pendingQueued.filter(function(qt) { return qt.tradeType !== 'SWING'; });
+  var pendingSwingQueued = pendingQueued.filter(function(qt) { return qt.tradeType === 'SWING'; });
+  // Combine: day trades in morning window + swing trades all market hours
+  var activePendingQueued = [];
+  if (et.total >= 570 && et.total < queuedWindowEnd) {
+    activePendingQueued = pendingQueued; // morning: all trades eligible
+  } else if (et.total >= 570 && et.total < marketClose) {
+    activePendingQueued = pendingSwingQueued; // after morning: swings only
+  }
+  if (activePendingQueued.length > 0) {
     try {
       var ts3 = require('./tradestation');
       var qtToken = await ts3.getAccessToken();
       if (qtToken) {
-        var qtSymbols = pendingQueued.map(function(qt) { return qt.ticker; }).join(',');
+        var qtSymbols = activePendingQueued.map(function(qt) { return qt.ticker; }).join(',');
         var qtRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + qtSymbols, {
           headers: { 'Authorization': 'Bearer ' + qtToken },
         });
@@ -2421,8 +2455,8 @@ async function runBrainCycle() {
           var qtQuotes = qtData.Quotes || qtData.quotes || [];
           if (!Array.isArray(qtQuotes)) qtQuotes = [qtQuotes];
 
-          for (var qi = 0; qi < pendingQueued.length; qi++) {
-            var qt = pendingQueued[qi];
+          for (var qi = 0; qi < activePendingQueued.length; qi++) {
+            var qt = activePendingQueued[qi];
             // Queued trades are pre-screened — don't cap them with maxTrades.
             // maxTrades only limits brain's own scanning/entries.
 
@@ -2573,14 +2607,21 @@ async function runBrainCycle() {
     }
   }
 
-  // EXPIRE unfired queued trades after morning window closes
-  if (pendingQueued.length > 0 && et.total >= queuedWindowEnd) {
+  // EXPIRE unfired DAY queued trades after morning window closes (11:30 AM)
+  // SWING trades stay alive until market close (4:00 PM)
+  if (pendingQueued.length > 0) {
     var today = new Date().toISOString().slice(0, 10);
     for (var qe = 0; qe < pendingQueued.length; qe++) {
-      if (pendingQueued[qe].tradeDate === today && pendingQueued[qe].status === 'PENDING') {
-        pendingQueued[qe].status = 'EXPIRED';
-        logBrain('QUEUED TRADE EXPIRED: ' + pendingQueued[qe].ticker + ' -- trigger $' + pendingQueued[qe].triggerPrice +
-          ' never hit by 11:30 AM. Setup is dead. Moving on.');
+      var qeT = pendingQueued[qe];
+      if (qeT.tradeDate === today && qeT.status === 'PENDING') {
+        if (qeT.tradeType === 'SWING' && et.total >= marketClose) {
+          qeT.status = 'EXPIRED';
+          logBrain('SWING QUEUED EXPIRED: ' + qeT.ticker + ' -- trigger $' + qeT.triggerPrice + ' never hit by market close.');
+        } else if (qeT.tradeType !== 'SWING' && et.total >= queuedWindowEnd) {
+          qeT.status = 'EXPIRED';
+          logBrain('QUEUED TRADE EXPIRED: ' + qeT.ticker + ' -- trigger $' + qeT.triggerPrice +
+            ' never hit by 11:30 AM. Setup is dead. Moving on.');
+        }
       }
     }
     saveQueuedTrades();
@@ -2592,6 +2633,148 @@ async function runBrainCycle() {
     // These are priority signals from your chart/webhooks — never block them
     var tvSig = popTVSignal();
     if (tvSig) {
+      // ---- XSP DIRECTIONAL CONVERSION ----
+      // When GO CALLS/GO PUTS fires on SPY/QQQ/IWM, convert to XSP directional trade.
+      // This is how PhiLip's Discord makes real money — directional XSP puts/calls, not spreads.
+      var isXSPCandidate = XSP_CONFIG.enabled &&
+        ['SPY', 'QQQ', 'IWM'].indexOf(tvSig.ticker) >= 0 &&
+        XSP_CONFIG.triggerSources.indexOf(tvSig.source) >= 0;
+
+      if (isXSPCandidate) {
+        var xspNow = Date.now();
+        var xspCooldownOk = (xspNow - lastXSPEntry) > XSP_CONFIG.cooldownMs;
+        var xspAlreadyIn = activePositions.some(function(p) { return p.ticker === 'XSP'; });
+        var xspPositionCount = activePositions.filter(function(p) { return p.ticker === 'XSP'; }).length;
+
+        if (xspAlreadyIn || xspPositionCount >= XSP_CONFIG.maxPositions) {
+          logBrain('XSP SKIP: Already have XSP directional position open');
+        } else if (!xspCooldownOk) {
+          var xspCoolRemain = Math.ceil((XSP_CONFIG.cooldownMs - (xspNow - lastXSPEntry)) / 60000);
+          logBrain('XSP SKIP: Cooldown active — ' + xspCoolRemain + ' min remaining');
+        } else {
+          // CONVERT: SPY GO signal → XSP directional entry
+          logBrain('XSP DIRECTIONAL: Converting ' + tvSig.ticker + ' ' + tvSig.direction +
+            ' (source: ' + tvSig.source + ') → XSP ' + tvSig.direction + ' entry');
+
+          if (BYPASS_MODE && orderExecutor && resolver) {
+            try {
+              var xspType = tvSig.direction === 'CALLS' ? 'call' : 'put';
+              var xspContract = await resolver.resolveContract('XSP', xspType, 'DAY', {
+                confluence: 7, strategy: 'XSP_DIRECTIONAL'
+              });
+
+              if (xspContract && !xspContract.blocked) {
+                var xspPrice = xspContract.entryPrice || xspContract.ask;
+
+                // Validate XSP price bounds
+                if (xspPrice < XSP_CONFIG.minEntryPrice || xspPrice > XSP_CONFIG.maxEntryPrice) {
+                  logBrain('XSP SKIP: Price $' + xspPrice.toFixed(2) + ' outside bounds ($' +
+                    XSP_CONFIG.minEntryPrice + '-$' + XSP_CONFIG.maxEntryPrice + ')');
+                } else if (xspContract.dte < XSP_CONFIG.minDTE) {
+                  logBrain('XSP SKIP: DTE ' + xspContract.dte + ' < min ' + XSP_CONFIG.minDTE);
+                } else {
+                  var xspQty = Math.min(XSP_CONFIG.maxContracts, xspContract.qty || 3);
+                  var xspStop = parseFloat((xspPrice * (1 + XSP_CONFIG.stopPct)).toFixed(2));
+                  var xspT1 = parseFloat((xspPrice * (1 + XSP_CONFIG.trimAt)).toFixed(2));
+
+                  logBrain('XSP EXECUTING: ' + xspContract.symbol + ' x' + xspQty +
+                    ' @ $' + xspPrice.toFixed(2) + ' | Stop $' + xspStop.toFixed(2) +
+                    ' | T1 $' + xspT1.toFixed(2) + ' | DTE ' + xspContract.dte);
+
+                  var xspResult = await orderExecutor.placeOrder({
+                    account: LIVE_ACCOUNT,
+                    symbol: xspContract.symbol,
+                    action: 'BUYTOOPEN',
+                    qty: xspQty,
+                    limit: xspPrice,
+                    stop: xspStop,
+                    t1: null, // brain manages trim, no exchange T1
+                    duration: 'DAY',
+                    note: 'XSP DIRECTIONAL: ' + tvSig.source + ' ' + tvSig.ticker + ' → XSP ' + xspType,
+                    liveBypass: true,
+                  });
+
+                  if (xspResult && xspResult.orderId) {
+                    lastXSPEntry = xspNow;
+                    activePositions.push({
+                      ticker: 'XSP',
+                      type: xspType,
+                      direction: tvSig.direction === 'CALLS' ? 'BULLISH' : 'BEARISH',
+                      contracts: xspQty,
+                      entry: xspPrice,
+                      stop: xspStop,
+                      contractSymbol: xspContract.symbol,
+                      orderId: xspResult.orderId,
+                      trim1Target: xspT1,
+                      trim2Target: null,
+                      trim1Done: false, trim2Done: false, trailStop: null,
+                      openTime: new Date().toISOString(),
+                      currentPrice: xspPrice,
+                      strategy: 'XSP_DIRECTIONAL',
+                      liveOrder: true,
+                      management: 'XSP_TRAIL', // custom management for XSP
+                    });
+                    tradesOpened++;
+
+                    await postToGoMode(
+                      '**XSP DIRECTIONAL ENTRY** ' + (xspType === 'call' ? 'CALLS ▲' : 'PUTS ▼') + '\n' +
+                      '`' + xspContract.symbol + '` x' + xspQty + ' @ $' + xspPrice.toFixed(2) + '\n' +
+                      'Trigger: ' + tvSig.ticker + ' ' + tvSig.source + '\n' +
+                      'Stop: $' + xspStop.toFixed(2) + ' (-35%) | Target: +100% → trail\n' +
+                      'DTE: ' + xspContract.dte + ' | Delta: ' + (xspContract.delta ? xspContract.delta.toFixed(2) : '?'),
+                      '\uD83D\uDFE2'
+                    );
+
+                    await postToDiscord(
+                      'XSP DIRECTIONAL ORDER PLACED\n' +
+                      '================================\n' +
+                      'Signal: ' + tvSig.ticker + ' ' + tvSig.direction + ' (' + tvSig.source + ')\n' +
+                      'Contract: ' + xspContract.symbol + ' x' + xspQty + '\n' +
+                      'Entry: $' + xspPrice.toFixed(2) + '\n' +
+                      'Stop: $' + xspStop.toFixed(2) + ' (-35%)\n' +
+                      'T1: $' + xspT1.toFixed(2) + ' (+100%)\n' +
+                      'DTE: ' + xspContract.dte + '\n' +
+                      'Order ID: ' + xspResult.orderId + '\n' +
+                      '================================\n' +
+                      'LIVE XSP DIRECTIONAL — NOT A SPREAD'
+                    );
+
+                    logBrain('XSP ORDER FILLED: ' + xspContract.symbol + ' x' + xspQty +
+                      ' @ $' + xspPrice.toFixed(2) + ' | ID: ' + xspResult.orderId);
+
+                    transitionTo('POSITION_OPEN', 'XSP Directional: ' + xspType);
+                  } else {
+                    logBrain('XSP ORDER FAILED: ' + (xspResult ? (xspResult.error || xspResult.reason) : 'no result'));
+                  }
+                }
+              } else {
+                logBrain('XSP SKIP: Contract resolver blocked — ' + (xspContract ? xspContract.reason : 'no contract'));
+              }
+            } catch(xspErr) {
+              logBrain('XSP ERROR: ' + xspErr.message);
+            }
+          } else {
+            // Not in BYPASS mode — just log the recommendation
+            await postToGoMode(
+              '**XSP DIRECTIONAL SIGNAL** ' + tvSig.direction + '\n' +
+              'Trigger: ' + tvSig.ticker + ' ' + tvSig.source + '\n' +
+              'Recommendation: Buy XSP ' + (tvSig.direction === 'CALLS' ? 'CALLS' : 'PUTS') + ' x3\n' +
+              'BYPASS OFF — manual entry required',
+              '\uD83D\uDFE1'
+            );
+          }
+          // Don't also process this as a regular stock trade — XSP consumed the signal
+          // Fall through to next cycle
+        }
+      }
+
+      // If XSP consumed the signal (and we're SPY/QQQ/IWM), skip regular stock processing
+      // For non-index tickers, process normally
+      if (isXSPCandidate) {
+        // Signal was handled by XSP logic above (either traded, skipped, or cooldown)
+        // Don't also try to trade SPY options directly
+      } else {
+      // Regular TV signal processing for non-index tickers
       var tvDirection = tvSig.direction === 'CALLS' ? 'BULLISH' : 'BEARISH';
       var tvAction = tvSig.direction === 'CALLS' ? 'CALL' : 'PUT';
       var signal = {
@@ -2694,6 +2877,7 @@ async function runBrainCycle() {
         logBrain('TV signal rejected: ' + entry.reason);
         transitionTo('WATCHING', 'TV signal rejected');
       }
+      } // end else (non-XSP regular TV signal processing)
       return;
     }
 

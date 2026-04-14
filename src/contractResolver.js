@@ -37,11 +37,11 @@ const MAX_PREMIUM = 2.40;
 // HIGH-PRICED STOCKS: ATM options on $100+ stocks exceed $2.40.
 // Allow higher premiums but CAP at 1 contract to keep risk defined.
 // e.g. NVDA $187 -> ATM call ~$6-8 -> 1 contract = $600-800 risk (within 2% of $19K)
-var HIGH_PRICE_TICKERS = new Set(['NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'NFLX', 'AVGO', 'MSFT']);
-var HIGH_PRICE_MAX_PREMIUM = 5.00; // 1 contract × $5 = $500 risk max
+var HIGH_PRICE_TICKERS = new Set(['NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'NFLX', 'AVGO', 'MSFT', 'XSP']);
+var HIGH_PRICE_MAX_PREMIUM = 6.00; // XSP/NVDA: 3 contracts × $6 = $1,800 risk max
 
 const WATCHLIST = new Set([
-  'SPY','QQQ','IWM',
+  'SPY','QQQ','IWM','XSP',
   'NVDA','TSLA','META','GOOGL','AMZN','MSFT','AMD','AAPL','MRVL',
   'JPM','GS','MS','WFC','BAC','V','MA',
   'XLE','XOM','CVX','COP',
