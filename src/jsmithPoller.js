@@ -90,11 +90,31 @@ async function fetchMessages(channelId, limit, token) {
 function johnIdeaToQueueItem(idea) {
   if (!idea || !idea.ticker || !idea.strike || !idea.expiry) return null;
 
+  // PREFER SAFER BACKUP: if John posted a backup contract labeled "safer" (or similar),
+  // swap to the backup expiry so we ride more DTE instead of the 3DTE primary.
+  // Policy: weekly lottos are not bill-paying. Safer = further-out expiry.
+  var useStrike = idea.strike;
+  var useExpiry = idea.expiry;
+  var swappedToBackup = false;
+  if (idea.backupContract && idea.backupContract.expiry) {
+    var label = (idea.backupContract.label || '').toLowerCase();
+    var isSafer = /safer|safe|alt|alternate/.test(label);
+    // Also prefer backup if it has more DTE than primary
+    var primaryMs = new Date(idea.expiry).getTime();
+    var backupMs = new Date(idea.backupContract.expiry).getTime();
+    var moreDTE = backupMs > primaryMs;
+    if (isSafer || moreDTE) {
+      useStrike = idea.backupContract.strike || idea.strike;
+      useExpiry = idea.backupContract.expiry;
+      swappedToBackup = true;
+    }
+  }
+
   // Build TradeStation contract symbol: "TICKER YYMMDDC<strike>"
-  // idea.expiry is "2026-05-15"
-  var yymmdd = idea.expiry.slice(2,4) + idea.expiry.slice(5,7) + idea.expiry.slice(8,10);
+  // useExpiry is "2026-05-15"
+  var yymmdd = useExpiry.slice(2,4) + useExpiry.slice(5,7) + useExpiry.slice(8,10);
   var cp = idea.direction === 'call' ? 'C' : 'P';
-  var strikeStr = Number.isInteger(idea.strike) ? String(idea.strike) : String(idea.strike);
+  var strikeStr = Number.isInteger(useStrike) ? String(useStrike) : String(useStrike);
   var contractSymbol = idea.ticker + ' ' + yymmdd + cp + strikeStr;
 
   // Max entry -- VIP gets a bit more headroom
@@ -112,8 +132,8 @@ function johnIdeaToQueueItem(idea) {
     direction:      idea.direction === 'call' ? 'CALLS' : 'PUTS',
     triggerPrice:   idea.triggerPrice,
     contractSymbol: contractSymbol,
-    strike:         idea.strike,
-    expiration:     idea.expiry.slice(5,7) + '-' + idea.expiry.slice(8,10) + '-' + idea.expiry.slice(0,4),
+    strike:         useStrike,
+    expiration:     useExpiry.slice(5,7) + '-' + useExpiry.slice(8,10) + '-' + useExpiry.slice(0,4),
     contractType:   idea.direction === 'call' ? 'Call' : 'Put',
     maxEntryPrice:  maxEntry,
     stopPct:        -(idea.stopPct || 25),
@@ -122,7 +142,8 @@ function johnIdeaToQueueItem(idea) {
     tradeType:      idea.tradeType || 'DAY',
     source:         'JSMITH_' + idea.tier + '_' + idea.ticker,
     note:           'Auto-parsed from Discord. Tier=' + idea.tier +
-                    (idea.backupContract ? ' | Backup:' + idea.backupContract.strike + (idea.backupContract.label || '') : ''),
+                    (swappedToBackup ? ' | SAFER-SWAP to ' + useStrike + ' ' + useExpiry : '') +
+                    (idea.backupContract && !swappedToBackup ? ' | Backup:' + idea.backupContract.strike + (idea.backupContract.label || '') : ''),
   };
 }
 
