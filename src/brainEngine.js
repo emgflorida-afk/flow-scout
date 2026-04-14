@@ -299,7 +299,7 @@ function saveQueuedTrades() {
 
 function addQueuedTrade(trade) {
   var qt = {
-    id: 'QT_' + Date.now(),
+    id: 'QT_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     ticker: (trade.ticker || '').toUpperCase(),
     direction: (trade.direction || 'CALLS').toUpperCase(),
     triggerPrice: parseFloat(trade.triggerPrice),     // stock price that triggers entry
