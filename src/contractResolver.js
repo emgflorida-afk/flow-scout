@@ -19,25 +19,27 @@ async function rateLimit() {
 
 const MODES = {
   DAY: {
-    label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
-    minDTE: 2, maxDTE: 5, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
-    // R:R = 1.6:1. minDTE: 2 -- no 0/1DTE, IV crush/gamma risk too high.
+    label: 'DAY TRADE', minPremium: 0.30, maxPremium: 3.50,
+    minDTE: 2, maxDTE: 5, stopPct: 0.25, t1Pct: 0.40, maxRisk: 400,
   },
   SWING: {
-    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
-    minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 140,
-    // R:R = 1.67:1 -- risk 30% to make 50%. Swings need room + bigger target.
+    label: 'SWING TRADE', minPremium: 0.50, maxPremium: 5.00,
+    minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 600,
   },
 };
 
 const MIN_PREMIUM = 0.30;
-const MAX_PREMIUM = 2.40;
+const MAX_PREMIUM = 5.00;
 
-// HIGH-PRICED STOCKS: ATM options on $100+ stocks exceed $2.40.
-// Allow higher premiums but CAP at 1 contract to keep risk defined.
-// e.g. NVDA $187 -> ATM call ~$6-8 -> 1 contract = $600-800 risk (within 2% of $19K)
-var HIGH_PRICE_TICKERS = new Set(['NVDA', 'AMZN', 'GOOGL', 'GOOG', 'META', 'NFLX', 'AVGO', 'MSFT', 'XSP', 'TSM', 'ASML', 'NOC']);
-var HIGH_PRICE_MAX_PREMIUM = 6.00; // XSP/NVDA: 3 contracts × $6 = $1,800 risk max
+// HIGH-PRICED STOCKS: ATM options on $100+ stocks exceed default cap.
+// Expanded for Bill-Paying Mode — A+ Stratum alerts on liquid mega-caps
+// need room. $105K BP supports 3 contracts × $6 = $1,800 risk per setup.
+var HIGH_PRICE_TICKERS = new Set([
+  'NVDA','AMZN','GOOGL','GOOG','META','NFLX','AVGO','MSFT','XSP','TSM','ASML','NOC',
+  'TSLA','COST','HD','LOW','JPM','GS','BAC','CVX','XOM','UNH','LLY','ORCL','CRM','ADBE',
+  'COIN','MU','MRVL','SPY','QQQ','IWM','DIA','WMT','MA','V','BRK.B','AAPL','SMCI','PLTR',
+]);
+var HIGH_PRICE_MAX_PREMIUM = 7.00; // 3 contracts × $7 = $2,100 risk max on A+ setup
 
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','XSP',
@@ -543,9 +545,9 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
 
   var optionStop=parseFloat((best.mid*(1-optionStopPct)).toFixed(2));
   var t1Price=parseFloat((best.mid*(1+t1Pct)).toFixed(2));
-  var qty=best.mid<=1.20?2:1;
-  // HIGH-PRICED: force 1 contract when premium > $2.40 to cap risk
-  if (best.mid > 2.40) qty = 1;
+  // Default resolver qty (2 cheap, 1 expensive). Alerter overrides this for
+  // Stratum A+/A++ via Bill-Paying sizing ladder — see alerter.js.
+  var qty=best.mid<=1.50?2:1;
   var timeCtx=getTimeContext();
 
   console.log('[OPRA] '+ticker+' '+best.symbol+' $'+best.strike+' mid:$'+best.mid+' '+dte+'DTE entry:'+entryMode+' T1:+'+(t1Pct*100).toFixed(0)+'% source:'+best.source);

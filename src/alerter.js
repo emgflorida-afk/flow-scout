@@ -815,10 +815,16 @@ async function autoExecuteStratSIM(parsed, resolved, tvData, stratGrade, dedupKe
     // the prior 2-contract method. Stop stays -25% regardless.
     var confNumForSize = parseInt(String(signal.confluence || '0').split('/')[0]) || 0;
     var isStratumForSize = (signal.source || '').toUpperCase().indexOf('STRATUM') === 0 && confNumForSize >= 5;
-    if (isStratumForSize) {
-      // 3 contracts on cheap premium, 2 on mid, 1 on expensive
-      if (ep <= 0.80) qty = 3;
-      else if (ep <= 1.50) qty = 2;
+    var isStratumAPlusPlus = isStratumForSize && confNumForSize >= 6;
+    if (isStratumAPlusPlus) {
+      // 6/6 A++ — maximum conviction. BP supports real size.
+      if (ep <= 2.00) qty = 3;
+      else if (ep <= 5.00) qty = 2;
+      else qty = 1;
+    } else if (isStratumForSize) {
+      // 5/6 A+ — strong conviction. Scale by premium cost.
+      if (ep <= 1.50) qty = 3;
+      else if (ep <= 3.50) qty = 2;
       else qty = 1;
     } else {
       qty = 2;
