@@ -252,12 +252,45 @@ async function getChainTS(ticker, expiry, type, price, token) {
   }
 }
 
+// -- PUBLIC.COM TOKEN EXCHANGE ------------------------------------
+// Public.com auth is 2-step: long-lived secret -> short-lived accessToken.
+// Prior version sent the secret directly as Bearer, which the API rejects
+// with 401 every time. Exchange + cache the accessToken here.
+var _pubAccessToken = null;
+var _pubTokenExpiresAt = 0;
+async function getPublicAccessToken() {
+  var now = Date.now();
+  if (_pubAccessToken && now < _pubTokenExpiresAt - 60000) return _pubAccessToken;
+  var secret = process.env.PUBLIC_API_KEY;
+  if (!secret) return null;
+  try {
+    var validityMinutes = 60;
+    var res = await fetch('https://api.public.com/userapiauthservice/personal/access-tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ validityInMinutes: validityMinutes, secret: secret }),
+    });
+    console.log('[PUB-AUTH] Token exchange HTTP:', res.status);
+    if (!res.ok) { console.error('[PUB-AUTH] Exchange failed:', res.status); return null; }
+    var data = await res.json();
+    var tok = data.accessToken || data.access_token || null;
+    if (!tok) { console.error('[PUB-AUTH] No accessToken in response'); return null; }
+    _pubAccessToken = tok;
+    _pubTokenExpiresAt = now + (validityMinutes * 60 * 1000);
+    console.log('[PUB-AUTH] Exchanged secret -> accessToken (cached ' + validityMinutes + 'm)');
+    return tok;
+  } catch(e) {
+    console.error('[PUB-AUTH] Exchange error:', e.message);
+    return null;
+  }
+}
+
 // -- GET OPTION CHAIN: PUBLIC.COM (source 2) ----------------------
 async function getChainPublic(ticker, expiry, type, price) {
   try {
     console.log('[CHAIN-PUB] Fetching', ticker, type, expiry);
-    var apiKey = process.env.PUBLIC_API_KEY;
-    if (!apiKey) { console.log('[CHAIN-PUB] No PUBLIC_API_KEY'); return []; }
+    var accessToken = await getPublicAccessToken();
+    if (!accessToken) { console.log('[CHAIN-PUB] No access token'); return []; }
 
     // Public.com options chain -- POST with JSON body per API docs
     var url = 'https://api.public.com/userapigateway/marketdata/' + (process.env.PUBLIC_ACCOUNT_ID || '5OF64813') + '/option-chain';
@@ -269,7 +302,7 @@ async function getChainPublic(ticker, expiry, type, price) {
     var res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Authorization': 'Bearer ' + apiKey,
+        'Authorization': 'Bearer ' + accessToken,
         'Content-Type': 'application/json'
       },
       body: body
