@@ -1351,6 +1351,34 @@ app.post('/api/scalp/toggle', function(req, res) {
 // -- BRAIN ENGINE -----------------------------------------------
 var brainEngine = null;
 try { brainEngine = require('./brainEngine'); console.log('[BRAIN] Loaded OK'); } catch(e) { console.log('[BRAIN] Skipped:', e.message); }
+var backtester = null;
+try { backtester = require('./backtester'); console.log('[BACKTEST] Loaded OK'); } catch(e) { console.log('[BACKTEST] Skipped:', e.message); }
+
+// POST /api/brain/backtest { date: "2026-04-11" }
+// Replays a historical day from Bullflow /backtesting, runs every algo alert
+// through the live executeNow gates, and returns simulated stats. Read-only —
+// does not place orders or mutate brain state.
+app.post('/api/brain/backtest', async function(req, res) {
+  try {
+    if (!backtester) return res.status(503).json({ error: 'backtester not loaded' });
+    var date = (req.body && req.body.date) || (req.query && req.query.date);
+    if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+    var result = await backtester.runBacktest({ date: date });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/brain/peak-return?symbol=O:SPY...&timestamp=2026-04-11T14:30:00Z
+app.get('/api/brain/peak-return', async function(req, res) {
+  try {
+    if (!backtester) return res.status(503).json({ error: 'backtester not loaded' });
+    var result = await backtester.getPeakReturn({
+      symbol: req.query.symbol,
+      timestamp: req.query.timestamp,
+    });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.get('/api/brain/status', function(req, res) {
   try {
