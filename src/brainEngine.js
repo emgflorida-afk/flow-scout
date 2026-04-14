@@ -264,6 +264,12 @@ var COOLDOWN_FILE = '/tmp/ticker_cooldowns.json';
 var QUEUED_FILE = '/tmp/queued_trades.json';
 var queuedTrades = [];
 
+// brainLog is fully declared further down, but the bootstrap IIFE below
+// calls logBrain() which pushes here. Hoist the initialization so bootstrap
+// doesn't trip on an undefined array during module load.
+var brainLog = [];
+var MAX_LOG  = 500;
+
 function loadQueuedTrades() {
   try {
     var fs = require('fs');
@@ -1116,8 +1122,9 @@ var brainActive = false;
 var cycleCount = 0;
 var lastCycleTime = null;
 var todayCatalysts = null;
-var brainLog = []; // rolling log of brain decisions (last 50)
-var MAX_LOG = 50;
+// brainLog + MAX_LOG are hoisted above the queue bootstrap (~line 268)
+// so that addQueuedTrade -> logBrain works during env bootstrap.
+MAX_LOG = 50;
 
 // ===================================================================
 // UTILITY: Calculate Exponential Moving Average
