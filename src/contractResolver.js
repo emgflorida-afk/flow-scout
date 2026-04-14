@@ -20,13 +20,12 @@ async function rateLimit() {
 const MODES = {
   DAY: {
     label: 'DAY TRADE', minPremium: 0.30, maxPremium: 1.50,
-    minDTE: 1, maxDTE: 3, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
-    // R:R = 1.6:1 -- risk 25% to make 40%. NEVER risk more than reward.
-    // minDTE: 1 -- NO 0DTE EVER. Doctrine rule. Changed from 0.
+    minDTE: 2, maxDTE: 5, stopPct: 0.25, t1Pct: 0.40, maxRisk: 120,
+    // R:R = 1.6:1. minDTE: 2 -- no 0/1DTE, IV crush/gamma risk too high.
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 2.40,
-    minDTE: 5, maxDTE: 14, stopPct: 0.30, t1Pct: 0.50, maxRisk: 140,
+    minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 140,
     // R:R = 1.67:1 -- risk 30% to make 50%. Swings need room + bigger target.
   },
 };
@@ -149,13 +148,18 @@ async function getExpirations(ticker, token) {
 
 function selectExpiry(expirations, mode) {
   var config = MODES[mode] || MODES.SWING;
-  // HARD RULE: NEVER select 0DTE -- filter them out completely
-  var nonZero = expirations.filter(function(e){ return e.dte >= 1; });
-  if (nonZero.length === 0) { console.log('[EXPIRY] BLOCKED -- all expirations are 0DTE. NO 0DTE EVER.'); return null; }
-  var valid = nonZero.filter(function(e){ return e.dte>=config.minDTE && e.dte<=config.maxDTE; });
+  // HARD RULE: NEVER select dead-expiry -- must be >= config.minDTE.
+  // No "nearest non-zero" fallback: a 1DTE for a SWING is a bug, not a fallback.
+  var eligible = expirations.filter(function(e){ return e.dte >= config.minDTE; });
+  if (eligible.length === 0) {
+    console.log('[EXPIRY] BLOCKED -- no expirations meet minDTE=' + config.minDTE);
+    return null;
+  }
+  var valid = eligible.filter(function(e){ return e.dte <= config.maxDTE; });
   if (valid.length > 0) { console.log('[EXPIRY] Selected:',valid[0].date+'('+valid[0].dte+'DTE)'); return valid[0]; }
-  // Fallback: nearest non-zero DTE
-  console.log('[EXPIRY] Fallback:',nonZero[0].date+'('+nonZero[0].dte+'DTE)'); return nonZero[0];
+  // Fallback: nearest expiry that still meets minDTE (may be slightly past maxDTE)
+  console.log('[EXPIRY] Fallback (past maxDTE but >= minDTE):',eligible[0].date+'('+eligible[0].dte+'DTE)');
+  return eligible[0];
 }
 
 function formatExpiry(dateStr) {
@@ -502,7 +506,7 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   var rawChain=await getOptionChain(ticker, expiry, type, price, token);
 
   if (!rawChain.length) {
-    var remaining=expirations.filter(function(e){ return e.date > expiry && e.dte > 0; });
+    var remaining=expirations.filter(function(e){ return e.date > expiry && e.dte >= config.minDTE; });
     for (var i=0; i<Math.min(remaining.length,3); i++) {
       console.log('[RESOLVE] Retrying expiry', remaining[i].date+'('+remaining[i].dte+'DTE)');
       expiry  = remaining[i].date;

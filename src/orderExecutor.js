@@ -380,7 +380,50 @@ async function placeOrder(params) {
     var orders  = data.Orders || [data];
     var orderId = orders[0] && (orders[0].OrderID || orders[0].orderId);
 
+    // EMBEDDED REJECTION CHECK: TS can return 200 with rejection details
+    // in data.Errors[] or orders[0].Error/Message
+    var embeddedError = null;
+    if (data.Errors && data.Errors.length > 0) {
+      embeddedError = 'TS_REJ: ' + JSON.stringify(data.Errors);
+    } else if (orders[0] && (orders[0].Error || orders[0].error)) {
+      embeddedError = 'TS_REJ: ' + (orders[0].Error || orders[0].error);
+    } else if (!orderId && orders[0] && orders[0].Message) {
+      embeddedError = 'TS_REJ: ' + orders[0].Message;
+    } else if (!orderId) {
+      embeddedError = 'TS_REJ: No OrderID returned: ' + JSON.stringify(data);
+    }
+    if (embeddedError) {
+      console.error('[EXECUTOR] REJECTED --', embeddedError);
+      return { error: embeddedError, rejected: true, response: data };
+    }
+
     console.log('[EXECUTOR] Order placed OK -- ID:', orderId);
+
+    // POST-PLACEMENT VERIFICATION: Poll TS for status after 1.2s.
+    // Catches rejections that land in the order record (REJ/CAN/EXP)
+    // even though the POST returned 200.
+    try {
+      await new Promise(function(r){ setTimeout(r, 1200); });
+      var verifyRes = await fetch(base + '/brokerage/accounts/' + account + '/orders/' + orderId, {
+        headers: { 'Authorization': 'Bearer ' + token },
+      });
+      if (verifyRes.ok) {
+        var verifyData = await verifyRes.json();
+        var ordArr = verifyData.Orders || [verifyData];
+        var liveOrder = ordArr[0] || {};
+        var status = (liveOrder.Status || liveOrder.StatusDescription || '').toUpperCase();
+        var rejStatuses = ['REJ', 'REJECTED', 'CAN', 'CANCELLED', 'CANCELED', 'EXP', 'EXPIRED', 'BRO', 'BROKEN'];
+        var isRej = rejStatuses.some(function(s){ return status.indexOf(s) !== -1; });
+        if (isRej) {
+          var rejMsg = liveOrder.RejectReason || liveOrder.StatusDescription || status;
+          console.error('[EXECUTOR] ORDER REJECTED POST-PLACEMENT --', orderId, status, rejMsg);
+          return { error: 'TS_REJ: ' + status + ' -- ' + rejMsg, rejected: true, orderId: orderId };
+        }
+        console.log('[EXECUTOR] Order verified alive --', orderId, 'status:', status);
+      }
+    } catch(vErr) {
+      console.log('[EXECUTOR] Verify skipped:', vErr.message);
+    }
 
     // RECORD RISK AFTER SUCCESSFUL PLACEMENT
     try {

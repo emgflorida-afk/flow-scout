@@ -51,6 +51,7 @@ var DISCORD_WEBHOOK = process.env.DISCORD_EXECUTE_NOW_WEBHOOK ||
 
 // -- STATE -------------------------------------------------------
 var openSpreads = [];            // array of spread position objects
+var lastEvaluation = null;       // last spread evaluation result for diagnostics
 var monitorTimer = null;
 var dailySpreadCount = 0;
 var dailySpreadDate  = '';
@@ -277,11 +278,17 @@ async function evaluateSpreadOpportunity() {
   }
 
   log('Signals -- FTFC: ' + ftfc + ' | Sunday: ' + sundayDir + ' | Dynamic: ' + dynBias);
+  lastEvaluation = {
+    at: new Date().toISOString(),
+    ftfc: ftfc, sunday: sundayDir, dynamic: dynBias,
+  };
 
   // -- 2/3 must agree on direction --
   var signals = [ftfc, sundayDir, dynBias];
   var bullVotes = signals.filter(function(s) { return s === 'BULL'; }).length;
   var bearVotes = signals.filter(function(s) { return s === 'BEAR'; }).length;
+  lastEvaluation.bullVotes = bullVotes;
+  lastEvaluation.bearVotes = bearVotes;
 
   var direction = null;
   var type = null;
@@ -881,6 +888,7 @@ function getSpreadStatus() {
     totalRiskDeployed: parseFloat(round2(totalRisk)),
     dailySpreadCount: dailySpreadCount,
     monitorRunning: monitorTimer !== null,
+    lastEvaluation: lastEvaluation,
   };
 }
 

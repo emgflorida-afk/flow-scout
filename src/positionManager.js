@@ -102,18 +102,28 @@ async function checkConflict(account, ticker, direction) {
     var positions = data.Positions || [];
 
     for (var i = 0; i < positions.length; i++) {
-      var p      = positions[i];
-      var sym    = (p.Symbol || '').toUpperCase();
-      var isCall = sym.includes('C') && !sym.includes('CRM');
-      var isPut  = sym.includes('P') && !sym.includes('SPY');
+      var p         = positions[i];
+      var sym       = (p.Symbol || '').toUpperCase();
+      var assetType = (p.AssetType || '').toUpperCase();
 
-      // Simpler check -- look for ticker in symbol
-      if (sym.includes(ticker.toUpperCase())) {
-        var existingDir = isCall ? 'call' : 'put';
-        if (existingDir !== direction) {
-          console.log('[POS-MGR] CONFLICT:', ticker, 'already have', existingDir, 'cannot open', direction);
-          return { allowed: false, conflict: existingDir, ticker: ticker };
-        }
+      // ONLY check option positions for conflicts. Long stock != put/call conflict.
+      // Options on TS come through as AssetType 'OP' or 'STOCKOPTION'.
+      var isOption = (assetType === 'OP' || assetType === 'STOCKOPTION' ||
+                      /\s\d{6}[CP]\d/.test(sym) || /\d{6}[CP]\d{8}/.test(sym));
+      if (!isOption) continue;
+
+      // Match on the OCC/TS option root (before the space or 6-digit date)
+      var root = sym.split(' ')[0].replace(/\d{6}[CP].*/, '').toUpperCase();
+      if (root !== ticker.toUpperCase()) continue;
+
+      // Detect CALL vs PUT from the option symbol itself (C or P after the 6-digit date)
+      var isCall = /\d{6}C\d/.test(sym) || /\sC\d/.test(sym);
+      var isPut  = /\d{6}P\d/.test(sym) || /\sP\d/.test(sym);
+      if (!isCall && !isPut) continue;
+      var existingDir = isCall ? 'call' : 'put';
+      if (existingDir !== direction) {
+        console.log('[POS-MGR] CONFLICT:', ticker, 'already have', existingDir, 'cannot open', direction);
+        return { allowed: false, conflict: existingDir, ticker: ticker };
       }
     }
     return { allowed: true };

@@ -1431,6 +1431,27 @@ app.delete('/api/brain/queue/:id', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Manually clear a phantom/stuck active position from brain state (e.g. HCA today).
+// Does NOT close at broker -- only removes from tracking.
+app.delete('/api/brain/position/:ticker', function(req, res) {
+  try {
+    if (!brainEngine || !brainEngine.removePosition) {
+      return res.json({ error: 'Brain engine not loaded' });
+    }
+    var removed = brainEngine.removePosition(req.params.ticker);
+    res.json({ status: removed > 0 ? 'OK' : 'NOT_FOUND', ticker: req.params.ticker, removed: removed });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/brain/positions', function(req, res) {
+  try {
+    if (!brainEngine || !brainEngine.getActivePositions) {
+      return res.json({ error: 'Brain engine not loaded' });
+    }
+    res.json({ status: 'OK', positions: brainEngine.getActivePositions() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });

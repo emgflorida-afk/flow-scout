@@ -620,13 +620,15 @@ async function executeAutonomous(entry) {
       liveBypass: true,
     });
 
-    if (result.error) {
-      logBrain('ORDER FAILED: ' + result.error);
+    if (result.error || result.rejected) {
+      var failTag = result.rejected ? 'ORDER REJECTED BY TS' : 'ORDER FAILED';
+      logBrain(failTag + ': ' + entry.ticker + ' -- ' + result.error);
       await postToDiscord(
-        'ORDER FAILED: ' + entry.ticker + ' ' + entry.type.toUpperCase() + '\n' +
-        'Error: ' + result.error
+        failTag + ': ' + entry.ticker + ' ' + entry.type.toUpperCase() + '\n' +
+        'Error: ' + result.error + '\n' +
+        'NOT tracking as active position.'
       );
-      return { executed: false, reason: result.error };
+      return { executed: false, reason: result.error, rejected: !!result.rejected };
     }
 
     logBrain('ORDER PLACED: ' + contract.symbol + ' x' + qty +
@@ -3248,9 +3250,11 @@ async function runBrainCycle() {
                 if (qPrice > 0) {
                   for (var qi2 = 0; qi2 < activePositions.length; qi2++) {
                     if ((activePositions[qi2].contractSymbol || '').toUpperCase() === qSym) {
-                      var oldPrice = activePositions[qi2].currentPrice || activePositions[qi2].entry;
+                      var oldPrice = parseFloat(activePositions[qi2].currentPrice || activePositions[qi2].entry || 0);
                       activePositions[qi2].currentPrice = qPrice;
-                      var pctNow = ((qPrice - activePositions[qi2].entry) / activePositions[qi2].entry * 100).toFixed(1);
+                      activePositions[qi2].lastPriceUpdate = Date.now();
+                      var entryPx = parseFloat(activePositions[qi2].entry || 0);
+                      var pctNow = entryPx > 0 ? ((qPrice - entryPx) / entryPx * 100).toFixed(1) : '0.0';
                       logBrain('PRICE UPDATE: ' + activePositions[qi2].ticker + ' $' + oldPrice.toFixed(2) + ' -> $' + qPrice.toFixed(2) + ' (' + pctNow + '%)');
                     }
                   }
@@ -3611,4 +3615,20 @@ module.exports = {
   addQueuedTrade: addQueuedTrade,
   cancelQueuedTrade: cancelQueuedTrade,
   getQueuedTrades: function() { return queuedTrades; },
+  getActivePositions: function() { return activePositions; },
+  removePosition: function(ticker) {
+    var t = (ticker || '').toUpperCase();
+    var before = activePositions.length;
+    activePositions = activePositions.filter(function(p) {
+      return (p.ticker || '').toUpperCase() !== t;
+    });
+    var removed = before - activePositions.length;
+    if (removed > 0) {
+      logBrain('POSITION REMOVED MANUALLY: ' + t + ' (' + removed + ' entries)');
+      if (activePositions.length === 0 && STATE === 'POSITION_OPEN') {
+        transitionTo('WATCHING', 'Manual position clear');
+      }
+    }
+    return removed;
+  },
 };
