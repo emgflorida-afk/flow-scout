@@ -27,6 +27,8 @@ var SCAN_TICKERS = [
   'U', 'ABNB', 'UBER', 'BIDU',
   // Market brief Apr 14 -- earnings + catalysts
   'MCD', 'FAST',
+  // Earnings week Apr 14-18 -- post-earnings Strat setups
+  'TSM', 'NFLX', 'ASML', 'BAC', 'JNJ', 'UNH', 'PGR',
 ];
 
 // Pre-market flow threshold -- lower to catch setups early

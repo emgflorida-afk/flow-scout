@@ -83,7 +83,8 @@ var CORE_WATCHLIST = ['SPY', 'QQQ', 'IWM']; // Casey method -- indices first
 var FLOW_WATCHLIST = ['NVDA', 'AMZN', 'META', 'TSLA', 'AAPL', 'INTC', 'MRVL', 'AMD'];
 var JSMITH_WATCHLIST = ['COIN', 'U', 'ABNB', 'UBER', 'BIDU', 'PPG', 'CHWY', 'HCA']; // JSmith Apr 12-14
 var CATALYST_WATCHLIST = ['MCD', 'FAST']; // Market brief Apr 14
-var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST).concat(CATALYST_WATCHLIST);
+var EARNINGS_WATCHLIST = ['TSM', 'NFLX', 'ASML', 'JPM', 'BAC', 'MS', 'JNJ', 'UNH', 'PGR']; // Earnings week Apr 14-18
+var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST).concat(CATALYST_WATCHLIST).concat(EARNINGS_WATCHLIST);
 
 // -- CORRELATION GROUPS (max 1 position per group, max 2 total) ------
 var CORRELATION_GROUPS = {
