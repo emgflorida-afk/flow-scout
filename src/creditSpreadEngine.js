@@ -188,15 +188,19 @@ async function fetchFTFC() {
 }
 
 function getContinuity(bars) {
+  // Rob Smith / The Strat FTFC rule: price relative to PRIOR candle's CLOSE.
+  // Green = current close > prior close (bullish continuity).
+  // Red   = current close < prior close.
+  // This is NOT the 2up/2down outside-bar definition; FTFC is a simple
+  // close-vs-prior-close directional vote per timeframe.
   if (!bars || bars.length < 2) return 'NEUTRAL';
   var last = bars[bars.length - 1];
   var prev = bars[bars.length - 2];
-  var h  = parseFloat(last.High);
-  var l  = parseFloat(last.Low);
-  var ph = parseFloat(prev.High);
-  var pl = parseFloat(prev.Low);
-  if (h > ph && l > pl) return 'BULL';
-  if (h < ph && l < pl) return 'BEAR';
+  var lc = parseFloat(last.Close);
+  var pc = parseFloat(prev.Close);
+  if (!isFinite(lc) || !isFinite(pc)) return 'NEUTRAL';
+  if (lc > pc) return 'BULL';
+  if (lc < pc) return 'BEAR';
   return 'NEUTRAL';
 }
 
@@ -302,8 +306,17 @@ async function evaluateSpreadOpportunity() {
     direction = 'BEARISH';
     type = 'BEAR_CALL';
     confidence = bearVotes / 3;
+  } else if (ftfc === 'BULL') {
+    // FTFC-only fallback: if 4TF continuity is clear but Sunday/dynamic
+    // are neutral, still take the trade. FTFC is the primary signal.
+    direction = 'BULLISH'; type = 'BULL_PUT'; confidence = 0.5;
+    lastEvaluation.fallback = 'FTFC_ONLY';
+  } else if (ftfc === 'BEAR') {
+    direction = 'BEARISH'; type = 'BEAR_CALL'; confidence = 0.5;
+    lastEvaluation.fallback = 'FTFC_ONLY';
   } else {
-    log('REJECTED: No 2/3 confluence -- BULL:' + bullVotes + ' BEAR:' + bearVotes);
+    log('REJECTED: No 2/3 confluence and no FTFC -- BULL:' + bullVotes + ' BEAR:' + bearVotes + ' FTFC:' + ftfc);
+    lastEvaluation.rejected = 'NO_CONFLUENCE';
     return null;
   }
 

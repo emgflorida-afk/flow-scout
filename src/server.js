@@ -1452,6 +1452,36 @@ app.get('/api/brain/positions', function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+app.get('/api/brain/watchlist', function(req, res) {
+  try {
+    if (!brainEngine || !brainEngine.getFullWatchlist) return res.json({ error: 'Brain engine not loaded' });
+    res.json({
+      status: 'OK',
+      full: brainEngine.getFullWatchlist(),
+      dynamic: brainEngine.getDynamicWatchlist ? brainEngine.getDynamicWatchlist() : [],
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/watchlist/add', function(req, res) {
+  try {
+    if (!brainEngine || !brainEngine.addDynamicTicker) return res.json({ error: 'Brain engine not loaded' });
+    var ticker = (req.body.ticker || '').toUpperCase();
+    var source = req.body.source || 'manual';
+    if (!ticker) return res.status(400).json({ error: 'Need ticker' });
+    var added = brainEngine.addDynamicTicker(ticker, source);
+    res.json({ status: 'OK', added: added, ticker: ticker });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain/grade', function(req, res) {
+  try {
+    if (!brainEngine || !brainEngine.gradeSetup) return res.json({ error: 'Brain engine not loaded' });
+    var grade = brainEngine.gradeSetup(req.body || {});
+    res.json({ status: 'OK', grade: grade });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.post('/api/brain/bypass', function(req, res) {
   try {
     if (!brainEngine) return res.json({ error: 'Brain engine not loaded' });

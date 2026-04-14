@@ -86,6 +86,102 @@ var CATALYST_WATCHLIST = ['MCD', 'FAST']; // Market brief Apr 14
 var EARNINGS_WATCHLIST = ['TSM', 'NFLX', 'ASML', 'JPM', 'BAC', 'MS', 'JNJ', 'UNH', 'PGR']; // Earnings week Apr 14-18
 var FULL_WATCHLIST = CORE_WATCHLIST.concat(FLOW_WATCHLIST).concat(JSMITH_WATCHLIST).concat(CATALYST_WATCHLIST).concat(EARNINGS_WATCHLIST);
 
+// DYNAMIC EXPANSION: tickers added intraday via flow sweeps, TV Strat signals,
+// AYCE triggers. Cleared at midnight ET reset. Capped to prevent scanner bloat.
+var DYNAMIC_WATCHLIST = [];
+var DYNAMIC_WATCHLIST_MAX = 20;
+function addDynamicTicker(ticker, source) {
+  if (!ticker) return false;
+  var t = ticker.toUpperCase();
+  if (FULL_WATCHLIST.indexOf(t) !== -1) return false; // already core
+  if (DYNAMIC_WATCHLIST.indexOf(t) !== -1) return false; // already added
+  if (DYNAMIC_WATCHLIST.length >= DYNAMIC_WATCHLIST_MAX) {
+    DYNAMIC_WATCHLIST.shift(); // FIFO eviction
+  }
+  DYNAMIC_WATCHLIST.push(t);
+  logBrain('WATCHLIST EXPAND: +' + t + ' (source: ' + (source || 'unknown') + ') | total dynamic: ' + DYNAMIC_WATCHLIST.length);
+  return true;
+}
+function getScanWatchlist() {
+  return FULL_WATCHLIST.concat(DYNAMIC_WATCHLIST);
+}
+function clearDynamicWatchlist() {
+  var n = DYNAMIC_WATCHLIST.length;
+  DYNAMIC_WATCHLIST = [];
+  return n;
+}
+
+// ================================================================
+// A-TIER SETUP GRADER — 7 criteria, letter grade
+// Grades any setup 0-7, returning letter + reasons so we know
+// at-a-glance whether this is a $500 setup or a nothing-burger.
+// Inputs: setup object with optional fields. Missing fields = 0.
+// ================================================================
+function gradeSetup(setup) {
+  setup = setup || {};
+  var checks = [];
+  var score = 0;
+
+  // 1. FTFC aligned (or 3/4 timeframes agreeing)
+  var ftfcAligned = setup.ftfc === 'BULL' && setup.direction === 'call' ||
+                    setup.ftfc === 'BEAR' && setup.direction === 'put' ||
+                    (setup.tfAligned && setup.tfAligned >= 3);
+  checks.push({ name: 'FTFC', pass: !!ftfcAligned, weight: 1 });
+  if (ftfcAligned) score++;
+
+  // 2. Flow confirmation (Bullflow sigScore >= 70 or bigDollarFlow agreeing)
+  var flowConfirmed = setup.flowScore >= 70 ||
+                      (setup.flowBias && setup.flowBias.toLowerCase() === (setup.direction === 'call' ? 'bullish' : 'bearish'));
+  checks.push({ name: 'FLOW', pass: !!flowConfirmed, weight: 1 });
+  if (flowConfirmed) score++;
+
+  // 3. Strat actionable signal (F2U, F2D, inside-bar breakout, hammer, shooter)
+  var stratSignal = !!setup.stratSignal && setup.stratSignal !== 'NONE';
+  checks.push({ name: 'STRAT', pass: stratSignal, weight: 1 });
+  if (stratSignal) score++;
+
+  // 4. Casey EMA fan in direction (9/21 stacked correctly on 2m or 4h)
+  var emaFan = !!setup.emaFanAligned;
+  checks.push({ name: 'EMA_FAN', pass: emaFan, weight: 1 });
+  if (emaFan) score++;
+
+  // 5. Key level proximity (PDH/PDL/PMH/PML within 0.5% — retest/breakout setup)
+  var keyLevel = !!setup.atKeyLevel;
+  checks.push({ name: 'KEY_LEVEL', pass: keyLevel, weight: 1 });
+  if (keyLevel) score++;
+
+  // 6. Clean contract (>= minDTE, bid-ask spread < 10%, premium in range)
+  var cleanContract = setup.dte >= 2 && setup.spreadPct < 0.10 &&
+                      setup.premium >= 0.30 && setup.premium <= 6.00;
+  checks.push({ name: 'CONTRACT', pass: !!cleanContract, weight: 1 });
+  if (cleanContract) score++;
+
+  // 7. No earnings within 3 days + no FOMC/CPI in next 30 min
+  var clearCatalyst = !setup.earningsWithin3Days && !setup.highImpactEventImminent;
+  checks.push({ name: 'CATALYST_CLEAR', pass: !!clearCatalyst, weight: 1 });
+  if (clearCatalyst) score++;
+
+  // Letter grade: 7=A++, 6=A, 5=B+, 4=B, 3=C, 2=D, 0-1=F
+  var grade;
+  if (score >= 7)      grade = 'A++';
+  else if (score === 6) grade = 'A';
+  else if (score === 5) grade = 'B+';
+  else if (score === 4) grade = 'B';
+  else if (score === 3) grade = 'C';
+  else if (score === 2) grade = 'D';
+  else                  grade = 'F';
+
+  return {
+    score: score,
+    maxScore: 7,
+    grade: grade,
+    tradeable: score >= 4, // B or better = tradeable
+    aTier: score >= 6,      // A or A++ = A-tier (high conviction)
+    checks: checks,
+    failed: checks.filter(function(c) { return !c.pass; }).map(function(c) { return c.name; }),
+  };
+}
+
 // -- CORRELATION GROUPS (max 1 position per group, max 2 total) ------
 var CORRELATION_GROUPS = {
   INDICES: ['SPY', 'QQQ', 'IWM', 'DIA', 'TQQQ', 'SQQQ', 'SPXL', 'TNA', 'XSP', 'SPX'],
@@ -719,6 +815,8 @@ function pushTVSignal(signal) {
     return;
   }
   tvSignalLastSeen[key] = now;
+  // Auto-expand watchlist so the scanner picks this ticker up on next cycle
+  addDynamicTicker(signal.ticker, 'TV_' + (signal.source || 'BRAIN'));
   tvSignalQueue.push({
     ticker: signal.ticker,
     direction: signal.direction,
@@ -1047,8 +1145,8 @@ async function evaluateScannerSignal() {
     }
 
     // Check priority tickers first (CORE then FLOW watchlist)
-    for (var w = 0; w < FULL_WATCHLIST.length; w++) {
-      var target = FULL_WATCHLIST[w];
+    for (var w = 0; w < getScanWatchlist().length; w++) {
+      var target = getScanWatchlist()[w];
       for (var r = 0; r < results.length; r++) {
         var result = results[r];
         if (result.symbol !== target) continue;
@@ -1091,8 +1189,8 @@ async function evaluateScannerSignal() {
 
     // ---- CASEY METHOD: Check for EMA crossover signals ----
     // Even without 2+ TF confluence, a Casey EMA signal is high conviction
-    for (var c = 0; c < FULL_WATCHLIST.length; c++) {
-      var caseyTicker = FULL_WATCHLIST[c];
+    for (var c = 0; c < getScanWatchlist().length; c++) {
+      var caseyTicker = getScanWatchlist()[c];
       // Check all results (not just withSetups) for EMA signals
       var allResults = scanResults.allResults || results;
       for (var cr = 0; cr < allResults.length; cr++) {
@@ -1220,8 +1318,8 @@ function evaluateFlowSignal() {
     }
 
     // Check watchlist tickers for conviction flow
-    for (var w = 0; w < FULL_WATCHLIST.length; w++) {
-      var ticker = FULL_WATCHLIST[w];
+    for (var w = 0; w < getScanWatchlist().length; w++) {
+      var ticker = getScanWatchlist()[w];
       var data = byTicker[ticker];
       if (!data) continue;
 
@@ -1287,7 +1385,7 @@ async function evaluateAYCESignal(deadZoneOnly) {
   }
 
   var et = getETTime();
-  var tickers = preMarketScanner.SCAN_TICKERS || FULL_WATCHLIST;
+  var tickers = preMarketScanner.SCAN_TICKERS || getScanWatchlist();
 
   try {
     for (var i = 0; i < tickers.length; i++) {
@@ -1520,7 +1618,7 @@ function evaluateEntry(signal) {
   var direction = signal.direction;
 
   // Check: is ticker in our watchlist?
-  var onWatchlist = FULL_WATCHLIST.indexOf(ticker) !== -1;
+  var onWatchlist = getScanWatchlist().indexOf(ticker) !== -1;
   if (!onWatchlist) {
     logBrain('ENTRY REJECTED: ' + ticker + ' not on watchlist');
     return { approved: false, reason: ticker + ' not on watchlist' };
@@ -3615,6 +3713,11 @@ module.exports = {
   addQueuedTrade: addQueuedTrade,
   cancelQueuedTrade: cancelQueuedTrade,
   getQueuedTrades: function() { return queuedTrades; },
+  addDynamicTicker: addDynamicTicker,
+  getDynamicWatchlist: function() { return DYNAMIC_WATCHLIST.slice(); },
+  getFullWatchlist: function() { return getScanWatchlist(); },
+  clearDynamicWatchlist: clearDynamicWatchlist,
+  gradeSetup: gradeSetup,
   getActivePositions: function() { return activePositions; },
   removePosition: function(ticker) {
     var t = (ticker || '').toUpperCase();
