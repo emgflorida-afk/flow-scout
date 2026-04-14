@@ -15,18 +15,16 @@ async function runBacktest(opts) {
   if (!apiKey) return { error: 'BULLFLOW_API_KEY missing' };
   if (!date) return { error: 'date required (YYYY-MM-DD)' };
 
-  var executeNow = null;
-  try { executeNow = require('./executeNow'); } catch(e) {}
-
   var stats = {
     date: date,
     eventsReceived: 0,
     algoAlerts: 0,
     customAlerts: 0,
-    wouldExecute: 0,
-    wouldBlock: 0,
-    blockReasons: {},
-    simulated: [],
+    readyStats: null,
+    byTicker: {},
+    byDirection: { CALLS: 0, PUTS: 0 },
+    premiumBuckets: { '<50K': 0, '50-100K': 0, '100-500K': 0, '500K-1M': 0, '1M+': 0 },
+    alertSamples: [],
   };
 
   // Probe candidate URL patterns since Bullflow didn't publish exact path.
@@ -59,7 +57,7 @@ async function runBacktest(opts) {
   // Read body as a stream with a soft timeout + terminal-event detection.
   // SSE stays open — we stop when we see event=end/complete/done or timeout.
   var raw = '';
-  var SOFT_TIMEOUT_MS = (opts && opts.timeoutMs) || 90000;
+  var SOFT_TIMEOUT_MS = (opts && opts.timeoutMs) || 240000;
   var startedAt = Date.now();
   try {
     await new Promise(function(resolve, reject) {
@@ -104,54 +102,62 @@ async function runBacktest(opts) {
     stats.eventsReceived++;
     if (stats.sampleEvents.length < 3) stats.sampleEvents.push(evt);
 
-    // Event envelope: { event: "init"|"status"|"error"|"alert"|"algo"|"custom"|... }
     var etype = (evt.event || evt.type || '').toLowerCase();
-    if (etype === 'init' || etype === 'status' || etype === 'error' || etype === 'heartbeat') continue;
-    if (etype === 'custom' || etype === 'custom-alert' || evt.matchedCustomAlert) stats.customAlerts++;
-    if (etype === 'algo' || etype === 'alert' || evt.alertType) stats.algoAlerts++;
+    if (etype === 'init' || etype === 'status' || etype === 'heartbeat') continue;
+    if (etype === 'ready') { stats.readyStats = evt; continue; }
+    if (etype === 'error') { stats.streamError = evt.message; continue; }
 
-    // Simulate execution gate
-    if (!executeNow || !executeNow.shouldExecute) continue;
-    var ticker = (evt.ticker || evt.symbol || '').toString().replace(/^O:/, '').match(/^[A-Z]+/);
-    ticker = ticker ? ticker[0] : null;
-    if (!ticker) continue;
+    // Alert payload lives under evt.data
+    var d = evt.data || {};
+    var rawSymbol = (d.symbol || d.rawSymbol || '').toString();
+    var alertType = (d.alertType || d.alert_type || '').toLowerCase();
+    var premium   = parseFloat(d.premium || d.alertPremium || d.total_premium || 0) || 0;
+    var tsField   = d.timestamp || d.alertTime || d.ts || null;
+    var tickerMatch = rawSymbol.replace(/^O:/, '').match(/^[A-Z.]+/);
+    var ticker = tickerMatch ? tickerMatch[0] : (d.ticker || d.symbol_underlying || null);
 
+    // Direction from OPRA suffix or alertType
     var direction = 'CALLS';
-    var sym = (evt.symbol || evt.rawSymbol || '').toString();
-    if (/P\d+$/.test(sym) || /put/i.test(evt.alertType || '')) direction = 'PUTS';
+    var opraMatch = rawSymbol.replace(/^O:/, '').match(/^[A-Z.]+\d{6}([CP])\d+/);
+    if (opraMatch && opraMatch[1] === 'P') direction = 'PUTS';
+    else if (/put/i.test(alertType)) direction = 'PUTS';
 
-    var fakeSignal = {
-      ticker: ticker,
-      direction: direction,
-      type: direction === 'PUTS' ? 'put' : 'call',
-      source: evt.source || 'BACKTEST_ALGO',
-      confluence: evt.confluence || '4/6',
-      premium: evt.premium || 0,
-      timestamp: evt.timestamp || null,
-    };
+    // Classify: custom vs algo
+    if (etype === 'custom' || etype === 'custom-alert' || evt.matchedCustomAlert) {
+      stats.customAlerts++;
+    } else if (etype === 'alert' || etype === 'algo' || alertType) {
+      stats.algoAlerts++;
+      if (ticker) {
+        if (!stats.byTicker[ticker]) stats.byTicker[ticker] = { calls: 0, puts: 0, totalPremium: 0 };
+        stats.byTicker[ticker][direction === 'PUTS' ? 'puts' : 'calls']++;
+        stats.byTicker[ticker].totalPremium += premium;
+      }
+      stats.byDirection[direction]++;
+      if (premium < 50000) stats.premiumBuckets['<50K']++;
+      else if (premium < 100000) stats.premiumBuckets['50-100K']++;
+      else if (premium < 500000) stats.premiumBuckets['100-500K']++;
+      else if (premium < 1000000) stats.premiumBuckets['500K-1M']++;
+      else stats.premiumBuckets['1M+']++;
 
-    var decision;
-    try { decision = executeNow.shouldExecute(fakeSignal, { backtest: true }); }
-    catch(e) { decision = { execute: false, reason: 'gate error: ' + e.message }; }
-
-    if (decision && decision.execute) {
-      stats.wouldExecute++;
-    } else {
-      stats.wouldBlock++;
-      var reason = (decision && decision.reason) || 'unknown';
-      stats.blockReasons[reason] = (stats.blockReasons[reason] || 0) + 1;
-    }
-
-    if (stats.simulated.length < 200) {
-      stats.simulated.push({
-        ticker: ticker,
-        direction: direction,
-        ts: evt.timestamp,
-        execute: !!(decision && decision.execute),
-        reason: decision && decision.reason,
-      });
+      if (stats.alertSamples.length < 5) {
+        stats.alertSamples.push({
+          seq: evt.sequence, ticker: ticker, direction: direction,
+          alertType: alertType, premium: premium, ts: tsField,
+          rawSymbol: rawSymbol,
+        });
+      }
     }
   }
+
+  // Top tickers by algo alert count
+  var tickerEntries = Object.keys(stats.byTicker).map(function(k) {
+    return { ticker: k, calls: stats.byTicker[k].calls, puts: stats.byTicker[k].puts,
+             total: stats.byTicker[k].calls + stats.byTicker[k].puts,
+             totalPremium: Math.round(stats.byTicker[k].totalPremium) };
+  });
+  tickerEntries.sort(function(a, b) { return b.total - a.total; });
+  stats.topTickers = tickerEntries.slice(0, 20);
+  delete stats.byTicker; // too verbose in response
 
   return { status: 'OK', stats: stats };
 }
