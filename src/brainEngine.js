@@ -822,12 +822,66 @@ function pushTVSignal(signal) {
     direction: signal.direction,
     source: signal.source || 'TV_BRAIN',
     confluence: signal.confluence || null,
-    momCount: signal.momCount || null,
-    sqzFiring: signal.sqzFiring || null,
-    vwap: signal.vwap || null,
+    tradeType: signal.tradeType || null,
+    tf: signal.tf || null,
+    price: signal.price != null ? parseFloat(signal.price) : null,
+    action: signal.action || null,
+    rsi: signal.rsi != null ? parseFloat(signal.rsi) : null,
+    vwap: signal.vwap != null ? parseFloat(signal.vwap) : null,
+    vwapBias: signal.vwapBias != null ? String(signal.vwapBias) : null,
+    volRatio: signal.volRatio != null ? parseFloat(signal.volRatio) : null,
+    momCount: signal.momCount != null ? parseFloat(signal.momCount) : null,
+    sqzFiring: signal.sqzFiring != null ? String(signal.sqzFiring) : null,
+    adx: signal.adx != null ? parseFloat(signal.adx) : null,
     timestamp: now,
   });
-  logBrain('TV SIGNAL QUEUED: ' + signal.ticker + ' ' + signal.direction + ' from ' + (signal.source || 'TV_BRAIN'));
+  logBrain('TV SIGNAL QUEUED: ' + signal.ticker + ' ' + signal.direction +
+    ' from ' + (signal.source || 'TV_BRAIN') +
+    (signal.confluence ? ' conf=' + signal.confluence : '') +
+    (signal.tf ? ' tf=' + signal.tf + 'm' : '') +
+    (signal.adx != null ? ' adx=' + signal.adx : ''));
+}
+
+// -- STRATUM → GRADER BRIDGE -------------------------------------------
+// Builds a gradeSetup() input object from a Stratum Master v7.3 payload.
+// Maps Stratum's own internal checks onto the brain's 7-criteria grader.
+// Caller must still supply FLOW, CONTRACT, and CATALYST fields externally.
+function buildSetupFromStratum(tvSig) {
+  if (!tvSig) return null;
+  var dir = (tvSig.direction === 'CALLS' || tvSig.action === 'BULL' || tvSig.type === 'call') ? 'call' :
+            (tvSig.direction === 'PUTS' || tvSig.action === 'BEAR' || tvSig.type === 'put') ? 'put' : null;
+  // Stratum confluence is X/6 — treat >=4/6 as FTFC-aligned (weekly+daily already in)
+  var confNum = 0;
+  if (tvSig.confluence) {
+    var m = String(tvSig.confluence).match(/^(\d+)\s*\/\s*(\d+)/);
+    if (m) confNum = parseInt(m[1], 10);
+  }
+  var ftfcAligned = confNum >= 4;
+  // vwapBias: "1" = above vwap (bullish), "-1" = below (bearish)
+  var vb = tvSig.vwapBias != null ? String(tvSig.vwapBias) : null;
+  var emaFanAligned = (dir === 'call' && vb === '1' && (tvSig.adx == null || tvSig.adx >= 20)) ||
+                      (dir === 'put'  && vb === '-1' && (tvSig.adx == null || tvSig.adx >= 20));
+  // Price near VWAP (within 0.3%) = "at key level" proxy for retest setups
+  var atKeyLevel = false;
+  if (tvSig.price != null && tvSig.vwap != null && tvSig.vwap > 0) {
+    atKeyLevel = Math.abs(tvSig.price - tvSig.vwap) / tvSig.vwap <= 0.003;
+  }
+  // Also accept squeeze-firing as a structural edge
+  if (tvSig.sqzFiring === '1') atKeyLevel = true;
+  return {
+    direction: dir,
+    ftfc: ftfcAligned ? (dir === 'call' ? 'BULL' : 'BEAR') : 'MIXED',
+    tfAligned: confNum >= 4 ? 4 : confNum,
+    stratSignal: tvSig.source || 'STRATUM',
+    emaFanAligned: !!emaFanAligned,
+    atKeyLevel: !!atKeyLevel,
+    // Fields below must be merged in by caller when available:
+    flowScore: null, flowBias: null,
+    dte: null, spreadPct: null, premium: null,
+    earningsWithin3Days: false, highImpactEventImminent: false,
+    // Raw stratum context preserved for audit
+    _stratum: tvSig,
+  };
 }
 
 function popTVSignal() {
@@ -3700,6 +3754,7 @@ module.exports = {
   getNextEarningsDate: getNextEarningsDate,
   getEarningsCache: function() { return earningsCache; },
   pushTVSignal: pushTVSignal,
+  buildSetupFromStratum: buildSetupFromStratum,
   popTVSignal: popTVSignal,
   checkSundayFutures: checkSundayFutures,
   getSundayBias: getSundayBias,

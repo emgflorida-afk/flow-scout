@@ -177,7 +177,35 @@ app.post('/webhook/tradingview', async function(req, res) {
       spreadWidth: resolved.spreadWidth || null,
     };
     alerter.sendTradeAlert(resolved.symbol, tvBias, {}, true, resolved).catch(console.error);
-    res.json({ status: 'processing', ticker: ticker, opra: resolved.symbol });
+    // BRIDGE: also push into brainEngine TV signal queue so the scanner sees it
+    // and the dynamic watchlist auto-expands. Without this, Stratum Master alerts
+    // only fire Discord notifications and never reach the autonomous execution path.
+    try {
+      if (brainEngine && brainEngine.pushTVSignal) {
+        var brainDir = type === 'put' ? 'PUTS' : 'CALLS';
+        brainEngine.pushTVSignal({
+          ticker: ticker,
+          direction: brainDir,
+          source: 'STRATUM_' + (body.tf ? body.tf + 'M' : 'TV'),
+          type: type,
+          action: body.action || null,
+          confluence: confluence,
+          tradeType: tradeType,
+          tf: body.tf || null,
+          price: body.price != null ? parseFloat(body.price) : null,
+          rsi: body.rsi != null ? parseFloat(body.rsi) : null,
+          vwap: body.vwap != null ? parseFloat(body.vwap) : null,
+          vwapBias: body.vwapBias != null ? String(body.vwapBias) : null,
+          volRatio: body.volRatio != null ? parseFloat(body.volRatio) : null,
+          momCount: body.momCount != null ? parseFloat(body.momCount) : null,
+          sqzFiring: body.sqzFiring != null ? String(body.sqzFiring) : null,
+          adx: body.adx != null ? parseFloat(body.adx) : null,
+        });
+      }
+    } catch(bridgeErr) {
+      console.error('[tradingview webhook] brain bridge error:', bridgeErr && bridgeErr.message);
+    }
+    res.json({ status: 'processing', ticker: ticker, opra: resolved.symbol, brainBridged: !!(brainEngine && brainEngine.pushTVSignal) });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
