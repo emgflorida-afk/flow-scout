@@ -704,7 +704,7 @@ async function closeAutonomous(position) {
 var tvSignalQueue = [];
 
 var tvSignalLastSeen = {}; // dedup: "TICKER:DIRECTION" → timestamp
-var TV_SIGNAL_DEDUP_MS = 5 * 60 * 1000; // ignore duplicate ticker+direction within 5 min
+var TV_SIGNAL_DEDUP_MS = 15 * 60 * 1000; // 15 min dedup — solid directional bias, not 5m chop
 
 function pushTVSignal(signal) {
   var key = signal.ticker + ':' + signal.direction;
