@@ -1852,6 +1852,69 @@ app.get('/api/health/check', async function(req, res) {
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// MORNING BRIEF cron (v7.5) -- 6:00 AM ET Mon-Fri
+// Generates a single watchlist + pulse + FTFC + queue summary and posts to Discord.
+var morningBrief = null;
+try { morningBrief = require('./morningBrief'); console.log('[SERVER] morningBrief loaded OK'); }
+catch(e) { console.log('[SERVER] morningBrief not loaded:', e.message); }
+cron.schedule('0 6 * * 1-5', function() {
+  if (morningBrief) {
+    morningBrief.generateAndPost().catch(function(e) { console.error('[BRIEF]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.get('/api/brief/generate', async function(req, res) {
+  if (!morningBrief) return res.status(500).json({ error: 'morningBrief not loaded' });
+  try {
+    var dry = req.query.dryRun === 'true';
+    res.json(await morningBrief.generateAndPost({ dryRun: dry }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// JSMITH POLLER cron (v7.5) -- every 60s during 9 AM - 4 PM ET Mon-Fri
+// Reads JSmithTrades.com VIP + Option Trade Ideas + CapitalFlow channels via
+// Discord user token and auto-queues John's picks. No-op if DISCORD_USER_TOKEN
+// is not set, so it is safe to deploy before the token is provided.
+var jsmithPoller = null;
+try { jsmithPoller = require('./jsmithPoller'); console.log('[SERVER] jsmithPoller loaded OK'); }
+catch(e) { console.log('[SERVER] jsmithPoller not loaded:', e.message); }
+cron.schedule('* 9-16 * * 1-5', function() {
+  if (jsmithPoller) {
+    jsmithPoller.runPollCycle().catch(function(e) { console.error('[JSMITH]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+// Also poll outside market hours (8-9 AM and after 4 PM) on 5-min cadence
+// so overnight/premarket John ideas land in the queue before the open.
+cron.schedule('*/5 8,17,18,19,20,21,22 * * 1-5', function() {
+  if (jsmithPoller) {
+    jsmithPoller.runPollCycle().catch(function(e) { console.error('[JSMITH-OFFHOURS]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.post('/api/jsmith/poll', async function(req, res) {
+  if (!jsmithPoller) return res.status(500).json({ error: 'jsmithPoller not loaded' });
+  try { res.json(await jsmithPoller.runPollCycle()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
+// so queued trades fire automatically when the market opens, no manual step.
+// Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.
+cron.schedule('29 9 * * 1-5', function() {
+  if (brainEngine && brainEngine.setQueueActive) {
+    brainEngine.setQueueActive(true);
+    console.log('[QUEUE-AUTO-ARM] queueActive=true');
+  }
+}, { timezone: 'America/New_York' });
+
+cron.schedule('1 16 * * 1-5', function() {
+  if (brainEngine && brainEngine.setQueueActive) {
+    brainEngine.setQueueActive(false);
+    console.log('[QUEUE-AUTO-DISARM] queueActive=false');
+  }
+}, { timezone: 'America/New_York' });
+
 // REMOVED: Legacy close cron that auto-closed SPX spread at open for a loss on Apr 13.
 // LESSON: Never auto-close existing spreads at open. Let them run to profit target or expiry.
 // The spread monitor (every 5 min) handles exits at 50% profit or 150% stop loss.
