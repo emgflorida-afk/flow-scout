@@ -5,16 +5,23 @@
 
 const fetch = require('node-fetch');
 
-// Rate limiter -- prevent TS 429 throttling
-var _lastChainRequest = 0;
-var CHAIN_DELAY_MS = 1500; // 1.5 seconds between chain requests
-async function rateLimit() {
-  var now = Date.now();
-  var elapsed = now - _lastChainRequest;
-  if (elapsed < CHAIN_DELAY_MS) {
-    await new Promise(function(r) { setTimeout(r, CHAIN_DELAY_MS - elapsed); });
-  }
-  _lastChainRequest = Date.now();
+// Rate limiter -- serialized queue prevents TS 429 under concurrent Stratum bursts.
+// Prior version was a race: N concurrent callers all read _lastChainRequest at once
+// and fired simultaneously. This chains each call onto the tail of a promise so
+// requests leave with a guaranteed gap between them.
+var CHAIN_DELAY_MS = 1500;
+var _chainTail = Promise.resolve();
+var _lastChainDone = 0;
+function rateLimit() {
+  var next = _chainTail.then(function() {
+    var gap = Date.now() - _lastChainDone;
+    var wait = gap < CHAIN_DELAY_MS ? CHAIN_DELAY_MS - gap : 0;
+    return new Promise(function(r) { setTimeout(r, wait); }).then(function() {
+      _lastChainDone = Date.now();
+    });
+  });
+  _chainTail = next.catch(function() {});
+  return next;
 }
 
 const MODES = {
