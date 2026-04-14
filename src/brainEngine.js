@@ -333,6 +333,200 @@ function cancelQueuedTrade(id) {
 
 loadQueuedTrades();
 
+// ---------------------------------------------------------------
+// DURABLE BOOTSTRAP: if /tmp was wiped by a redeploy but a
+// QUEUE_INIT_JSON env var is set, rehydrate from env. This means
+// a Railway variable can hold the day's queue and survive deploys.
+// ---------------------------------------------------------------
+(function bootstrapQueueFromEnv() {
+  try {
+    if (queuedTrades.length > 0) return; // file already has entries
+    var raw = process.env.QUEUE_INIT_JSON;
+    if (!raw) return;
+    var parsed = JSON.parse(raw);
+    var list = Array.isArray(parsed) ? parsed : (parsed.trades || []);
+    if (!Array.isArray(list) || !list.length) return;
+    var today = new Date().toISOString().slice(0, 10);
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      // Only seed trades for today or future
+      if (t.tradeDate && t.tradeDate < today) continue;
+      addQueuedTrade(t);
+    }
+    logBrain('QUEUE BOOTSTRAPPED from env: ' + queuedTrades.length + ' trades');
+  } catch(e) {
+    console.error('[QUEUE] bootstrap error:', e.message);
+  }
+})();
+
+// ---------------------------------------------------------------
+// BULK ADD — load a whole morning queue in one call.
+// Idempotent: existing PENDING trades for same ticker+direction
+// are replaced. Used by POST /api/queue/bulk.
+// ---------------------------------------------------------------
+function bulkAddQueuedTrades(trades, opts) {
+  opts = opts || {};
+  if (!Array.isArray(trades)) return { added: 0, error: 'trades must be array' };
+  var added = 0;
+  var replaced = 0;
+  if (opts.replaceAll) {
+    // Mark all existing PENDING as CANCELLED, fresh slate
+    for (var i = 0; i < queuedTrades.length; i++) {
+      if (queuedTrades[i].status === 'PENDING') {
+        queuedTrades[i].status = 'CANCELLED';
+        replaced++;
+      }
+    }
+  }
+  for (var j = 0; j < trades.length; j++) {
+    try {
+      addQueuedTrade(trades[j]);
+      added++;
+    } catch(e) {
+      console.error('[QUEUE] bulk add error for trade', j, e.message);
+    }
+  }
+  saveQueuedTrades();
+  logBrain('QUEUE BULK ADD: +' + added + ' trades, ' + replaced + ' replaced');
+  return { added: added, replaced: replaced, total: queuedTrades.filter(function(t){return t.status==='PENDING';}).length };
+}
+
+// ---------------------------------------------------------------
+// QUEUE-ONLY CYCLE — runs the queued-trade scan INDEPENDENT of
+// brainActive. Called by its own cron in server.js. Lets you
+// queue trades overnight, pause the brain, and still have the
+// pre-approved setups fire automatically in the morning.
+// ---------------------------------------------------------------
+var queueActive = false;
+var _queueCycleRunning = false;
+
+function setQueueActive(on) {
+  queueActive = !!on;
+  logBrain('QUEUE ' + (queueActive ? 'ACTIVATED' : 'DEACTIVATED'));
+  return queueActive;
+}
+function getQueueActive() { return queueActive; }
+
+async function runQueueCycle() {
+  if (!queueActive) return { skipped: 'inactive' };
+  if (_queueCycleRunning) return { skipped: 'already running' };
+  if (brainActive) return { skipped: 'brain active — queue runs inside brain cycle' };
+  _queueCycleRunning = true;
+  try {
+    // Reuse the same fire logic as runBrainCycle by invoking the
+    // single-pass scan function. For simplicity we inline the minimal
+    // scan here — a near-copy of the block in runBrainCycle.
+    var et = getETTime();
+    var marketOpen = 9 * 60 + 30;
+    var marketCloseLocal = 16 * 60;
+    if (et.total < marketOpen || et.total >= marketCloseLocal) {
+      return { skipped: 'outside market hours' };
+    }
+    var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
+    if (!pendingQueued.length) return { checked: 0 };
+    var queuedWindowEnd = 11 * 60 + 30;
+    var pendingSwingQueued = pendingQueued.filter(function(qt) { return qt.tradeType === 'SWING'; });
+    var activePendingQueued = [];
+    if (et.total < queuedWindowEnd) {
+      activePendingQueued = pendingQueued; // morning: all trades eligible
+    } else {
+      activePendingQueued = pendingSwingQueued; // after morning: swings only
+    }
+    if (!activePendingQueued.length) return { checked: 0 };
+
+    var ts3 = require('./tradestation');
+    var qtToken = await ts3.getAccessToken();
+    if (!qtToken) return { error: 'no TS token' };
+    var qtSymbols = activePendingQueued.map(function(qt) { return qt.ticker; }).join(',');
+    var qtRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + qtSymbols, {
+      headers: { 'Authorization': 'Bearer ' + qtToken },
+    });
+    if (!qtRes.ok) return { error: 'quote fetch failed' };
+    var qtData = await qtRes.json();
+    var qtQuotes = qtData.Quotes || qtData.quotes || [];
+    if (!Array.isArray(qtQuotes)) qtQuotes = [qtQuotes];
+
+    var fired = 0;
+    for (var qi = 0; qi < activePendingQueued.length; qi++) {
+      var qt = activePendingQueued[qi];
+      if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
+      var qtQuote = null;
+      for (var qj = 0; qj < qtQuotes.length; qj++) {
+        if ((qtQuotes[qj].Symbol || '').toUpperCase() === qt.ticker) { qtQuote = qtQuotes[qj]; break; }
+      }
+      if (!qtQuote) continue;
+      var qtLast = parseFloat(qtQuote.Last || qtQuote.last || 0);
+      if (qtLast <= 0) continue;
+      var triggered = false;
+      if (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) triggered = true;
+      if (qt.direction === 'PUTS' && qtLast <= qt.triggerPrice) triggered = true;
+      if (!triggered) continue;
+
+      logBrain('[QUEUE-CYCLE] ' + qt.ticker + ' TRIGGERED @ $' + qtLast.toFixed(2) +
+        ' (trigger $' + qt.triggerPrice + ') | ' + qt.contractSymbol);
+
+      if (!orderExecutor) { logBrain('[QUEUE-CYCLE] orderExecutor not loaded'); continue; }
+      qt.status = 'TRIGGERED';
+      saveQueuedTrades();
+
+      try {
+        var optRes = await fetch('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(qt.contractSymbol), {
+          headers: { 'Authorization': 'Bearer ' + qtToken },
+        });
+        var optPrice = 0;
+        if (optRes.ok) {
+          var optData = await optRes.json();
+          var optQ = (optData.Quotes || optData.quotes || [])[0] || {};
+          var optAsk = parseFloat(optQ.Ask || optQ.ask || 0);
+          var optBid = parseFloat(optQ.Bid || optQ.bid || 0);
+          var optLast = parseFloat(optQ.Last || optQ.last || 0);
+          optPrice = optAsk > 0 ? optAsk : (optLast > 0 ? optLast : ((optBid + optAsk) / 2));
+        }
+        if (optPrice <= 0) {
+          logBrain('[QUEUE-CYCLE] skip ' + qt.contractSymbol + ' — no option price');
+          qt.status = 'PENDING'; saveQueuedTrades(); continue;
+        }
+        if (qt.maxEntryPrice > 0 && optPrice > qt.maxEntryPrice) {
+          logBrain('[QUEUE-CYCLE] skip ' + qt.contractSymbol + ' ask $' + optPrice.toFixed(2) + ' > max $' + qt.maxEntryPrice.toFixed(2));
+          qt.status = 'PENDING'; saveQueuedTrades(); continue;
+        }
+        var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
+        var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+        var qtExec = await orderExecutor.placeOrder({
+          account: LIVE_ACCOUNT,
+          symbol: qt.contractSymbol,
+          action: 'BUYTOOPEN',
+          qty: qt.contracts,
+          limit: limitPrice,
+          stop: qtStop,
+          t1: null,
+          duration: 'DAY',
+          note: 'QUEUE-CYCLE ' + qt.source + ': ' + qt.ticker,
+        });
+        if (qtExec && qtExec.orderId) {
+          qt.status = 'FILLED';
+          saveQueuedTrades();
+          fired++;
+          logBrain('[QUEUE-CYCLE] FILLED ' + qt.ticker + ' ' + qt.contractSymbol +
+            ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2));
+        } else {
+          logBrain('[QUEUE-CYCLE] order failed ' + qt.ticker + ' — ' + (qtExec ? (qtExec.error || qtExec.reason) : 'no result'));
+          qt.status = 'PENDING'; saveQueuedTrades();
+        }
+      } catch(qErr) {
+        logBrain('[QUEUE-CYCLE] error ' + qt.ticker + ' — ' + qErr.message);
+        qt.status = 'PENDING'; saveQueuedTrades();
+      }
+    }
+    return { checked: activePendingQueued.length, fired: fired };
+  } catch(e) {
+    console.error('[QUEUE-CYCLE] top error:', e.message);
+    return { error: e.message };
+  } finally {
+    _queueCycleRunning = false;
+  }
+}
+
 function saveCooldowns() {
   try { require('fs').writeFileSync(COOLDOWN_FILE, JSON.stringify(tickerCooldowns)); } catch(e) {}
 }
@@ -3908,8 +4102,12 @@ module.exports = {
   getExecutionMode: function() { return EXECUTION_MODE; },
   setCooldown: function(ticker) { tickerCooldowns[ticker] = Date.now(); saveCooldowns(); logBrain('COOLDOWN SET: ' + ticker + ' (30 min)'); },
   addQueuedTrade: addQueuedTrade,
+  bulkAddQueuedTrades: bulkAddQueuedTrades,
   cancelQueuedTrade: cancelQueuedTrade,
   getQueuedTrades: function() { return queuedTrades; },
+  runQueueCycle: runQueueCycle,
+  setQueueActive: setQueueActive,
+  getQueueActive: getQueueActive,
   addDynamicTicker: addDynamicTicker,
   getDynamicWatchlist: function() { return DYNAMIC_WATCHLIST.slice(); },
   getFullWatchlist: function() { return getScanWatchlist(); },

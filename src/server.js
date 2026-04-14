@@ -1775,6 +1775,49 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
+// QUEUE CYCLE cron -- runs queued-trade scan INDEPENDENT of brainActive.
+// You can pause the brain and still have night-queued setups fire.
+cron.schedule('* 9-16 * * 1-5', function() {
+  if (brainEngine && brainEngine.runQueueCycle) {
+    brainEngine.runQueueCycle().catch(function(e) { console.error('[QUEUE-CRON]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+// Bulk add — POST a full morning queue in one call
+app.post('/api/queue/bulk', function(req, res) {
+  if (!brainEngine || !brainEngine.bulkAddQueuedTrades) return res.status(500).json({ error: 'brainEngine not loaded' });
+  var trades = req.body.trades || req.body || [];
+  var replaceAll = req.body.replaceAll === true;
+  var result = brainEngine.bulkAddQueuedTrades(trades, { replaceAll: replaceAll });
+  res.json({ status: 'OK', result: result });
+});
+
+app.get('/api/queue/list', function(req, res) {
+  if (!brainEngine || !brainEngine.getQueuedTrades) return res.status(500).json({ error: 'brainEngine not loaded' });
+  res.json({
+    active: brainEngine.getQueueActive ? brainEngine.getQueueActive() : null,
+    trades: brainEngine.getQueuedTrades(),
+  });
+});
+
+app.post('/api/queue/start', function(req, res) {
+  if (!brainEngine || !brainEngine.setQueueActive) return res.status(500).json({ error: 'brainEngine not loaded' });
+  var on = brainEngine.setQueueActive(true);
+  res.json({ status: 'OK', queueActive: on });
+});
+
+app.post('/api/queue/stop', function(req, res) {
+  if (!brainEngine || !brainEngine.setQueueActive) return res.status(500).json({ error: 'brainEngine not loaded' });
+  var on = brainEngine.setQueueActive(false);
+  res.json({ status: 'OK', queueActive: on });
+});
+
+app.post('/api/queue/cancel/:id', function(req, res) {
+  if (!brainEngine || !brainEngine.cancelQueuedTrade) return res.status(500).json({ error: 'brainEngine not loaded' });
+  var ok = brainEngine.cancelQueuedTrade(req.params.id);
+  res.json({ status: ok ? 'OK' : 'NOT_FOUND' });
+});
+
 // NEWS CATALYST cron (Plan 01) -- poll SEC EDGAR + FINRA every 60s
 // during RTH. Alert-only. Never auto-executes.
 var newsScanner = null;
