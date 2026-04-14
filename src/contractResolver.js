@@ -312,7 +312,13 @@ async function getChainPublic(ticker, expiry, type, price) {
 
     var data = await res.json();
     var contracts = data.contracts || data.options || data.results || data || [];
-    if (!Array.isArray(contracts)) { console.log('[CHAIN-PUB] Unexpected format'); return []; }
+    if (!Array.isArray(contracts)) {
+      // Diagnostic: dump top-level keys + first 300 chars so we can fix the normalizer.
+      var keys = (data && typeof data === 'object') ? Object.keys(data).join(',') : typeof data;
+      var sample = JSON.stringify(data).slice(0, 300);
+      console.log('[CHAIN-PUB] Unexpected format. keys=' + keys + ' sample=' + sample);
+      return [];
+    }
 
     // Normalize to TS format
     var normalized = contracts.map(function(c) {
