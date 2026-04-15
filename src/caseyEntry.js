@@ -96,7 +96,7 @@ function isPreMarket(isoTs) {
 // -----------------------------------------------------------------
 function computeLevels(dailyBars, minBars) {
   if (!dailyBars || dailyBars.length < 2) return null;
-  if (!minBars || minBars.length < 1) return null;
+  if (!minBars || minBars.length < 3) return null;
 
   // Prior day = second-to-last daily bar (last is today in progress)
   var prior = dailyBars[dailyBars.length - 2];
@@ -119,8 +119,75 @@ function computeLevels(dailyBars, minBars) {
   var last = minBars[minBars.length - 1];
   var cur = last ? Number(last.Close) : null;
 
+  // Last closed 5m bar (for green/red retest confirm) and prior 5m bar (pullback)
+  var lastClosed = minBars[minBars.length - 2] || null;
+  var priorBar   = minBars[minBars.length - 3] || null;
+
   if (!isFinite(pdh) || !isFinite(pdl) || !isFinite(cur)) return null;
-  return { pdh: pdh, pdl: pdl, pdc: pdc, pmh: pmh, pml: pml, cur: cur };
+  return {
+    pdh: pdh, pdl: pdl, pdc: pdc,
+    pmh: pmh, pml: pml,
+    cur: cur,
+    lastBar:  lastClosed ? { o: +lastClosed.Open, h: +lastClosed.High, l: +lastClosed.Low, c: +lastClosed.Close } : null,
+    priorBar: priorBar   ? { o: +priorBar.Open,   h: +priorBar.High,   l: +priorBar.Low,   c: +priorBar.Close   } : null,
+  };
+}
+
+// -----------------------------------------------------------------
+// CASEY TRIGGER LOGIC (tightened Apr 15 2026)
+// The old logic was just `cur > PDH` which fired on every ticker above
+// yesterday's high. Real Casey = retest of PMH after a break.
+//
+// CALLS require:
+//   1. cur > PDH                        (daily breakout context)
+//   2. PMH is set                       (actual premarket level existed)
+//   3. cur is within [-0.15%, +0.75%] of PMH   (hovering near the retest)
+//   4. prior 5m bar low touched PMH ± 0.25%    (pulled back)
+//   5. last closed 5m bar is green (c > o)    (reclaimed)
+//
+// PUTS mirror: cur < PDL, near PML, prior tested from above, last bar red.
+//
+// If the tight retest condition doesn't fit but the breakout is clean
+// (cur > PDH and cur > PMH * 1.002 AND last bar green), we allow a
+// looser "BREAKOUT" variant labeled differently so we can track edge.
+// -----------------------------------------------------------------
+function classifyCasey(lv) {
+  if (!lv || !isFinite(lv.cur)) return null;
+  var cur = lv.cur;
+  var lb  = lv.lastBar;
+  var pb  = lv.priorBar;
+  if (!lb) return null;
+
+  // ---------- CALLS ----------
+  if (cur > lv.pdh && isFinite(lv.pmh) && lv.pmh > 0) {
+    var nearPmh = (cur >= lv.pmh * 0.9985) && (cur <= lv.pmh * 1.0075);
+    var pulledBack = pb && (pb.l <= lv.pmh * 1.0025) && (pb.l >= lv.pmh * 0.9975);
+    var lastGreen = lb.c > lb.o;
+    if (nearPmh && pulledBack && lastGreen) {
+      return { direction: 'CALLS', kind: 'RETEST', trigger: lv.pmh };
+    }
+    // Clean breakout variant: price decisively above PMH and still pushing
+    var cleanBO = (cur > lv.pmh * 1.002) && lastGreen && (lb.c > pb.c);
+    if (cleanBO) {
+      return { direction: 'CALLS', kind: 'BREAKOUT', trigger: Math.max(lv.pmh, lv.pdh) };
+    }
+  }
+
+  // ---------- PUTS ----------
+  if (cur < lv.pdl && isFinite(lv.pml) && lv.pml > 0) {
+    var nearPml = (cur <= lv.pml * 1.0015) && (cur >= lv.pml * 0.9925);
+    var pulledUp = pb && (pb.h >= lv.pml * 0.9975) && (pb.h <= lv.pml * 1.0025);
+    var lastRed  = lb.c < lb.o;
+    if (nearPml && pulledUp && lastRed) {
+      return { direction: 'PUTS', kind: 'RETEST', trigger: lv.pml };
+    }
+    var cleanBD = (cur < lv.pml * 0.998) && lastRed && (lb.c < pb.c);
+    if (cleanBD) {
+      return { direction: 'PUTS', kind: 'BREAKDOWN', trigger: Math.min(lv.pml, lv.pdl) };
+    }
+  }
+
+  return null;
 }
 
 // -----------------------------------------------------------------
@@ -157,10 +224,16 @@ function buildContract(ticker, direction, current) {
 // -----------------------------------------------------------------
 // QUEUE ITEM BUILDER
 // -----------------------------------------------------------------
-function buildQueueItem(ticker, direction, lv) {
+function buildQueueItem(ticker, sig, lv) {
+  var direction = sig.direction;
   var c = buildContract(ticker, direction, lv.cur);
-  var trigger = direction === 'CALLS' ? lv.pdh : lv.pdl;
-  var source = direction === 'CALLS' ? 'CASEY_PDH_RETEST' : 'CASEY_PDL_BREAKDOWN';
+  var trigger = sig.trigger;
+  var source;
+  if (direction === 'CALLS') {
+    source = sig.kind === 'RETEST' ? 'CASEY_PMH_RETEST' : 'CASEY_PDH_BREAKOUT';
+  } else {
+    source = sig.kind === 'RETEST' ? 'CASEY_PML_RETEST' : 'CASEY_PDL_BREAKDOWN';
+  }
   return {
     ticker:         ticker,
     direction:      direction,
@@ -234,23 +307,21 @@ async function pollOnce() {
         var lv = computeLevels(daily, mins);
         if (!lv) { skipped++; continue; }
 
-        var direction = null;
-        if (lv.cur > lv.pdh && lv.pmh !== null) direction = 'CALLS';
-        else if (lv.cur < lv.pdl && lv.pml !== null) direction = 'PUTS';
+        var sig = classifyCasey(lv);
+        if (!sig) { skipped++; continue; }
+        var direction = sig.direction;
 
-        if (!direction) { skipped++; continue; }
-
-        if (isDeduped(sym, direction)) {
-          console.log('[CASEY] dedup skip ' + sym + ' ' + direction);
+        if (isDeduped(sym, direction + '|' + sig.kind)) {
+          console.log('[CASEY] dedup skip ' + sym + ' ' + direction + ' ' + sig.kind);
           skipped++;
           continue;
         }
 
-        var item = buildQueueItem(sym, direction, lv);
+        var item = buildQueueItem(sym, sig, lv);
         items.push(item);
-        markDeduped(sym, direction);
-        console.log('[CASEY] signal ' + sym + ' ' + direction +
-                    ' cur=' + lv.cur + ' pdh=' + lv.pdh + ' pdl=' + lv.pdl);
+        markDeduped(sym, direction + '|' + sig.kind);
+        console.log('[CASEY] signal ' + sym + ' ' + direction + ' ' + sig.kind +
+                    ' cur=' + lv.cur + ' pmh=' + lv.pmh + ' pml=' + lv.pml);
       } catch(e) {
         console.log('[CASEY] ticker error ' + sym + ': ' + e.message);
         skipped++;

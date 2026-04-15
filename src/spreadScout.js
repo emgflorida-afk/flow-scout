@@ -117,9 +117,13 @@ function withinTradingWindow() {
 // -----------------------------------------------------------------
 async function tsBars(ticker, unit, interval, barsback, token) {
   try {
+    // sessiontemplate=Default is only valid for Minute intervals in the TS API;
+    // passing it on Daily/Weekly/Monthly returns "insufficient bars" (silent
+    // rejection). Drop it for non-intraday timeframes.
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker +
       '?interval=' + interval + '&unit=' + unit +
-      '&barsback=' + barsback + '&sessiontemplate=Default';
+      '&barsback=' + barsback +
+      (unit === 'Minute' ? '&sessiontemplate=Default' : '');
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (!res.ok) {
       console.error('[SPREAD] bars ' + ticker + ' ' + unit + '/' + interval + ' ' + res.status);
