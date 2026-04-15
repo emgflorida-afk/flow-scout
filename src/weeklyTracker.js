@@ -18,9 +18,14 @@
 var fs = require('fs');
 var fetch = require('node-fetch');
 
-var WEEKLY_GOAL = parseFloat(process.env.WEEKLY_GOAL || '2500');
+var WEEKLY_GOAL_BASE = parseFloat(process.env.WEEKLY_GOAL || '2500');
 var WEEKLY_STOP = parseFloat(process.env.WEEKLY_STOP || '-750');
 var DANGER_FLOOR = parseFloat(process.env.WEEKLY_DANGER || '-500');
+// Deficit carry: on missed week, next week absorbs half the shortfall,
+// capped at +$1000 added (max effective goal = $3500). Prevents tilt.
+var DEFICIT_CARRY_PCT = parseFloat(process.env.DEFICIT_CARRY_PCT || '0.5');
+var DEFICIT_CARRY_MAX = parseFloat(process.env.DEFICIT_CARRY_MAX || '1000');
+var WEEKLY_GOAL = WEEKLY_GOAL_BASE;
 
 var STATE_FILE = '/tmp/weekly_state.json';
 
@@ -32,6 +37,8 @@ var state = {
   status: 'ON_PACE',
   goalHit: false,
   stopHit: false,
+  effectiveGoal: WEEKLY_GOAL_BASE,  // may be bumped by deficit carry
+  carryFromPrior: 0,                 // dollars of deficit carried in
 };
 
 // -----------------------------------------------------------------
@@ -89,7 +96,24 @@ loadState();
 function resetIfNewWeek() {
   var ws = isoDate(mondayOfThisWeek());
   if (state.weekStart !== ws) {
-    console.log('[WEEKLY] New week reset -- prior P&L: $' + state.totalPnL.toFixed(2));
+    // Compute deficit carry from prior week
+    var priorPnL = state.totalPnL || 0;
+    var priorGoal = state.effectiveGoal || WEEKLY_GOAL_BASE;
+    var carry = 0;
+    if (state.weekStart && priorPnL < priorGoal) {
+      var shortfall = priorGoal - priorPnL;
+      carry = Math.min(DEFICIT_CARRY_MAX, shortfall * DEFICIT_CARRY_PCT);
+      // Don't carry if last week was a blowup (-$500+ loss). Wipe it clean.
+      if (priorPnL <= DANGER_FLOOR) {
+        console.log('[WEEKLY] Prior week blowup ($' + priorPnL.toFixed(2) + '). Wiping deficit, fresh start.');
+        carry = 0;
+      }
+    }
+    var newGoal = WEEKLY_GOAL_BASE + carry;
+    WEEKLY_GOAL = newGoal;
+    console.log('[WEEKLY] New week reset -- prior P&L: $' + priorPnL.toFixed(2) +
+                ' | carry: $' + carry.toFixed(0) +
+                ' | new goal: $' + newGoal.toFixed(0));
     state = {
       weekStart: ws,
       weekEnd: isoDate(fridayOfThisWeek()),
@@ -98,8 +122,13 @@ function resetIfNewWeek() {
       status: 'ON_PACE',
       goalHit: false,
       stopHit: false,
+      effectiveGoal: newGoal,
+      carryFromPrior: carry,
     };
     saveState();
+  } else if (state.effectiveGoal) {
+    // Keep module-level WEEKLY_GOAL synced with persisted state
+    WEEKLY_GOAL = state.effectiveGoal;
   }
 }
 

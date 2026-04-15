@@ -427,6 +427,20 @@ app.post('/api/weekly/fill', function(req, res) {
   weeklyTracker.recordFill(ticker, parseFloat(pnl), source);
   res.json(weeklyTracker.getState());
 });
+// Seed weekly P&L -- one-shot loader for historical options realized.
+// Body: { fills: [{ticker, pnl, source, date}], resetFirst: true }
+app.post('/api/weekly/seed', function(req, res) {
+  if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
+  var fills = req.body.fills || [];
+  if (!Array.isArray(fills)) return res.status(400).json({ error: 'fills must be array' });
+  var results = [];
+  fills.forEach(function(f) {
+    if (!f || f.pnl == null) return;
+    var r = weeklyTracker.recordFill(f.ticker || '?', parseFloat(f.pnl), f.source || 'seed');
+    results.push({ ticker: f.ticker, pnl: f.pnl, weeklyAfter: r.totalPnL });
+  });
+  res.json({ status: 'seeded', count: results.length, state: weeklyTracker.getState() });
+});
 app.post('/api/weekly/post', function(req, res) {
   if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
   weeklyTracker.postWeeklySummary().catch(console.error);

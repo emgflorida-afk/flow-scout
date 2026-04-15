@@ -159,6 +159,30 @@ function formatBrief(ctx) {
   lines.push('🌅 STRATUM MORNING BRIEF — ' + today);
   lines.push('════════════════════════════════════════');
 
+  // WEEKLY TRACKER BAR (Bill-Paying Mode)
+  if (ctx.weekly) {
+    var w = ctx.weekly;
+    var goal = ctx.weeklyGoal || 2500;
+    var pnl = w.totalPnL || 0;
+    var pace = pnl >= 0 ? '+$' + pnl.toFixed(0) : '-$' + Math.abs(pnl).toFixed(0);
+    var remain = Math.max(0, goal - pnl);
+    // Days left this week (incl today) Mon-Fri
+    var dayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' })).getDay();
+    var daysLeft = Math.max(1, 6 - Math.max(1, Math.min(5, dayET)));
+    var perDay = remain / daysLeft;
+    lines.push('💰 WEEKLY — Goal $' + goal + '  |  P&L ' + pace + '  |  ' + (ctx.weeklyBar || ''));
+    lines.push('   State: ' + w.status + '  |  Days left: ' + daysLeft +
+               '  |  Need $' + perDay.toFixed(0) + '/day to finish green');
+    if (w.status === 'BEHIND' || w.status === 'DANGER') {
+      lines.push('   ⚠️  BEHIND PACE — A/A+ setups only. No sizing up. No B-grade trades.');
+    } else if (w.status === 'STOP') {
+      lines.push('   🛑 WEEKLY STOP HIT — queue frozen. Manage existing only.');
+    } else if (w.status === 'AHEAD') {
+      lines.push('   ✅ GOAL BANKED — ride runners only. No new entries.');
+    }
+    lines.push('');
+  }
+
   // MARKET PULSE
   lines.push('📊 MARKET PULSE');
   var spy = ctx.pulse.SPY || {}, qqq = ctx.pulse.QQQ || {}, iwm = ctx.pulse.IWM || {};
@@ -270,12 +294,24 @@ async function generateAndPost(opts) {
       queued = (be.getQueuedTrades() || []).filter(function(q){ return q.status === 'PENDING'; });
     } catch(e) { console.error('[BRIEF] queue read error:', e.message); }
 
+    // Weekly tracker state
+    var weeklyState = null, weeklyBar = '', weeklyGoal = 2500;
+    try {
+      var wt = require('./weeklyTracker');
+      weeklyState = wt.getState();
+      weeklyBar = wt.formatWeeklyBar();
+      weeklyGoal = wt.WEEKLY_GOAL;
+    } catch(e) { console.error('[BRIEF] weekly read error:', e.message); }
+
     var ctx = {
       pulse:         pulse,
       spyFtfc:       spyFtfc,
       watchlist:     wl,
       ftfcByTicker:  ftfcByTicker,
       queued:        queued,
+      weekly:        weeklyState,
+      weeklyBar:     weeklyBar,
+      weeklyGoal:    weeklyGoal,
     };
 
     var body = formatBrief(ctx);
