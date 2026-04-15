@@ -458,6 +458,12 @@ function bulkAddQueuedTrades(trades, opts) {
 // ---------------------------------------------------------------
 var queueActive = false;
 var _queueCycleRunning = false;
+// Gap-through protection: in-memory map of qt.id -> last observed underlying
+// price. Resets on process restart (daily Railway redeploy is fine).
+// Required so runQueueCycle can detect a TRUE CROSS of the trigger from the
+// non-trigger side, and refuse to fill when the bell opens gap-through.
+// Added Apr 15 2026 AM -- see feedback_dead_zone.md (9:30-10:00 = -$1,460).
+var lastSeenUnderlying = {};
 
 function setQueueActive(on) {
   queueActive = !!on;
@@ -516,13 +522,45 @@ async function runQueueCycle() {
       if (!qtQuote) continue;
       var qtLast = parseFloat(qtQuote.Last || qtQuote.last || 0);
       if (qtLast <= 0) continue;
+
+      // ---- GAP-THROUGH PROTECTION ----
+      // Require a TRUE CROSS of the trigger from the non-trigger side.
+      // First observation establishes baseline only -- never fire on tick 0.
+      // If that first tick is already past the trigger, flag waitForRetest so
+      // operators can see why nothing fired, and still require a later cross.
+      var prevLast = lastSeenUnderlying[qt.id];
+      lastSeenUnderlying[qt.id] = qtLast;
+
+      if (prevLast === undefined) {
+        var gappedThrough = (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) ||
+                            (qt.direction === 'PUTS'  && qtLast <= qt.triggerPrice);
+        if (gappedThrough && !qt.waitForRetest) {
+          qt.waitForRetest = true;
+          saveQueuedTrades();
+          logBrain('[QUEUE-GAP] ' + qt.ticker + ' opened through trigger — wait for retest (last $' +
+            qtLast.toFixed(2) + ' vs trigger $' + qt.triggerPrice + ')');
+        }
+        continue;
+      }
+
       var triggered = false;
-      if (qt.direction === 'CALLS' && qtLast >= qt.triggerPrice) triggered = true;
-      if (qt.direction === 'PUTS' && qtLast <= qt.triggerPrice) triggered = true;
+      // TRUE CROSS: prev on non-trigger side, current on trigger side
+      if (qt.direction === 'CALLS' && prevLast < qt.triggerPrice && qtLast >= qt.triggerPrice) triggered = true;
+      if (qt.direction === 'PUTS'  && prevLast > qt.triggerPrice && qtLast <= qt.triggerPrice) triggered = true;
+
+      // Expire gap-through setups that never retested by 11:30 AM ET (day trades only)
+      if (qt.waitForRetest && !triggered && et.total >= queuedWindowEnd && qt.tradeType !== 'SWING') {
+        qt.status = 'CANCELLED';
+        qt.cancelReason = 'gap_no_retest_by_1130';
+        saveQueuedTrades();
+        logBrain('[QUEUE-GAP] ' + qt.ticker + ' waitForRetest expired at 11:30 — cancelled');
+        continue;
+      }
+
       if (!triggered) continue;
 
       logBrain('[QUEUE-CYCLE] ' + qt.ticker + ' TRIGGERED @ $' + qtLast.toFixed(2) +
-        ' (trigger $' + qt.triggerPrice + ') | ' + qt.contractSymbol);
+        ' (trigger $' + qt.triggerPrice + ', prev $' + prevLast.toFixed(2) + ') | ' + qt.contractSymbol);
 
       if (!orderExecutor) { logBrain('[QUEUE-CYCLE] orderExecutor not loaded'); continue; }
       qt.status = 'TRIGGERED';
