@@ -2037,6 +2037,43 @@ app.post('/api/spy-hedge/reset', function(req, res) {
   res.json(spyHedgeScout.resetState());
 });
 
+// CASEY / WP / STRAT ENTRY SCOUTS -- auto-queue their own setups.
+// Casey: PDH/PDL breakout + PMH/PML retest every 60s 9:30-11:30 ET.
+// Strat: F2U/F2D/Inside/Hammer/Shooter on 60m + Daily, FTFC veto. Every 60s.
+// WP:    4hr hammer/shooter off 9/21 EMA fan. Every 4h on the hour.
+var caseyEntry = null, wpEntry = null, stratEntry = null;
+try { caseyEntry = require('./caseyEntry'); console.log('[SERVER] caseyEntry loaded OK'); }
+catch(e) { console.log('[SERVER] caseyEntry not loaded:', e.message); }
+try { wpEntry = require('./wpEntry'); console.log('[SERVER] wpEntry loaded OK'); }
+catch(e) { console.log('[SERVER] wpEntry not loaded:', e.message); }
+try { stratEntry = require('./stratEntry'); console.log('[SERVER] stratEntry loaded OK'); }
+catch(e) { console.log('[SERVER] stratEntry not loaded:', e.message); }
+
+cron.schedule('* 9-11 * * 1-5', function() {
+  if (caseyEntry) caseyEntry.run().catch(function(e){ console.error('[CASEY]', e.message); });
+}, { timezone: 'America/New_York' });
+
+cron.schedule('* 9-15 * * 1-5', function() {
+  if (stratEntry) stratEntry.run().catch(function(e){ console.error('[STRAT]', e.message); });
+}, { timezone: 'America/New_York' });
+
+cron.schedule('5 10,14 * * 1-5', function() {
+  if (wpEntry) wpEntry.run().catch(function(e){ console.error('[WP]', e.message); });
+}, { timezone: 'America/New_York' });
+
+app.post('/api/casey/run', async function(req, res) {
+  if (!caseyEntry) return res.status(500).json({ error: 'caseyEntry not loaded' });
+  try { res.json(await caseyEntry.run()); } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/wp/run', async function(req, res) {
+  if (!wpEntry) return res.status(500).json({ error: 'wpEntry not loaded' });
+  try { res.json(await wpEntry.run()); } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/strat/run', async function(req, res) {
+  if (!stratEntry) return res.status(500).json({ error: 'stratEntry not loaded' });
+  try { res.json(await stratEntry.run()); } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.
