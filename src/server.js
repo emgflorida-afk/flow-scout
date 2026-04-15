@@ -2074,6 +2074,36 @@ app.post('/api/strat/run', async function(req, res) {
   try { res.json(await stratEntry.run()); } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// AYCE + SPREAD scouts (Tier 3)
+var ayceScout = null, spreadScout = null;
+try { ayceScout = require('./ayceScout'); console.log('[SERVER] ayceScout loaded OK'); }
+catch(e) { console.log('[SERVER] ayceScout not loaded:', e.message); }
+try { spreadScout = require('./spreadScout'); console.log('[SERVER] spreadScout loaded OK'); }
+catch(e) { console.log('[SERVER] spreadScout not loaded:', e.message); }
+
+// AYCE fires opportunistically: 9:30-11:30 AM for Miyagi/4HR/Failed9/322,
+// then every 5 min 11-15 ET for 7HR liquidity sweep.
+cron.schedule('*/2 9-11 * * 1-5', function() {
+  if (ayceScout) ayceScout.run().catch(function(e){ console.error('[AYCE]', e.message); });
+}, { timezone: 'America/New_York' });
+cron.schedule('*/5 11-15 * * 1-5', function() {
+  if (ayceScout) ayceScout.run().catch(function(e){ console.error('[AYCE-SWEEP]', e.message); });
+}, { timezone: 'America/New_York' });
+
+// Spread scout: once every 30 min during RTH, skipping Friday PM.
+cron.schedule('*/30 9-14 * * 1-5', function() {
+  if (spreadScout) spreadScout.run().catch(function(e){ console.error('[SPREAD-SCOUT]', e.message); });
+}, { timezone: 'America/New_York' });
+
+app.post('/api/ayce/run', async function(req, res) {
+  if (!ayceScout) return res.status(500).json({ error: 'ayceScout not loaded' });
+  try { res.json(await ayceScout.run()); } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/spread-scout/run', async function(req, res) {
+  if (!spreadScout) return res.status(500).json({ error: 'spreadScout not loaded' });
+  try { res.json(await spreadScout.run()); } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.
