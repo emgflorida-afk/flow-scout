@@ -2003,6 +2003,40 @@ app.get('/api/jsmith/diag', function(req, res) {
   });
 });
 
+// SPY HEDGE SCOUT cron -- every 60s during market hours Mon-Fri
+// Watches SPY 5-min bars for FAILED resistance rejection or support break
+// and auto-queues a SPY put hedge via brainEngine. See spyHedgeScout.js.
+var spyHedgeScout = null;
+try { spyHedgeScout = require('./spyHedgeScout'); console.log('[SERVER] spyHedgeScout loaded OK'); }
+catch(e) { console.log('[SERVER] spyHedgeScout not loaded:', e.message); }
+cron.schedule('* 9-15 * * 1-5', function() {
+  if (spyHedgeScout) {
+    spyHedgeScout.runCycle().then(function(r) {
+      if (r && (r.status === 'FIRED_A' || r.status === 'FIRED_B' || r.status === 'ABORT' || r.status === 'signal_bar_flagged')) {
+        console.log('[SPY-HEDGE]', r.status);
+      }
+    }).catch(function(e) { console.error('[SPY-HEDGE]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.post('/api/spy-hedge/run', async function(req, res) {
+  if (!spyHedgeScout) return res.status(500).json({ error: 'spyHedgeScout not loaded' });
+  try { res.json(await spyHedgeScout.runCycle()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/spy-hedge/state', function(req, res) {
+  if (!spyHedgeScout) return res.status(500).json({ error: 'spyHedgeScout not loaded' });
+  res.json({ config: spyHedgeScout.getConfig(), state: spyHedgeScout.getState() });
+});
+app.post('/api/spy-hedge/config', function(req, res) {
+  if (!spyHedgeScout) return res.status(500).json({ error: 'spyHedgeScout not loaded' });
+  res.json(spyHedgeScout.setConfig(req.body || {}));
+});
+app.post('/api/spy-hedge/reset', function(req, res) {
+  if (!spyHedgeScout) return res.status(500).json({ error: 'spyHedgeScout not loaded' });
+  res.json(spyHedgeScout.resetState());
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.
