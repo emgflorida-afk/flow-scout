@@ -15,6 +15,7 @@ var flowCluster   = require('./flowCluster');
 
 var goalTracker      = null;
 var weeklyTracker    = null;
+var stopManager      = null;
 var finviz           = null;
 var capitol          = null;
 var ts               = null;
@@ -26,6 +27,7 @@ var positionOffset   = null;
 
 try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
 try { weeklyTracker    = require('./weeklyTracker');    console.log('[WEEKLY] Loaded OK');  } catch(e) { console.log('[WEEKLY] Skipped:', e.message); }
+try { stopManager      = require('./stopManager');      console.log('[STOPMGR] Loaded OK'); } catch(e) { console.log('[STOPMGR] Skipped:', e.message); }
 try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
 try { capitol          = require('./capitolTrades');    console.log('[CAPITOL] Loaded OK'); } catch(e) { console.log('[CAPITOL] Skipped:', e.message); }
 try { ts               = require('./tradestation');     console.log('[TS] Loaded OK');      } catch(e) { console.log('[TS] Skipped:', e.message); }
@@ -441,6 +443,39 @@ app.post('/api/weekly/seed', function(req, res) {
   });
   res.json({ status: 'seeded', count: results.length, state: weeklyTracker.getState() });
 });
+// -- STOP MANAGER -----------------------------------------------
+app.post('/api/stops/prepare', function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  try { res.json(stopManager.prepareOrder(req.body || {})); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/stops/attach', async function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  try {
+    var r = await stopManager.attachStopAfterFill(req.body || {});
+    res.json(r);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/stops/cancel/:orderId', async function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  try { res.json(await stopManager.cancelStop(req.params.orderId)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/stops/trail/begin', async function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  try { res.json(await stopManager.beginStructuralTrail(req.body || {})); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/stops/trail/step', async function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  try { res.json(await stopManager.trailStep(req.body.ticker, req.body.symbol)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/stops/trail/state', function(req, res) {
+  if (!stopManager) return res.status(500).json({ error: 'Stop manager not loaded' });
+  res.json(stopManager.getTrailState());
+});
+
 app.post('/api/weekly/post', function(req, res) {
   if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
   weeklyTracker.postWeeklySummary().catch(console.error);
@@ -1144,6 +1179,18 @@ cron.schedule('30 16 * * 1-5', async function() {
     if (!positionManager) return;
     await positionManager.checkSimPromotion();
   } catch(e) { console.error('[POS-MGR] SIM promotion error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// STOP MANAGER -- ratcheting trail step every 5 min during market hours
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!stopManager) return;
+    var st = stopManager.getTrailState();
+    if (!st || !Object.keys(st).length) return;
+    var results = await stopManager.trailAll();
+    var changed = Object.keys(results).filter(function(k){ return results[k] && results[k].changed; });
+    if (changed.length) console.log('[STOPMGR] Trail ratcheted:', changed.length, 'positions');
+  } catch(e) { console.error('[STOPMGR] trail cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // WEEKLY TRACKER -- Friday 4:05 PM ET post summary

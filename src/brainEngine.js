@@ -376,9 +376,13 @@ function bulkAddQueuedTrades(trades, opts) {
   var added = 0;
   var replaced = 0;
   var skippedByWeekly = 0;
+  var skippedByStops = 0;
   // Weekly tracker gate -- skip entries when weekly state forbids
   var weeklyGate = null;
   try { weeklyGate = require('./weeklyTracker'); } catch(e) {}
+  // Stop manager gate -- validate entry, size by grade, compute stop
+  var stopMgr = null;
+  try { stopMgr = require('./stopManager'); } catch(e) {}
   if (opts.replaceAll) {
     // Mark all existing PENDING as CANCELLED, fresh slate
     for (var i = 0; i < queuedTrades.length; i++) {
@@ -390,23 +394,60 @@ function bulkAddQueuedTrades(trades, opts) {
   }
   for (var j = 0; j < trades.length; j++) {
     try {
+      var t = trades[j];
       if (weeklyGate && weeklyGate.shouldAllowNewEntry) {
-        var gate = weeklyGate.shouldAllowNewEntry(trades[j] && trades[j].grade);
+        var gate = weeklyGate.shouldAllowNewEntry(t && t.grade);
         if (!gate.allow) {
           skippedByWeekly++;
-          console.log('[QUEUE] weekly-gate skip ' + (trades[j] && trades[j].ticker) + ': ' + gate.reason);
+          console.log('[QUEUE] weekly-gate skip ' + (t && t.ticker) + ': ' + gate.reason);
           continue;
         }
       }
-      addQueuedTrade(trades[j]);
+      // Stop manager: validate entry, compute structural stop, size by grade
+      if (stopMgr && stopMgr.prepareOrder && t && t.triggerPrice) {
+        var prep = stopMgr.prepareOrder({
+          source: t.source,
+          ticker: t.ticker,
+          entry: t.triggerPrice,
+          premium: t.maxEntryPrice,
+          delta: t.delta,
+          grade: t.grade || 'B',
+          direction: t.direction,
+          ctx: {
+            pdh: t.pdh, pdl: t.pdl,
+            pmh: t.pmh, pml: t.pml,
+            signalBarHigh: t.signalBarHigh, signalBarLow: t.signalBarLow,
+            hammerLow: t.hammerLow, shooterHigh: t.shooterHigh,
+          },
+        });
+        if (!prep.accept) {
+          skippedByStops++;
+          console.log('[QUEUE] stop-gate skip ' + t.ticker + ': ' + prep.reason);
+          continue;
+        }
+        // Stamp the queue item with the computed stop + sizing
+        t.stopProfile = prep.profile;
+        t.structuralStop = prep.stop.stopPrice;
+        t.stopReason = prep.stop.reason;
+        t.stopPremium = prep.stopPremium;
+        t.contracts = prep.sizing.contracts;
+        t.trimLevels = prep.trim.levels;
+        t.gradeRisk = prep.sizing.maxRisk;
+      }
+      addQueuedTrade(t);
       added++;
     } catch(e) {
       console.error('[QUEUE] bulk add error for trade', j, e.message);
     }
   }
   saveQueuedTrades();
-  logBrain('QUEUE BULK ADD: +' + added + ' trades, ' + replaced + ' replaced, ' + skippedByWeekly + ' weekly-gated');
-  return { added: added, replaced: replaced, skippedByWeekly: skippedByWeekly, total: queuedTrades.filter(function(t){return t.status==='PENDING';}).length };
+  logBrain('QUEUE BULK ADD: +' + added + ' trades, ' + replaced + ' replaced, ' +
+           skippedByWeekly + ' weekly-gated, ' + skippedByStops + ' stop-gated');
+  return {
+    added: added, replaced: replaced,
+    skippedByWeekly: skippedByWeekly, skippedByStops: skippedByStops,
+    total: queuedTrades.filter(function(t){return t.status==='PENDING';}).length,
+  };
 }
 
 // ---------------------------------------------------------------
