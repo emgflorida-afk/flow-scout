@@ -194,6 +194,11 @@ function buildItem(ticker, sig, tf, currentPrice, ftfcDir) {
   var tradeType = is60 ? 'DAY' : 'SWING';
   var contracts = is60 ? 2 : 3;
   var dte       = is60 ? 5 : 10;
+  // GRADE: FTFC-aligned F2U/F2D = A+ (Primo's textbook actionable signal).
+  // Non-aligned reversal or continuation = A. No B grades ever emerge here.
+  var ftfcAligned = ftfcDir === 'FTFC UP' || ftfcDir === 'FTFC DOWN';
+  var isReversal  = sig.signal === 'F2U' || sig.signal === 'F2D';
+  var grade = (isReversal && ftfcAligned) ? 'A+' : 'A';
   var expDate   = pickExpiry(dte);
   var strike    = Math.round(currentPrice);
   var contractType = sig.direction === 'CALLS' ? 'Call' : 'Put';
@@ -217,6 +222,7 @@ function buildItem(ticker, sig, tf, currentPrice, ftfcDir) {
     contracts: contracts,
     management: 'STRAT',
     tradeType: tradeType,
+    grade: grade,
     source: sig.source,
     note: tf + ' ' + sig.signal + ' bar=' + JSON.stringify(sig.bar) + ' ftfc=' + ftfcDir,
   };

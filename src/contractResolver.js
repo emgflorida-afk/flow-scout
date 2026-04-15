@@ -110,7 +110,7 @@ async function getLVLs(ticker, token) {
     if (!token) return null;
     var res = await fetch(
       getTSBase() + '/marketdata/barcharts/' + ticker +
-      '?unit=Daily&interval=1&barsback=3&sessiontemplate=Default',
+      '?unit=Daily&interval=1&barsback=3',
       { headers: { 'Authorization': 'Bearer ' + token } }
     );
     var data = await res.json();

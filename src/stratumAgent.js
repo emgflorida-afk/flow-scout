@@ -90,7 +90,7 @@ async function get6HRBars() {
   var token = await getTSToken();
   if (!token) return null;
   try {
-    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
+    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5';
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) return null;
     var data = await res.json();

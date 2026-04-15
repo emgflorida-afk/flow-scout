@@ -2107,6 +2107,53 @@ app.post('/api/spread-scout/run', async function(req, res) {
   try { res.json(await spreadScout.run()); } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// -----------------------------------------------------------------
+// /arm -- phone-native one-tap arm/kill page (save to home screen)
+// -----------------------------------------------------------------
+var armPage = null;
+try { armPage = require('./armPage'); console.log('[SERVER] armPage loaded OK'); }
+catch(e) { console.log('[SERVER] armPage not loaded:', e.message); }
+if (armPage) {
+  app.get('/arm', armPage.handler);
+  app.get('/arm/', armPage.handler);
+}
+
+// -----------------------------------------------------------------
+// AUTO-FIRE gate API -- the split-mode brain
+// A+ setups auto-fire via this gate chain; A setups stage to queue
+// for manual approval; B ignored entirely. Flagged OFF by default.
+// -----------------------------------------------------------------
+var autoFireGate = null;
+try { autoFireGate = require('./autoFireGate'); console.log('[SERVER] autoFireGate loaded OK'); }
+catch(e) { console.log('[SERVER] autoFireGate not loaded:', e.message); }
+
+app.get('/api/autofire/status', function(req, res) {
+  if (!autoFireGate) return res.json({ enabled: false, loaded: false });
+  var s = autoFireGate.getState();
+  s.loaded = true;
+  // Include last FTFC string from spreadScout if available
+  try {
+    if (spreadScout && spreadScout.lastFtfc) s.ftfc = spreadScout.lastFtfc;
+  } catch(e) {}
+  res.json(s);
+});
+
+app.post('/api/autofire/toggle', function(req, res) {
+  if (!autoFireGate) return res.status(500).json({ error: 'autoFireGate not loaded' });
+  var on = !!(req.body && req.body.enabled);
+  var result = autoFireGate.setEnabled(on);
+  console.log('[AUTOFIRE] toggled ->', result);
+  res.json({ enabled: result });
+});
+
+app.post('/api/autofire/config', function(req, res) {
+  if (!autoFireGate) return res.status(500).json({ error: 'autoFireGate not loaded' });
+  var body = req.body || {};
+  if (Array.isArray(body.allowedGrades)) autoFireGate.setAllowedGrades(body.allowedGrades);
+  if (isFinite(body.maxRiskPerTrade))    autoFireGate.setMaxRisk(body.maxRiskPerTrade);
+  res.json(autoFireGate.getState());
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.

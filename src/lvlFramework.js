@@ -29,8 +29,10 @@ async function getHTFCandle(ticker, token, isSim, htfUnit) {
       : 'https://api.tradestation.com/v3';
 
     var unit = htfUnit || 'Daily';
+    // sessiontemplate=Default only valid on Minute; Apr 15 system-wide fix
     var res  = await fetch(base + '/marketdata/barcharts/' + ticker +
-      '?interval=1&unit=' + unit + '&barsback=5&sessiontemplate=Default', {
+      '?interval=1&unit=' + unit + '&barsback=5' +
+      (unit === 'Minute' ? '&sessiontemplate=Default' : ''), {
       headers: { 'Authorization': 'Bearer ' + token }
     });
     var data = await res.json();

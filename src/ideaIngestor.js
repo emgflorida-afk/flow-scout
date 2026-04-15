@@ -157,11 +157,14 @@ async function getLiveBars(ticker, unit, interval, barsback) {
     var token = await ts.getAccessToken();
     if (!token) return null;
 
+    // sessiontemplate=Default only valid on Minute interval; silent 0-bar
+    // return on Daily/Weekly/Monthly. Apr 15 2026 system-wide fix.
+    var _unit = unit || 'Daily';
     var url = TS_BASE + '/marketdata/barcharts/' + ticker +
-      '?unit=' + (unit || 'Daily') +
+      '?unit=' + _unit +
       '&interval=' + (interval || '1') +
       '&barsback=' + (barsback || 5) +
-      '&sessiontemplate=Default';
+      (_unit === 'Minute' ? '&sessiontemplate=Default' : '');
 
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) return null;

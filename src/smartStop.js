@@ -65,7 +65,7 @@ async function getTSBars(ticker) {
     if (!token) return null;
 
     var url = TS_BASE + '/marketdata/barcharts/' + ticker +
-      '?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
+      '?unit=Daily&interval=1&barsback=5';
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) {
       console.log('[SMARTSTOP] TS bars failed:', res.status);

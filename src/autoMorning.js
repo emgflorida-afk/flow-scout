@@ -41,7 +41,7 @@ async function get6HRDirection() {
     var token = await ts.getAccessToken();
     if (!token) return 'MIXED';
 
-    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
+    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5';
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) return 'MIXED';
 

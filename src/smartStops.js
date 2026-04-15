@@ -18,7 +18,7 @@ async function getDailyBars(ticker) {
     var token = await ts.getAccessToken();
     if (!token) return null;
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker
-      + '?interval=1&unit=Daily&barsback=5&sessiontemplate=Default';
+      + '?interval=1&unit=Daily&barsback=5';
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (!res.ok) return null;
     var data = await res.json();

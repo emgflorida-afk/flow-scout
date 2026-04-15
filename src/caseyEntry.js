@@ -240,6 +240,9 @@ function buildQueueItem(ticker, sig, lv) {
   } else {
     source = sig.kind === 'RETEST' ? 'CASEY_PML_RETEST' : 'CASEY_PDL_BREAKDOWN';
   }
+  // GRADE: RETEST = A+ (Casey's textbook entry), BREAKOUT = A (one rule
+  // looser but still passes stale-chase guard).
+  var grade = sig.kind === 'RETEST' ? 'A+' : 'A';
   return {
     ticker:         ticker,
     direction:      direction,
@@ -254,6 +257,7 @@ function buildQueueItem(ticker, sig, lv) {
     contracts:      3,
     management:     'CASEY',
     tradeType:      'DAY',
+    grade:          grade,
     source:         source,
     note:           'PDH=' + lv.pdh + ' PDL=' + lv.pdl +
                     ' PMH=' + lv.pmh + ' PML=' + lv.pml +

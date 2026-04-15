@@ -1906,7 +1906,7 @@ async function evaluateAYCESignal(deadZoneOnly) {
           var caseyToken = await ts.getAccessToken();
           if (caseyToken) {
             // Fetch yesterday's daily bar for PDH/PDL + today's 5-min bars for EMA/price
-            var dailyUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=2&sessiontemplate=Default';
+            var dailyUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=1&unit=Daily&barsback=2';
             var fiveMinUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker + '?interval=5&unit=Minute&barsback=30&sessiontemplate=Default';
             var headers = { 'Authorization': 'Bearer ' + caseyToken };
 

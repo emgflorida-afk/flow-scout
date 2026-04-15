@@ -226,6 +226,10 @@ function buildQueueItem(ticker, signal, bar, ema9, ema21) {
     contracts:      2,
     management:     'WP',
     tradeType:      'SWING',
+    // GRADE: WP 4hr hammer/shooter off 9/21 EMA fan is a textbook
+    // higher-TF swing setup. Always A. (WP never auto-fires —
+    // SWING trades always stage for manual review.)
+    grade:          'A',
     source:         source,
     note:           '4hr ' + signal + ' ema9=' + ema9.toFixed(2) + ' ema21=' + ema21.toFixed(2) +
                     ' bar=' + JSON.stringify({ o: bar.open, h: bar.high, l: bar.low, c: bar.close }),

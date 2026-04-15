@@ -59,7 +59,7 @@ async function get6HRBias(token) {
       if (!token) return null;
     }
 
-    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
+    var url = TS_BASE + '/marketdata/barcharts/SPY?unit=Daily&interval=1&barsback=5';
     var res = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
     if (!res.ok) {
       console.log('[MACRO] Daily bars failed:', res.status);
