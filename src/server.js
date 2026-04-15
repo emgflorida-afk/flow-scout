@@ -14,6 +14,7 @@ var discordBot    = require('./discordBot');
 var flowCluster   = require('./flowCluster');
 
 var goalTracker      = null;
+var weeklyTracker    = null;
 var finviz           = null;
 var capitol          = null;
 var ts               = null;
@@ -24,6 +25,7 @@ var preMarketReport  = null;
 var positionOffset   = null;
 
 try { goalTracker      = require('./goalTracker');      console.log('[GOAL] Loaded OK');    } catch(e) { console.log('[GOAL] Skipped:', e.message); }
+try { weeklyTracker    = require('./weeklyTracker');    console.log('[WEEKLY] Loaded OK');  } catch(e) { console.log('[WEEKLY] Skipped:', e.message); }
 try { finviz           = require('./finvizScreener');   console.log('[FINVIZ] Loaded OK');  } catch(e) { console.log('[FINVIZ] Skipped:', e.message); }
 try { capitol          = require('./capitolTrades');    console.log('[CAPITOL] Loaded OK'); } catch(e) { console.log('[CAPITOL] Skipped:', e.message); }
 try { ts               = require('./tradestation');     console.log('[TS] Loaded OK');      } catch(e) { console.log('[TS] Skipped:', e.message); }
@@ -386,7 +388,11 @@ app.post('/goal/trade', function(req, res) {
   if (!ticker || pnl == null) return res.status(400).json({ error: 'Missing ticker or pnl' });
   goalTracker.recordTrade(ticker, parseFloat(pnl));
   goalTracker.postGoalUpdate().catch(console.error);
-  res.json(goalTracker.getState());
+  if (weeklyTracker) {
+    try { weeklyTracker.recordFill(ticker, parseFloat(pnl), req.body.source || 'manual'); }
+    catch(e) { console.error('[WEEKLY] recordFill error:', e.message); }
+  }
+  res.json({ daily: goalTracker.getState(), weekly: weeklyTracker ? weeklyTracker.getState() : null });
 });
 
 // -- CLAUDE MCP GOAL BRIDGE ------------------------------------
@@ -405,6 +411,26 @@ app.post('/webhook/goal', function(req, res) {
     console.log('[GOAL] Updated from Claude MCP -- $' + realizedPnL);
     res.json({ status: 'OK', realizedPnL: realizedPnL, state: goalTracker.getState() });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -- WEEKLY TRACKER ---------------------------------------------
+app.get('/api/weekly', function(req, res) {
+  if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
+  res.json(weeklyTracker.getState());
+});
+app.post('/api/weekly/fill', function(req, res) {
+  if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
+  var ticker = req.body.ticker;
+  var pnl    = req.body.pnl;
+  var source = req.body.source;
+  if (!ticker || pnl == null) return res.status(400).json({ error: 'Missing ticker or pnl' });
+  weeklyTracker.recordFill(ticker, parseFloat(pnl), source);
+  res.json(weeklyTracker.getState());
+});
+app.post('/api/weekly/post', function(req, res) {
+  if (!weeklyTracker) return res.json({ status: 'Weekly tracker not loaded' });
+  weeklyTracker.postWeeklySummary().catch(console.error);
+  res.json({ status: 'posted' });
 });
 
 // -- SMART STOPS -------------------------------------------------
@@ -1104,6 +1130,14 @@ cron.schedule('30 16 * * 1-5', async function() {
     if (!positionManager) return;
     await positionManager.checkSimPromotion();
   } catch(e) { console.error('[POS-MGR] SIM promotion error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// WEEKLY TRACKER -- Friday 4:05 PM ET post summary
+cron.schedule('5 16 * * 5', async function() {
+  try {
+    if (!weeklyTracker) return;
+    await weeklyTracker.postWeeklySummary();
+  } catch(e) { console.error('[WEEKLY] Friday post error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // EOD CLOSE ALL -- 3:45PM ET: try limit orders first

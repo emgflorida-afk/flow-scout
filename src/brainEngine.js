@@ -375,6 +375,10 @@ function bulkAddQueuedTrades(trades, opts) {
   if (!Array.isArray(trades)) return { added: 0, error: 'trades must be array' };
   var added = 0;
   var replaced = 0;
+  var skippedByWeekly = 0;
+  // Weekly tracker gate -- skip entries when weekly state forbids
+  var weeklyGate = null;
+  try { weeklyGate = require('./weeklyTracker'); } catch(e) {}
   if (opts.replaceAll) {
     // Mark all existing PENDING as CANCELLED, fresh slate
     for (var i = 0; i < queuedTrades.length; i++) {
@@ -386,6 +390,14 @@ function bulkAddQueuedTrades(trades, opts) {
   }
   for (var j = 0; j < trades.length; j++) {
     try {
+      if (weeklyGate && weeklyGate.shouldAllowNewEntry) {
+        var gate = weeklyGate.shouldAllowNewEntry(trades[j] && trades[j].grade);
+        if (!gate.allow) {
+          skippedByWeekly++;
+          console.log('[QUEUE] weekly-gate skip ' + (trades[j] && trades[j].ticker) + ': ' + gate.reason);
+          continue;
+        }
+      }
       addQueuedTrade(trades[j]);
       added++;
     } catch(e) {
@@ -393,8 +405,8 @@ function bulkAddQueuedTrades(trades, opts) {
     }
   }
   saveQueuedTrades();
-  logBrain('QUEUE BULK ADD: +' + added + ' trades, ' + replaced + ' replaced');
-  return { added: added, replaced: replaced, total: queuedTrades.filter(function(t){return t.status==='PENDING';}).length };
+  logBrain('QUEUE BULK ADD: +' + added + ' trades, ' + replaced + ' replaced, ' + skippedByWeekly + ' weekly-gated');
+  return { added: added, replaced: replaced, skippedByWeekly: skippedByWeekly, total: queuedTrades.filter(function(t){return t.status==='PENDING';}).length };
 }
 
 // ---------------------------------------------------------------
