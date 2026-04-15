@@ -27,7 +27,9 @@ var DEFICIT_CARRY_PCT = parseFloat(process.env.DEFICIT_CARRY_PCT || '0.5');
 var DEFICIT_CARRY_MAX = parseFloat(process.env.DEFICIT_CARRY_MAX || '1000');
 var WEEKLY_GOAL = WEEKLY_GOAL_BASE;
 
-var STATE_FILE = '/tmp/weekly_state.json';
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { require('fs').mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+var STATE_FILE = STATE_DIR + '/weekly_state.json';
 
 var state = {
   weekStart: '',      // YYYY-MM-DD of Monday

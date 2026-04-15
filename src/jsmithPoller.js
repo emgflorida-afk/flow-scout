@@ -27,7 +27,9 @@ var CHAN = {
 var DISCORD_API = 'https://discord.com/api/v10';
 
 // Dedup store -- last-seen message id per channel + set of seen ids
-var SEEN_FILE = '/tmp/jsmith_seen.json';
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+var SEEN_FILE = STATE_DIR + '/jsmith_seen.json';
 var seen = { byChannel: {}, ids: {} };
 function loadSeen() {
   try {

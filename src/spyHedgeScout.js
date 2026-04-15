@@ -38,7 +38,9 @@ var config = {
 // -----------------------------------------------------------------
 // STATE — persisted so we survive restarts inside a single trading day
 // -----------------------------------------------------------------
-var STATE_FILE = '/tmp/spy_hedge_scout.json';
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { require('fs').mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+var STATE_FILE = STATE_DIR + '/spy_hedge_scout.json';
 var state = {
   date: null,         // 'YYYY-MM-DD' ET — reset each day
   signalBar: null,    // { time, open, high, low, close } — pending rejection bar

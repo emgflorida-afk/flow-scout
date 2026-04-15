@@ -310,16 +310,54 @@ async function placeOrder(params) {
       var bracketOrders = [];
 
       if (stop) {
-        bracketOrders.push({
-          AccountID:   account,
-          Symbol:      symbol,
-          Quantity:    String(qty),
-          OrderType:   'StopMarket',
-          StopPrice:   String(stop),      // already round2'd above
-          TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
-          TimeInForce: { Duration: duration || 'GTC' },
-          Route:       'Intelligent',
-        });
+        // Apr 15 2026: switched from StopMarket → StopLimit on liquid underlyings.
+        // Root cause on MRVL: StopMarket filled at opening-spread bid ($3.29)
+        // while stop trigger was $3.50, eating $21 on a flat trade. The contract
+        // itself recovered to $3.43+ intraday — a StopLimit with a reasonable
+        // offset would have either filled in a sane band or not fired at all,
+        // leaving the position to run.
+        //
+        // Rule: if the underlying is on the liquid whitelist (or env-override),
+        // use StopLimit with LimitPrice = stop * 0.94 (6% worse than trigger
+        // gives ~1 wide-spread of protection). For thin names, fall back to
+        // StopMarket so we still get out on a gap.
+        var LIQUID_DEFAULT = 'SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,META,AMZN,TSLA,GOOGL,GOOG,NFLX,AMD,AVGO,COIN,PLTR,MRVL,LRCX,ORCL,SMCI,SPX,SPXW,XSP,MU,HOOD';
+        var liquidSet = (process.env.LIQUID_UNDERLYINGS || LIQUID_DEFAULT)
+          .toUpperCase().split(',').map(function(s){return s.trim();});
+        // Extract root from option symbol: "MRVL 260417C135" -> "MRVL"
+        var symRoot = String(symbol || '').split(' ')[0].toUpperCase();
+        var useStopLimit = liquidSet.indexOf(symRoot) >= 0;
+        var stopOffsetPct = parseFloat(process.env.STOP_LIMIT_OFFSET_PCT || '0.06');
+
+        if (useStopLimit) {
+          var stopLimitPrice = Math.max(0.05, parseFloat(stop) * (1 - stopOffsetPct));
+          // Round to 2 decimals and floor slightly so we don't cross the limit
+          stopLimitPrice = Math.round(stopLimitPrice * 100) / 100;
+          bracketOrders.push({
+            AccountID:   account,
+            Symbol:      symbol,
+            Quantity:    String(qty),
+            OrderType:   'StopLimit',
+            StopPrice:   String(stop),
+            LimitPrice:  String(stopLimitPrice),
+            TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+            TimeInForce: { Duration: duration || 'GTC' },
+            Route:       'Intelligent',
+          });
+          console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stop + ' limit $' + stopLimitPrice + ' (liquid)');
+        } else {
+          bracketOrders.push({
+            AccountID:   account,
+            Symbol:      symbol,
+            Quantity:    String(qty),
+            OrderType:   'StopMarket',
+            StopPrice:   String(stop),
+            TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+            TimeInForce: { Duration: duration || 'GTC' },
+            Route:       'Intelligent',
+          });
+          console.log('[EXECUTOR] Stop=StopMarket ' + symbol + ' trigger $' + stop + ' (thin)');
+        }
       }
 
       if (t1) {

@@ -74,7 +74,9 @@ function getT1Pct(ticker) { return T1_TARGETS[ticker] || 0.35; }
 
 // Track state -- persistent across restarts
 var fs = require('fs');
-var STATE_FILE = '/tmp/stratum-exec-state.json';
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+var STATE_FILE = STATE_DIR + '/stratum-exec-state.json';
 
 var todaySetups = [];
 var todayTickers = {};

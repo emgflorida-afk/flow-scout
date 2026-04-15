@@ -253,15 +253,23 @@ var weeklyPace = {
   },
 };
 
-var PACE_FILE = '/tmp/weekly_pace.json';
-var COOLDOWN_FILE = '/tmp/ticker_cooldowns.json';
+// STATE_DIR — set to /data when Railway volume is mounted, falls back to /tmp.
+// This is the single fix for the "queue wipes on redeploy" bug.
+// Volume setup: Railway dashboard → flow-scout service → Volumes → Create
+//   mount path /data, then set env STATE_DIR=/data. No code redeploy needed
+//   after volume is mounted — just the env var flip.
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { require('fs').mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+
+var PACE_FILE = STATE_DIR + '/weekly_pace.json';
+var COOLDOWN_FILE = STATE_DIR + '/ticker_cooldowns.json';
 
 // ===================================================================
 // QUEUED TRADES — Pre-loaded setups from JohnJSmith / Discord picks
 // Brain monitors trigger prices and auto-executes when conditions hit.
-// Persisted to /tmp/queued_trades.json so Railway redeploys don't lose them.
+// Persisted to STATE_DIR/queued_trades.json so Railway redeploys don't lose them.
 // ===================================================================
-var QUEUED_FILE = '/tmp/queued_trades.json';
+var QUEUED_FILE = STATE_DIR + '/queued_trades.json';
 var queuedTrades = [];
 
 // brainLog is fully declared further down, but the bootstrap IIFE below
@@ -308,7 +316,21 @@ function addQueuedTrade(trade) {
     expiration: trade.expiration || null,               // e.g. '05-01-2026'
     contractType: (trade.contractType || 'Call'),
     maxEntryPrice: parseFloat(trade.maxEntryPrice || 0), // max price to pay for contract (0 = market)
-    stopPct: parseFloat(trade.stopPct || -25) / 100,   // -25% default
+    stopPct: (function(){
+      // Accept either -25 (percent) or -0.25 (fraction). Normalize to fraction.
+      // Apr 15 2026: MRVL + PLTR stopped at entry because -0.25 was being divided
+      // by 100 → -0.0025 (0.25% stop). Fix honors both input formats and clamps
+      // to a sane range [-0.95, -0.05] so a typo can't produce an at-entry stop.
+      var raw = parseFloat(trade.stopPct);
+      if (isNaN(raw) || raw === 0) return -0.25; // default -25%
+      var frac = Math.abs(raw) >= 1 ? raw / 100 : raw;
+      // Force sign negative (stop must reduce from entry for longs)
+      if (frac > 0) frac = -frac;
+      // Clamp to [-0.95, -0.05] — never allow a stop tighter than 5% or looser than 95%
+      if (frac > -0.05) frac = -0.05;
+      if (frac < -0.95) frac = -0.95;
+      return frac;
+    })(),
     targets: trade.targets || [0.25, 0.50, 1.00],      // +25%, +50%, +100%
     contracts: parseInt(trade.contracts || 2),           // number of contracts
     management: trade.management || 'JSMITH',           // JSMITH = 80% off at 20%, leave runners
