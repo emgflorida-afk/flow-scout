@@ -479,10 +479,12 @@ async function scanTicker(symbol, token) {
       '?unit=Minute&interval=30&barsback=10&sessiontemplate=Default';
     var url2h = getTSBase() + '/marketdata/barcharts/' + symbol +
       '?unit=Minute&interval=120&barsback=8&sessiontemplate=Default';
+    // sessiontemplate=Default only valid on Minute interval; silently returns
+    // 0 bars on Daily/Weekly/Monthly. Fix found Apr 15 2026 PM.
     var urlDaily = getTSBase() + '/marketdata/barcharts/' + symbol +
-      '?unit=Daily&interval=1&barsback=5&sessiontemplate=Default';
+      '?unit=Daily&interval=1&barsback=5';
     var urlWeekly = getTSBase() + '/marketdata/barcharts/' + symbol +
-      '?unit=Weekly&interval=1&barsback=3&sessiontemplate=Default';
+      '?unit=Weekly&interval=1&barsback=3';
     // Casey method: 5min bars for EMA crossover detection (need 60 bars for 48 EMA + buffer)
     var url5min = getTSBase() + '/marketdata/barcharts/' + symbol +
       '?unit=Minute&interval=5&barsback=60&sessiontemplate=Default';

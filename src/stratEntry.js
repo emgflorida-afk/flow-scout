@@ -62,9 +62,12 @@ function pruneDedup(d) {
 // -----------------------------------------------------------------
 async function tsBars(ticker, unit, interval, barsback, token) {
   try {
+    // sessiontemplate=Default only valid for Minute interval; silent reject
+    // on Daily/Weekly/Monthly. See Apr 15 2026 spreadScout fix.
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker +
       '?interval=' + interval + '&unit=' + unit +
-      '&barsback=' + barsback + '&sessiontemplate=Default';
+      '&barsback=' + barsback +
+      (unit === 'Minute' ? '&sessiontemplate=Default' : '');
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (!res.ok) {
       console.error('[STRAT] bars ' + ticker + ' ' + unit + ' ' + res.status);

@@ -47,8 +47,14 @@ async function tsQuotes(symbols, token) {
 
 async function tsBars(ticker, unit, barsback, token) {
   try {
+    // sessiontemplate=Default is only valid for Minute intervals; passing it
+    // on Daily/Weekly/Monthly returns 0 bars (silent rejection). This bug
+    // was causing checkFTFC to return ERR for every ticker and was silently
+    // disabling the FTFC veto across stratEntry, wpEntry, ayceScout, and
+    // the jsmith flow enricher. Found Apr 15 2026 PM.
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + ticker +
-      '?interval=1&unit=' + unit + '&barsback=' + barsback + '&sessiontemplate=Default';
+      '?interval=1&unit=' + unit + '&barsback=' + barsback +
+      (unit === 'Minute' ? '&sessiontemplate=Default' : '');
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (!res.ok) return [];
     var data = await res.json();

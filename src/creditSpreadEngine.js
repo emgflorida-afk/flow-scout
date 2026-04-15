@@ -149,9 +149,14 @@ async function fetchFTFC() {
 
     var headers = { 'Authorization': 'Bearer ' + token };
 
-    var monthlyRes = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Monthly&barsback=3&sessiontemplate=Default', { headers: headers });
-    var weeklyRes  = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Weekly&barsback=3&sessiontemplate=Default', { headers: headers });
-    var dailyRes   = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Daily&barsback=3&sessiontemplate=Default', { headers: headers });
+    // Apr 15 2026: sessiontemplate=Default is only valid for Minute interval
+    // on the TS bars endpoint. Passing it on Daily/Weekly/Monthly returns 0
+    // bars silently, which forced this FTFC check to default to MIXED every
+    // single run and caused creditSpreadEngine to fire the wrong direction
+    // (or nothing) for weeks. Dropped for non-intraday TFs.
+    var monthlyRes = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Monthly&barsback=3', { headers: headers });
+    var weeklyRes  = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Weekly&barsback=3', { headers: headers });
+    var dailyRes   = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=1&unit=Daily&barsback=3', { headers: headers });
     var hourlyRes  = await fetch(TS_BASE + '/marketdata/barcharts/SPY?interval=60&unit=Minute&barsback=5&sessiontemplate=Default', { headers: headers });
 
     var monthlyData = await monthlyRes.json();

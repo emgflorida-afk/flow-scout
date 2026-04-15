@@ -166,9 +166,14 @@ function classifyCasey(lv) {
     if (nearPmh && pulledBack && lastGreen) {
       return { direction: 'CALLS', kind: 'RETEST', trigger: lv.pmh };
     }
-    // Clean breakout variant: price decisively above PMH and still pushing
+    // Clean breakout variant: price decisively above PMH and still pushing.
+    // STALE-CHASE GUARD (Apr 15 PM): reject if price is already more than
+    // 0.75% above PMH or 1.00% above PDH — the move already played out and
+    // entering here is chasing the top (the same bug that almost fired
+    // AAPL @ 261.93 with cur 265.32 and TSLA @ 367 with cur 386).
     var cleanBO = (cur > lv.pmh * 1.002) && lastGreen && (lb.c > pb.c);
-    if (cleanBO) {
+    var staleChase = (cur > lv.pmh * 1.0075) || (cur > lv.pdh * 1.010);
+    if (cleanBO && !staleChase) {
       return { direction: 'CALLS', kind: 'BREAKOUT', trigger: Math.max(lv.pmh, lv.pdh) };
     }
   }
@@ -182,7 +187,8 @@ function classifyCasey(lv) {
       return { direction: 'PUTS', kind: 'RETEST', trigger: lv.pml };
     }
     var cleanBD = (cur < lv.pml * 0.998) && lastRed && (lb.c < pb.c);
-    if (cleanBD) {
+    var staleBD = (cur < lv.pml * 0.9925) || (cur < lv.pdl * 0.990);
+    if (cleanBD && !staleBD) {
       return { direction: 'PUTS', kind: 'BREAKDOWN', trigger: Math.min(lv.pml, lv.pdl) };
     }
   }
