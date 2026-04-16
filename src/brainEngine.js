@@ -687,7 +687,24 @@ async function runQueueCycle() {
           qt.status = 'PENDING'; saveQueuedTrades(); continue;
         }
         var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
-        var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+        // Calculate stop with minimum dollar distance on cheap contracts.
+        // On contracts under $1.00, the bid-ask spread at open can be $0.10-$0.20.
+        // A percentage stop (25% of $0.35 = $0.09) gets eaten by the spread instantly.
+        // Enforce minimum $0.15 distance on contracts under $1, $0.20 under $0.50.
+        var rawStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+        var minStopDistance = 0.10; // default minimum
+        if (limitPrice < 0.50) minStopDistance = 0.20;
+        else if (limitPrice < 1.00) minStopDistance = 0.15;
+        else if (limitPrice < 2.00) minStopDistance = 0.12;
+        var minStop = parseFloat((limitPrice - minStopDistance).toFixed(2));
+        // If the percentage stop is tighter than our minimum distance, use the floor
+        if (rawStop > minStop) {
+          logBrain('[STOP-FLOOR] ' + qt.ticker + ': pct stop $' + rawStop.toFixed(2) + ' too tight on $' + limitPrice.toFixed(2) + ' contract. Using floor $' + minStop.toFixed(2) + ' (min distance $' + minStopDistance.toFixed(2) + ')');
+          rawStop = minStop;
+        }
+        // Never set a stop below $0.05 (worthless territory, just let it expire)
+        if (rawStop < 0.05) rawStop = 0.05;
+        var qtStop = rawStop;
         var qtExec = await orderExecutor.placeOrder({
           account: LIVE_ACCOUNT,
           symbol: qt.contractSymbol,
@@ -3247,7 +3264,19 @@ async function runBrainCycle() {
                   }
 
                   var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
-                  var qtStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+                  // Stop with minimum dollar distance (same logic as runQueueCycle)
+                  var rawStop2 = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
+                  var minStopDist2 = 0.10;
+                  if (limitPrice < 0.50) minStopDist2 = 0.20;
+                  else if (limitPrice < 1.00) minStopDist2 = 0.15;
+                  else if (limitPrice < 2.00) minStopDist2 = 0.12;
+                  var minStop2 = parseFloat((limitPrice - minStopDist2).toFixed(2));
+                  if (rawStop2 > minStop2) {
+                    logBrain('[STOP-FLOOR] ' + qt.ticker + ': pct stop $' + rawStop2.toFixed(2) + ' too tight on $' + limitPrice.toFixed(2) + ' contract. Using floor $' + minStop2.toFixed(2));
+                    rawStop2 = minStop2;
+                  }
+                  if (rawStop2 < 0.05) rawStop2 = 0.05;
+                  var qtStop = rawStop2;
                   var qtT1 = parseFloat((limitPrice * (1 + qt.targets[0])).toFixed(2));
                   var qtT2 = qt.targets.length > 1 ? parseFloat((limitPrice * (1 + qt.targets[1])).toFixed(2)) : null;
 
