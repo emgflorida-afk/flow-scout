@@ -552,6 +552,47 @@
   </div>
 </div>
 
+<!-- QUICK QUEUE — Lane 1 -->
+<div id="quick-queue-panel" style="
+  background: var(--bg2);
+  border-bottom: 2px solid var(--amber);
+  padding: 12px 20px;
+">
+  <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+    <span style="color:var(--amber); font-weight:700; font-size:11px; letter-spacing:0.15em;">QUICK QUEUE</span>
+    <span style="color:var(--text-dim); font-size:10px;">3 taps — you find it, system executes</span>
+  </div>
+  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <input id="qq-ticker" type="text" placeholder="TICKER" maxlength="5" style="
+      background:var(--bg); border:1px solid var(--border2); color:var(--text);
+      font-family:var(--mono); font-size:14px; font-weight:700; padding:8px 10px;
+      width:80px; text-transform:uppercase; border-radius:2px; text-align:center;
+    ">
+    <select id="qq-direction" style="
+      background:var(--bg); border:1px solid var(--border2); color:var(--text);
+      font-family:var(--mono); font-size:12px; padding:8px 10px;
+      border-radius:2px; cursor:pointer;
+    ">
+      <option value="CALLS" style="color:#00cc66;">CALLS</option>
+      <option value="PUTS" style="color:#ff3333;">PUTS</option>
+    </select>
+    <input id="qq-trigger" type="number" placeholder="TRIGGER $" step="0.01" style="
+      background:var(--bg); border:1px solid var(--border2); color:var(--text);
+      font-family:var(--mono); font-size:14px; padding:8px 10px;
+      width:110px; border-radius:2px; text-align:center;
+    ">
+    <button id="qq-submit" onclick="submitQuickQueue()" style="
+      background:var(--amber); color:#000; border:none;
+      font-family:var(--mono); font-size:12px; font-weight:700;
+      padding:8px 20px; border-radius:2px; cursor:pointer;
+      letter-spacing:0.1em; text-transform:uppercase;
+    ">QUEUE IT</button>
+    <div id="qq-status" style="
+      font-size:11px; color:var(--text-dim); margin-left:8px; max-width:400px;
+    "></div>
+  </div>
+</div>
+
 <!-- MAIN -->
 <div class="main" id="main-content">
   <div class="loading">LOADING MARKET DATA<span class="blink">_</span></div>
@@ -582,6 +623,70 @@
   }
   setInterval(updateClock, 1000);
   updateClock();
+
+  // ── QUICK QUEUE ──
+  async function submitQuickQueue() {
+    const ticker = document.getElementById('qq-ticker').value.trim().toUpperCase();
+    const direction = document.getElementById('qq-direction').value;
+    const trigger = parseFloat(document.getElementById('qq-trigger').value);
+    const statusEl = document.getElementById('qq-status');
+    const btn = document.getElementById('qq-submit');
+
+    if (!ticker) { statusEl.innerHTML = '<span style="color:var(--red)">Enter a ticker</span>'; return; }
+    if (!trigger || trigger <= 0) { statusEl.innerHTML = '<span style="color:var(--red)">Enter trigger price</span>'; return; }
+
+    btn.disabled = true;
+    btn.textContent = '...';
+    statusEl.innerHTML = '<span style="color:var(--amber)">Resolving contract...</span>';
+
+    try {
+      const res = await fetch('/api/quick-queue', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-stratum-secret': 'stratum2026' },
+        body: JSON.stringify({ ticker, direction, trigger }),
+      });
+      const data = await res.json();
+
+      if (data.status === 'QUEUED') {
+        const dirColor = direction === 'CALLS' ? 'var(--green)' : 'var(--red)';
+        statusEl.innerHTML = `<span style="color:var(--green)">✅ QUEUED</span> ` +
+          `<span style="color:${dirColor}">${ticker} ${direction}</span> ` +
+          `<span style="color:var(--text-dim)">→ ${data.contract} | Δ${data.delta ? data.delta.toFixed(2) : '?'} ` +
+          `| IV ${data.iv ? (data.iv*100).toFixed(0)+'%' : '?'} | ${data.dte}DTE ` +
+          `| trigger $${trigger}</span>`;
+        // Clear inputs for next trade
+        document.getElementById('qq-ticker').value = '';
+        document.getElementById('qq-trigger').value = '';
+        document.getElementById('qq-ticker').focus();
+      } else if (data.status === 'BLOCKED') {
+        statusEl.innerHTML = `<span style="color:var(--red)">❌ BLOCKED (${data.gate})</span> ` +
+          `<span style="color:var(--text-dim)">${data.reason}</span>`;
+      } else {
+        statusEl.innerHTML = `<span style="color:var(--red)">❌ ${data.error || JSON.stringify(data)}</span>`;
+      }
+    } catch(e) {
+      statusEl.innerHTML = `<span style="color:var(--red)">❌ ${e.message}</span>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'QUEUE IT';
+    }
+  }
+
+  // Submit on Enter key in trigger field
+  document.addEventListener('DOMContentLoaded', function() {
+    const triggerInput = document.getElementById('qq-trigger');
+    if (triggerInput) {
+      triggerInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') submitQuickQueue();
+      });
+    }
+    const tickerInput = document.getElementById('qq-ticker');
+    if (tickerInput) {
+      tickerInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') document.getElementById('qq-trigger').focus();
+      });
+    }
+  });
 
   // ── MODE TOGGLE ──
   function setMode(mode) {
