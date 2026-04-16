@@ -307,6 +307,7 @@ var COOLDOWN_FILE = STATE_DIR + '/ticker_cooldowns.json';
 // Persisted to STATE_DIR/queued_trades.json so Railway redeploys don't lose them.
 // ===================================================================
 var QUEUED_FILE = STATE_DIR + '/queued_trades.json';
+var BRAIN_STATE_FILE = STATE_DIR + '/brainState.json';
 var queuedTrades = [];
 
 // brainLog is fully declared further down, but the bootstrap IIFE below
@@ -342,6 +343,44 @@ function saveQueuedTrades() {
   } catch(e) { console.error('[QUEUE] Save error:', e.message); }
 }
 
+// -- BRAIN STATE PERSISTENCE ------------------------------------------
+// Persist brainActive, bypassMode, queueActive to disk so Railway
+// redeploys don't reset them to false. Same pattern as saveQueuedTrades.
+// Added Apr 16 2026 — missed trades 3 times from state reset on redeploy.
+// ---------------------------------------------------------------------
+function saveBrainState() {
+  try {
+    var fs = require('fs');
+    var state = {
+      brainActive: brainActive,
+      bypassMode: BYPASS_MODE,
+      queueActive: queueActive,
+      savedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(BRAIN_STATE_FILE, JSON.stringify(state, null, 2));
+  } catch(e) { console.error('[BRAIN] saveBrainState error:', e.message); }
+}
+
+function loadBrainState() {
+  try {
+    var fs = require('fs');
+    if (fs.existsSync(BRAIN_STATE_FILE)) {
+      var data = JSON.parse(fs.readFileSync(BRAIN_STATE_FILE, 'utf8'));
+      if (data) {
+        if (typeof data.brainActive === 'boolean') brainActive = data.brainActive;
+        if (typeof data.bypassMode === 'boolean') {
+          BYPASS_MODE = data.bypassMode;
+          EXECUTION_MODE = data.bypassMode ? 'BYPASS' : 'APPROVE';
+        }
+        if (typeof data.queueActive === 'boolean') queueActive = data.queueActive;
+        console.log('[BRAIN] State restored from disk: brainActive=' + brainActive +
+          ', bypassMode=' + BYPASS_MODE + ', queueActive=' + queueActive +
+          ' (saved ' + (data.savedAt || 'unknown') + ')');
+      }
+    }
+  } catch(e) { console.error('[BRAIN] loadBrainState error:', e.message); }
+}
+
 function addQueuedTrade(trade) {
   var qt = {
     id: 'QT_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
@@ -369,7 +408,7 @@ function addQueuedTrade(trade) {
       return frac;
     })(),
     targets: trade.targets || [0.25, 0.50, 1.00],      // +25%, +50%, +100%
-    contracts: parseInt(trade.contracts || 2),           // number of contracts
+    contracts: Math.max(3, parseInt(trade.contracts || 3)),  // MINIMUM 3 for 20/50/100 trim ladder
     management: trade.management || 'JSMITH',           // JSMITH = 80% off at 20%, leave runners
     tradeDate: trade.tradeDate || new Date().toISOString().slice(0, 10),
     source: trade.source || 'JSMITH',
@@ -411,6 +450,7 @@ function cancelQueuedTrade(id) {
 }
 
 loadQueuedTrades();
+loadBrainState();
 
 // ---------------------------------------------------------------
 // DURABLE BOOTSTRAP: if /tmp was wiped by a redeploy but a
@@ -540,6 +580,7 @@ var lastSeenUnderlying = {};
 
 function setQueueActive(on) {
   queueActive = !!on;
+  saveBrainState();
   logBrain('QUEUE ' + (queueActive ? 'ACTIVATED' : 'DEACTIVATED'));
   return queueActive;
 }
@@ -755,7 +796,7 @@ async function runQueueCycle() {
           account: LIVE_ACCOUNT,
           symbol: qt.contractSymbol,
           action: 'BUYTOOPEN',
-          qty: qt.contracts,
+          qty: Math.max(3, qt.contracts),
           limit: limitPrice,
           stop: qtStop,
           t1: null,
@@ -1126,6 +1167,7 @@ if (EXECUTION_MODE === 'OFF') console.log('[BRAIN] EXECUTION MODE: OFF (alerts o
 function setBypassMode(enabled) {
   BYPASS_MODE = !!enabled;
   EXECUTION_MODE = enabled ? 'BYPASS' : 'APPROVE';
+  saveBrainState();
   logBrain('EXECUTION MODE: ' + EXECUTION_MODE + (BYPASS_MODE ? ' -- LIVE AUTONOMOUS EXECUTION' : ' -- approval required'));
   return BYPASS_MODE;
 }
@@ -3025,6 +3067,7 @@ function resetDaily() {
 // ===================================================================
 function setBrainActive(active) {
   brainActive = !!active;
+  saveBrainState();
   logBrain('Brain ' + (brainActive ? 'ACTIVATED' : 'DEACTIVATED'));
   if (brainActive) {
     // HEALTH CHECK: verify option resolution works BEFORE accepting trades
@@ -3362,7 +3405,7 @@ async function runBrainCycle() {
                     account: LIVE_ACCOUNT,
                     symbol: qt.contractSymbol,
                     action: 'BUYTOOPEN',
-                    qty: qt.contracts,
+                    qty: Math.max(3, qt.contracts),
                     limit: limitPrice,
                     stop: qtStop,
                     t1: sendT1,
