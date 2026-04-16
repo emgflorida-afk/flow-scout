@@ -359,6 +359,8 @@ function addQueuedTrade(trade) {
     tradeType: (trade.tradeType || 'DAY').toUpperCase(),  // DAY or SWING — swings can trigger all day
     status: 'PENDING',                                  // PENDING, TRIGGERED, FILLED, EXPIRED, CANCELLED
     note: trade.note || '',
+    grade: trade.grade || null,                           // letter grade (A++, A+, A, B+, B, C, D, F)
+    confluenceScore: parseFloat(trade.confluenceScore || 0), // numeric score for tiebreaking
     createdAt: new Date().toISOString(),
   };
   queuedTrades.push(qt);
@@ -576,6 +578,26 @@ async function runQueueCycle() {
       activePendingQueued = pendingSwingQueued; // after morning: swings only
     }
     if (!activePendingQueued.length) return { checked: 0 };
+
+    // ---- PRIORITY RANK: best trades fire first when a slot opens ----
+    // Grade rank: A++=8, A+=7, A=6, A-=5.5, B+=5, B=4, C=3, D=2, F=1, null=0
+    var _gradeRank = { 'A++': 8, 'A+': 7, 'A': 6, 'A-': 5.5, 'B+': 5, 'B': 4, 'C': 3, 'D': 2, 'F': 1 };
+    activePendingQueued.sort(function(a, b) {
+      var aRank = _gradeRank[a.grade] || 0;
+      var bRank = _gradeRank[b.grade] || 0;
+      if (bRank !== aRank) return bRank - aRank;           // higher grade first
+      var aScore = a.confluenceScore || 0;
+      var bScore = b.confluenceScore || 0;
+      if (bScore !== aScore) return bScore - aScore;       // higher confluence score second
+      // Freshest signal wins tiebreaker (most recent createdAt)
+      var aTime = new Date(a.createdAt || 0).getTime();
+      var bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+    logBrain('[QUEUE-PRIORITY] Ranked ' + activePendingQueued.length + ' signals: ' +
+      activePendingQueued.slice(0, 5).map(function(q) {
+        return q.ticker + '(' + (q.grade || '?') + ')';
+      }).join(' > '));
 
     var ts3 = require('./tradestation');
     var qtToken = await ts3.getAccessToken();
@@ -3192,6 +3214,20 @@ async function runBrainCycle() {
     activePendingQueued = pendingSwingQueued; // after morning: swings only
   }
   if (activePendingQueued.length > 0) {
+    // ---- PRIORITY RANK: best trades fire first when a slot opens ----
+    var _gradeRankB = { 'A++': 8, 'A+': 7, 'A': 6, 'A-': 5.5, 'B+': 5, 'B': 4, 'C': 3, 'D': 2, 'F': 1 };
+    activePendingQueued.sort(function(a, b) {
+      var aRank = _gradeRankB[a.grade] || 0;
+      var bRank = _gradeRankB[b.grade] || 0;
+      if (bRank !== aRank) return bRank - aRank;
+      var aScore = a.confluenceScore || 0;
+      var bScore = b.confluenceScore || 0;
+      if (bScore !== aScore) return bScore - aScore;
+      var aTime = new Date(a.createdAt || 0).getTime();
+      var bTime = new Date(b.createdAt || 0).getTime();
+      return bTime - aTime;
+    });
+
     try {
       var ts3 = require('./tradestation');
       var qtToken = await ts3.getAccessToken();
