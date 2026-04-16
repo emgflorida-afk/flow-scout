@@ -587,10 +587,36 @@
       padding:8px 20px; border-radius:2px; cursor:pointer;
       letter-spacing:0.1em; text-transform:uppercase;
     ">QUEUE IT</button>
+    <button id="bt-submit" onclick="runBacktest()" style="
+      background:var(--cyan); color:#000; border:none;
+      font-family:var(--mono); font-size:12px; font-weight:700;
+      padding:8px 20px; border-radius:2px; cursor:pointer;
+      letter-spacing:0.1em; text-transform:uppercase;
+      margin-left:4px;
+    ">📊 BACKTEST</button>
     <div id="qq-status" style="
       font-size:11px; color:var(--text-dim); margin-left:8px; max-width:400px;
     "></div>
   </div>
+</div>
+
+<!-- BACKTEST RESULTS PANEL -->
+<div id="bt-panel" style="
+  display:none;
+  background: var(--bg2);
+  border-bottom: 2px solid var(--cyan);
+  padding: 12px 20px;
+  max-height: 400px;
+  overflow-y: auto;
+">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+    <span style="color:var(--cyan); font-weight:700; font-size:11px; letter-spacing:0.15em;">BULLFLOW BACKTEST</span>
+    <button onclick="document.getElementById('bt-panel').style.display='none'" style="
+      background:transparent; border:0; color:var(--text-dim); cursor:pointer;
+      font-size:18px; padding:0 4px;
+    ">×</button>
+  </div>
+  <div id="bt-content" style="font-family:var(--mono); font-size:11px; color:var(--text);"></div>
 </div>
 
 <!-- MAIN -->
@@ -669,6 +695,85 @@
     } finally {
       btn.disabled = false;
       btn.textContent = 'QUEUE IT';
+    }
+  }
+
+  // ── BACKTEST ──
+  async function runBacktest() {
+    const btn = document.getElementById('bt-submit');
+    const panel = document.getElementById('bt-panel');
+    const content = document.getElementById('bt-content');
+
+    // Default to yesterday (today's session may not be closed in Bullflow yet)
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    const date = d.toISOString().slice(0, 10);
+
+    btn.disabled = true;
+    btn.textContent = 'RUNNING...';
+    panel.style.display = 'block';
+    content.innerHTML = `<div style="color:var(--amber)">⏳ Replaying ${date} — streams full day data, takes ~6 min. Please wait...</div>`;
+
+    try {
+      // Hit MAIN URL since that's where BULLFLOW_API_KEY is
+      const res = await fetch('https://flow-scout-production.up.railway.app/api/brain/backtest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-stratum-secret': 'stratum2026' },
+        body: JSON.stringify({ date }),
+      });
+      const data = await res.json();
+
+      if (data.error) {
+        content.innerHTML = `<div style="color:var(--red)">❌ ${data.error}</div>`;
+        return;
+      }
+
+      const stats = data.stats || {};
+      const top = stats.topTickers || [];
+      const ready = stats.readyStats || {};
+
+      let html = `<div style="color:var(--cyan); margin-bottom:8px;">
+        <strong>${stats.date || date}</strong> — ${ready.totalTrades || 0} trades, ${ready.algoAlerts || 0} algo alerts, ${ready.customAlerts || 0} custom alerts
+      </div>`;
+
+      html += `<table style="width:100%; border-collapse:collapse; font-size:11px;">
+        <tr style="color:var(--text-dim); border-bottom:1px solid var(--border2);">
+          <th style="text-align:left; padding:4px;">TICKER</th>
+          <th style="text-align:right; padding:4px;">CALLS</th>
+          <th style="text-align:right; padding:4px;">PUTS</th>
+          <th style="text-align:right; padding:4px;">RATIO</th>
+          <th style="text-align:right; padding:4px;">PREMIUM</th>
+          <th style="text-align:left; padding:4px;">READ</th>
+        </tr>`;
+
+      top.slice(0, 20).forEach(t => {
+        const ratio = t.puts > 0 ? (t.calls / t.puts) : 999;
+        const prem = (t.totalPremium / 1e6).toFixed(1);
+        let read = '', color = 'var(--text-dim)';
+        if (ratio >= 10) { read = '🚀 EXTREME BULL'; color = 'var(--green)'; }
+        else if (ratio >= 3) { read = '🟢 BULLISH'; color = 'var(--green)'; }
+        else if (ratio >= 1.5) { read = '🟡 mild bull'; color = 'var(--amber)'; }
+        else if (ratio >= 0.8) { read = '⚪ mixed'; color = 'var(--text-dim)'; }
+        else if (ratio >= 0.5) { read = '🟠 bearish'; color = 'var(--amber)'; }
+        else { read = '🔴 BEARISH'; color = 'var(--red)'; }
+
+        html += `<tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:4px; font-weight:700;">${t.ticker}</td>
+          <td style="text-align:right; padding:4px;">${t.calls}</td>
+          <td style="text-align:right; padding:4px;">${t.puts}</td>
+          <td style="text-align:right; padding:4px; color:${color}; font-weight:700;">${ratio >= 999 ? '∞' : ratio.toFixed(1)}:1</td>
+          <td style="text-align:right; padding:4px;">$${prem}M</td>
+          <td style="padding:4px; color:${color};">${read}</td>
+        </tr>`;
+      });
+
+      html += '</table>';
+      content.innerHTML = html;
+    } catch(e) {
+      content.innerHTML = `<div style="color:var(--red)">❌ ${e.message}</div>`;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '📊 BACKTEST';
     }
   }
 
