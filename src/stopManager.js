@@ -124,8 +124,17 @@ function calcStop(profile, entry, direction, ctx) {
         type: 'structural-fallback',
       };
     }
-    // Small cushion below/above the structural level so we aren't wicked
-    var cushion = 0.05;
+    // Apr 16 2026: Widened cushion from $0.05 to dynamic 0.15%-0.30% of price.
+    // Previous $0.05 was getting hunted by algos — stops parked literally at
+    // the hunt zone. Dynamic cushion scales with price so a $20 stock gets
+    // ~$0.06 cushion and a $400 stock gets ~$1.20. Still reasonable stops
+    // but not at the obvious $0.05-below-PDL level where algos sweep.
+    //
+    // Override: AGGRESSIVE_STOPS=true uses old $0.05 cushion for day trades
+    // where tighter stops are required.
+    var cushionPct = process.env.AGGRESSIVE_STOPS === 'true' ? 0.0 : 0.003; // 0.3% default
+    var dynamicCushion = Math.max(0.15, level * cushionPct); // floor at $0.15
+    var cushion = dynamicCushion;
     var stop = isCall ? level - cushion : level + cushion;
     return {
       stopPrice: round2(stop),
