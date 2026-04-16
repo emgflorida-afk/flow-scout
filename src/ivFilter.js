@@ -34,6 +34,8 @@ var HIGH_BETA = [
   'MARA','RIOT','COIN','MSTR','IONQ','RGTI','SOUN','ACHR','LUNR',
   'RKLB','HOOD','SOFI','AFRM','UPST','HIMS','APP','SNAP','RDDT',
   'ROKU','DKNG','SE','SMCI','ARM','TSLA','NVDA','AMD','PLTR','SHOP','SNOW',
+  // Added Apr 16: Recent IPO / crypto-adjacent / high-beta momentum names
+  'CRCL','CRWV','BMNR','CVNA','AXTI','LITE','NBIS','IBIT',
 ];
 
 function getIVCap(ticker) {
