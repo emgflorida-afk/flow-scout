@@ -417,6 +417,7 @@ function addQueuedTrade(trade) {
     note: trade.note || '',
     grade: trade.grade || null,                           // letter grade (A++, A+, A, B+, B, C, D, F)
     confluenceScore: parseFloat(trade.confluenceScore || 0), // numeric score for tiebreaking
+    waitUntil: trade.waitUntil || null,                    // ET time gate e.g. '11:00' for AYCE 7HR
     createdAt: new Date().toISOString(),
   };
   queuedTrades.push(qt);
@@ -678,6 +679,18 @@ async function runQueueCycle() {
         continue;
       }
       if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
+
+      // ---- waitUntil ENFORCEMENT ----
+      // AYCE strategies have time gates: 7HR fires after 11:00, 322 after 10:00.
+      // If the queue item has a waitUntil field (e.g. '11:00'), skip until that ET time.
+      if (qt.waitUntil) {
+        var waitParts = qt.waitUntil.split(':');
+        var waitHour = parseInt(waitParts[0], 10);
+        var waitMin = parseInt(waitParts[1] || '0', 10);
+        var waitTotal = waitHour * 60 + waitMin;
+        if (et.total < waitTotal) continue; // not yet time
+      }
+
       var qtQuote = null;
       for (var qj = 0; qj < qtQuotes.length; qj++) {
         if ((qtQuotes[qj].Symbol || '').toUpperCase() === qt.ticker) { qtQuote = qtQuotes[qj]; break; }
@@ -3322,6 +3335,13 @@ async function runBrainCycle() {
               continue;
             }
             if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
+
+            // waitUntil enforcement (same as runQueueCycle)
+            if (qt.waitUntil) {
+              var _wParts = qt.waitUntil.split(':');
+              var _wTotal = parseInt(_wParts[0], 10) * 60 + parseInt(_wParts[1] || '0', 10);
+              if (et.total < _wTotal) continue;
+            }
 
             var qtQuote = null;
             for (var qj = 0; qj < qtQuotes.length; qj++) {

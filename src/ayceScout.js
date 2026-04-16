@@ -5,7 +5,7 @@
 // queues qualifying trades via brainEngine.bulkAddQueuedTrades.
 //
 // Strategies implemented:
-//  1) 12HR Miyagi       (STUB — 12HR aggregation nontrivial; logs only)
+//  1) 12HR Miyagi       (FULL — 60m bar aggregation into 12HR blocks)
 //  2) 4HR Re-Trigger    (FULL — 240m bars, 2-2 reversal, 9:30 break)
 //  3) 3-2-2 First Live  (FULL — 60m bars, fires after 10 AM)
 //  4) 7HR Liquidity Sweep (SIMPLIFIED — 4AM premarket range + 5m sweep, QQQ only)
@@ -156,13 +156,110 @@ function classify(bar, prev) {
 }
 
 // -----------------------------------------------------------------
-// STRATEGY 1: 12HR MIYAGI — STUB
+// STRATEGY 1: 12HR MIYAGI (1-3-1 Sequence)
 // -----------------------------------------------------------------
+// Aggregates 60-min bars into 12HR candles anchored at 4AM/4PM ET.
+// Pattern: 1-3-1 (inside → outside → inside). Entry on 4th candle.
+// Trigger = 50% of 3rd candle. 2UP above trigger → PUTS, 2DOWN below → CALLS.
 async function detectMiyagi(ticker, token) {
-  // TradeStation does not expose native 12HR bars. A proper
-  // implementation would aggregate 1HR bars into 12HR blocks anchored
-  // at 4AM/4PM ET. Deferred — returns null but logs awareness.
-  console.log('[AYCE] Miyagi 12HR not implemented for ' + ticker + ' — skipping');
+  // Pull ~72 hours of 60m bars to build ~6 12HR candles
+  var bars = await tsBars(ticker, 'Minute', 60, 72, token, 'USEQPreAndPost');
+  if (!bars || bars.length < 24) return null;
+  var normed = bars.map(normBar).filter(Boolean);
+
+  // Aggregate into 12HR blocks anchored at 4AM and 4PM ET
+  // Block boundaries: 4:00 AM → 3:59 PM (day session), 4:00 PM → 3:59 AM (night session)
+  var blocks = [];
+  var curBlock = null;
+  for (var i = 0; i < normed.length; i++) {
+    var b = normed[i];
+    var et = barETHour(b.raw);
+    if (!et) continue;
+    // Determine which 12HR block this bar belongs to
+    // 4AM-15:59 → block anchor = that day 4AM
+    // 16:00-3:59 → block anchor = that day 4PM (or prev day)
+    var blockKey;
+    var bDate = new Date(b.ts);
+    var ymd = bDate.toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+    if (et.h >= 4 && et.h < 16) {
+      blockKey = ymd + '_4AM';
+    } else {
+      blockKey = ymd + '_4PM';
+      if (et.h < 4) {
+        // Past midnight but before 4AM — belongs to PREVIOUS day's 4PM block
+        var prev = new Date(bDate.getTime() - 86400000);
+        blockKey = prev.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }) + '_4PM';
+      }
+    }
+    if (!curBlock || curBlock.key !== blockKey) {
+      curBlock = { key: blockKey, o: b.o, h: b.h, l: b.l, c: b.c, ts: b.ts };
+      blocks.push(curBlock);
+    } else {
+      if (b.h > curBlock.h) curBlock.h = b.h;
+      if (b.l < curBlock.l) curBlock.l = b.l;
+      curBlock.c = b.c; // close of last bar in block
+    }
+  }
+
+  if (blocks.length < 4) return null;
+
+  // Look for 1-3-1-? pattern in last 4 blocks
+  // blocks[-4]=1st, [-3]=2nd(3), [-2]=3rd(1), [-1]=4th(live)
+  var b1 = blocks[blocks.length - 4];
+  var b2 = blocks[blocks.length - 3];
+  var b3 = blocks[blocks.length - 2];
+  var b4 = blocks[blocks.length - 1];
+
+  var cls1 = classify(b2, b1); // 2nd vs 1st: should be outside(3)
+  var cls2 = classify(b3, b2); // 3rd vs 2nd: should be inside(1)
+  var cls3 = classify(b4, b3); // 4th vs 3rd: should be 2U or 2D
+
+  if (!cls1 || !cls2 || !cls3) return null;
+  if (!cls1.is3) return null;  // 2nd must be outside bar
+  if (!cls2.is1) return null;  // 3rd must be inside bar
+
+  // Invalidation: 3rd candle became outside (3) — means it already went outside-3
+  // which invalidates the setup
+  // cls2.is1 already checked above, so we're good
+
+  // Trigger = 50% of 3rd candle (the inside bar)
+  var trigger = (b3.h + b3.l) / 2;
+
+  // 4th candle must be 2UP or 2DOWN
+  if (cls3.is2U) {
+    // 2UP above trigger → PUTS (reversal setup)
+    if (b4.c > trigger) {
+      return {
+        strategy: 'AYCE_12HR_MIYAGI',
+        ticker: ticker,
+        direction: 'PUTS',
+        trigger: trigger,
+        triggerPrice: b3.l, // entry when price breaks below 3rd candle low
+        stop: b4.h, // above the 4th candle high
+        note: 'Miyagi 1-3-1: 4th candle 2UP above 50% trigger $' + trigger.toFixed(2) + ' → PUTS',
+        signalBarHigh: b4.h,
+        signalBarLow: b3.l,
+        waitUntil: '09:30',
+      };
+    }
+  } else if (cls3.is2D) {
+    // 2DOWN below trigger → CALLS (reversal setup)
+    if (b4.c < trigger) {
+      return {
+        strategy: 'AYCE_12HR_MIYAGI',
+        ticker: ticker,
+        direction: 'CALLS',
+        trigger: trigger,
+        triggerPrice: b3.h, // entry when price breaks above 3rd candle high
+        stop: b4.l, // below the 4th candle low
+        note: 'Miyagi 1-3-1: 4th candle 2DOWN below 50% trigger $' + trigger.toFixed(2) + ' → CALLS',
+        signalBarHigh: b3.h,
+        signalBarLow: b4.l,
+        waitUntil: '09:30',
+      };
+    }
+  }
+
   return null;
 }
 

@@ -2202,6 +2202,41 @@ app.post('/api/spread-scout/run', async function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// MORNING BRAIN BRIEF (enhanced) — 8:55 AM ET + 6:00 AM backtest pre-cache
+// -----------------------------------------------------------------
+var morningBrainBrief = null;
+try { morningBrainBrief = require('./morningBrainBrief'); console.log('[SERVER] morningBrainBrief loaded OK'); }
+catch(e) { console.log('[SERVER] morningBrainBrief not loaded:', e.message); }
+
+// Pre-cache yesterday's backtest at 6:00 AM ET so the 8:55 brief reads it instantly
+cron.schedule('0 6 * * 1-5', function() {
+  if (morningBrainBrief && morningBrainBrief.preCacheBacktest) {
+    morningBrainBrief.preCacheBacktest().catch(function(e) { console.error('[BRAIN-BRIEF] backtest pre-cache error:', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+// Generate and post the full brain brief at 8:55 AM ET
+cron.schedule('55 8 * * 1-5', function() {
+  if (morningBrainBrief) {
+    morningBrainBrief.generateAndPost().catch(function(e) { console.error('[BRAIN-BRIEF] generate error:', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+app.post('/api/brain-brief/generate', async function(req, res) {
+  if (!morningBrainBrief) return res.status(500).json({ error: 'morningBrainBrief not loaded' });
+  try {
+    var dry = req.query.dryRun === 'true';
+    res.json(await morningBrainBrief.generateAndPost({ dryRun: dry }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/brain-brief/backtest-cache', async function(req, res) {
+  if (!morningBrainBrief || !morningBrainBrief.preCacheBacktest) return res.status(500).json({ error: 'morningBrainBrief not loaded' });
+  try { res.json(await morningBrainBrief.preCacheBacktest()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
 // RUNTIME CONFIG — hot-swap watchlists, liquid list, etc. without redeploy
 // -----------------------------------------------------------------
 var runtimeConfig = null;
