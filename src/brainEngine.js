@@ -852,6 +852,28 @@ async function runQueueCycle() {
           logBrain('[QUEUE-CYCLE] skip ' + qt.contractSymbol + ' ask $' + optPrice.toFixed(2) + ' > max $' + qt.maxEntryPrice.toFixed(2));
           qt.status = 'PENDING'; saveQueuedTrades(); continue;
         }
+
+        // ---- IV FILTER: block theta traps (high-IV names where even winning trades lose) ----
+        try {
+          var _ivFilter = require('./ivFilter');
+          var ivCheck = await _ivFilter.checkIV(qt.ticker, qtToken, qt.contractSymbol);
+          if (!ivCheck.allowed) {
+            logBrain('[QUEUE-CYCLE] IV BLOCKED: ' + qt.ticker + ' — ' + ivCheck.reason);
+            qt.status = 'IV_BLOCKED';
+            qt.ivBlockReason = ivCheck.reason;
+            qt.ivAtBlock = ivCheck.iv;
+            saveQueuedTrades();
+            continue;
+          }
+          if (ivCheck.warning) {
+            logBrain('[QUEUE-CYCLE] IV WARNING: ' + qt.ticker + ' IV=' + Math.round(ivCheck.iv * 100) + '% — elevated, proceeding with caution');
+            qt.ivWarning = true;
+            qt.iv = ivCheck.iv;
+          } else if (ivCheck.iv) {
+            qt.iv = ivCheck.iv;
+          }
+        } catch(ivErr) { /* IV filter is nice-to-have, don't block on error */ }
+
         var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
         // Calculate stop with minimum dollar distance on cheap contracts.
         // On contracts under $1.00, the bid-ask spread at open can be $0.10-$0.20.

@@ -2301,6 +2301,35 @@ app.post('/api/regime/clear-cache', function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// IV FILTER — implied volatility gate diagnostics
+// -----------------------------------------------------------------
+var ivFilter = null;
+try { ivFilter = require('./ivFilter'); console.log('[SERVER] ivFilter loaded OK'); }
+catch(e) { console.log('[SERVER] ivFilter not loaded:', e.message); }
+
+app.get('/api/iv', function(req, res) {
+  if (!ivFilter) return res.status(500).json({ error: 'ivFilter not loaded' });
+  res.json(ivFilter.getState());
+});
+
+app.get('/api/iv/check', async function(req, res) {
+  if (!ivFilter) return res.status(500).json({ error: 'ivFilter not loaded' });
+  var ticker = (req.query.ticker || 'SPY').toUpperCase();
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    var result = await ivFilter.checkIV(ticker, token, req.query.contract || null);
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/iv/clear-cache', function(req, res) {
+  if (!ivFilter) return res.status(500).json({ error: 'ivFilter not loaded' });
+  ivFilter.clearCache();
+  res.json({ ok: true, message: 'IV cache cleared' });
+});
+
+// -----------------------------------------------------------------
 // RUNTIME CONFIG — hot-swap watchlists, liquid list, etc. without redeploy
 // -----------------------------------------------------------------
 var runtimeConfig = null;
