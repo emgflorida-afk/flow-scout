@@ -22,10 +22,11 @@ var fs = require('fs');
 // -----------------------------------------------------------------
 // CONFIG
 // -----------------------------------------------------------------
-var DEFAULT_WATCHLIST = 'SPY,QQQ';
-var EXTENDED_WATCH    = 'SPY,QQQ,NVDA,AAPL,TSLA,META';
+var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,MSFT,AAPL,META,TSLA,AVGO,SMH';
+var EXTENDED_WATCH    = 'SPY,QQQ,NVDA,AAPL,TSLA,META,MSFT,AVGO,SMH';
 
 function getWatchlist() {
+  try { var rc = require('./runtimeConfig'); var v = rc.get('AYCE_WATCHLIST'); if (v) return v.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean); } catch(e){}
   var raw = process.env.AYCE_WATCHLIST || DEFAULT_WATCHLIST;
   return raw.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
 }

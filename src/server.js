@@ -2108,6 +2108,36 @@ app.post('/api/spread-scout/run', async function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// RUNTIME CONFIG — hot-swap watchlists, liquid list, etc. without redeploy
+// -----------------------------------------------------------------
+var runtimeConfig = null;
+try { runtimeConfig = require('./runtimeConfig'); console.log('[SERVER] runtimeConfig loaded OK'); }
+catch(e) { console.log('[SERVER] runtimeConfig not loaded:', e.message); }
+
+app.get('/api/config', function(req, res) {
+  if (!runtimeConfig) return res.json({});
+  res.json(runtimeConfig.getAll());
+});
+app.post('/api/config', function(req, res) {
+  if (!runtimeConfig) return res.status(500).json({ error: 'runtimeConfig not loaded' });
+  var body = req.body || {};
+  if (body.key && body.value !== undefined) {
+    res.json(runtimeConfig.set(body.key, body.value));
+  } else if (typeof body === 'object' && !body.key) {
+    // Bulk set: POST { CASEY_WATCHLIST: '...', STRAT_WATCHLIST: '...' }
+    res.json(runtimeConfig.setMany(body));
+  } else {
+    res.status(400).json({ error: 'need {key, value} or {KEY: val, ...}' });
+  }
+});
+app.post('/api/config/delete', function(req, res) {
+  if (!runtimeConfig) return res.status(500).json({ error: 'runtimeConfig not loaded' });
+  var body = req.body || {};
+  if (body.key) { res.json(runtimeConfig.del(body.key)); }
+  else { res.status(400).json({ error: 'need {key}' }); }
+});
+
+// -----------------------------------------------------------------
 // /arm -- phone-native one-tap arm/kill page (save to home screen)
 // -----------------------------------------------------------------
 var armPage = null;

@@ -20,9 +20,10 @@ var fs = require('fs');
 // -----------------------------------------------------------------
 // CONFIG
 // -----------------------------------------------------------------
-var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,AAPL,MSFT,META,AMZN,TSLA,PLTR,AMD,MRVL,GOOGL,NFLX';
+var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,AAPL,MSFT,META,AMZN,TSLA,PLTR,AMD,MRVL,GOOGL,NFLX,AVGO,COIN,CRM,UBER,SHOP,NOW,HOOD,SOFI,MU,DKNG,RKLB,NET,PANW,CRWD,SNOW,WDAY,ARM,ANET,DELL,SMCI,MSTR,SMH,ARKK,XBI';
 
 function getWatchlist() {
+  try { var rc = require('./runtimeConfig'); var v = rc.get('STRAT_WATCHLIST'); if (v) return v.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean); } catch(e){}
   var raw = process.env.STRAT_WATCHLIST || DEFAULT_WATCHLIST;
   return raw.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
 }

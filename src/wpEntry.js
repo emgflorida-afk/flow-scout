@@ -47,8 +47,9 @@ function markDuped(ticker, direction) {
 // -----------------------------------------------------------------
 // Watchlist
 // -----------------------------------------------------------------
-var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,AAPL,MSFT,META,AMZN,TSLA,PLTR,AMD,MRVL,GOOGL,NFLX,UBER,COIN';
+var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,AAPL,MSFT,META,AMZN,TSLA,PLTR,AMD,MRVL,GOOGL,NFLX,AVGO,COIN,CRM,UBER,SHOP,NOW,HOOD,SOFI,MU,DKNG,RKLB,NET,PANW,CRWD,SNOW,WDAY,ARM,ANET,DELL,SMCI,MSTR,LLY,UNH,V,MA,JPM,GS,BA,CAT,WMT,HD,COST,BABA,SMH,XBI,GDX';
 function getWatchlist() {
+  try { var rc = require('./runtimeConfig'); var v = rc.get('WP_WATCHLIST'); if (v) return v.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean); } catch(e){}
   var raw = process.env.WP_WATCHLIST || DEFAULT_WATCHLIST;
   return raw.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
 }

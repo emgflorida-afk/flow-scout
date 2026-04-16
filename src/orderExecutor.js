@@ -321,8 +321,10 @@ async function placeOrder(params) {
         // use StopLimit with LimitPrice = stop * 0.94 (6% worse than trigger
         // gives ~1 wide-spread of protection). For thin names, fall back to
         // StopMarket so we still get out on a gap.
-        var LIQUID_DEFAULT = 'SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,META,AMZN,TSLA,GOOGL,GOOG,NFLX,AMD,AVGO,COIN,PLTR,MRVL,LRCX,ORCL,SMCI,SPX,SPXW,XSP,MU,HOOD,WMT,RKLB';
-        var liquidSet = (process.env.LIQUID_UNDERLYINGS || LIQUID_DEFAULT)
+        var LIQUID_DEFAULT = 'SPY,QQQ,IWM,DIA,NVDA,AAPL,MSFT,META,AMZN,TSLA,GOOGL,GOOG,NFLX,AMD,AVGO,COIN,PLTR,MRVL,LRCX,ORCL,SMCI,SPX,SPXW,XSP,MU,HOOD,WMT,RKLB,CRM,UBER,SHOP,NOW,SOFI,DKNG,NET,PANW,CRWD,SNOW,MSTR,ARM,ANET,DELL,LLY,BA,CAT,JPM,GS,V,MA,HD,COST,BABA,SMH,ARKK,XBI,GDX';
+        // Hot-swap via runtimeConfig or env var
+        var rcLiquid = null; try { var rc = require('./runtimeConfig'); rcLiquid = rc.get('LIQUID_UNDERLYINGS'); } catch(e){}
+        var liquidSet = (rcLiquid || process.env.LIQUID_UNDERLYINGS || LIQUID_DEFAULT)
           .toUpperCase().split(',').map(function(s){return s.trim();});
         // Extract root from option symbol: "MRVL 260417C135" -> "MRVL"
         var symRoot = String(symbol || '').split(' ')[0].toUpperCase();
