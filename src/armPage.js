@@ -89,6 +89,28 @@ var HTML = `<!DOCTYPE html>
   .scout-chip.ok { background: #0d4f2a; color: #7ee2a8; }
   .scout-chip.err { background: #4f1a1a; color: #ff9999; }
   .scout-chip.stale { background: #3d2e0a; color: #ffcf7e; }
+  /* GEX gamma panel */
+  .gex-panel {
+    margin: 12px 0; padding: 14px; border-radius: 14px;
+    background: #161b22; border: 1px solid #30363d;
+  }
+  .gex-title {
+    font-size: 13px; font-weight: 700; color: #7d8590; margin-bottom: 10px;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .gex-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 0; border-bottom: 1px solid #21262d; font-size: 13px;
+  }
+  .gex-row:last-child { border-bottom: none; }
+  .gex-ticker { font-weight: 700; width: 50px; }
+  .gex-spot { color: #7d8590; width: 65px; text-align: right; }
+  .gex-pin { color: #7ee2a8; font-weight: 700; width: 55px; text-align: right; }
+  .gex-flip { color: #ffcf7e; width: 55px; text-align: right; }
+  .gex-walls { color: #7d8590; font-size: 11px; flex: 1; text-align: right; margin-left: 6px; }
+  .gex-regime { padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 700; }
+  .gex-pos { background: #0d4f2a; color: #7ee2a8; }
+  .gex-neg { background: #4f1a1a; color: #ff9999; }
 </style>
 </head>
 <body>
@@ -115,6 +137,14 @@ var HTML = `<!DOCTYPE html>
 <button class="kill" onclick="killQueue()">KILL — DISARM</button>
 <button class="auto" onclick="toggleAuto()">TOGGLE AUTO-FIRE</button>
 <button class="small ghost" onclick="refresh()">⟳ Refresh</button>
+
+<div class="gex-panel" id="gex-panel">
+  <div class="gex-title">
+    <span>GAMMA LEVELS (price magnets)</span>
+    <span id="gex-ts" style="font-weight:400;font-size:11px;color:#484f58">loading…</span>
+  </div>
+  <div id="gex-rows"><div class="q-sub">Fetching gamma data…</div></div>
+</div>
 
 <div class="queue" id="queue"><div class="q-sub">Loading queue…</div></div>
 
@@ -322,12 +352,57 @@ async function saveWatchlist() {
   await api('POST','/api/config', { CASEY_WATCHLIST: val, STRAT_WATCHLIST: val });
 }
 
+// --- GEX GAMMA LEVELS ---
+async function refreshGEX() {
+  try {
+    var data = await api('GET', '/api/gex/batch?tickers=SPY,QQQ,TSLA,MSTR');
+    var el = document.getElementById('gex-rows');
+    var ts = document.getElementById('gex-ts');
+    if (!data || !data.results) { el.innerHTML = '<div class="q-sub">No GEX data</div>'; return; }
+
+    var tickers = Object.keys(data.results);
+    var html = '';
+    // Header
+    html += '<div class="gex-row" style="color:#484f58;font-size:11px;font-weight:600;border-bottom:1px solid #30363d">'
+      + '<span class="gex-ticker">SYM</span>'
+      + '<span class="gex-spot">SPOT</span>'
+      + '<span class="gex-pin">PIN</span>'
+      + '<span class="gex-flip">FLIP</span>'
+      + '<span class="gex-walls">WALLS</span>'
+      + '</div>';
+
+    for (var i = 0; i < tickers.length; i++) {
+      var t = tickers[i];
+      var g = data.results[t];
+      if (!g) continue;
+
+      var regCls = g.regime === 'POSITIVE' ? 'gex-pos' : 'gex-neg';
+      var wallStr = (g.walls || []).map(function(w){ return '$' + w.strike; }).join(' ');
+
+      html += '<div class="gex-row">'
+        + '<span class="gex-ticker">' + g.ticker + ' <span class="gex-regime ' + regCls + '">' + (g.regime === 'POSITIVE' ? '+' : '-') + '</span></span>'
+        + '<span class="gex-spot">$' + (g.spot || 0).toFixed(0) + '</span>'
+        + '<span class="gex-pin">$' + (g.pin || '—') + '</span>'
+        + '<span class="gex-flip">$' + (g.gammaFlip || '—') + '</span>'
+        + '<span class="gex-walls">' + wallStr + '</span>'
+        + '</div>';
+    }
+    el.innerHTML = html;
+
+    // Timestamp
+    var now = new Date();
+    ts.textContent = now.toLocaleTimeString('en-US', { timeZone:'America/New_York', hour:'numeric', minute:'2-digit' }) + ' ET';
+  } catch(e) { console.log('gex error', e); }
+}
+
 loadWatchlist();
 
 refresh();
 refreshHealth();
+refreshGEX();
 setInterval(refresh, 10000);
 setInterval(refreshHealth, 15000);
+setInterval(refreshGEX, 5 * 60 * 1000); // refresh GEX every 5 min (CBOE is 15-min delayed anyway)
 </script>
 </body>
 </html>`;
