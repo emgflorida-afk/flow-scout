@@ -17,7 +17,7 @@ var CONVICTION_WEBHOOK  = process.env.DISCORD_CONVICTION_WEBHOOK;
 var ACCOUNT_SIZE     = parseFloat(process.env.ACCOUNT_SIZE || '6000');
 var MAX_PREMIUM      = 2.40;
 var MAX_LOSS_PER_TRADE = 120;
-var MAX_POSITIONS    = 3;     // Primo: 1-3 positions max, not 4+
+var MAX_POSITIONS    = 6;     // Bill-paying mode: 2 day + 3 swing + 1 hedge
 var MAX_SETUPS_PER_DAY = 3;   // Quality over quantity -- 3 max per day
 
 // SCALP MODE -- configurable, default OFF

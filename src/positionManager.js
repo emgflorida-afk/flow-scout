@@ -13,7 +13,7 @@ try { etTime = require('./etTime'); } catch(e) {}
 
 var LIVE_ACCOUNT = '11975462';
 var SIM_ACCOUNT  = 'SIM3142118M';
-var MAX_POSITIONS_LIVE = 4;
+var MAX_POSITIONS_LIVE = 6;
 var MAX_POSITIONS_SIM  = 6;
 var EOD_CLOSE_HOUR     = 15;  // 3PM ET
 var EOD_CLOSE_MIN      = 45;  // 3:45PM ET
