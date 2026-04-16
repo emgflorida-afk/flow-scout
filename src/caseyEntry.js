@@ -6,6 +6,8 @@
 var fetch = require('node-fetch');
 var fs    = require('fs');
 var regimeGate = require('./regimeGate');
+var gapScanner = null;
+try { gapScanner = require('./gapScanner'); } catch(e) {}
 
 // -----------------------------------------------------------------
 // STATE / DEDUP
@@ -308,6 +310,13 @@ async function pollOnce() {
     }
 
     var watch = getWatchlist();
+
+    // PRIORITY REORDER — biggest pre-market gappers scan first
+    if (gapScanner && gapScanner.hasPriority()) {
+      watch = gapScanner.prioritize(watch);
+      console.log('[CASEY] priority order: ' + watch.slice(0, 5).join(',') + ' ...');
+    }
+
     var items = [];
 
     for (var i = 0; i < watch.length; i++) {
@@ -338,6 +347,18 @@ async function pollOnce() {
         }
 
         var item = buildQueueItem(sym, sig, lv);
+
+        // BOOST — gap scanner priority tickers get higher grade + more contracts
+        if (gapScanner) {
+          var gapData = gapScanner.getGapData(sym);
+          if (gapData && gapData.absGap >= 3.0) {
+            item.grade = 'A++';
+            item.contracts = 3;
+            item.note = (item.note || '') + ' | GAP ' + gapData.gapPct + '% PRIORITY';
+            console.log('[CASEY] ★ GAP PRIORITY ' + sym + ' ' + gapData.gapPct + '% — grade boosted to A++');
+          }
+        }
+
         items.push(item);
         markDeduped(sym, direction + '|' + sig.kind);
         console.log('[CASEY] signal ' + sym + ' ' + direction + ' ' + sig.kind +

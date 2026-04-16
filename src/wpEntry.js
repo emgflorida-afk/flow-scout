@@ -294,6 +294,8 @@ async function pollOnce() {
     }
 
     var watchlist = getWatchlist();
+    // PRIORITY REORDER — biggest pre-market gappers scan first
+    try { var gs = require('./gapScanner'); if (gs.hasPriority()) { watchlist = gs.prioritize(watchlist); } } catch(e) {}
     var newItems = [];
 
     for (var i = 0; i < watchlist.length; i++) {

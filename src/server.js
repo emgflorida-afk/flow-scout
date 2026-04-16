@@ -2237,6 +2237,40 @@ app.post('/api/brain-brief/backtest-cache', async function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// GAP SCANNER — pre-market gapper ranking for priority entries
+// -----------------------------------------------------------------
+var gapScanner = null;
+try { gapScanner = require('./gapScanner'); console.log('[SERVER] gapScanner loaded OK'); }
+catch(e) { console.log('[SERVER] gapScanner not loaded:', e.message); }
+
+// 9:25 AM ET — pre-market gap scan (before bell)
+cron.schedule('25 9 * * 1-5', async function() {
+  if (gapScanner) {
+    console.log('[CRON] 9:25 AM — pre-market gap scan');
+    await gapScanner.scan();
+  }
+}, { timezone: 'America/New_York' });
+
+// 9:31 AM ET — re-scan with live opening prices
+cron.schedule('31 9 * * 1-5', async function() {
+  if (gapScanner) {
+    console.log('[CRON] 9:31 AM — opening gap re-scan');
+    await gapScanner.scan();
+  }
+}, { timezone: 'America/New_York' });
+
+app.get('/api/gap', function(req, res) {
+  if (!gapScanner) return res.status(500).json({ error: 'gapScanner not loaded' });
+  res.json(gapScanner.getState());
+});
+
+app.post('/api/gap/scan', async function(req, res) {
+  if (!gapScanner) return res.status(500).json({ error: 'gapScanner not loaded' });
+  try { res.json(await gapScanner.scan()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
 // REGIME GATE — market regime diagnostics
 // -----------------------------------------------------------------
 var regimeGate = null;

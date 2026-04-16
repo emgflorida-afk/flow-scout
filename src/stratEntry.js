@@ -292,6 +292,8 @@ async function pollOnce() {
     pruneDedup(dedup);
 
     var tickers = getWatchlist();
+    // PRIORITY REORDER — biggest pre-market gappers scan first
+    try { var gs = require('./gapScanner'); if (gs.hasPriority()) { tickers = gs.prioritize(tickers); } } catch(e) {}
 
     for (var i = 0; i < tickers.length; i++) {
       var ticker = tickers[i];
