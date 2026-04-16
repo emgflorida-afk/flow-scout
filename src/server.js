@@ -2003,6 +2003,20 @@ app.get('/api/jsmith/diag', function(req, res) {
   });
 });
 
+// -----------------------------------------------------------------
+// SCOUT HEALTH TRACKER -- real-time heartbeat for the arm page
+// -----------------------------------------------------------------
+var scoutHealth = null;
+try { scoutHealth = require('./scoutHealth'); console.log('[SERVER] scoutHealth loaded OK'); }
+catch(e) { console.log('[SERVER] scoutHealth not loaded:', e.message); }
+
+app.get('/api/health', async function(req, res) {
+  if (!scoutHealth) return res.json({ status: 'NOT_LOADED' });
+  // Quick token check on demand (cached result if recent)
+  await scoutHealth.checkToken();
+  res.json(scoutHealth.getHealth());
+});
+
 // SPY HEDGE SCOUT cron -- every 60s during market hours Mon-Fri
 // Watches SPY 5-min bars for FAILED resistance rejection or support break
 // and auto-queues a SPY put hedge via brainEngine. See spyHedgeScout.js.
@@ -2012,10 +2026,14 @@ catch(e) { console.log('[SERVER] spyHedgeScout not loaded:', e.message); }
 cron.schedule('* 9-15 * * 1-5', function() {
   if (spyHedgeScout) {
     spyHedgeScout.runCycle().then(function(r) {
+      if (scoutHealth) scoutHealth.report('spyHedge', { ok: true, checked: 1, queued: (r && r.status && r.status.indexOf('FIRED') >= 0) ? 1 : 0, skipped: 0 });
       if (r && (r.status === 'FIRED_A' || r.status === 'FIRED_B' || r.status === 'ABORT' || r.status === 'signal_bar_flagged')) {
         console.log('[SPY-HEDGE]', r.status);
       }
-    }).catch(function(e) { console.error('[SPY-HEDGE]', e.message); });
+    }).catch(function(e) {
+      if (scoutHealth) scoutHealth.report('spyHedge', { ok: false, reason: e.message, checked: 0, queued: 0, skipped: 0 });
+      console.error('[SPY-HEDGE]', e.message);
+    });
   }
 }, { timezone: 'America/New_York' });
 
@@ -2053,15 +2071,30 @@ catch(e) { console.log('[SERVER] stratEntry not loaded:', e.message); }
 // Apr 15 2026: AB removed the 9-11 morning-only gate. The scouts are
 // disciplined enough to dedup their own signals; let them run all day.
 cron.schedule('* 9-15 * * 1-5', function() {
-  if (caseyEntry) caseyEntry.run().catch(function(e){ console.error('[CASEY]', e.message); });
+  if (caseyEntry) caseyEntry.run().then(function(r) {
+    if (scoutHealth) scoutHealth.report('casey', r);
+  }).catch(function(e){
+    if (scoutHealth) scoutHealth.report('casey', { ok: false, reason: e.message, checked: 0, queued: 0, skipped: 0 });
+    console.error('[CASEY]', e.message);
+  });
 }, { timezone: 'America/New_York' });
 
 cron.schedule('* 9-15 * * 1-5', function() {
-  if (stratEntry) stratEntry.run().catch(function(e){ console.error('[STRAT]', e.message); });
+  if (stratEntry) stratEntry.run().then(function(r) {
+    if (scoutHealth) scoutHealth.report('strat', r);
+  }).catch(function(e){
+    if (scoutHealth) scoutHealth.report('strat', { ok: false, reason: e.message, checked: 0, queued: 0, skipped: 0 });
+    console.error('[STRAT]', e.message);
+  });
 }, { timezone: 'America/New_York' });
 
 cron.schedule('*/15 9-15 * * 1-5', function() {
-  if (wpEntry) wpEntry.run().catch(function(e){ console.error('[WP]', e.message); });
+  if (wpEntry) wpEntry.run().then(function(r) {
+    if (scoutHealth) scoutHealth.report('wp', r);
+  }).catch(function(e){
+    if (scoutHealth) scoutHealth.report('wp', { ok: false, reason: e.message, checked: 0, queued: 0, skipped: 0 });
+    console.error('[WP]', e.message);
+  });
 }, { timezone: 'America/New_York' });
 
 app.post('/api/casey/run', async function(req, res) {
@@ -2089,7 +2122,12 @@ catch(e) { console.log('[SERVER] spreadScout not loaded:', e.message); }
 // AYCE: every 2 min all session. Strategy-level gating lives inside the
 // scout (Miyagi/Failed9 fire at 9:30, 322 at 10, 7HR sweep after 11).
 cron.schedule('*/2 9-15 * * 1-5', function() {
-  if (ayceScout) ayceScout.run().catch(function(e){ console.error('[AYCE]', e.message); });
+  if (ayceScout) ayceScout.run().then(function(r) {
+    if (scoutHealth) scoutHealth.report('ayce', r);
+  }).catch(function(e){
+    if (scoutHealth) scoutHealth.report('ayce', { ok: false, reason: e.message, checked: 0, queued: 0, skipped: 0 });
+    console.error('[AYCE]', e.message);
+  });
 }, { timezone: 'America/New_York' });
 
 // Spread: every 10 min during RTH. spreadScout self-blocks Friday 14:00+

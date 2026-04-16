@@ -28,6 +28,10 @@ async function getAccessToken() {
   if (_accessToken && Date.now() < _tokenExpiresAt - 60000) return _accessToken;
   var rt = getRefreshToken();
   if (rt) {
+    // Retry up to 3 times with 2-second gaps on transient failures
+    var MAX_RETRIES = 3;
+    var RETRY_DELAY = 2000;
+    for (var _attempt = 1; _attempt <= MAX_RETRIES; _attempt++) {
     try {
       var res = await fetch(TS_AUTH_URL, {
         method: 'POST',
@@ -45,10 +49,16 @@ async function getAccessToken() {
         _accessToken    = data.access_token;
         _tokenExpiresAt = Date.now() + (data.expires_in * 1000);
         if (data.refresh_token) _refreshToken = data.refresh_token;
-        console.log('[TS] Token refreshed OK');
+        if (_attempt > 1) console.log('[TS] Token refreshed OK (attempt ' + _attempt + ')');
+        else console.log('[TS] Token refreshed OK');
         return _accessToken;
       }
-      console.error('[TS] Refresh failed:', data.error_description || data.error);
+      // Non-transient error (invalid_grant, etc.) — don't retry
+      if (data.error === 'invalid_grant' || data.error === 'unauthorized_client') {
+        console.error('[TS] Refresh failed (permanent): ' + (data.error_description || data.error));
+        break;
+      }
+      console.error('[TS] Refresh failed (attempt ' + _attempt + '/' + MAX_RETRIES + '):', data.error_description || data.error);
       // Only alert during market hours (9AM-4:30PM ET) to avoid false alarms
       var _et = etTime ? etTime.getETTime() : { hour: ((new Date().getUTCHours() - 4) + 24) % 24, min: new Date().getUTCMinutes(), total: 0 }; var etHourNow = _et.hour;
       var isDuringMarketHours = etHourNow >= 9 && etHourNow < 17;
@@ -74,7 +84,14 @@ async function getAccessToken() {
         } catch(de) { /* discord alert failed -- not critical */ }
       }
       } // end isDuringMarketHours check
-    } catch(e) { console.error('[TS] Refresh error:', e.message); }
+    } catch(e) {
+      console.error('[TS] Refresh error (attempt ' + _attempt + '/' + MAX_RETRIES + '):', e.message);
+    }
+    // Wait before next retry (skip wait on last attempt)
+    if (_attempt < MAX_RETRIES) {
+      await new Promise(function(r){ setTimeout(r, RETRY_DELAY); });
+    }
+    } // end retry loop
   }
   console.log('[TS] No token -- visit /ts-auth to authenticate');
   return null;

@@ -66,6 +66,29 @@ var HTML = `<!DOCTYPE html>
   footer { margin-top: auto; padding: 16px 0; color: #484f58; font-size: 11px; text-align: center; }
   .calls { color: #7ee2a8; }
   .puts  { color: #ff9999; }
+  /* Health heartbeat strip */
+  .hb {
+    margin: 8px 0 4px; padding: 10px 14px; border-radius: 10px;
+    font-size: 12px; font-weight: 600; display: flex; align-items: center; gap: 8px;
+    border: 1px solid #30363d;
+  }
+  .hb-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .hb-green  { background: #0d4f2a; color: #7ee2a8; }
+  .hb-green .hb-dot { background: #7ee2a8; box-shadow: 0 0 6px #7ee2a8; }
+  .hb-yellow { background: #3d2e0a; color: #ffcf7e; }
+  .hb-yellow .hb-dot { background: #ffcf7e; box-shadow: 0 0 6px #ffcf7e; }
+  .hb-red    { background: #4f1a1a; color: #ff9999; }
+  .hb-red .hb-dot { background: #ff9999; box-shadow: 0 0 6px #ff9999; }
+  .hb-gray   { background: #161b22; color: #7d8590; }
+  .hb-gray .hb-dot { background: #484f58; }
+  .scout-row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .scout-chip {
+    padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
+    background: #21262d; color: #7d8590;
+  }
+  .scout-chip.ok { background: #0d4f2a; color: #7ee2a8; }
+  .scout-chip.err { background: #4f1a1a; color: #ff9999; }
+  .scout-chip.stale { background: #3d2e0a; color: #ffcf7e; }
 </style>
 </head>
 <body>
@@ -74,6 +97,12 @@ var HTML = `<!DOCTYPE html>
   <h1>Stratum · ARM</h1>
   <div class="sub" id="clock">Loading…</div>
 </header>
+
+<div class="hb hb-gray" id="heartbeat">
+  <span class="hb-dot"></span>
+  <span id="hb-text">Checking system…</span>
+</div>
+<div class="scout-row" id="scout-chips"></div>
 
 <div class="state" id="state">
   <div class="row"><span class="k">Queue</span><span class="v"><span class="pill off" id="queue-pill">OFF</span></span></div>
@@ -170,6 +199,68 @@ async function toggleAuto() {
   refresh();
 }
 
+// --- HEALTH HEARTBEAT ---
+async function refreshHealth() {
+  try {
+    var h = await api('GET','/api/health');
+    var el = document.getElementById('heartbeat');
+    var txt = document.getElementById('hb-text');
+    var chips = document.getElementById('scout-chips');
+
+    // Status color
+    var cls = 'hb-gray';
+    if (h.status === 'HEALTHY') cls = 'hb-green';
+    else if (h.status === 'DEGRADED' || h.status === 'STALE') cls = 'hb-yellow';
+    else if (h.status === 'TOKEN_DOWN') cls = 'hb-red';
+    el.className = 'hb ' + cls;
+
+    // Token line
+    var tokenStr = h.token && h.token.ok ? 'Token OK' : 'TOKEN DOWN';
+
+    // Scout summary
+    var names = h.scouts ? Object.keys(h.scouts) : [];
+    var okCount = 0; var totalChecked = 0;
+    for (var i = 0; i < names.length; i++) {
+      var s = h.scouts[names[i]];
+      if (s.ok && !s.stale) okCount++;
+      totalChecked += (s.checked || 0);
+    }
+
+    // Find last scan time
+    var lastScan = null;
+    for (var j = 0; j < names.length; j++) {
+      var lr = h.scouts[names[j]].lastRun;
+      if (lr && (!lastScan || lr > lastScan)) lastScan = lr;
+    }
+    var lastStr = lastScan ? new Date(lastScan).toLocaleTimeString('en-US', { timeZone:'America/New_York', hour:'numeric', minute:'2-digit' }) + ' ET' : 'no scans';
+
+    if (h.status === 'TOKEN_DOWN') {
+      txt.textContent = 'TOKEN DOWN — scouts blind. Visit /ts-auth to fix.';
+    } else if (h.status === 'HEALTHY') {
+      txt.textContent = okCount + '/' + names.length + ' scouts OK · ' + totalChecked + ' tickers · ' + tokenStr + ' · ' + lastStr;
+    } else if (h.status === 'DEGRADED') {
+      txt.textContent = okCount + '/' + names.length + ' scouts OK · ' + tokenStr + ' · ' + lastStr;
+    } else if (h.status === 'STALE') {
+      txt.textContent = 'Stale — last scan ' + lastStr + ' · ' + tokenStr;
+    } else {
+      txt.textContent = 'Waiting for first scan…';
+    }
+
+    // Render scout chips
+    if (names.length > 0) {
+      chips.innerHTML = names.map(function(n) {
+        var s = h.scouts[n];
+        var c = s.ok && !s.stale ? 'ok' : s.stale ? 'stale' : 'err';
+        var label = n.toUpperCase();
+        if (s.ok && !s.stale) label += ' ' + (s.checked||0);
+        else if (s.stale) label += ' stale';
+        else label += ' ERR';
+        return '<span class="scout-chip ' + c + '">' + label + '</span>';
+      }).join('');
+    }
+  } catch(e) { /* health endpoint not available yet */ }
+}
+
 // --- WATCHLIST MANAGEMENT ---
 var currentWatchlist = [];
 var WL_KEYS = ['CASEY_WATCHLIST','STRAT_WATCHLIST'];
@@ -234,7 +325,9 @@ async function saveWatchlist() {
 loadWatchlist();
 
 refresh();
+refreshHealth();
 setInterval(refresh, 10000);
+setInterval(refreshHealth, 15000);
 </script>
 </body>
 </html>`;
