@@ -22,8 +22,9 @@ var fs = require('fs');
 // -----------------------------------------------------------------
 // CONFIG
 // -----------------------------------------------------------------
-var DEFAULT_WATCHLIST = 'SPY,QQQ,NVDA,MSFT,AAPL,META,TSLA,AVGO,SMH';
-var EXTENDED_WATCH    = 'SPY,QQQ,NVDA,AAPL,TSLA,META,MSFT,AVGO,SMH';
+// Synced with preMarketScanner so anything alerted at 4AM can get queued at 9AM
+var DEFAULT_WATCHLIST = 'SPY,QQQ,IWM,NVDA,AAPL,GOOGL,MSFT,AMZN,TSLA,META,MRVL,AVGO,COIN,JPM,GS,MS,WFC,LMT,RTX,NOC,GD,LDOS,BAH,DAL,UAL,LUV,AAL,XOM,CVX,OXY,XLE,U,ABNB,UBER,BIDU,MCD,FAST,TSM,NFLX,ASML,BAC,JNJ,UNH,PGR,SMH';
+var EXTENDED_WATCH    = DEFAULT_WATCHLIST;
 
 function getWatchlist() {
   try { var rc = require('./runtimeConfig'); var v = rc.get('AYCE_WATCHLIST'); if (v) return v.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean); } catch(e){}
@@ -590,8 +591,8 @@ async function pollOnce() {
           { name: 'AYCE_322_FIRSTLIVE',fn: detect322FirstLive },
           { name: 'AYCE_FAILED9',      fn: detectFailed9 },
         ];
-        // 7HR sweep only QQQ
-        if (ticker === 'QQQ') {
+        // 7HR sweep on index ETFs (QQQ, SPY, IWM)
+        if (ticker === 'QQQ' || ticker === 'SPY' || ticker === 'IWM') {
           detectors.push({ name: 'AYCE_7HR_SWEEP', fn: detect7HRSweep });
         }
 
