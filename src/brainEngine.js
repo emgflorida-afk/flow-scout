@@ -659,7 +659,7 @@ async function runQueueCycle() {
           fired++;
           logBrain('[QUEUE-CYCLE] FILLED ' + qt.ticker + ' ' + qt.contractSymbol +
             ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2));
-          // Post fill + gamma levels to Discord
+          // Post fill + gamma levels to GO MODE Discord channel
           var fillMsg = qt.ticker + ' ' + qt.direction + ' FILLED\n'
             + qt.contractSymbol + ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2) + '\n'
             + 'Stop: $' + qtStop.toFixed(2) + ' (' + (qt.stopPct * 100).toFixed(0) + '%)';
@@ -670,7 +670,13 @@ async function runQueueCycle() {
               + '\nRegime: ' + (gexLevels.regime === 'POSITIVE' ? 'POSITIVE (hold)' : 'NEGATIVE (volatile)')
               + '\nWalls: ' + (qt.gexWalls || []).map(function(w){ return '$' + w; }).join(' ');
           }
-          postToDiscord(fillMsg);
+          try {
+            await fetch(GO_MODE_WEBHOOK, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ content: '```\n\uD83D\uDE80 TRADE FIRED\n' + fillMsg + '\n```', username: 'Stratum Brain' }),
+            });
+          } catch(discErr) { /* non-critical */ }
         } else {
           logBrain('[QUEUE-CYCLE] order failed ' + qt.ticker + ' — ' + (qtExec ? (qtExec.error || qtExec.reason) : 'no result'));
           qt.status = 'PENDING'; saveQueuedTrades();
