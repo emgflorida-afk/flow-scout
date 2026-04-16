@@ -22,7 +22,12 @@ var TS_BASE = 'https://api.tradestation.com/v3';
 // CONFIG
 // ================================================================
 var DEFAULT_IV_CAP = 0.80;       // 80% — options above this are theta traps
-var HIGH_BETA_IV_CAP = 1.00;     // 100% — high-beta names run hotter
+// Apr 16 2026: Raised from 100% → 115% after Telegram MARA +283% case study.
+// MARA was 102% IV and someone made +283% on it. Our cap at 100% would have
+// blocked that winner. High-beta crypto miners/AI names run 100-115% IV
+// normally. The REAL theta trap is LUNR at 119%. Keep cap above typical
+// range but below the danger zone.
+var HIGH_BETA_IV_CAP = 1.15;     // 115% — allows MARA/RIOT/COIN etc. to fire
 var IV_WARNING_THRESHOLD = 0.65; // 65% — flag as elevated but allow
 
 var HIGH_BETA = [
