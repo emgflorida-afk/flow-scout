@@ -453,6 +453,39 @@ function cancelQueuedTrade(id) {
 loadQueuedTrades();
 loadBrainState();
 
+// -- AUTO-START ON BOOT DURING MARKET HOURS ----------------------------
+// /tmp gets wiped on every Railway redeploy, so brainState.json disappears
+// and brain boots to OFF. This caused missed trades 5+ times on Apr 15-16.
+// Fix: if it's a weekday during market hours, force brain ON automatically.
+// No more manual re-arming after every deploy.
+(function autoStartIfMarketHours() {
+  try {
+    var etStr = new Date().toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+      weekday: 'short',
+    });
+    // etStr looks like "Wed, 11:30" or similar
+    var parts = etStr.split(',');
+    var day = (parts[0] || '').trim();
+    var timePart = (parts[1] || '').trim();
+    var hm = timePart.split(':');
+    var hour = parseInt(hm[0], 10);
+    var min = parseInt(hm[1], 10);
+    var totalMin = hour * 60 + min;
+    var weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    var isWeekday = weekdays.indexOf(day) >= 0;
+    var isMarketHours = totalMin >= 570 && totalMin <= 960; // 9:30 AM - 4:00 PM ET
+    if (isWeekday && isMarketHours) {
+      brainActive = true;
+      BYPASS_MODE = true;
+      EXECUTION_MODE = 'BYPASS';
+      queueActive = true;
+      console.log('[BRAIN] AUTO-START: Market hours detected (' + day + ' ' + timePart + ' ET). Brain ON, Bypass ON, Queue ON.');
+    }
+  } catch(e) { console.error('[BRAIN] autoStart error:', e.message); }
+})();
+
 // ---------------------------------------------------------------
 // DURABLE BOOTSTRAP: if /tmp was wiped by a redeploy but a
 // QUEUE_INIT_JSON env var is set, rehydrate from env. This means
