@@ -1891,6 +1891,158 @@ cron.schedule('* 9-16 * * 1-5', function() {
   }
 }, { timezone: 'America/New_York' });
 
+// ================================================================
+// QUICK-QUEUE — Lane 1: You find it, system executes it.
+// POST /api/quick-queue { ticker, direction, trigger }
+// System auto-picks contract, checks 3 gates (regime, IV, price),
+// queues as SWING so it fires anytime. 3 taps and done.
+// ================================================================
+app.post('/api/quick-queue', async function(req, res) {
+  try {
+    var ticker = (req.body.ticker || '').toUpperCase().trim();
+    var direction = (req.body.direction || 'CALLS').toUpperCase().trim();
+    var trigger = parseFloat(req.body.trigger || 0);
+    var maxPrice = parseFloat(req.body.maxPrice || 6.00);
+    var contracts = parseInt(req.body.contracts || 3);
+    var grade = req.body.grade || 'A';
+
+    if (!ticker) return res.status(400).json({ error: 'ticker required' });
+    if (!trigger) return res.status(400).json({ error: 'trigger price required' });
+    if (direction !== 'CALLS' && direction !== 'PUTS') {
+      return res.status(400).json({ error: 'direction must be CALLS or PUTS' });
+    }
+
+    var type = direction === 'CALLS' ? 'call' : 'put';
+
+    // GATE 1: Regime check (don't fight the trend)
+    var regimeResult = null;
+    try {
+      var _rg = require('./regimeGate');
+      var _ts = require('./tradestation');
+      var _tok = await _ts.getAccessToken();
+      regimeResult = await _rg.canEnter(ticker, direction, _tok);
+      if (!regimeResult.allowed) {
+        return res.json({
+          status: 'BLOCKED',
+          gate: 'REGIME',
+          reason: regimeResult.reason,
+          ticker: ticker,
+          direction: direction,
+        });
+      }
+    } catch(e) { /* regime gate unavailable, proceed */ }
+
+    // AUTO-RESOLVE CONTRACT — picks best strike, expiration, delta
+    var resolved = null;
+    try {
+      var _resolver = require('./contractResolver');
+      resolved = await _resolver.resolveContract(ticker, type, 'SWING', {});
+    } catch(e) {
+      console.error('[QUICK-QUEUE] resolve error:', e.message);
+    }
+
+    if (!resolved) {
+      return res.status(500).json({ error: 'Could not resolve contract for ' + ticker });
+    }
+    if (resolved.blocked) {
+      return res.json({
+        status: 'BLOCKED',
+        gate: 'LEVEL_FILTER',
+        reason: resolved.reason,
+        ticker: ticker,
+      });
+    }
+
+    // GATE 2: IV check (don't buy theta traps)
+    var ivResult = null;
+    try {
+      var _iv = require('./ivFilter');
+      var _ts2 = require('./tradestation');
+      var _tok2 = await _ts2.getAccessToken();
+      ivResult = await _iv.checkIV(ticker, _tok2, resolved.symbol);
+      if (!ivResult.allowed) {
+        return res.json({
+          status: 'BLOCKED',
+          gate: 'IV_FILTER',
+          reason: ivResult.reason,
+          iv: ivResult.iv,
+          cap: ivResult.cap,
+          ticker: ticker,
+        });
+      }
+    } catch(e) { /* IV filter unavailable, proceed */ }
+
+    // GATE 3: Max price check
+    if (resolved.ask > maxPrice) {
+      return res.json({
+        status: 'BLOCKED',
+        gate: 'PRICE',
+        reason: ticker + ' option ask $' + resolved.ask.toFixed(2) + ' > max $' + maxPrice.toFixed(2),
+        ticker: ticker,
+        ask: resolved.ask,
+      });
+    }
+
+    // BUILD AND QUEUE — minimal gates, maximum speed
+    var trade = {
+      ticker: ticker,
+      direction: direction,
+      triggerPrice: trigger,
+      contractSymbol: resolved.symbol,
+      strike: resolved.strike,
+      expiration: resolved.expiry,
+      contractType: direction === 'CALLS' ? 'Call' : 'Put',
+      maxEntryPrice: maxPrice,
+      stopPct: resolved.optionStopPct ? -(resolved.optionStopPct / 100) : -0.30,
+      targets: [0.30, 0.75, 1.50],
+      contracts: Math.max(3, contracts),
+      management: 'CASEY',
+      tradeType: 'SWING',  // ALWAYS swing so it fires anytime
+      grade: grade,
+      source: 'QUICK_QUEUE',
+      note: 'Quick-queue Lane 1. ' + resolved.symbol + ' delta=' +
+            (resolved.delta ? resolved.delta.toFixed(2) : '?') +
+            ' iv=' + (resolved.iv ? (resolved.iv * 100).toFixed(0) + '%' : '?') +
+            ' dte=' + (resolved.dte || '?'),
+    };
+
+    if (!brainEngine || !brainEngine.bulkAddQueuedTrades) {
+      return res.status(500).json({ error: 'brainEngine not loaded' });
+    }
+    var result = brainEngine.bulkAddQueuedTrades([trade], { replaceAll: false });
+
+    // Make sure queue is active
+    if (brainEngine.setQueueActive) brainEngine.setQueueActive(true);
+
+    res.json({
+      status: 'QUEUED',
+      ticker: ticker,
+      direction: direction,
+      trigger: trigger,
+      contract: resolved.symbol,
+      strike: resolved.strike,
+      expiry: resolved.expiry,
+      dte: resolved.dte,
+      delta: resolved.delta,
+      iv: resolved.iv,
+      ask: resolved.ask,
+      mid: resolved.mid,
+      stopPct: trade.stopPct,
+      contracts: trade.contracts,
+      gates: {
+        regime: regimeResult ? 'PASSED' : 'SKIPPED',
+        iv: ivResult ? (ivResult.warning ? 'WARNING' : 'PASSED') : 'SKIPPED',
+        price: 'PASSED',
+      },
+      queueResult: result,
+    });
+
+  } catch(e) {
+    console.error('[QUICK-QUEUE] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Bulk add — POST a full morning queue in one call
 app.post('/api/queue/bulk', function(req, res) {
   if (!brainEngine || !brainEngine.bulkAddQueuedTrades) return res.status(500).json({ error: 'brainEngine not loaded' });
