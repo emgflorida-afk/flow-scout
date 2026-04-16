@@ -163,9 +163,24 @@ function gradeSetup(setup) {
   checks.push({ name: 'CATALYST_CLEAR', pass: !!clearCatalyst, weight: 1 });
   if (clearCatalyst) score++;
 
-  // Letter grade: 7=A++, 6=A, 5=B+, 4=B, 3=C, 2=D, 0-1=F
+  // 8. GEX gamma alignment — price moving toward pin/wall, gamma flip supports direction
+  var gexAligned = false;
+  if (setup.gex) {
+    var g = setup.gex;
+    // Gamma flip alignment: above flip = bullish regime, below = bearish
+    var aboveFlip = g.gammaFlip && g.spot > g.gammaFlip;
+    var flipAligned = (setup.direction === 'call' && aboveFlip) || (setup.direction === 'put' && !aboveFlip);
+    // Pin magnet pull: price moving toward pin (pin above spot for calls, below for puts)
+    var pinPull = g.pin && ((setup.direction === 'call' && g.pin >= g.spot) || (setup.direction === 'put' && g.pin <= g.spot));
+    gexAligned = flipAligned || pinPull;
+  }
+  checks.push({ name: 'GEX', pass: gexAligned, weight: 1 });
+  if (gexAligned) score++;
+
+  // Letter grade: 8=A++, 7=A+, 6=A, 5=B+, 4=B, 3=C, 2=D, 0-1=F
   var grade;
-  if (score >= 7)      grade = 'A++';
+  if (score >= 8)      grade = 'A++';
+  else if (score === 7) grade = 'A+';
   else if (score === 6) grade = 'A';
   else if (score === 5) grade = 'B+';
   else if (score === 4) grade = 'B';
@@ -175,7 +190,7 @@ function gradeSetup(setup) {
 
   return {
     score: score,
-    maxScore: 7,
+    maxScore: 8,
     grade: grade,
     tradeable: score >= 4, // B or better = tradeable
     aTier: score >= 6,      // A or A++ = A-tier (high conviction)
@@ -584,6 +599,22 @@ async function runQueueCycle() {
       logBrain('[QUEUE-CYCLE] ' + qt.ticker + ' TRIGGERED @ $' + qtLast.toFixed(2) +
         ' (trigger $' + qt.triggerPrice + ', prev $' + prevLast.toFixed(2) + ') | ' + qt.contractSymbol);
 
+      // Fetch gamma levels for the triggered ticker
+      var gexLevels = null;
+      try {
+        var _gex = require('./gex');
+        gexLevels = await _gex.getGammaLevels(qt.ticker);
+        if (gexLevels) {
+          qt.gexPin = gexLevels.pin;
+          qt.gexFlip = gexLevels.gammaFlip;
+          qt.gexWalls = (gexLevels.walls || []).map(function(w){ return w.strike; });
+          qt.gexRegime = gexLevels.regime;
+          logBrain('[GEX] ' + qt.ticker + ' PIN: $' + gexLevels.pin +
+            ' | Flip: $' + gexLevels.gammaFlip +
+            ' | Walls: ' + qt.gexWalls.map(function(w){ return '$' + w; }).join(', '));
+        }
+      } catch(gexErr) { /* GEX enrichment is nice-to-have, not critical */ }
+
       if (!orderExecutor) { logBrain('[QUEUE-CYCLE] orderExecutor not loaded'); continue; }
       qt.status = 'TRIGGERED';
       saveQueuedTrades();
@@ -628,6 +659,18 @@ async function runQueueCycle() {
           fired++;
           logBrain('[QUEUE-CYCLE] FILLED ' + qt.ticker + ' ' + qt.contractSymbol +
             ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2));
+          // Post fill + gamma levels to Discord
+          var fillMsg = qt.ticker + ' ' + qt.direction + ' FILLED\n'
+            + qt.contractSymbol + ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2) + '\n'
+            + 'Stop: $' + qtStop.toFixed(2) + ' (' + (qt.stopPct * 100).toFixed(0) + '%)';
+          if (gexLevels) {
+            fillMsg += '\n--- GAMMA LEVELS ---'
+              + '\nPIN magnet: $' + (gexLevels.pin || '—')
+              + '\nGamma Flip: $' + (gexLevels.gammaFlip || '—')
+              + '\nRegime: ' + (gexLevels.regime === 'POSITIVE' ? 'POSITIVE (hold)' : 'NEGATIVE (volatile)')
+              + '\nWalls: ' + (qt.gexWalls || []).map(function(w){ return '$' + w; }).join(' ');
+          }
+          postToDiscord(fillMsg);
         } else {
           logBrain('[QUEUE-CYCLE] order failed ' + qt.ticker + ' — ' + (qtExec ? (qtExec.error || qtExec.reason) : 'no result'));
           qt.status = 'PENDING'; saveQueuedTrades();
