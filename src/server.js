@@ -79,6 +79,9 @@ try { dailyLossLimit = require('./dailyLossLimit'); console.log('[LOSS-LIMIT] Lo
 var dynamicBias = null;
 try { dynamicBias = require('./dynamicBias'); console.log('[DYNAMIC-BIAS] Loaded OK'); } catch(e) { console.log('[DYNAMIC-BIAS] Skipped:', e.message); }
 
+var gex = null;
+try { gex = require('./gex'); console.log('[GEX] Loaded OK'); } catch(e) { console.log('[GEX] Skipped:', e.message); }
+
 var positionManager = null;
 try { positionManager = require('./positionManager'); console.log('[POS-MGR] Loaded OK'); } catch(e) { console.log('[POS-MGR] Skipped:', e.message); }
 
@@ -2015,6 +2018,28 @@ app.get('/api/health', async function(req, res) {
   // Quick token check on demand (cached result if recent)
   await scoutHealth.checkToken();
   res.json(scoutHealth.getHealth());
+});
+
+// GEX / GAMMA LEVELS API
+// GET /api/gex/SPY  → returns gamma levels for SPY
+// GET /api/gex/batch?tickers=SPY,QQQ,TSLA → batch gamma levels
+app.get('/api/gex/batch', async function(req, res) {
+  if (!gex) return res.status(500).json({ error: 'GEX module not loaded' });
+  try {
+    var tickers = (req.query.tickers || 'SPY,QQQ').split(',').map(function(t) { return t.trim().toUpperCase(); });
+    var results = await gex.batchGammaLevels(tickers);
+    res.json({ ok: true, results: results });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/gex/:ticker', async function(req, res) {
+  if (!gex) return res.status(500).json({ error: 'GEX module not loaded' });
+  try {
+    var ticker = req.params.ticker.toUpperCase();
+    var levels = await gex.getGammaLevels(ticker);
+    if (!levels) return res.status(404).json({ error: 'No GEX data for ' + ticker });
+    res.json({ ok: true, levels: levels, discord: gex.formatGEXForDiscord(levels) });
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // SPY HEDGE SCOUT cron -- every 60s during market hours Mon-Fri

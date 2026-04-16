@@ -1,170 +1,370 @@
-// GEX ENGINE
-const axios = require('axios');
+// gex.js -- Stratum v7.5
+// -----------------------------------------------------------------
+// Gamma Exposure (GEX) calculator.  Uses CBOE free delayed quotes
+// API (no key needed) to pull full options chains with greeks, then
+// calculates dealer gamma exposure per strike to find:
+//   - PIN   = highest positive GEX strike (price magnet)
+//   - WALLS = top N gamma walls (resistance/support magnets)
+//   - FLIP  = zero-gamma crossing (regime change level)
+//   - VOL   = highest negative GEX (vol expansion zone)
+//
+// Primo's Stratalyst shows these as green bars on the chart.
+// This gives us the same edge.
+// -----------------------------------------------------------------
 
-const POLYGON_KEY = process.env.POLYGON_API_KEY;
-const BASE = 'https://api.polygon.io';
-const gexCache = new Map();
+var fetch = require('node-fetch');
 
-function getCacheKey(ticker) {
-  const today = new Date().toISOString().split('T')[0];
-  return `${ticker}-${today}`;
-}
+var CBOE_BASE = 'https://cdn.cboe.com/api/global/delayed_quotes/options';
 
-async function getSpotPrice(ticker) {
+// Cache: ticker -> { data, ts }
+var _cache = {};
+var CACHE_TTL = 15 * 60 * 1000; // 15 min (CBOE data is 15-min delayed anyway)
+
+// -----------------------------------------------------------------
+// CBOE free API — returns full options chain with greeks
+// No API key required.  15-min delayed.
+// -----------------------------------------------------------------
+async function fetchCBOEChain(ticker) {
+  // CBOE uses special prefixes for indices
+  var cboeSymbol = ticker;
+  if (ticker === 'SPX' || ticker === 'SPY') cboeSymbol = ticker;
+  if (ticker === 'NDX') cboeSymbol = ticker;
+
+  var url = CBOE_BASE + '/' + cboeSymbol + '.json';
+  console.log('[GEX] Fetching CBOE chain: ' + url);
+
   try {
-    const res = await axios.get(`${BASE}/v2/last/trade/${ticker}`, {
-      params: { apiKey: POLYGON_KEY }
+    var res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'application/json' },
+      timeout: 15000,
     });
-    return res.data && res.data.results ? res.data.results.p : null;
-  } catch (e) {
-    try {
-      const res = await axios.get(`${BASE}/v2/aggs/ticker/${ticker}/prev`, {
-        params: { apiKey: POLYGON_KEY }
-      });
-      return res.data && res.data.results ? res.data.results[0].c : null;
-    } catch (e2) { return null; }
-  }
-}
-
-async function getOptionsChain(ticker, spotPrice) {
-  try {
-    const expiry = new Date();
-    expiry.setDate(expiry.getDate() + 45);
-    const expiryStr = expiry.toISOString().split('T')[0];
-
-    const res = await axios.get(`${BASE}/v3/snapshot/options/${ticker}`, {
-      params: {
-        apiKey: POLYGON_KEY,
-        expiration_date_lte: expiryStr,
-        limit: 250,
-        strike_price_gte: spotPrice * 0.85,
-        strike_price_lte: spotPrice * 1.15,
-      }
-    });
-    return res.data && res.data.results ? res.data.results : [];
-  } catch (err) {
-    console.error('[GEX] Failed to fetch options chain for ' + ticker + ': ' + err.message);
-    return [];
-  }
-}
-
-function calculateGEX(options, spotPrice) {
-  const strikeMap = new Map();
-
-  for (const opt of options) {
-    const strike = opt.details && opt.details.strike_price;
-    const gamma  = opt.greeks && opt.greeks.gamma;
-    const oi     = opt.open_interest;
-    const type   = opt.details && opt.details.contract_type;
-
-    if (!strike || !gamma || !oi) continue;
-
-    const gex = gamma * oi * 100 * Math.pow(spotPrice, 2) * 0.01;
-    const signedGex = type === 'call' ? gex : -gex;
-
-    if (!strikeMap.has(strike)) {
-      strikeMap.set(strike, { strike, gex: 0, callGex: 0, putGex: 0 });
+    if (!res.ok) {
+      console.error('[GEX] CBOE returned ' + res.status + ' for ' + ticker);
+      return null;
     }
-    const entry = strikeMap.get(strike);
-    entry.gex += signedGex;
-    if (type === 'call') entry.callGex += gex;
-    else entry.putGex += gex;
+    var json = await res.json();
+    return json;
+  } catch (e) {
+    console.error('[GEX] CBOE fetch error for ' + ticker + ': ' + e.message);
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------
+// Parse CBOE response into normalized options array
+// -----------------------------------------------------------------
+function parseCBOEOptions(json) {
+  if (!json || !json.data) return { spot: null, options: [] };
+
+  var spot = json.data.current_price || null;
+  var optionsRaw = json.data.options || [];
+  var options = [];
+
+  for (var i = 0; i < optionsRaw.length; i++) {
+    var opt = optionsRaw[i];
+    var sym = opt.option || '';
+    if (!sym) continue;
+
+    // Parse CBOE OCC symbol: "SPY260415C00700000"
+    // Format: TICKER + YYMMDD + C/P + 00STRIKE000 (strike * 1000, zero-padded to 8 digits)
+    var cpIdx = -1;
+    var type = null;
+    for (var c = sym.length - 9; c >= 1; c--) {
+      if (sym[c] === 'C' || sym[c] === 'P') {
+        cpIdx = c;
+        type = sym[c] === 'C' ? 'call' : 'put';
+        break;
+      }
+    }
+    if (!type || cpIdx < 0) continue;
+
+    var strikeStr = sym.substring(cpIdx + 1);
+    var strike = parseInt(strikeStr, 10) / 1000;
+    if (!strike || strike <= 0) continue;
+
+    var gamma = parseFloat(opt.gamma) || 0;
+    var oi = parseInt(opt.open_interest) || 0;
+    var delta = parseFloat(opt.delta) || 0;
+    var iv = parseFloat(opt.iv) || 0;
+    var volume = parseInt(opt.volume) || 0;
+
+    options.push({
+      strike: strike,
+      type: type,
+      gamma: gamma,
+      oi: oi,
+      delta: delta,
+      iv: iv,
+      volume: volume,
+    });
   }
 
-  const strikes = Array.from(strikeMap.values()).sort((a, b) => a.strike - b.strike);
-  const totalNetGex = strikes.reduce((sum, s) => sum + s.gex, 0);
+  return { spot: spot, options: options };
+}
 
-  let cumulativeGex = 0;
-  let gammaFlip = null;
-  for (const s of strikes) {
-    const prevCum = cumulativeGex;
-    cumulativeGex += s.gex;
+// -----------------------------------------------------------------
+// Core GEX calculation
+// Formula: GEX = spot^2 * gamma * OI * 100 * 0.01
+// Calls = positive (dealer long gamma = dampening)
+// Puts  = negative (dealer short gamma = amplifying)
+// -----------------------------------------------------------------
+function calculateGEX(options, spotPrice) {
+  var strikeMap = {};
+
+  for (var i = 0; i < options.length; i++) {
+    var opt = options[i];
+    if (!opt.gamma || !opt.oi) continue;
+
+    // Only include near-money strikes (within 15% of spot)
+    var dist = Math.abs(opt.strike - spotPrice) / spotPrice;
+    if (dist > 0.15) continue;
+
+    var gex = opt.gamma * opt.oi * 100 * spotPrice * spotPrice * 0.01;
+    var signedGex = opt.type === 'call' ? gex : -gex;
+
+    var key = opt.strike.toString();
+    if (!strikeMap[key]) {
+      strikeMap[key] = { strike: opt.strike, gex: 0, callGex: 0, putGex: 0, callOI: 0, putOI: 0 };
+    }
+    strikeMap[key].gex += signedGex;
+    if (opt.type === 'call') {
+      strikeMap[key].callGex += gex;
+      strikeMap[key].callOI += opt.oi;
+    } else {
+      strikeMap[key].putGex += gex;
+      strikeMap[key].putOI += opt.oi;
+    }
+  }
+
+  // Convert to sorted array
+  var strikes = [];
+  var keys = Object.keys(strikeMap);
+  for (var j = 0; j < keys.length; j++) {
+    strikes.push(strikeMap[keys[j]]);
+  }
+  strikes.sort(function (a, b) { return a.strike - b.strike; });
+
+  // Total net GEX
+  var totalNetGex = 0;
+  for (var k = 0; k < strikes.length; k++) {
+    totalNetGex += strikes[k].gex;
+  }
+
+  // Find gamma flip (where cumulative GEX crosses zero)
+  var cumulativeGex = 0;
+  var gammaFlip = null;
+  for (var m = 0; m < strikes.length; m++) {
+    var prevCum = cumulativeGex;
+    cumulativeGex += strikes[m].gex;
     if ((prevCum < 0 && cumulativeGex >= 0) || (prevCum > 0 && cumulativeGex <= 0)) {
-      gammaFlip = s.strike;
+      gammaFlip = strikes[m].strike;
       break;
     }
   }
 
-  const pinStrike = strikes.reduce((max, s) => s.gex > (max ? max.gex : -Infinity) ? s : max, null);
-  const volZoneStrike = strikes.reduce((min, s) => s.gex < (min ? min.gex : Infinity) ? s : min, null);
-  const sortedPositive = strikes.filter(s => s.gex > 0).sort((a, b) => b.gex - a.gex);
-
-  return {
-    totalNetGex, gammaFlip,
-    pin: pinStrike ? pinStrike.strike : null,
-    pinGex: pinStrike ? pinStrike.gex : 0,
-    volZone: volZoneStrike ? volZoneStrike.strike : null,
-    volZoneGex: volZoneStrike ? volZoneStrike.gex : 0,
-    secondaryPin: sortedPositive[1] ? sortedPositive[1].strike : null,
-    strikes, spotPrice,
-  };
-}
-
-function scoreGEX(gexData, contract) {
-  if (!gexData) return { score: 0, stars: 0, reasons: [], gexData: null };
-
-  const totalNetGex = gexData.totalNetGex;
-  const gammaFlip = gexData.gammaFlip;
-  const pin = gexData.pin;
-  const volZone = gexData.volZone;
-  const spotPrice = gexData.spotPrice;
-  const strike = contract.strike;
-  const type = contract.type;
-
-  let score = 0;
-  const reasons = [];
-
-  const absGex = Math.abs(totalNetGex);
-  if (absGex > 500000000)      { score += 2;   reasons.push('Massive GEX 500M+'); }
-  else if (absGex > 200000000) { score += 1.5; reasons.push('Large GEX 200M+'); }
-  else if (absGex > 50000000)  { score += 1;   reasons.push('Moderate GEX 50M+'); }
-  else if (absGex > 10000000)  { score += 0.5; reasons.push('Low GEX 10M+'); }
-
-  if (gammaFlip) {
-    const aboveFlip = spotPrice > gammaFlip;
-    if ((type === 'CALL' && aboveFlip) || (type === 'PUT' && !aboveFlip)) {
-      score += 2; reasons.push('Flow aligns with gamma regime flip at ' + gammaFlip);
-    } else {
-      score -= 1; reasons.push('Flow AGAINST gamma regime - counter-trend');
+  // Find PIN (highest positive GEX = price magnet)
+  var pin = null;
+  var pinGex = 0;
+  for (var n = 0; n < strikes.length; n++) {
+    if (strikes[n].gex > pinGex) {
+      pinGex = strikes[n].gex;
+      pin = strikes[n].strike;
     }
   }
 
-  if (pin) {
-    const distToPin = Math.abs(strike - pin) / spotPrice;
-    if (distToPin < 0.02)      { score += 1;   reasons.push('Within 2pct of pin ' + pin); }
-    else if (distToPin < 0.05) { score += 0.5; reasons.push('Within 5pct of pin ' + pin); }
+  // Find VOL zone (most negative GEX = expansion zone)
+  var volZone = null;
+  var volGex = 0;
+  for (var p = 0; p < strikes.length; p++) {
+    if (strikes[p].gex < volGex) {
+      volGex = strikes[p].gex;
+      volZone = strikes[p].strike;
+    }
   }
 
-  if (volZone) {
-    const distToVol = Math.abs(spotPrice - volZone) / spotPrice;
-    if (distToVol > 0.05) { score += 1; reasons.push('Vol zone clear'); }
-    else { reasons.push('Near vol zone ' + volZone); }
+  // Top gamma walls (top 5 by absolute GEX)
+  var sortedByAbs = strikes.slice().sort(function (a, b) {
+    return Math.abs(b.gex) - Math.abs(a.gex);
+  });
+  var walls = [];
+  for (var q = 0; q < Math.min(5, sortedByAbs.length); q++) {
+    walls.push({
+      strike: sortedByAbs[q].strike,
+      gex: sortedByAbs[q].gex,
+      type: sortedByAbs[q].gex > 0 ? 'CALL_WALL' : 'PUT_WALL',
+      callOI: sortedByAbs[q].callOI,
+      putOI: sortedByAbs[q].putOI,
+    });
   }
+  walls.sort(function (a, b) { return a.strike - b.strike; });
 
-  const finalScore = Math.min(6, Math.max(0, score));
-  const stars = finalScore >= 5.5 ? 5 : finalScore >= 4.5 ? 4 : finalScore >= 3.0 ? 3 : finalScore >= 1.5 ? 2 : finalScore >= 0.5 ? 1 : 0;
-
-  return { score: finalScore, stars, reasons, gexData };
+  return {
+    spot: spotPrice,
+    totalNetGex: totalNetGex,
+    regime: totalNetGex > 0 ? 'POSITIVE' : 'NEGATIVE',
+    gammaFlip: gammaFlip,
+    pin: pin,
+    pinGex: pinGex,
+    volZone: volZone,
+    volZoneGex: volGex,
+    walls: walls,
+    strikes: strikes,
+  };
 }
 
+// -----------------------------------------------------------------
+// getGammaLevels(ticker)
+// Returns the key gamma levels as price magnets.
+// This is what Primo shows on his Stratalyst charts.
+// -----------------------------------------------------------------
+async function getGammaLevels(ticker) {
+  // Check cache
+  var cached = _cache[ticker];
+  if (cached && Date.now() - cached.ts < CACHE_TTL) {
+    return cached.data;
+  }
+
+  var raw = await fetchCBOEChain(ticker);
+  if (!raw) return null;
+
+  var parsed = parseCBOEOptions(raw);
+  if (!parsed.spot || parsed.options.length === 0) {
+    console.error('[GEX] No valid data for ' + ticker);
+    return null;
+  }
+
+  var gex = calculateGEX(parsed.options, parsed.spot);
+
+  var result = {
+    ticker: ticker,
+    spot: gex.spot,
+    regime: gex.regime,
+    gammaFlip: gex.gammaFlip,
+    pin: gex.pin,
+    walls: gex.walls,
+    volZone: gex.volZone,
+    totalNetGex: gex.totalNetGex,
+    timestamp: new Date().toISOString(),
+    source: 'CBOE_DELAYED',
+  };
+
+  // Cache it
+  _cache[ticker] = { data: result, ts: Date.now() };
+  console.log('[GEX] ' + ticker + ' @ $' + gex.spot + ' | PIN: $' + gex.pin +
+    ' | Flip: $' + gex.gammaFlip + ' | Regime: ' + gex.regime +
+    ' | Walls: ' + gex.walls.map(function (w) { return '$' + w.strike; }).join(', '));
+
+  return result;
+}
+
+// -----------------------------------------------------------------
+// getGEXScore(ticker, contract)
+// Scoring function for confluence (existing API preserved)
+// -----------------------------------------------------------------
 async function getGEXScore(ticker, contract) {
-  const cacheKey = getCacheKey(ticker);
+  var levels = await getGammaLevels(ticker);
+  if (!levels) return { score: 0, stars: 0, reasons: ['No GEX data'], gexData: null };
 
-  if (gexCache.has(cacheKey)) {
-    return scoreGEX(gexCache.get(cacheKey), contract);
+  var strike = contract && contract.strike;
+  var type = contract && contract.type;
+  var score = 0;
+  var reasons = [];
+
+  // 1. Regime alignment
+  if (levels.regime === 'POSITIVE' && type === 'CALL') {
+    score += 1; reasons.push('Positive gamma regime (dampening, mean-reverting)');
+  } else if (levels.regime === 'NEGATIVE' && type === 'PUT') {
+    score += 1; reasons.push('Negative gamma regime (amplifying, trending)');
+  } else if (levels.regime === 'NEGATIVE' && type === 'CALL') {
+    score += 0.5; reasons.push('Negative gamma = volatile, bigger moves possible');
   }
 
-  const spotPrice = await getSpotPrice(ticker);
-  if (!spotPrice) return { score: 0, stars: 0, reasons: ['No spot price'], gexData: null };
+  // 2. Gamma flip alignment
+  if (levels.gammaFlip) {
+    var aboveFlip = levels.spot > levels.gammaFlip;
+    if ((type === 'CALL' && aboveFlip) || (type === 'PUT' && !aboveFlip)) {
+      score += 2; reasons.push('Price aligns with gamma flip at $' + levels.gammaFlip);
+    } else {
+      score -= 1; reasons.push('AGAINST gamma flip at $' + levels.gammaFlip);
+    }
+  }
 
-  const options = await getOptionsChain(ticker, spotPrice);
-  if (!options.length) return { score: 0, stars: 0, reasons: ['No options data'], gexData: null };
+  // 3. Proximity to pin (magnet)
+  if (levels.pin && strike) {
+    var distToPin = Math.abs(strike - levels.pin) / levels.spot;
+    if (distToPin < 0.02) { score += 1; reasons.push('Near pin magnet $' + levels.pin); }
+    else if (distToPin < 0.05) { score += 0.5; reasons.push('Within 5% of pin $' + levels.pin); }
+  }
 
-  const gexData = calculateGEX(options, spotPrice);
-  gexCache.set(cacheKey, gexData);
-  setTimeout(function() { gexCache.delete(cacheKey); }, 30 * 60 * 1000);
+  // 4. Walls as targets
+  for (var i = 0; i < levels.walls.length; i++) {
+    var w = levels.walls[i];
+    if (type === 'CALL' && w.strike > levels.spot && w.type === 'CALL_WALL') {
+      reasons.push('Call wall target at $' + w.strike);
+      break;
+    }
+    if (type === 'PUT' && w.strike < levels.spot && w.type === 'PUT_WALL') {
+      reasons.push('Put wall target at $' + w.strike);
+      break;
+    }
+  }
 
-  return scoreGEX(gexData, contract);
+  var finalScore = Math.min(6, Math.max(0, score));
+  var stars = finalScore >= 5.5 ? 5 : finalScore >= 4.5 ? 4 : finalScore >= 3.0 ? 3 : finalScore >= 1.5 ? 2 : finalScore >= 0.5 ? 1 : 0;
+
+  return { score: finalScore, stars: stars, reasons: reasons, gexData: levels };
 }
 
-module.exports = { getGEXScore, getSpotPrice };
+// -----------------------------------------------------------------
+// formatGEXForDiscord(levels)
+// Pretty-print for Discord alerts / morning brief
+// -----------------------------------------------------------------
+function formatGEXForDiscord(levels) {
+  if (!levels) return 'No GEX data';
+
+  var lines = [];
+  lines.push('**' + levels.ticker + '** GEX Levels @ $' + levels.spot);
+  lines.push('Regime: ' + (levels.regime === 'POSITIVE' ? 'POSITIVE (dampening)' : 'NEGATIVE (volatile)'));
+  if (levels.pin) lines.push('PIN (magnet): **$' + levels.pin + '**');
+  if (levels.gammaFlip) lines.push('Gamma Flip: **$' + levels.gammaFlip + '**');
+  if (levels.volZone) lines.push('Vol Zone: $' + levels.volZone);
+
+  if (levels.walls && levels.walls.length) {
+    lines.push('Gamma Walls:');
+    for (var i = 0; i < levels.walls.length; i++) {
+      var w = levels.walls[i];
+      var label = w.type === 'CALL_WALL' ? 'CALL' : 'PUT';
+      var gexM = (Math.abs(w.gex) / 1000000).toFixed(1);
+      lines.push('  ' + label + ' $' + w.strike + ' (' + gexM + 'M GEX)');
+    }
+  }
+  return lines.join('\n');
+}
+
+// -----------------------------------------------------------------
+// batchGammaLevels(tickers)
+// Get gamma levels for multiple tickers (with rate limiting)
+// -----------------------------------------------------------------
+async function batchGammaLevels(tickers) {
+  var results = {};
+  for (var i = 0; i < tickers.length; i++) {
+    try {
+      results[tickers[i]] = await getGammaLevels(tickers[i]);
+    } catch (e) {
+      console.error('[GEX] Error on ' + tickers[i] + ': ' + e.message);
+      results[tickers[i]] = null;
+    }
+    // Small delay to be nice to CBOE
+    if (i < tickers.length - 1) {
+      await new Promise(function (r) { setTimeout(r, 500); });
+    }
+  }
+  return results;
+}
+
+module.exports = {
+  getGammaLevels: getGammaLevels,
+  getGEXScore: getGEXScore,
+  batchGammaLevels: batchGammaLevels,
+  formatGEXForDiscord: formatGEXForDiscord,
+};
