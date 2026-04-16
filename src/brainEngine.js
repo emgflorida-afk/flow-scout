@@ -55,7 +55,12 @@ async function refreshEarningsCache() {
   } catch(e) { console.error('[BRAIN] Earnings cache error:', e.message); }
 }
 
+// Tickers manually approved to trade despite earnings proximity
+var EARNINGS_OVERRIDE_TICKERS = ['NFLX'];
+
 function tickerHasEarningsWithin3Days(ticker) {
+  // Allow manually overridden tickers to trade through earnings
+  if (EARNINGS_OVERRIDE_TICKERS.indexOf(ticker) !== -1) return false;
   if (!earningsCache.data || earningsCache.data.length === 0) return false;
   var now = new Date();
   var cutoff = new Date(now);
