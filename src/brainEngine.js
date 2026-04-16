@@ -235,6 +235,33 @@ function countPositionsByType() {
   return { day: day, swing: swing, total: day + swing };
 }
 
+// Cache of live TS option tickers — refreshed each cycle by syncLivePositions()
+var _liveTickers = {};
+
+// Pull actual TradeStation positions so we never double up on a ticker
+// even after a redeploy wipes activePositions from memory.
+async function syncLivePositions() {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return;
+    var fetch = require('node-fetch');
+    var res = await fetch('https://api.tradestation.com/v3/brokerage/accounts/11975462/positions', {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    if (!res.ok) return;
+    var data = await res.json();
+    var positions = data.Positions || [];
+    _liveTickers = {};
+    positions.forEach(function(p) {
+      if (p.AssetType === 'StockOption' && parseInt(p.Quantity) > 0) {
+        var root = (p.SymbolRoot || p.Symbol || '').toUpperCase().split(' ')[0];
+        if (root) _liveTickers[root] = true;
+      }
+    });
+  } catch(e) { /* silent — sync is best-effort */ }
+}
+
 function isCorrelationAllowed(ticker, tradeType) {
   var group = getCorrelationGroup(ticker);
   var activeGroups = {};
@@ -249,8 +276,12 @@ function isCorrelationAllowed(ticker, tradeType) {
   } else {
     if (counts.day >= MAX_DAY_POSITIONS) return { allowed: false, reason: 'Max ' + MAX_DAY_POSITIONS + ' day trade positions open (' + counts.day + ')' };
   }
-  // Max 1 per correlation group
+  // Max 1 per correlation group (in-memory)
   if (activeGroups[group]) return { allowed: false, reason: 'Already have position in ' + group + ' group' };
+  // DUPLICATE TICKER CHECK: also check LIVE TradeStation positions
+  // Prevents doubling up after a redeploy wipes in-memory activePositions
+  var tickerUp = ticker.toUpperCase();
+  if (_liveTickers[tickerUp]) return { allowed: false, reason: 'Already hold ' + tickerUp + ' option in TradeStation' };
   return { allowed: true };
 }
 
@@ -625,6 +656,8 @@ async function runQueueCycle() {
   if (_queueCycleRunning) return { skipped: 'already running' };
   if (brainActive) return { skipped: 'brain active — queue runs inside brain cycle' };
   _queueCycleRunning = true;
+  // Sync live TS positions to prevent duplicate ticker entries (LUNR bug Apr 16)
+  await syncLivePositions();
   try {
     // Reuse the same fire logic as runBrainCycle by invoking the
     // single-pass scan function. For simplicity we inline the minimal
@@ -3212,6 +3245,9 @@ async function runBrainCycle() {
   _cycleRunning = true;
 
   try {
+
+  // Sync live TS positions to prevent duplicate ticker purchases after redeploy
+  await syncLivePositions();
 
   cycleCount++;
   lastCycleTime = formatET();
