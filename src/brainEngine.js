@@ -853,6 +853,23 @@ async function runQueueCycle() {
           qt.status = 'PENDING'; saveQueuedTrades(); continue;
         }
 
+        // ---- REGIME GATE (EXECUTION TIME): block counter-trend trades even if queued before regime check ----
+        // Apr 16 2026: AB's MARA PUT + IONQ PUT fired today because they were queued
+        // yesterday before the regime gate existed. Running regime check at EXECUTION
+        // time catches these stale queue items — better than letting a counter-trend
+        // trade fire because it was queued under old rules.
+        try {
+          var _regimeGate = require('./regimeGate');
+          var regimeCheck = await _regimeGate.canEnter(qt.ticker, qt.direction, qtToken);
+          if (!regimeCheck.allowed) {
+            logBrain('[QUEUE-CYCLE] REGIME BLOCKED: ' + qt.ticker + ' ' + qt.direction + ' — ' + regimeCheck.reason);
+            qt.status = 'REGIME_BLOCKED';
+            qt.regimeBlockReason = regimeCheck.reason;
+            saveQueuedTrades();
+            continue;
+          }
+        } catch(regimeErr) { /* regime gate is nice-to-have, don't block on error */ }
+
         // ---- IV FILTER: block theta traps (high-IV names where even winning trades lose) ----
         try {
           var _ivFilter = require('./ivFilter');
