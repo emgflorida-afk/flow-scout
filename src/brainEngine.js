@@ -221,17 +221,34 @@ function getCorrelationGroup(ticker) {
   return 'OTHER';
 }
 
-function isCorrelationAllowed(ticker) {
+// -- SPLIT POSITION CAPS: swings and day trades run independently ----
+// Swings cook overnight and shouldn't block intraday cash flow.
+var MAX_DAY_POSITIONS = 2;
+var MAX_SWING_POSITIONS = 3;
+
+function countPositionsByType() {
+  var day = 0, swing = 0;
+  activePositions.forEach(function(p) {
+    if (p.tradeType === 'SWING') swing++;
+    else day++;
+  });
+  return { day: day, swing: swing, total: day + swing };
+}
+
+function isCorrelationAllowed(ticker, tradeType) {
   var group = getCorrelationGroup(ticker);
   var activeGroups = {};
-  var totalPositions = 0;
   activePositions.forEach(function(p) {
     var g = getCorrelationGroup(p.ticker);
     activeGroups[g] = true;
-    totalPositions++;
   });
-  // Max 2 positions total
-  if (totalPositions >= 2) return { allowed: false, reason: 'Max 2 positions already open' };
+  // Split caps: swings don't block day trades
+  var counts = countPositionsByType();
+  if (tradeType === 'SWING') {
+    if (counts.swing >= MAX_SWING_POSITIONS) return { allowed: false, reason: 'Max ' + MAX_SWING_POSITIONS + ' swing positions open (' + counts.swing + ')' };
+  } else {
+    if (counts.day >= MAX_DAY_POSITIONS) return { allowed: false, reason: 'Max ' + MAX_DAY_POSITIONS + ' day trade positions open (' + counts.day + ')' };
+  }
   // Max 1 per correlation group
   if (activeGroups[group]) return { allowed: false, reason: 'Already have position in ' + group + ' group' };
   return { allowed: true };
@@ -663,6 +680,13 @@ async function runQueueCycle() {
       }
 
       if (!triggered) continue;
+
+      // ---- SPLIT POSITION CAP: check day vs swing independently ----
+      var _capCheck = isCorrelationAllowed(qt.ticker, qt.tradeType);
+      if (!_capCheck.allowed) {
+        logBrain('[QUEUE-CYCLE] CAP BLOCK: ' + qt.ticker + ' — ' + _capCheck.reason);
+        continue; // stays PENDING, will retry next cycle when a slot opens
+      }
 
       logBrain('[QUEUE-CYCLE] ' + qt.ticker + ' TRIGGERED @ $' + qtLast.toFixed(2) +
         ' (trigger $' + qt.triggerPrice + ', prev $' + prevLast.toFixed(2) + ') | ' + qt.contractSymbol);
@@ -3248,6 +3272,12 @@ async function runBrainCycle() {
 
             var alreadyInQt = activePositions.some(function(p) { return p.ticker === qt.ticker; });
             if (alreadyInQt) continue;
+            // Split position cap: swings don't block day trades
+            var _capCheckB = isCorrelationAllowed(qt.ticker, qt.tradeType);
+            if (!_capCheckB.allowed) {
+              logBrain('[BRAIN-QUEUE] CAP BLOCK: ' + qt.ticker + ' — ' + _capCheckB.reason);
+              continue;
+            }
             if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
 
             var qtQuote = null;
@@ -3361,6 +3391,7 @@ async function runBrainCycle() {
                       strategy: 'QUEUED_' + qt.source,
                       liveOrder: true,
                       management: qt.management,
+                      tradeType: qt.tradeType || 'DAY',
                     });
                     tradesOpened++;
 
@@ -3511,6 +3542,7 @@ async function runBrainCycle() {
                       strategy: 'XSP_DIRECTIONAL',
                       liveOrder: true,
                       management: 'XSP_TRAIL', // custom management for XSP
+                      tradeType: 'DAY',
                     });
                     tradesOpened++;
 
@@ -3664,6 +3696,7 @@ async function runBrainCycle() {
             trim1Done: false, trim2Done: false, trailStop: null,
             openTime: new Date().toISOString(), currentPrice: execResult.limit,
             strategy: 'TV_BRAIN', liveOrder: true,
+            tradeType: 'DAY',
           });
           tradesOpened++;
           transitionTo('POSITION_OPEN', 'TV Brain: ' + entry.ticker);
@@ -3900,6 +3933,7 @@ async function runBrainCycle() {
               currentPrice: phExec.limit,
               strategy: phEntry.strategy,
               liveOrder: true,
+              tradeType: 'DAY',
             });
             tradesOpened++;
             transitionTo('POSITION_OPEN', 'Power hour: ' + phEntry.ticker);
@@ -4421,6 +4455,7 @@ module.exports = {
   clearDynamicWatchlist: clearDynamicWatchlist,
   gradeSetup: gradeSetup,
   getActivePositions: function() { return activePositions; },
+  countPositionsByType: countPositionsByType,
   removePosition: function(ticker) {
     var t = (ticker || '').toUpperCase();
     var before = activePositions.length;
