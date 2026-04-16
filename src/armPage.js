@@ -89,6 +89,19 @@ var HTML = `<!DOCTYPE html>
 
 <div class="queue" id="queue"><div class="q-sub">Loading queue…</div></div>
 
+<div class="queue" id="watchlist-section" style="margin-top:20px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <span style="font-weight:700;font-size:14px">Watchlist</span>
+    <span class="q-sub" id="wl-count">—</span>
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:12px">
+    <input id="add-ticker" type="text" placeholder="Add ticker (e.g. RIVN)" autocapitalize="characters" autocorrect="off" spellcheck="false"
+      style="flex:1;padding:10px 12px;border-radius:10px;border:1px solid #30363d;background:#0d1117;color:#e6edf3;font-size:15px;outline:none;">
+    <button onclick="addTicker()" class="small" style="width:auto;padding:10px 18px;margin:0;background:linear-gradient(180deg,#238636,#1a7f37);border-radius:10px;font-size:14px">+ ADD</button>
+  </div>
+  <div id="wl-tags" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+</div>
+
 <footer>Tap ARM to go live. Tap KILL to stop. Auto-fire only touches A+.</footer>
 
 <script>
@@ -156,6 +169,69 @@ async function toggleAuto() {
   await api('POST','/api/autofire/toggle', { enabled: !af.enabled });
   refresh();
 }
+
+// --- WATCHLIST MANAGEMENT ---
+var currentWatchlist = [];
+var WL_KEYS = ['CASEY_WATCHLIST','STRAT_WATCHLIST'];
+
+async function loadWatchlist() {
+  try {
+    var cfg = await api('GET','/api/config');
+    // Show Casey watchlist as the canonical one (Strat mirrors it)
+    var raw = cfg.CASEY_WATCHLIST || '';
+    if (!raw) {
+      // No override set — fetch default from a scout run to show what's active
+      // For now show placeholder
+      document.getElementById('wl-count').textContent = 'using defaults';
+      document.getElementById('wl-tags').innerHTML = '<span class="q-sub">Tap + ADD to customize. Current: 37 tickers (defaults).</span>';
+      return;
+    }
+    currentWatchlist = raw.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean);
+    renderWatchlist();
+  } catch(e) { console.log('wl load error', e); }
+}
+
+function renderWatchlist() {
+  document.getElementById('wl-count').textContent = currentWatchlist.length + ' tickers';
+  var el = document.getElementById('wl-tags');
+  el.innerHTML = currentWatchlist.map(function(t) {
+    return '<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border-radius:8px;background:#21262d;font-size:12px;font-weight:600">'
+      + t + '<span onclick="removeTicker(\\'' + t + '\\')" style="cursor:pointer;color:#ff9999;font-size:14px;padding:0 2px">&times;</span></span>';
+  }).join('');
+}
+
+async function addTicker() {
+  var inp = document.getElementById('add-ticker');
+  var t = inp.value.trim().toUpperCase();
+  if (!t) return;
+  inp.value = '';
+  if (currentWatchlist.length === 0) {
+    // First custom add — seed with defaults
+    var cfg = await api('GET','/api/config');
+    if (!cfg.CASEY_WATCHLIST) {
+      // Load hardcoded defaults
+      currentWatchlist = 'SPY,QQQ,NVDA,AAPL,MSFT,META,AMZN,TSLA,PLTR,AMD,MRVL,GOOGL,NFLX,AVGO,COIN,CRM,UBER,SHOP,NOW,HOOD,SOFI,MU,DKNG,RKLB,NET,PANW,CRWD,SNOW,WDAY,ARM,ANET,DELL,SMCI,MSTR,SMH,ARKK,XBI'.split(',');
+    }
+  }
+  if (currentWatchlist.indexOf(t) >= 0) { alert(t + ' already on list'); return; }
+  currentWatchlist.push(t);
+  await saveWatchlist();
+  renderWatchlist();
+}
+
+async function removeTicker(t) {
+  currentWatchlist = currentWatchlist.filter(function(x){ return x !== t; });
+  await saveWatchlist();
+  renderWatchlist();
+}
+
+async function saveWatchlist() {
+  var val = currentWatchlist.join(',');
+  // Set for casey + strat (mirror). WP gets its own broader list.
+  await api('POST','/api/config', { CASEY_WATCHLIST: val, STRAT_WATCHLIST: val });
+}
+
+loadWatchlist();
 
 refresh();
 setInterval(refresh, 10000);
