@@ -2237,6 +2237,36 @@ app.post('/api/brain-brief/backtest-cache', async function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// REGIME GATE — market regime diagnostics
+// -----------------------------------------------------------------
+var regimeGate = null;
+try { regimeGate = require('./regimeGate'); console.log('[SERVER] regimeGate loaded OK'); }
+catch(e) { console.log('[SERVER] regimeGate not loaded:', e.message); }
+
+app.get('/api/regime', function(req, res) {
+  if (!regimeGate) return res.status(500).json({ error: 'regimeGate not loaded' });
+  res.json(regimeGate.getState());
+});
+
+app.get('/api/regime/check', async function(req, res) {
+  if (!regimeGate) return res.status(500).json({ error: 'regimeGate not loaded' });
+  var ticker = (req.query.ticker || 'SPY').toUpperCase();
+  var direction = (req.query.direction || 'CALLS').toUpperCase();
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    var result = await regimeGate.canEnter(ticker, direction, token);
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/regime/clear-cache', function(req, res) {
+  if (!regimeGate) return res.status(500).json({ error: 'regimeGate not loaded' });
+  regimeGate.clearCache();
+  res.json({ ok: true, message: 'regime cache cleared' });
+});
+
+// -----------------------------------------------------------------
 // RUNTIME CONFIG — hot-swap watchlists, liquid list, etc. without redeploy
 // -----------------------------------------------------------------
 var runtimeConfig = null;

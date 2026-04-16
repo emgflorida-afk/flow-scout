@@ -314,6 +314,15 @@ async function pollOnce() {
           continue;
         }
 
+        // REGIME GATE — block counter-trend entries
+        var regimeGate = require('./regimeGate');
+        var gate = await regimeGate.canEnter(ticker, direction, token);
+        if (!gate.allowed) {
+          console.log('[WP] REGIME VETO ' + ticker + ' ' + direction + ': ' + gate.reason);
+          skipped++;
+          continue;
+        }
+
         var vetoed = await ftfcVetoes(ticker, direction, result.bar.close, token);
         if (vetoed) { skipped++; continue; }
 

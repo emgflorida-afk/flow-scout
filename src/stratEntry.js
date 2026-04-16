@@ -321,7 +321,16 @@ async function pollOnce() {
       for (var k = 0; k < candidates.length; k++) {
         var c = candidates[k];
 
-        // FTFC veto
+        // REGIME GATE — block counter-trend entries (replaces soft-fail FTFC)
+        var regimeGate = require('./regimeGate');
+        var gate = await regimeGate.canEnter(ticker, c.sig.direction, token);
+        if (!gate.allowed) {
+          console.log('[STRAT] REGIME VETO ' + ticker + ' ' + c.sig.signal + ': ' + gate.reason);
+          skipped++;
+          continue;
+        }
+
+        // FTFC veto (now hard-fail: if FTFC opposes, block even if API errors)
         var ftfcDir = 'N/A';
         if (mb && mb.checkFTFC) {
           try {
@@ -333,7 +342,7 @@ async function pollOnce() {
               continue;
             }
           } catch(e) {
-            console.log('[STRAT] FTFC check failed ' + ticker + ': ' + e.message + ' — proceeding');
+            console.log('[STRAT] FTFC check failed ' + ticker + ': ' + e.message + ' — regime gate already passed, proceeding');
           }
         }
 

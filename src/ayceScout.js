@@ -710,7 +710,16 @@ async function pollOnce() {
           }
           if (!sig) continue;
 
-          // FTFC soft-check
+          // REGIME GATE — block counter-trend entries
+          var regimeGate = require('./regimeGate');
+          var gate = await regimeGate.canEnter(ticker, sig.direction, token);
+          if (!gate.allowed) {
+            console.log('[AYCE] REGIME VETO ' + ticker + ' ' + sig.strategy + ': ' + gate.reason);
+            skipped++;
+            continue;
+          }
+
+          // FTFC check (regime gate already passed — this is secondary)
           var ftfcDir = 'N/A';
           if (mb && mb.checkFTFC) {
             try {
@@ -722,7 +731,7 @@ async function pollOnce() {
                 continue;
               }
             } catch(e) {
-              console.log('[AYCE] FTFC fail ' + ticker + ': ' + e.message + ' — proceeding');
+              console.log('[AYCE] FTFC fail ' + ticker + ': ' + e.message + ' — regime gate already passed, proceeding');
             }
           }
 

@@ -5,6 +5,7 @@
 
 var fetch = require('node-fetch');
 var fs    = require('fs');
+var regimeGate = require('./regimeGate');
 
 // -----------------------------------------------------------------
 // STATE / DEDUP
@@ -324,6 +325,14 @@ async function pollOnce() {
 
         if (isDeduped(sym, direction + '|' + sig.kind)) {
           console.log('[CASEY] dedup skip ' + sym + ' ' + direction + ' ' + sig.kind);
+          skipped++;
+          continue;
+        }
+
+        // REGIME GATE — block counter-trend entries
+        var gate = await regimeGate.canEnter(sym, direction, token);
+        if (!gate.allowed) {
+          console.log('[CASEY] REGIME VETO ' + sym + ' ' + direction + ': ' + gate.reason);
           skipped++;
           continue;
         }
