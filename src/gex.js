@@ -213,6 +213,28 @@ function calculateGEX(options, spotPrice) {
 }
 
 // -----------------------------------------------------------------
+// Find ATM implied volatility from options chain
+// Averages the IV of the nearest call and put to spot price.
+// Used for Expected Move calculation.
+// -----------------------------------------------------------------
+function findATMImpliedVol(options, spot) {
+  if (!options || !options.length || !spot) return null;
+  var bestCall = null, bestPut = null;
+  var bestCallDist = 999999, bestPutDist = 999999;
+  for (var i = 0; i < options.length; i++) {
+    var o = options[i];
+    if (!o.iv || o.iv <= 0) continue;
+    var dist = Math.abs(o.strike - spot);
+    if (o.type === 'call' && dist < bestCallDist) { bestCall = o; bestCallDist = dist; }
+    if (o.type === 'put' && dist < bestPutDist) { bestPut = o; bestPutDist = dist; }
+  }
+  if (bestCall && bestPut) return (bestCall.iv + bestPut.iv) / 2;
+  if (bestCall) return bestCall.iv;
+  if (bestPut) return bestPut.iv;
+  return null;
+}
+
+// -----------------------------------------------------------------
 // getGammaLevels(ticker)
 // Returns the key gamma levels as price magnets.
 // This is what Primo shows on his Stratalyst charts.
@@ -235,6 +257,20 @@ async function getGammaLevels(ticker) {
 
   var gex = calculateGEX(parsed.options, parsed.spot);
 
+  // Calculate expected move from ATM IV
+  // EM = spot * IV * sqrt(DTE/365)
+  // For daily: EM = spot * IV * sqrt(1/365) ≈ spot * IV * 0.05234
+  var expectedMove = null;
+  var expectedHigh = null;
+  var expectedLow = null;
+  var atmIV = findATMImpliedVol(parsed.options, parsed.spot);
+  if (atmIV && atmIV > 0) {
+    expectedMove = parsed.spot * atmIV * Math.sqrt(1 / 365);
+    expectedHigh = Math.round((parsed.spot + expectedMove) * 100) / 100;
+    expectedLow = Math.round((parsed.spot - expectedMove) * 100) / 100;
+    expectedMove = Math.round(expectedMove * 100) / 100;
+  }
+
   var result = {
     ticker: ticker,
     spot: gex.spot,
@@ -244,6 +280,9 @@ async function getGammaLevels(ticker) {
     walls: gex.walls,
     volZone: gex.volZone,
     totalNetGex: gex.totalNetGex,
+    expectedMove: expectedMove,
+    expectedHigh: expectedHigh,
+    expectedLow: expectedLow,
     timestamp: new Date().toISOString(),
     source: 'CBOE_DELAYED',
   };
@@ -252,6 +291,7 @@ async function getGammaLevels(ticker) {
   _cache[ticker] = { data: result, ts: Date.now() };
   console.log('[GEX] ' + ticker + ' @ $' + gex.spot + ' | PIN: $' + gex.pin +
     ' | Flip: $' + gex.gammaFlip + ' | Regime: ' + gex.regime +
+    (expectedMove ? ' | EM: ±$' + expectedMove + ' [$' + expectedLow + '-$' + expectedHigh + ']' : '') +
     ' | Walls: ' + gex.walls.map(function (w) { return '$' + w.strike; }).join(', '));
 
   return result;

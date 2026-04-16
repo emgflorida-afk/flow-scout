@@ -82,6 +82,9 @@ try { dynamicBias = require('./dynamicBias'); console.log('[DYNAMIC-BIAS] Loaded
 var gex = null;
 try { gex = require('./gex'); console.log('[GEX] Loaded OK'); } catch(e) { console.log('[GEX] Skipped:', e.message); }
 
+var signalTracker = null;
+try { signalTracker = require('./signalTracker'); console.log('[SIGNAL-TRACKER] Loaded OK'); } catch(e) { console.log('[SIGNAL-TRACKER] Skipped:', e.message); }
+
 var positionManager = null;
 try { positionManager = require('./positionManager'); console.log('[POS-MGR] Loaded OK'); } catch(e) { console.log('[POS-MGR] Skipped:', e.message); }
 
@@ -1425,6 +1428,13 @@ cron.schedule('0 16 * * 1-5', async function() {
   } else if (tradingJournal) {
     try { await tradingJournal.writeJournal({}); } catch(e) { console.error('[JOURNAL]', e.message); }
   }
+  // Auto-reconcile signal tracker — match closed TS positions to signals
+  if (signalTracker) {
+    try {
+      var reconciled = await signalTracker.autoReconcile();
+      console.log('[SIGNAL-TRACKER] 4PM reconcile:', JSON.stringify(reconciled));
+    } catch(e) { console.error('[SIGNAL-TRACKER]', e.message); }
+  }
 }, { timezone: 'America/New_York' });
 
 // -- SCALP MODE ENDPOINTS ----------------------------------------
@@ -2040,6 +2050,27 @@ app.get('/api/gex/:ticker', async function(req, res) {
     if (!levels) return res.status(404).json({ error: 'No GEX data for ' + ticker });
     res.json({ ok: true, levels: levels, discord: gex.formatGEXForDiscord(levels) });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// SIGNAL PERFORMANCE TRACKER API
+app.get('/api/signals/stats', function(req, res) {
+  if (!signalTracker) return res.status(500).json({ error: 'Signal tracker not loaded' });
+  var days = parseInt(req.query.days) || 30;
+  var source = req.query.source || null;
+  var grade = req.query.grade || null;
+  res.json(signalTracker.getStats({ days: days, source: source, grade: grade }));
+});
+
+app.get('/api/signals/history', function(req, res) {
+  if (!signalTracker) return res.status(500).json({ error: 'Signal tracker not loaded' });
+  var limit = parseInt(req.query.limit) || 50;
+  res.json(signalTracker.getHistory({ limit: limit }));
+});
+
+app.post('/api/signals/reconcile', async function(req, res) {
+  if (!signalTracker) return res.status(500).json({ error: 'Signal tracker not loaded' });
+  try { res.json(await signalTracker.autoReconcile()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // SPY HEDGE SCOUT cron -- every 60s during market hours Mon-Fri

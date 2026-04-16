@@ -368,6 +368,7 @@ async function refreshGEX() {
       + '<span class="gex-spot">SPOT</span>'
       + '<span class="gex-pin">PIN</span>'
       + '<span class="gex-flip">FLIP</span>'
+      + '<span style="color:#484f58;font-size:11px;flex:0 0 auto;margin-left:6px">EM</span>'
       + '<span class="gex-walls">WALLS</span>'
       + '</div>';
 
@@ -378,12 +379,14 @@ async function refreshGEX() {
 
       var regCls = g.regime === 'POSITIVE' ? 'gex-pos' : 'gex-neg';
       var wallStr = (g.walls || []).map(function(w){ return '$' + w.strike; }).join(' ');
+      var emStr = g.expectedMove ? '±$' + g.expectedMove : '—';
 
       html += '<div class="gex-row">'
         + '<span class="gex-ticker">' + g.ticker + ' <span class="gex-regime ' + regCls + '">' + (g.regime === 'POSITIVE' ? '+' : '-') + '</span></span>'
         + '<span class="gex-spot">$' + (g.spot || 0).toFixed(0) + '</span>'
         + '<span class="gex-pin">$' + (g.pin || '—') + '</span>'
         + '<span class="gex-flip">$' + (g.gammaFlip || '—') + '</span>'
+        + '<span style="color:#d29922;font-size:11px;flex:0 0 auto;margin-left:6px">' + emStr + '</span>'
         + '<span class="gex-walls">' + wallStr + '</span>'
         + '</div>';
     }

@@ -359,6 +359,18 @@ function addQueuedTrade(trade) {
   queuedTrades.push(qt);
   saveQueuedTrades();
   logBrain('QUEUED TRADE ADDED: ' + qt.ticker + ' ' + qt.direction + ' | trigger $' + qt.triggerPrice + ' | ' + qt.contractSymbol + ' | ' + qt.source);
+
+  // Log signal for performance tracking
+  try {
+    var _st = require('./signalTracker');
+    var sig = _st.logSignal({
+      ticker: qt.ticker, direction: qt.direction, grade: qt.grade || null,
+      source: qt.source, triggerPrice: qt.triggerPrice,
+      contracts: qt.contracts, strike: qt.strike, expiration: qt.expiration,
+    });
+    if (sig) qt._signalId = sig.id;
+  } catch(stErr) { /* signal tracking is nice-to-have */ }
+
   return qt;
 }
 
@@ -524,6 +536,30 @@ async function runQueueCycle() {
     if (et.total < marketOpen || et.total >= marketCloseLocal) {
       return { skipped: 'outside market hours' };
     }
+    // ---- CHOP FILTER: skip index entries when SPY is in a tight range ----
+    // If SPY's high-low range over last 4 fifteen-minute bars is < $2, market is chopping.
+    // Choppy action eats premium. Block SPY/QQQ/IWM day-trade entries until range expands.
+    var _chopDetected = false;
+    var CHOP_TICKERS = ['SPY', 'QQQ', 'IWM'];
+    var CHOP_THRESHOLD = 2.0; // dollars
+    try {
+      var _chopBars = await getBarsForChop('SPY', 'Minute', '15', 5);
+      if (_chopBars && _chopBars.length >= 4) {
+        var _chopHigh = 0, _chopLow = 999999;
+        for (var _ci = _chopBars.length - 4; _ci < _chopBars.length; _ci++) {
+          var _ch = parseFloat(_chopBars[_ci].High || 0);
+          var _cl = parseFloat(_chopBars[_ci].Low || 0);
+          if (_ch > _chopHigh) _chopHigh = _ch;
+          if (_cl < _chopLow) _chopLow = _cl;
+        }
+        var _chopRange = _chopHigh - _chopLow;
+        if (_chopRange < CHOP_THRESHOLD && _chopRange > 0) {
+          _chopDetected = true;
+          logBrain('CHOP FILTER: SPY range $' + _chopRange.toFixed(2) + ' over last hour (< $' + CHOP_THRESHOLD + '). Blocking index day-trade entries.');
+        }
+      }
+    } catch(e) { /* chop check failed, proceed normally */ }
+
     var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
     if (!pendingQueued.length) return { checked: 0 };
     var queuedWindowEnd = 11 * 60 + 30;
@@ -551,6 +587,11 @@ async function runQueueCycle() {
     var fired = 0;
     for (var qi = 0; qi < activePendingQueued.length; qi++) {
       var qt = activePendingQueued[qi];
+      // CHOP FILTER: skip index day-trades when SPY is chopping
+      if (_chopDetected && CHOP_TICKERS.indexOf(qt.ticker) !== -1 && qt.tradeType !== 'SWING') {
+        logBrain('CHOP BLOCK: Skipping ' + qt.ticker + ' ' + qt.direction + ' — SPY chopping. Will retry next cycle.');
+        continue;
+      }
       if (tickerCooldowns[qt.ticker] && (Date.now() - tickerCooldowns[qt.ticker]) < COOLDOWN_MS) continue;
       var qtQuote = null;
       for (var qj = 0; qj < qtQuotes.length; qj++) {
@@ -659,6 +700,16 @@ async function runQueueCycle() {
           fired++;
           logBrain('[QUEUE-CYCLE] FILLED ' + qt.ticker + ' ' + qt.contractSymbol +
             ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2));
+          // Log fill for signal performance tracking
+          try {
+            var _st2 = require('./signalTracker');
+            _st2.logFill(qt._signalId, {
+              ticker: qt.ticker, direction: qt.direction,
+              entryPrice: limitPrice, contracts: qt.contracts,
+              stopPrice: qtStop,
+              gexPin: qt.gexPin, gexFlip: qt.gexFlip, gexRegime: qt.gexRegime,
+            });
+          } catch(stErr2) { /* tracking is nice-to-have */ }
           // Post fill + gamma levels to GO MODE Discord channel
           var fillMsg = qt.ticker + ' ' + qt.direction + ' FILLED\n'
             + qt.contractSymbol + ' x' + qt.contracts + ' @ $' + limitPrice.toFixed(2) + '\n'
@@ -1302,6 +1353,23 @@ function calcEMA(closes, period) {
   return ema;
 }
 
+// UTILITY: Get bars for chop detection (lightweight, separate from enricher)
+// ===================================================================
+async function getBarsForChop(symbol, unit, interval, barsback) {
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return [];
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + symbol
+      + '?interval=' + interval + '&unit=' + unit + '&barsback=' + (barsback || 5);
+    var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!res.ok) return [];
+    var data = await res.json();
+    return (data && data.Bars) ? data.Bars : [];
+  } catch(e) { return []; }
+}
+
+// ===================================================================
 // UTILITY: Get current ET time info
 // ===================================================================
 function getETTime() {
