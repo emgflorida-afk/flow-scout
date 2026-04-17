@@ -468,9 +468,9 @@ async function placeOrder(params) {
 }
 
 // ================================================================
-// CLOSE POSITION -- market sell to close
+// CLOSE POSITION -- LIMIT sell to close (Apr 16 2026: AB rule = no Market)
 // ================================================================
-async function closePosition(account, symbol, qty) {
+async function closePosition(account, symbol, qty, limitPrice) {
   try {
     var ts    = require('./tradestation');
     var token = await ts.getAccessToken();
@@ -478,15 +478,36 @@ async function closePosition(account, symbol, qty) {
 
     var base = getBaseUrl(account, false);
 
+    // Apr 16 2026: AB rule "never market orders, only stop limits."
+    // If caller provides limitPrice, use it. Otherwise fetch current bid
+    // and set limit = bid - $0.05 for fast fill without slippage.
+    var useLimit = limitPrice;
+    if (!useLimit || isNaN(parseFloat(useLimit))) {
+      try {
+        var q = await fetch(base + '/marketdata/quotes/' + encodeURIComponent(symbol), {
+          headers: { 'Authorization': 'Bearer ' + token },
+        });
+        if (q.ok) {
+          var qd = await q.json();
+          var qq = (qd.Quotes || qd.quotes || [])[0] || {};
+          var bid = parseFloat(qq.Bid || qq.bid || 0);
+          if (bid > 0) useLimit = Math.max(0.01, bid - 0.05).toFixed(2);
+        }
+      } catch(e) { /* fallback */ }
+      if (!useLimit) useLimit = '0.01'; // safety floor - will likely not fill but won't market-dump
+    }
+
     var orderBody = {
       AccountID:   account,
       Symbol:      symbol,
       Quantity:    String(qty),
-      OrderType:   'Market',
+      OrderType:   'Limit',
+      LimitPrice:  String(useLimit),
       TradeAction: 'SELLTOCLOSE',
       TimeInForce: { Duration: 'DAY' },
       Route:       'Intelligent',
     };
+    console.log('[CLOSE-POSITION] LIMIT sell @ $' + useLimit + ' for ' + qty + 'x ' + symbol);
 
     var res = await fetch(base + '/orderexecution/orders', {
       method:  'POST',

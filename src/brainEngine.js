@@ -4284,16 +4284,22 @@ async function runBrainCycle() {
             var tsTrim = require('./tradestation');
             var trimToken = await tsTrim.getAccessToken();
             if (trimToken) {
+              // Apr 16 2026: Changed from Market to Limit per AB rule.
+              // AB explicit: "only stop limits, I hate market stops."
+              // Use current bid - $0.05 as limit to ensure fast fill without chasing.
+              var trimBid = parseFloat(pos.lastBid || pos.currentPrice || 0);
+              var trimLimit = Math.max(0.01, trimBid - 0.05).toFixed(2);
               var trimOrder = {
                 AccountID: LIVE_ACCOUNT,
                 Symbol: pos.contractSymbol,
                 Quantity: String(trimQty),
-                OrderType: 'Market',
+                OrderType: 'Limit',
+                LimitPrice: String(trimLimit),
                 TradeAction: 'SellToClose',
                 TimeInForce: { Duration: 'DAY' },
                 Route: 'Intelligent',
               };
-              logBrain('TRIM SELL: Placing market sell for ' + trimQty + 'x ' + pos.contractSymbol);
+              logBrain('TRIM SELL: Placing LIMIT sell @ $' + trimLimit + ' for ' + trimQty + 'x ' + pos.contractSymbol);
               var trimRes = await fetch('https://api.tradestation.com/v3/orderexecution/orders', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + trimToken, 'Content-Type': 'application/json' },
@@ -4365,16 +4371,24 @@ async function runBrainCycle() {
             var tsStop = require('./tradestation');
             var stopToken = await tsStop.getAccessToken();
             if (stopToken) {
+              // Apr 16 2026: Changed from Market to Limit per AB rule.
+              // Brain's internal stop was firing Market orders bypassing the
+              // bracket StopLimit. AB's SPY PUT / SPY CALL today got filled at
+              // "Stop Market" price because of this path. Never again.
+              // Use current bid - $0.10 to ensure fill but floor above zero.
+              var stopBid = parseFloat(pos.lastBid || pos.currentPrice || 0);
+              var stopLimit = Math.max(0.01, stopBid - 0.10).toFixed(2);
               var stopOrder = {
                 AccountID: LIVE_ACCOUNT,
                 Symbol: pos.contractSymbol,
                 Quantity: String(stopQty),
-                OrderType: 'Market',
+                OrderType: 'Limit',
+                LimitPrice: String(stopLimit),
                 TradeAction: 'SellToClose',
                 TimeInForce: { Duration: 'DAY' },
                 Route: 'Intelligent',
               };
-              logBrain('STOP SELL: Placing market sell for ' + stopQty + 'x ' + pos.contractSymbol);
+              logBrain('STOP SELL: Placing LIMIT sell @ $' + stopLimit + ' for ' + stopQty + 'x ' + pos.contractSymbol);
               var stopRes = await fetch('https://api.tradestation.com/v3/orderexecution/orders', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + stopToken, 'Content-Type': 'application/json' },
