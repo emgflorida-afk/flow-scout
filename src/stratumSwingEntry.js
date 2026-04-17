@@ -211,7 +211,7 @@ function buildQueueItem(ticker, signal, bar, ema9, ema21) {
   var exp = pickSwingExpiration();
   var cp = isCall ? 'C' : 'P';
   var contractSymbol = ticker + ' ' + exp.yymmdd + cp + strike;
-  var source = isCall ? 'WP_4HR_HAMMER' : 'WP_4HR_SHOOTER';
+  var source = isCall ? 'STRATUMSWING_HAMMER' : 'STRATUMSWING_SHOOTER';
 
   return {
     ticker:         ticker,
@@ -241,7 +241,7 @@ function buildQueueItem(ticker, signal, bar, ema9, ema21) {
 // Discord confirm alert
 // -----------------------------------------------------------------
 async function postConfirmAlert(item, signal) {
-  var webhookUrl = process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+  var webhookUrl = process.env.DISCORD_STRATUMSWING_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
   if (!webhookUrl) return;
   try {
     var lines = [

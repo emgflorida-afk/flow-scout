@@ -2136,7 +2136,7 @@ app.get('/api/brief/generate', async function(req, res) {
 // Discord user token and auto-queues John's picks. No-op if DISCORD_USER_TOKEN
 // is not set, so it is safe to deploy before the token is provided.
 var jsmithPoller = null;
-try { jsmithPoller = require('./jsmithPoller'); console.log('[SERVER] jsmithPoller loaded OK'); }
+try { jsmithPoller = require('./stratumExternalPoller'); console.log('[SERVER] stratumExternalPoller loaded OK'); }
 catch(e) { console.log('[SERVER] jsmithPoller not loaded:', e.message); }
 cron.schedule('* 9-16 * * 1-5', function() {
   if (jsmithPoller) {
@@ -2268,12 +2268,12 @@ app.post('/api/spy-hedge/reset', function(req, res) {
 // Strat: F2U/F2D/Inside/Hammer/Shooter on 60m + Daily, FTFC veto. Every 60s.
 // WP:    4hr hammer/shooter off 9/21 EMA fan. Every 4h on the hour.
 var caseyEntry = null, wpEntry = null, stratEntry = null;
-try { caseyEntry = require('./caseyEntry'); console.log('[SERVER] caseyEntry loaded OK'); }
-catch(e) { console.log('[SERVER] caseyEntry not loaded:', e.message); }
-try { wpEntry = require('./wpEntry'); console.log('[SERVER] wpEntry loaded OK'); }
-catch(e) { console.log('[SERVER] wpEntry not loaded:', e.message); }
-try { stratEntry = require('./stratEntry'); console.log('[SERVER] stratEntry loaded OK'); }
-catch(e) { console.log('[SERVER] stratEntry not loaded:', e.message); }
+try { caseyEntry = require('./stratumBreakEntry'); console.log('[SERVER] stratumBreakEntry loaded OK'); }
+catch(e) { console.log('[SERVER] stratumBreakEntry not loaded:', e.message); }
+try { wpEntry = require('./stratumSwingEntry'); console.log('[SERVER] stratumSwingEntry loaded OK'); }
+catch(e) { console.log('[SERVER] stratumSwingEntry not loaded:', e.message); }
+try { stratEntry = require('./stratumBarEntry'); console.log('[SERVER] stratumBarEntry loaded OK'); }
+catch(e) { console.log('[SERVER] stratumBarEntry not loaded:', e.message); }
 
 // Scout cron windows -- system watches the whole session, no hour gate.
 // Apr 15 2026: AB removed the 9-11 morning-only gate. The scouts are
@@ -2320,7 +2320,7 @@ app.post('/api/strat/run', async function(req, res) {
 
 // AYCE + SPREAD scouts (Tier 3)
 var ayceScout = null, spreadScout = null;
-try { ayceScout = require('./ayceScout'); console.log('[SERVER] ayceScout loaded OK'); }
+try { ayceScout = require('./stratumFailureScout'); console.log('[SERVER] stratumFailureScout loaded OK'); }
 catch(e) { console.log('[SERVER] ayceScout not loaded:', e.message); }
 try { spreadScout = require('./spreadScout'); console.log('[SERVER] spreadScout loaded OK'); }
 catch(e) { console.log('[SERVER] spreadScout not loaded:', e.message); }

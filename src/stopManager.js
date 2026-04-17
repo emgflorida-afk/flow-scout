@@ -70,10 +70,11 @@ function pickTrimProfile(premium) {
 // -----------------------------------------------------------------
 function pickStopProfile(source) {
   var s = (source || '').toUpperCase();
-  if (s.indexOf('JSMITH') === 0) return 'fastBurn';
-  if (s.indexOf('CASEY') === 0) return 'structural';
-  if (s.indexOf('WP_') === 0 || s.indexOf('WEALTHPRINCE') === 0) return 'structural';
-  if (s.indexOf('STRAT_') === 0) return 'signalBar';
+  if (s.indexOf('JSMITH') === 0 || s.indexOf('STRATUMEXTERNAL') === 0) return 'fastBurn';
+  if (s.indexOf('CASEY') === 0 || s.indexOf('STRATUMBREAK') === 0) return 'structural';
+  if (s.indexOf('WP_') === 0 || s.indexOf('WEALTHPRINCE') === 0 || s.indexOf('STRATUMSWING') === 0) return 'structural';
+  if (s.indexOf('STRAT_') === 0 || s.indexOf('STRATUMBAR') === 0) return 'signalBar';
+  if (s.indexOf('AYCE') === 0 || s.indexOf('STRATUMFAILURE') === 0) return 'signalBar';
   if (s.indexOf('SPREAD_') === 0) return 'spread';
   return 'structural';
 }
@@ -279,19 +280,24 @@ function prepareOrder(input) {
 // -----------------------------------------------------------------
 async function attachStopAfterFill(params) {
   // params: {account, symbol, qty, stopPremium, note}
-  // Places a standalone StopMarket SELLTOCLOSE at stopPremium.
+  // Places a standalone StopLimit SELLTOCLOSE at stopPremium (AB doctrine: NEVER StopMarket).
+  // LimitPrice = StopPrice - $0.10 slippage room (fills on fast moves, won't market).
   // Returns {ok, orderId, error}
   try {
     var ts = require('./tradestation');
     var token = await ts.getAccessToken();
     if (!token) return { ok: false, error: 'No TS token' };
 
+    var stopP = parseFloat(params.stopPremium);
+    var limitP = Math.max(0.01, stopP - 0.10);
+
     var body = {
       AccountID: params.account,
       Symbol: params.symbol,
       Quantity: String(params.qty),
-      OrderType: 'StopMarket',
-      StopPrice: String(params.stopPremium),
+      OrderType: 'StopLimit',
+      StopPrice: String(stopP.toFixed(2)),
+      LimitPrice: String(limitP.toFixed(2)),
       TradeAction: 'SELLTOCLOSE',
       TimeInForce: { Duration: 'GTC' },
       Route: 'Intelligent',

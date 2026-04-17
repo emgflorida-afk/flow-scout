@@ -240,9 +240,9 @@ function buildQueueItem(ticker, sig, lv) {
   var trigger = sig.trigger;
   var source;
   if (direction === 'CALLS') {
-    source = sig.kind === 'RETEST' ? 'CASEY_PMH_RETEST' : 'CASEY_PDH_BREAKOUT';
+    source = sig.kind === 'RETEST' ? 'STRATUMBREAK_PMH_RETEST' : 'STRATUMBREAK_PDH_BREAKOUT';
   } else {
-    source = sig.kind === 'RETEST' ? 'CASEY_PML_RETEST' : 'CASEY_PDL_BREAKDOWN';
+    source = sig.kind === 'RETEST' ? 'STRATUMBREAK_PML_RETEST' : 'STRATUMBREAK_PDL_BREAKDOWN';
   }
   // GRADE: RETEST = A+ (Casey's textbook entry), BREAKOUT = A (one rule
   // looser but still passes stale-chase guard).
@@ -273,7 +273,7 @@ function buildQueueItem(ticker, sig, lv) {
 // DISCORD CONFIRM
 // -----------------------------------------------------------------
 async function postDiscord(item) {
-  var hook = process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+  var hook = process.env.DISCORD_STRATUMBREAK_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
   if (!hook) return;
   try {
     var line = '[CASEY] queued ' + item.ticker + ' ' + item.direction +

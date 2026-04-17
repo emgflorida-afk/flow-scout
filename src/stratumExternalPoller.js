@@ -142,7 +142,7 @@ function johnIdeaToQueueItem(idea) {
     contracts:      idea.tier === 'VIP' ? 3 : 2, // VIP = bill-payer size, normal = 2
     tradeDate:      tradeDate,
     tradeType:      idea.tradeType || 'DAY',
-    source:         'JSMITH_' + idea.tier + '_' + idea.ticker,
+    source:         'STRATUMEXTERNAL_' + idea.tier + '_' + idea.ticker,
     note:           'Auto-parsed from Discord. Tier=' + idea.tier +
                     (swappedToBackup ? ' | SAFER-SWAP to ' + useStrike + ' ' + useExpiry : '') +
                     (idea.backupContract && !swappedToBackup ? ' | Backup:' + idea.backupContract.strike + (idea.backupContract.label || '') : ''),
@@ -269,7 +269,7 @@ async function runPollCycle(opts) {
 
   _cycleRunning = true;
   try {
-    var webhookUrl = process.env.DISCORD_JSMITH_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+    var webhookUrl = process.env.DISCORD_STRATUMEXTERNAL_WEBHOOK || process.env.DISCORD_JSMITH_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
 
     // Poll flow channel first so enrichment has fresh events before John ideas come in
     var flowResult = await pollChannel(CHAN.CAPITAL_FLOW, token);

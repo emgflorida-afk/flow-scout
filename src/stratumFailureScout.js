@@ -230,7 +230,7 @@ async function detectMiyagi(ticker, token) {
     // 2UP above trigger → PUTS (reversal setup)
     if (b4.c > trigger) {
       return {
-        strategy: 'AYCE_12HR_MIYAGI',
+        strategy: 'STRATUMFAILURE_MIYAGI',
         ticker: ticker,
         direction: 'PUTS',
         trigger: trigger,
@@ -246,7 +246,7 @@ async function detectMiyagi(ticker, token) {
     // 2DOWN below trigger → CALLS (reversal setup)
     if (b4.c < trigger) {
       return {
-        strategy: 'AYCE_12HR_MIYAGI',
+        strategy: 'STRATUMFAILURE_MIYAGI',
         ticker: ticker,
         direction: 'CALLS',
         trigger: trigger,
@@ -309,7 +309,7 @@ async function detect4HRReTrigger(ticker, token) {
   // CALLS: 4AM 2D + 8AM 2U
   if (cls4.is2D && cls8.is2U) {
     return {
-      strategy: 'AYCE_4HR_RETRIG',
+      strategy: 'STRATUMFAILURE_RETRIGGER',
       direction: 'CALLS',
       triggerPrice: bar4am.h,
       signalBarHigh: bar4am.h,
@@ -320,7 +320,7 @@ async function detect4HRReTrigger(ticker, token) {
   // PUTS: 4AM 2U + 8AM 2D
   if (cls4.is2U && cls8.is2D) {
     return {
-      strategy: 'AYCE_4HR_RETRIG',
+      strategy: 'STRATUMFAILURE_RETRIGGER',
       direction: 'PUTS',
       triggerPrice: bar4am.l,
       signalBarHigh: bar4am.h,
@@ -372,7 +372,7 @@ async function detect322FirstLive(ticker, token) {
   // Reversal: 9AM 2D -> enter CALLS on break above 9AM high
   if (cls9.is2D) {
     return {
-      strategy: 'AYCE_322_FIRSTLIVE',
+      strategy: 'STRATUMFAILURE_322',
       direction: 'CALLS',
       triggerPrice: bar9.h,
       signalBarHigh: bar9.h,
@@ -383,7 +383,7 @@ async function detect322FirstLive(ticker, token) {
   // Reversal: 9AM 2U -> PUTS on break below 9AM low
   if (cls9.is2U) {
     return {
-      strategy: 'AYCE_322_FIRSTLIVE',
+      strategy: 'STRATUMFAILURE_322',
       direction: 'PUTS',
       triggerPrice: bar9.l,
       signalBarHigh: bar9.h,
@@ -454,7 +454,7 @@ async function detect7HRSweep(ticker, token) {
   var last5 = after11[after11.length - 1];
   if (highSweep && last5.c < bar4.h) {
     return {
-      strategy: 'AYCE_7HR_SWEEP',
+      strategy: 'STRATUMFAILURE_SWEEP',
       direction: 'PUTS',
       triggerPrice: bar4.h,
       signalBarHigh: bar4.h,
@@ -464,7 +464,7 @@ async function detect7HRSweep(ticker, token) {
   }
   if (lowSweep && last5.c > bar4.l) {
     return {
-      strategy: 'AYCE_7HR_SWEEP',
+      strategy: 'STRATUMFAILURE_SWEEP',
       direction: 'CALLS',
       triggerPrice: bar4.l,
       signalBarHigh: bar4.h,
@@ -516,7 +516,7 @@ async function detectFailed9(ticker, token) {
   // 9AM 2U + price below 50% (put trigger): expect pullback into 50% -> PUTS
   if (cls9.is2U && bar9.c > bar8.h) {
     return {
-      strategy: 'AYCE_FAILED9',
+      strategy: 'STRATUMFAILURE_FAILED9',
       direction: 'PUTS',
       triggerPrice: mid8,
       signalBarHigh: bar9.h,
@@ -527,7 +527,7 @@ async function detectFailed9(ticker, token) {
   // 9AM 2D + expect push up into 50% -> CALLS
   if (cls9.is2D && bar9.c < bar8.l) {
     return {
-      strategy: 'AYCE_FAILED9',
+      strategy: 'STRATUMFAILURE_FAILED9',
       direction: 'CALLS',
       triggerPrice: mid8,
       signalBarHigh: bar9.h,
@@ -605,7 +605,7 @@ function buildItem(ticker, sig, currentPrice) {
 // DISCORD CONFIRM
 // -----------------------------------------------------------------
 async function postConfirmAlert(item, sig, ftfcDir) {
-  var webhookUrl = process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+  var webhookUrl = process.env.DISCORD_STRATUMFAILURE_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
   if (!webhookUrl) return;
   try {
     var lines = [
@@ -683,14 +683,14 @@ async function pollOnce() {
       try {
         // Run each strategy; any errors contained per strategy
         var detectors = [
-          { name: 'AYCE_MIYAGI',       fn: detectMiyagi },
-          { name: 'AYCE_4HR_RETRIG',   fn: detect4HRReTrigger },
-          { name: 'AYCE_322_FIRSTLIVE',fn: detect322FirstLive },
-          { name: 'AYCE_FAILED9',      fn: detectFailed9 },
+          { name: 'STRATUMFAILURE_MIYAGI',       fn: detectMiyagi },
+          { name: 'STRATUMFAILURE_RETRIGGER',   fn: detect4HRReTrigger },
+          { name: 'STRATUMFAILURE_322',fn: detect322FirstLive },
+          { name: 'STRATUMFAILURE_FAILED9',      fn: detectFailed9 },
         ];
         // 7HR sweep on index ETFs (QQQ, SPY, IWM)
         if (ticker === 'QQQ' || ticker === 'SPY' || ticker === 'IWM') {
-          detectors.push({ name: 'AYCE_7HR_SWEEP', fn: detect7HRSweep });
+          detectors.push({ name: 'STRATUMFAILURE_SWEEP', fn: detect7HRSweep });
         }
 
         // Need a current price — pull 5m last bar

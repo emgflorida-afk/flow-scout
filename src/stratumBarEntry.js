@@ -132,26 +132,26 @@ function detectSignal(bars, currentPrice) {
   if (!cls) return null;
 
   if (cls.f2u) {
-    return { signal: 'F2U', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRAT_F2U' };
+    return { signal: 'F2U', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRATUMBAR_F2U' };
   }
   if (cls.f2d) {
-    return { signal: 'F2D', direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRAT_F2D' };
+    return { signal: 'F2D', direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRATUMBAR_F2D' };
   }
   if (cls.inside) {
     // Inside bar breakout by current price
     if (currentPrice > signal.h) {
-      return { signal: 'INSIDE_BO_UP', direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRAT_INSIDE_BO' };
+      return { signal: 'INSIDE_BO_UP', direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRATUMBAR_INSIDE_BO' };
     }
     if (currentPrice < signal.l) {
-      return { signal: 'INSIDE_BO_DN', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRAT_INSIDE_BO' };
+      return { signal: 'INSIDE_BO_DN', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRATUMBAR_INSIDE_BO' };
     }
     return null;
   }
   if (cls.hammer) {
-    return { signal: 'HAMMER',  direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRAT_HAMMER' };
+    return { signal: 'HAMMER',  direction: 'CALLS', trigger: signal.h, bar: signal, source: 'STRATUMBAR_HAMMER' };
   }
   if (cls.shooter) {
-    return { signal: 'SHOOTER', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRAT_SHOOTER' };
+    return { signal: 'SHOOTER', direction: 'PUTS',  trigger: signal.l, bar: signal, source: 'STRATUMBAR_SHOOTER' };
   }
   return null;
 }
@@ -233,7 +233,7 @@ function buildItem(ticker, sig, tf, currentPrice, ftfcDir) {
 // DISCORD CONFIRM
 // -----------------------------------------------------------------
 async function postConfirmAlert(item, sig, tf, ftfcDir) {
-  var webhookUrl = process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
+  var webhookUrl = process.env.DISCORD_STRATUMBAR_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
   if (!webhookUrl) return;
   try {
     var lines = [
