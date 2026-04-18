@@ -292,6 +292,7 @@
       <label><input type="checkbox" id="filter-ftfc">FTFC only</label>
       <label><input type="checkbox" id="filter-flow">Flow-aligned only</label>
       <label><input type="checkbox" id="filter-tv">TV alerts only</label>
+      <label style="color: var(--green); font-weight: 600;"><input type="checkbox" id="filter-confidence">🎯 Confidence Mode</label>
     </div>
     <div id="root"><div class="loading">Scanning the universe…</div></div>
   </div>
@@ -551,10 +552,20 @@ function applyFilters(data) {
   if (!ftfcOnly && !flowOnly && !tvOnly) return data;
   var filtered = { generatedAt: data.generatedAt, tookMs: data.tookMs, scanned: data.scanned, matched: 0, groups: {} };
   Object.keys(data.groups).forEach(function(k) {
+    var confidenceMode = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
     var rows = data.groups[k].filter(function(r) {
+      // CONFIDENCE MODE -- single-setup, high-conviction filter.
+      // Only Failed 2D with FTFC UP + magnitude 2-5% + flow not bearish + volume 1.5x+
+      // Designed to rebuild win rate with one mechanical setup at a time.
+      if (confidenceMode) {
+        if (r.signal !== 'Failed 2D') return false;
+        if (r.ftfcDir !== 'UP') return false;
+        if (!r.magnitude || Math.abs(r.magnitude.pct) < 2 || Math.abs(r.magnitude.pct) > 5) return false;
+        if (r.flow && r.flow.dominant === 'BEAR') return false;
+        if (!r.volRel || r.volRel < 1.5) return false;
+        return true;
+      }
       if (ftfcOnly) {
-        // "FTFC only" now means FTFC DIRECTION ALIGNS WITH SIGNAL
-        // (old behavior was just "ftfc true" which missed the point)
         var sd = signalDir(r.signal);
         if (!r.ftfcDir) return false;
         if (sd) {
@@ -727,7 +738,7 @@ function renderStarred() {
 }
 
 // Wire filter checkboxes
-['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
   document.addEventListener('DOMContentLoaded', function() {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
@@ -736,13 +747,13 @@ function renderStarred() {
 // Attach when DOM ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function() {
-    ['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+    ['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
     });
   });
 } else {
-  ['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+  ['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
   });
