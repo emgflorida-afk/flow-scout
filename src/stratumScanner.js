@@ -190,7 +190,7 @@ var DEFAULT_WATCHLIST = [
 
 // Blacklisted tickers never show up in scan -- mirrors orderExecutor blacklist.
 // TSLA = SESSION_START_RULES; BTC-correlated = AB personal preference.
-var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','IREN','CIFR','HIVE'];
+var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','IREN','CIFR','HIVE','SOFI'];
 
 function getWatchlist() {
   var raw;
