@@ -188,13 +188,25 @@ var DEFAULT_WATCHLIST = [
   'CSCO','T','VZ','CMCSA','DIS','NFLX','ROKU','SE','SPOT',
 ];
 
+// Blacklisted tickers never show up in scan -- mirrors orderExecutor blacklist.
+// TSLA = SESSION_START_RULES; BTC-correlated = AB personal preference.
+var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','IREN','CIFR','HIVE'];
+
 function getWatchlist() {
-  try { var rc = require('./runtimeConfig'); var v = rc.get('STRATUM_SCANNER_WATCHLIST'); if (v) return v.split(',').map(function(s){return s.trim().toUpperCase();}).filter(Boolean); } catch(e){}
-  var raw = process.env.STRATUM_SCANNER_WATCHLIST;
-  if (raw) return raw.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
-  // Dedup DEFAULT_WATCHLIST
+  var raw;
+  try { var rc = require('./runtimeConfig'); var v = rc.get('STRATUM_SCANNER_WATCHLIST'); if (v) raw = v; } catch(e){}
+  if (!raw) raw = process.env.STRATUM_SCANNER_WATCHLIST;
+  var list = raw
+    ? raw.split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean)
+    : DEFAULT_WATCHLIST.slice();
+  // Dedup + remove blacklisted tickers
   var seen = {};
-  return DEFAULT_WATCHLIST.filter(function(s){ if (seen[s]) return false; seen[s] = 1; return true; });
+  return list.filter(function(s){
+    if (seen[s]) return false;
+    if (SCANNER_BLACKLIST.indexOf(s) !== -1) return false;
+    seen[s] = 1;
+    return true;
+  });
 }
 
 // -----------------------------------------------------------------

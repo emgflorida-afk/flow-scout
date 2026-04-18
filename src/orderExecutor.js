@@ -136,10 +136,13 @@ async function placeOrder(params) {
     // ============================================================
     var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
 
-    // GATE: TSLA blacklist -- hard reject regardless of signal grade
-    if (baseTicker === 'TSLA') {
-      console.log('[EXECUTOR] BLOCKED -- TSLA is blacklisted per SESSION_START_RULES.md');
-      return { error: 'TSLA is blacklisted. Hard reject.' };
+    // GATE: Blacklisted tickers -- hard reject regardless of signal grade
+    // TSLA: per SESSION_START_RULES.md
+    // BTC-correlated (Apr 18 2026): AB personal preference, BTC beta exposure
+    var BLACKLIST = ['TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'IREN', 'CIFR', 'HIVE'];
+    if (BLACKLIST.indexOf(baseTicker) !== -1) {
+      console.log('[EXECUTOR] BLOCKED -- ' + baseTicker + ' is blacklisted');
+      return { error: baseTicker + ' is blacklisted. Hard reject.' };
     }
 
     // GATE: 0DTE hard reject -- parse OSI YYMMDD from symbol
