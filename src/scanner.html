@@ -145,7 +145,14 @@
     border-color: rgba(248,113,113,0.4);
   }
   .trade-btn:hover { opacity: 0.8; }
-  .trade-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .trade-btn:disabled {
+    background: rgba(251,191,36,0.15);
+    color: var(--yellow);
+    border: 1px solid rgba(251,191,36,0.4);
+    opacity: 1;
+    cursor: not-allowed;
+    font-size: 10px;
+  }
 
   .tabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
   .tab {
@@ -462,6 +469,22 @@ function signalDir(sig) {
   if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up'   || sig === 'Continuation Up')   return 'BULL';
   return null;
 }
+function isFirstFifteenMinET() {
+  // Returns true if current ET time is 9:30:00 - 9:44:59 on a weekday (Mon-Fri)
+  try {
+    var nowET = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    var parts = nowET.split(', ');
+    var day = parts[0];                  // e.g., "Mon"
+    var timeStr = parts[1] || parts[0];  // e.g., "09:35"
+    var tParts = timeStr.split(':');
+    var h = parseInt(tParts[0], 10);
+    var m = parseInt(tParts[1], 10);
+    var mins = h * 60 + m;
+    var isWeekday = ['Mon','Tue','Wed','Thu','Fri'].indexOf(day) !== -1;
+    return isWeekday && mins >= (9*60+30) && mins < (9*60+45);
+  } catch(e) { return false; }
+}
+
 function tradeBtnHtml(r) {
   var dir = signalDir(r.signal);
   if (!dir) return '<span class="flow-mixed">—</span>';
@@ -472,6 +495,11 @@ function tradeBtnHtml(r) {
     trigger: r.trigger || r.price, ftfc: r.ftfc,
     flow: r.flow && r.flow.dominant
   }));
+  // Discipline gate: disable Trade button 9:30-9:45 AM ET (first 15 min)
+  // Forces Strategy B — click only AFTER 9:45 confirmation.
+  if (isFirstFifteenMinET()) {
+    return '<button class="trade-btn" disabled title="Wait until 9:45 AM ET for 15-min confirmation (Strategy B discipline gate)">⏱ WAIT</button>';
+  }
   return '<button class="' + cls + '" onclick="queueTrade(\'' + payload + '\', this)">▶ ' + label + '</button>';
 }
 function starBtnHtml(r) {
@@ -832,7 +860,21 @@ if (document.readyState === 'loading') {
 }
 
 loadScan(false);
+// Auto-refresh every 5 min normally, but re-render every 15s during 9:20-9:50 ET
+// so the WAIT → CALL/PUT button state flips at 9:45 automatically.
 setInterval(function(){ loadScan(true); }, 5 * 60 * 1000);
+setInterval(function() {
+  // Tight re-render window around market open to flip button state
+  try {
+    var et = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: '2-digit', minute: '2-digit' });
+    var parts = et.split(', ');
+    var day = parts[0];
+    var tp = (parts[1] || '').split(':');
+    var mins = parseInt(tp[0],10)*60 + parseInt(tp[1],10);
+    var inWindow = ['Mon','Tue','Wed','Thu','Fri'].indexOf(day) !== -1 && mins >= (9*60+20) && mins < (9*60+50);
+    if (inWindow && _cachedData) render(applyFilters(_cachedData));
+  } catch(e) {}
+}, 15000);
 </script>
 </body>
 </html>
