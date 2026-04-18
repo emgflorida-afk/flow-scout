@@ -133,7 +133,8 @@ app.get('/api/stratum-scanner', async function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   try {
     var force = req.query && req.query.force === '1';
-    var data = await stratumScanner.scan({ force: force });
+    var tf = (req.query && req.query.tf) || 'Daily';
+    var data = await stratumScanner.scan({ force: force, tf: tf });
     res.json(data);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

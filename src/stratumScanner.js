@@ -471,13 +471,19 @@ function earningsBadge(dateStr) {
 }
 
 // -----------------------------------------------------------------
-// SCAN ONE TICKER
+// SCAN ONE TICKER -- optional TF: 'Daily' (default), '4HR', 'Weekly'
 // -----------------------------------------------------------------
-async function scanTicker(ticker, token, earningsMap) {
-  var dailyBars = await fetchBars(ticker, 'Daily', 1, 30, token);
-  if (!dailyBars || dailyBars.length < 5) return null;
+async function scanTicker(ticker, token, earningsMap, tf) {
+  tf = tf || 'Daily';
+  var barUnit, barInterval, barCount;
+  if (tf === '4HR')       { barUnit = 'Minute'; barInterval = 240; barCount = 60; }
+  else if (tf === 'Weekly') { barUnit = 'Weekly'; barInterval = 1; barCount = 20; }
+  else                     { barUnit = 'Daily';  barInterval = 1; barCount = 30; tf = 'Daily'; }
 
-  var normed = dailyBars.map(normBar).filter(Boolean);
+  var bars = await fetchBars(ticker, barUnit, barInterval, barCount, token);
+  if (!bars || bars.length < 5) return null;
+
+  var normed = bars.map(normBar).filter(Boolean);
   if (normed.length < 4) return null;
 
   var last = normed[normed.length - 1];
@@ -768,21 +774,23 @@ async function queueFromRow(opts) {
 // -----------------------------------------------------------------
 // FULL SCAN (with concurrency)
 // -----------------------------------------------------------------
-var _running = false;
-var _lastScan = null;
+var _running = {};      // keyed by tf
+var _lastScan = {};     // keyed by tf
 
 async function scan(opts) {
   opts = opts || {};
+  var tf = opts.tf || 'Daily';
+  if (['Daily','4HR','Weekly'].indexOf(tf) === -1) tf = 'Daily';
   var concurrency = opts.concurrency || 6;
-  if (_running && !opts.force) return _lastScan;
-  _running = true;
+  if (_running[tf] && !opts.force) return _lastScan[tf];
+  _running[tf] = true;
   var startedAt = Date.now();
 
   try {
     var token = await getToken();
     if (!token) {
-      _running = false;
-      return { error: 'no TS token', generatedAt: new Date().toISOString(), groups: {} };
+      _running[tf] = false;
+      return { error: 'no TS token', generatedAt: new Date().toISOString(), tf: tf, groups: {} };
     }
 
     var earningsMap = await getEarningsMap();
@@ -795,7 +803,7 @@ async function scan(opts) {
         var myIdx = idx++;
         var t = tickers[myIdx];
         try {
-          var row = await scanTicker(t, token, earningsMap);
+          var row = await scanTicker(t, token, earningsMap, tf);
           if (row && row.signal) rows.push(row);
         } catch(e) { /* skip bad ticker */ }
       }
@@ -871,23 +879,26 @@ async function scan(opts) {
     var result = {
       generatedAt: new Date().toISOString(),
       tookMs: Date.now() - startedAt,
+      tf: tf,
       scanned: tickers.length,
       matched: rows.length,
       groups: groups,
       stars: getStars(),
     };
-    _lastScan = result;
-    // Snapshot for history + win/loss eval (non-blocking)
-    snapshotHistory(result).catch(function(e) { console.error('[SCANNER] history:', e.message); });
+    _lastScan[tf] = result;
+    // Snapshot Daily scans only for history tracking
+    if (tf === 'Daily') {
+      snapshotHistory(result).catch(function(e) { console.error('[SCANNER] history:', e.message); });
+    }
     return result;
   } finally {
-    _running = false;
+    _running[tf] = false;
   }
 }
 
 module.exports = {
   scan: scan,
-  getLastScan: function() { return _lastScan; },
+  getLastScan: function(tf) { return _lastScan[tf || 'Daily']; },
   ingestTVAlert: ingestTVAlert,
   getTVAlertsFor: getTVAlertsFor,
   // Stars

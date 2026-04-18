@@ -291,14 +291,19 @@ async function runPollCycle(opts) {
       if (q) queueItems.push({ item: q, idea: allNew[i] });
     }
 
-    // Push to brain queue
+    // Push to brain queue (SIGNAL-ONLY mode check Apr 18 2026)
     if (queueItems.length > 0) {
-      try {
-        var be = require('./brainEngine');
-        if (be && be.bulkAddQueuedTrades) {
-          be.bulkAddQueuedTrades(queueItems.map(function(x){ return x.item; }), { replaceAll: false });
-        }
-      } catch(e) { console.error('[JSMITH] queue push error:', e.message); }
+      var jsMode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+      if (jsMode === 'STRAT_ONLY') {
+        console.log('[JSMITH] SIGNAL-ONLY mode — ' + queueItems.length + ' VIP ideas alerted to Discord, no auto-queue');
+      } else {
+        try {
+          var be = require('./brainEngine');
+          if (be && be.bulkAddQueuedTrades) {
+            be.bulkAddQueuedTrades(queueItems.map(function(x){ return x.item; }), { replaceAll: false });
+          }
+        } catch(e) { console.error('[JSMITH] queue push error:', e.message); }
+      }
 
       // Post confirm alerts
       for (var j = 0; j < queueItems.length; j++) {

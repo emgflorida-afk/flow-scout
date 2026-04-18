@@ -755,14 +755,19 @@ async function pollOnce() {
       }
     }
 
-    // Push to brain queue
+    // Push to brain queue (SIGNAL-ONLY mode check Apr 18 2026)
     if (queuedItems.length > 0) {
-      try {
-        var be = require('./brainEngine');
-        if (be && be.bulkAddQueuedTrades) {
-          be.bulkAddQueuedTrades(queuedItems, { replaceAll: false });
-        }
-      } catch(e) { console.error('[AYCE] queue push error:', e.message); }
+      var ayceMode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+      if (ayceMode === 'STRAT_ONLY') {
+        console.log('[AYCE] SIGNAL-ONLY mode — ' + queuedItems.length + ' setups alerted to Discord, no auto-queue');
+      } else {
+        try {
+          var be = require('./brainEngine');
+          if (be && be.bulkAddQueuedTrades) {
+            be.bulkAddQueuedTrades(queuedItems, { replaceAll: false });
+          }
+        } catch(e) { console.error('[AYCE] queue push error:', e.message); }
+      }
 
       for (var a = 0; a < alerts.length; a++) {
         try {

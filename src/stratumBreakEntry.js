@@ -373,16 +373,24 @@ async function pollOnce() {
       return { ok: true, checked: checked, queued: 0, skipped: skipped };
     }
 
-    // Push to brain queue
-    try {
-      var be = require('./brainEngine');
-      if (be && be.bulkAddQueuedTrades) {
-        var res = be.bulkAddQueuedTrades(items, { replaceAll: false });
-        queued = (res && res.added) || 0;
-        console.log('[CASEY] bulkAdd result: ' + JSON.stringify(res));
+    // Push to brain queue -- SIGNAL-ONLY mode check (Apr 18 2026)
+    // When BRAIN_AUTOFIRE_MODE=STRAT_ONLY, Casey only alerts Discord — no auto-queue.
+    // AB manually clicks Trade on /scanner if wants to take the setup.
+    var mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+    if (mode === 'STRAT_ONLY') {
+      console.log('[CASEY] SIGNAL-ONLY mode (BRAIN_AUTOFIRE_MODE=STRAT_ONLY) — ' + items.length + ' setups alerted to Discord, no auto-queue');
+      queued = 0;
+    } else {
+      try {
+        var be = require('./brainEngine');
+        if (be && be.bulkAddQueuedTrades) {
+          var res = be.bulkAddQueuedTrades(items, { replaceAll: false });
+          queued = (res && res.added) || 0;
+          console.log('[CASEY] bulkAdd result: ' + JSON.stringify(res));
+        }
+      } catch(e) {
+        console.log('[CASEY] queue push error: ' + e.message);
       }
-    } catch(e) {
-      console.log('[CASEY] queue push error: ' + e.message);
     }
 
     // Discord confirms

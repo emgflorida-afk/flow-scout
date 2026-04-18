@@ -50,6 +50,13 @@
     font-size: 12px;
   }
   button:hover { opacity: 0.85; }
+  .tf-btn {
+    background: transparent; color: var(--muted); padding: 4px 12px;
+    border: 0; border-radius: 3px; cursor: pointer; font-weight: 600;
+    font-size: 11px; letter-spacing: 0.5px; font-family: inherit;
+  }
+  .tf-btn.active { background: var(--accent); color: #0a0b0d; }
+  .tf-btn:hover:not(.active) { color: var(--text); background: rgba(167,139,250,0.1); }
   .container { padding: 16px 20px; }
   .group { margin-bottom: 28px; }
   .group-header {
@@ -277,7 +284,12 @@
       <span id="meta-took"></span>
     </div>
   </div>
-  <div>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <div class="tf-selector" style="display:flex; gap:2px; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:2px;">
+      <button class="tf-btn active" data-tf="Daily" onclick="setTF('Daily')">D</button>
+      <button class="tf-btn" data-tf="4HR" onclick="setTF('4HR')">4HR</button>
+      <button class="tf-btn" data-tf="Weekly" onclick="setTF('Weekly')">W</button>
+    </div>
     <button id="refresh-btn" onclick="loadScan(true)">⟳ Refresh</button>
   </div>
 </header>
@@ -565,6 +577,15 @@ function render(data) {
 }
 
 var _cachedData = null;
+var _currentTF = 'Daily';
+
+function setTF(tf) {
+  _currentTF = tf;
+  document.querySelectorAll('.tf-btn').forEach(function(b){
+    b.classList.toggle('active', b.dataset.tf === tf);
+  });
+  loadScan(true);
+}
 function applyFilters(data) {
   if (!data || !data.groups) return data;
   var ftfcOnly = document.getElementById('filter-ftfc').checked;
@@ -613,8 +634,9 @@ function applyFilters(data) {
 
 function loadScan(force) {
   document.getElementById('refresh-btn').disabled = true;
-  document.getElementById('refresh-btn').textContent = '⟳ Scanning…';
-  fetch('/api/stratum-scanner' + (force ? '?force=1' : ''))
+  document.getElementById('refresh-btn').textContent = '⟳ Scanning ' + _currentTF + '…';
+  var qs = 'tf=' + encodeURIComponent(_currentTF) + (force ? '&force=1' : '');
+  fetch('/api/stratum-scanner?' + qs)
     .then(function(r) { return r.json(); })
     .then(function(data) { _cachedData = data; render(applyFilters(data)); })
     .catch(function(e) {

@@ -339,16 +339,21 @@ async function pollOnce() {
     }
 
     if (newItems.length > 0) {
-      try {
-        var be = require('./brainEngine');
-        if (be && be.bulkAddQueuedTrades) {
-          be.bulkAddQueuedTrades(newItems.map(function(x){ return x.item; }), { replaceAll: false });
-          queued = newItems.length;
-        } else {
-          console.error('[WP] brainEngine.bulkAddQueuedTrades not found');
+      var wpMode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+      if (wpMode === 'STRAT_ONLY') {
+        console.log('[WP] SIGNAL-ONLY mode — ' + newItems.length + ' swings alerted to Discord, no auto-queue');
+      } else {
+        try {
+          var be = require('./brainEngine');
+          if (be && be.bulkAddQueuedTrades) {
+            be.bulkAddQueuedTrades(newItems.map(function(x){ return x.item; }), { replaceAll: false });
+            queued = newItems.length;
+          } else {
+            console.error('[WP] brainEngine.bulkAddQueuedTrades not found');
+          }
+        } catch(e) {
+          console.error('[WP] queue push error:', e.message);
         }
-      } catch(e) {
-        console.error('[WP] queue push error:', e.message);
       }
 
       for (var k = 0; k < newItems.length; k++) {
