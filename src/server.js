@@ -137,6 +137,20 @@ app.get('/api/stratum-scanner', async function(req, res) {
     res.json(data);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+// TradingView webhook receiver -- in TV alert, set Webhook URL to:
+//   https://flow-scout-production-f021.up.railway.app/api/tv-alert
+// And body to JSON like: {"ticker":"{{ticker}}","action":"buy","tf":"{{interval}}","price":{{close}},"message":"{{strategy.order.alert_message}}"}
+app.post('/api/tv-alert', function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  try {
+    var body = req.body || {};
+    // TV sometimes sends as string body
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e){} }
+    var result = stratumScanner.ingestTVAlert(body);
+    console.log('[TV-ALERT]', JSON.stringify(body).slice(0, 200), '->', JSON.stringify(result));
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/dashboard/data', async function(req, res) {
   try { var data = await dashboard.getDashboardData((req.query.mode || 'DAY').toUpperCase()); res.json(data); }
   catch(e) { res.status(500).json({ error: e.message }); }

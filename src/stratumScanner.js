@@ -16,6 +16,119 @@ var ts = null;
 try { ts = require('./tradestation'); } catch(e) {}
 var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
+var bullflow = null;
+try { bullflow = require('./bullflowStream'); } catch(e) {}
+
+// -----------------------------------------------------------------
+// FINNHUB ENRICHMENT -- analyst recommendations + news sentiment
+// -----------------------------------------------------------------
+function finnhubKey() { return process.env.FINNHUB_KEY || process.env.FINNHUB_API_KEY || ''; }
+
+var _finnhubCache = {}; // ticker -> { data, ts }
+var FINNHUB_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+async function getFinnhubData(ticker) {
+  var key = finnhubKey();
+  if (!key) return null;
+  var cached = _finnhubCache[ticker];
+  if (cached && (Date.now() - cached.ts) < FINNHUB_TTL_MS) return cached.data;
+  try {
+    var base = 'https://finnhub.io/api/v1';
+    var recRes = await fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
+    var targetRes = await fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
+    var rec = await recRes.json().catch(function(){return[];});
+    var target = await targetRes.json().catch(function(){return{};});
+    var latest = Array.isArray(rec) && rec.length ? rec[0] : null;
+    var data = {
+      rec: latest ? {
+        buy: (latest.strongBuy || 0) + (latest.buy || 0),
+        hold: latest.hold || 0,
+        sell: (latest.sell || 0) + (latest.strongSell || 0),
+      } : null,
+      target: target && target.targetMean ? target.targetMean : null,
+    };
+    _finnhubCache[ticker] = { data: data, ts: Date.now() };
+    return data;
+  } catch(e) { return null; }
+}
+
+function recToLabel(rec) {
+  if (!rec) return null;
+  var total = rec.buy + rec.hold + rec.sell;
+  if (!total) return null;
+  if (rec.buy / total >= 0.6) return 'BUY';
+  if (rec.sell / total >= 0.5) return 'SELL';
+  return 'HOLD';
+}
+
+// -----------------------------------------------------------------
+// BULLFLOW ENRICHMENT -- aggregate recent flow per ticker
+// -----------------------------------------------------------------
+function getFlowForTicker(ticker) {
+  if (!bullflow || !bullflow.getRecentFlow) return null;
+  try {
+    var recent = bullflow.getRecentFlow({ symbol: ticker }) || [];
+    if (!recent.length) return null;
+    var callPrem = 0, putPrem = 0, callCount = 0, putCount = 0;
+    recent.forEach(function(a) {
+      var p = parseFloat(a.premium || 0);
+      if (a.callPut === 'CALL') { callPrem += p; callCount++; }
+      else if (a.callPut === 'PUT') { putPrem += p; putCount++; }
+    });
+    var net = callPrem - putPrem;
+    var total = callPrem + putPrem;
+    if (!total) return null;
+    var dominant = total > 0 ? (callPrem / total >= 0.6 ? 'BULL' : (putPrem / total >= 0.6 ? 'BEAR' : 'MIXED')) : 'NONE';
+    return {
+      callPrem: callPrem,
+      putPrem: putPrem,
+      callCount: callCount,
+      putCount: putCount,
+      net: net,
+      dominant: dominant,
+      total: total,
+    };
+  } catch(e) { return null; }
+}
+
+// -----------------------------------------------------------------
+// TRADINGVIEW ALERT RECEIVER -- in-memory store, 4hr TTL
+// Wire to /api/tv-alert in server.js
+// -----------------------------------------------------------------
+var _tvAlerts = {};  // ticker -> [{ message, tf, action, time }]
+var TV_TTL_MS = 4 * 60 * 60 * 1000;
+
+function ingestTVAlert(payload) {
+  if (!payload) return { ok: false, reason: 'no payload' };
+  var ticker = (payload.ticker || payload.symbol || '').toUpperCase();
+  if (!ticker) return { ok: false, reason: 'no ticker' };
+  _tvAlerts[ticker] = _tvAlerts[ticker] || [];
+  _tvAlerts[ticker].push({
+    message:   payload.message || payload.alert || '',
+    tf:        payload.timeframe || payload.tf || '',
+    action:    payload.action || payload.direction || '',
+    price:     parseFloat(payload.price || 0) || null,
+    time:      Date.now(),
+  });
+  // Prune old
+  var cutoff = Date.now() - TV_TTL_MS;
+  _tvAlerts[ticker] = _tvAlerts[ticker].filter(function(a) { return a.time > cutoff; });
+  return { ok: true, ticker: ticker, count: _tvAlerts[ticker].length };
+}
+
+function getTVAlertsFor(ticker) {
+  var list = _tvAlerts[ticker];
+  if (!list) return null;
+  var cutoff = Date.now() - TV_TTL_MS;
+  list = list.filter(function(a) { return a.time > cutoff; });
+  _tvAlerts[ticker] = list;
+  if (!list.length) return null;
+  // Return most recent + count
+  return {
+    count: list.length,
+    latest: list[list.length - 1],
+  };
+}
 
 // -----------------------------------------------------------------
 // WATCHLIST
@@ -289,6 +402,18 @@ async function scanTicker(ticker, token, earningsMap) {
 
   var badge = earningsBadge(earningsMap[ticker]);
 
+  // Enrich: Bullflow + Finnhub + TradingView alerts (all non-blocking)
+  var flow = getFlowForTicker(ticker);
+  var tvAlerts = getTVAlertsFor(ticker);
+  var finn = null;
+  try { finn = await getFinnhubData(ticker); } catch(e) {}
+
+  var analyst = finn && finn.rec ? recToLabel(finn.rec) : null;
+  var priceTargetPct = null;
+  if (finn && finn.target && price) {
+    priceTargetPct = ((finn.target - price) / price) * 100;
+  }
+
   return {
     ticker: ticker,
     price: price,
@@ -301,6 +426,11 @@ async function scanTicker(ticker, token, earningsMap) {
     volAbs: vol ? vol.abs : null,
     volRel: vol ? vol.rel : null,
     earnings: badge,
+    // Enrichments:
+    flow: flow,                       // { callPrem, putPrem, dominant, total }
+    analyst: analyst,                 // 'BUY' | 'HOLD' | 'SELL'
+    priceTargetPct: priceTargetPct,   // % upside to analyst mean target
+    tvAlert: tvAlerts,                // { count, latest } or null
   };
 }
 
@@ -359,11 +489,29 @@ async function scan(opts) {
       if (!groups[r.signal]) groups[r.signal] = [];
       groups[r.signal].push(r);
     });
-    // Sort each group: FTFC-aligned first, then by |chgPct| desc
+    // Signal -> preferred direction (for flow-alignment scoring)
+    function signalDir(sig) {
+      if (!sig) return null;
+      if (sig === 'Failed 2U' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Shooter') return 'BEAR';
+      if (sig === 'Failed 2D' || sig === '2-1-2 Up' || sig === '3-1-2 Up' || sig === 'Hammer') return 'BULL';
+      return null;
+    }
+    function rowScore(r) {
+      var score = 0;
+      if (r.ftfc) score += 3;
+      if (r.tvAlert) score += 3; // user-curated = big boost
+      var sd = signalDir(r.signal);
+      if (sd && r.flow && r.flow.dominant === sd) score += 2; // flow aligns with signal
+      if (sd && r.flow && r.flow.dominant && r.flow.dominant !== sd && r.flow.dominant !== 'MIXED') score -= 2;
+      if (r.volRel && r.volRel >= 1.5) score += 1;
+      if (r.volRel && r.volRel >= 3)   score += 1;
+      return score;
+    }
+    // Sort each group: highest rowScore first, tie-break by |chgPct|
     Object.keys(groups).forEach(function(k) {
       groups[k].sort(function(a,b) {
-        if (a.ftfc && !b.ftfc) return -1;
-        if (!a.ftfc && b.ftfc) return 1;
+        var ds = rowScore(b) - rowScore(a);
+        if (ds !== 0) return ds;
         return Math.abs(b.chgPct || 0) - Math.abs(a.chgPct || 0);
       });
     });
@@ -387,6 +535,8 @@ async function scan(opts) {
 module.exports = {
   scan: scan,
   getLastScan: function() { return _lastScan; },
+  ingestTVAlert: ingestTVAlert,
+  getTVAlertsFor: getTVAlertsFor,
   // exported for testing
   classifyBar: classifyBar,
   detectSignal: detectSignal,

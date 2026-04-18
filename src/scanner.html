@@ -94,6 +94,32 @@
   .col-combo { width: 130px; }
   .col-tf { width: 32px; text-align: center; }
   .col-vol { width: 90px; text-align: right; }
+  .col-flow { width: 110px; }
+  .col-analyst { width: 80px; }
+  .col-tv { width: 50px; text-align: center; }
+
+  .flow-bull { color: var(--green); font-weight: 600; }
+  .flow-bear { color: var(--red); font-weight: 600; }
+  .flow-mixed { color: var(--muted); }
+  .flow-prem { color: var(--muted); font-size: 10px; display: block; }
+
+  .analyst-buy  { background: rgba(74,222,128,0.15); color: var(--green); border: 1px solid rgba(74,222,128,0.4); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .analyst-hold { background: rgba(251,191,36,0.15); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .analyst-sell { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.4); padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 700; }
+  .pt-up { color: var(--green); font-size: 10px; display: block; }
+  .pt-dn { color: var(--red); font-size: 10px; display: block; }
+
+  .tv-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: rgba(96,165,250,0.2);
+    color: var(--blue);
+    border: 1px solid rgba(96,165,250,0.5);
+    font-size: 10px;
+    font-weight: 700;
+  }
+  .tv-none { color: var(--muted); }
 
   .ticker-cell { display: flex; align-items: center; gap: 6px; }
   .ticker-sym { font-weight: 700; color: var(--text); }
@@ -247,6 +273,35 @@ function ftfcBadgeHtml(ftfc) {
   return '<span class="badge badge-ftfc">FTFC</span>';
 }
 
+function fmtPrem(n) {
+  if (n == null) return '—';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return '$' + (n / 1e3).toFixed(0) + 'K';
+  return '$' + Math.round(n);
+}
+function flowHtml(flow) {
+  if (!flow) return '<span class="flow-mixed">—</span>';
+  var cls = flow.dominant === 'BULL' ? 'flow-bull' : (flow.dominant === 'BEAR' ? 'flow-bear' : 'flow-mixed');
+  var label = flow.dominant === 'BULL' ? '🟢 Bull' : (flow.dominant === 'BEAR' ? '🔴 Bear' : '⚪ Mixed');
+  return '<span class="' + cls + '">' + label + '</span>' +
+    '<span class="flow-prem">C ' + fmtPrem(flow.callPrem) + ' / P ' + fmtPrem(flow.putPrem) + '</span>';
+}
+function analystHtml(r) {
+  if (!r.analyst) return '<span class="flow-mixed">—</span>';
+  var cls = r.analyst === 'BUY' ? 'analyst-buy' : (r.analyst === 'SELL' ? 'analyst-sell' : 'analyst-hold');
+  var ptHtml = '';
+  if (r.priceTargetPct != null && isFinite(r.priceTargetPct)) {
+    var ptCls = r.priceTargetPct >= 0 ? 'pt-up' : 'pt-dn';
+    var sign = r.priceTargetPct >= 0 ? '+' : '';
+    ptHtml = '<span class="' + ptCls + '">PT ' + sign + r.priceTargetPct.toFixed(0) + '%</span>';
+  }
+  return '<span class="' + cls + '">' + r.analyst + '</span>' + ptHtml;
+}
+function tvHtml(tv) {
+  if (!tv || !tv.count) return '<span class="tv-none">—</span>';
+  return '<span class="tv-badge" title="' + (tv.latest && tv.latest.message ? tv.latest.message.replace(/"/g,'') : '') + '">TV ×' + tv.count + '</span>';
+}
+
 function rowHtml(r) {
   var volRelClass = '';
   if (r.volRel != null) {
@@ -271,6 +326,9 @@ function rowHtml(r) {
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.M) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.Q) + '</td>' +
+    '<td class="col-flow">' + flowHtml(r.flow) + '</td>' +
+    '<td class="col-analyst">' + analystHtml(r) + '</td>' +
+    '<td class="col-tv">' + tvHtml(r.tvAlert) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
@@ -298,6 +356,9 @@ function groupHtml(name, rows) {
       '<th class="col-tf">W</th>' +
       '<th class="col-tf">M</th>' +
       '<th class="col-tf">Q</th>' +
+      '<th class="col-flow">Flow</th>' +
+      '<th class="col-analyst">Analyst</th>' +
+      '<th class="col-tv">TV</th>' +
       '<th class="col-vol">Vol</th>' +
     '</tr></thead>' +
     '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
