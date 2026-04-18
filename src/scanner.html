@@ -539,7 +539,27 @@ function render(data) {
   Object.keys(groups).forEach(function(k) {
     if (GROUP_ORDER.indexOf(k) === -1 && groups[k].length) html += groupHtml(k, groups[k]);
   });
-  if (!html) html = '<div class="empty">No Strat signals matched on the current watchlist.</div>';
+  if (!html) {
+    var cm = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
+    var ftfcOn = document.getElementById('filter-ftfc') && document.getElementById('filter-ftfc').checked;
+    var flowOn = document.getElementById('filter-flow') && document.getElementById('filter-flow').checked;
+    var tvOn   = document.getElementById('filter-tv') && document.getElementById('filter-tv').checked;
+    if (cm) {
+      html = '<div class="empty" style="padding: 32px; line-height: 1.8;">' +
+        '<div style="font-size: 18px; color: var(--green); margin-bottom: 12px;">🎯 Zero Confidence Mode candidates right now</div>' +
+        '<div style="color: var(--text);">This is the system working correctly, not a bug.</div>' +
+        '<div style="color: var(--muted); margin-top: 10px;">' +
+        'Confidence Mode requires: bullish signal + FTFC ↑ + magnitude 1.5–8% + volume ≥ 1.3× + flow not BEAR.<br>' +
+        'None of the current ' + (_cachedData && _cachedData.matched || 0) + ' matched signals fit that profile.<br><br>' +
+        '<b>A zero-setup day is a win.</b> Close the tab. Come back tomorrow.<br>' +
+        'Try unchecking Confidence Mode to see all signals and study the chart setups.' +
+        '</div></div>';
+    } else if (ftfcOn || flowOn || tvOn) {
+      html = '<div class="empty">No signals match the active filters. Try unchecking some.</div>';
+    } else {
+      html = '<div class="empty">No Strat signals matched on the current watchlist.</div>';
+    }
+  }
   document.getElementById('root').innerHTML = html;
 }
 
@@ -563,9 +583,11 @@ function applyFilters(data) {
         var bullSet = ['Failed 2D', 'Hammer', '2-1-2 Up', '3-1-2 Up'];
         if (bullSet.indexOf(r.signal) === -1) return false;
         if (r.ftfcDir !== 'UP') return false;
-        if (!r.magnitude || Math.abs(r.magnitude.pct) < 2 || Math.abs(r.magnitude.pct) > 5) return false;
+        // Magnitude: 1.5% min (enough room to trade) to 8% max (not a pipe dream)
+        if (!r.magnitude || Math.abs(r.magnitude.pct) < 1.5 || Math.abs(r.magnitude.pct) > 8) return false;
         if (r.flow && r.flow.dominant === 'BEAR') return false;
-        if (!r.volRel || r.volRel < 1.5) return false;
+        // Volume 1.3x+ (loosened from 1.5x -- volume data often missing in off-hours scans)
+        if (r.volRel && r.volRel < 1.3) return false;
         return true;
       }
       if (ftfcOnly) {
