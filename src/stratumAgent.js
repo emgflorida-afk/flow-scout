@@ -439,7 +439,8 @@ async function eodJournal() {
   var balances  = await getLiveBalances();
   var positions = agentState.openPositions;
 
-  var today = new Date().toLocaleDateString('en-US', {
+  var now = new Date();
+  var today = now.toLocaleDateString('en-US', {
     timeZone: 'America/New_York', weekday: 'long', month: 'long', day: 'numeric', year: 'numeric'
   });
 
@@ -449,28 +450,93 @@ async function eodJournal() {
   var buyingPower   = balances ? balances.buyingPower   : 0;
   var dayChange     = equity - agentState.bodEquity;
 
-  // Grade the day
+  // Grade the day using TOTAL P&L (realized + unrealized day change drives outcome).
+  // Old logic graded on realizedPnL alone, so a -$20 day with 0 realized still got 'C'.
+  var totalDayPnL = realizedPnL + (unrealizedPnL - (agentState.bodUnrealized || 0));
+  // Prefer dayChange from equity when available (most accurate single number)
+  var gradeBasis = isFinite(dayChange) && agentState.bodEquity > 0 ? dayChange : totalDayPnL;
+  var GOAL = 500; // per financial_goals.md -- $500/day target, $10K/month stretch
   var grade;
-  if (realizedPnL >= 400)       grade = 'A+';
-  else if (realizedPnL >= 250)  grade = 'A';
-  else if (realizedPnL >= 100)  grade = 'B';
-  else if (realizedPnL >= 0)    grade = 'C';
-  else                          grade = 'D';
+  if (gradeBasis >= GOAL)        grade = 'A+';
+  else if (gradeBasis >= GOAL/2) grade = 'A';
+  else if (gradeBasis >= 0)      grade = 'B';
+  else if (gradeBasis >= -100)   grade = 'C';
+  else if (gradeBasis >= -250)   grade = 'D';
+  else                           grade = 'F';
+
+  // Filter options + drop expired contracts (OSI format: TICKER YYMMDD[C|P]STRIKE)
+  function isExpired(symbol) {
+    try {
+      var m = symbol && symbol.match(/\s(\d{6})[CP]/);
+      if (!m) return false;
+      var yy = parseInt(m[1].substring(0, 2), 10);
+      var mm = parseInt(m[1].substring(2, 4), 10) - 1;
+      var dd = parseInt(m[1].substring(4, 6), 10);
+      var expDate = new Date(2000 + yy, mm, dd, 23, 59, 59);
+      return now.getTime() > expDate.getTime();
+    } catch(e) { return false; }
+  }
 
   var optPositions = positions.filter(function(p) {
     return p.Symbol && p.Symbol.includes(' ');
   });
+  var liveOpt    = optPositions.filter(function(p) { return !isExpired(p.Symbol); });
+  var expiredOpt = optPositions.filter(function(p) { return  isExpired(p.Symbol); });
 
-  var posLines = optPositions.map(function(p) {
+  function fmtPosLine(p) {
     var pnl  = parseFloat(p.UnrealizedProfitLoss || 0);
-    var icon = pnl >= 0 ? '+' : '';
-    return '  ' + p.Symbol + '  ' + icon + '$' + pnl.toFixed(0);
-  });
+    var qty  = parseFloat(p.Quantity || 0);
+    var avg  = parseFloat(p.AveragePrice || 0);
+    var last = parseFloat(p.Last || 0);
+    var sign = pnl >= 0 ? '+' : '';
+    var side = qty < 0 ? 'SHORT' : 'LONG';
+    return '  ' + p.Symbol + '  x' + Math.abs(qty) + ' ' + side +
+           '  avg $' + avg.toFixed(2) + '  last $' + last.toFixed(2) +
+           '  (' + sign + '$' + pnl.toFixed(0) + ')';
+  }
 
+  // Closed trades today -- pull from historical orders (best-effort)
+  var closedLines = [];
+  try {
+    var historyData = await getTSData('/brokerage/accounts/' + ACCOUNT_ID + '/historicalorders?since=' +
+      new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString().slice(0, 10));
+    var orders = (historyData && historyData.Orders) || [];
+    var fills = orders.filter(function(o) {
+      return o.Status === 'FLL' || o.StatusDescription === 'Filled';
+    });
+    // Aggregate by symbol/action
+    var agg = {};
+    fills.forEach(function(o) {
+      var legs = o.Legs || [];
+      legs.forEach(function(leg) {
+        var k = leg.Symbol + '|' + leg.OpenOrClose + '|' + leg.BuyOrSell;
+        agg[k] = agg[k] || { symbol: leg.Symbol, action: leg.BuyOrSell + ' ' + leg.OpenOrClose, qty: 0, gross: 0 };
+        agg[k].qty   += parseFloat(leg.ExecQuantity || leg.QuantityOrdered || 0);
+        agg[k].gross += parseFloat(leg.ExecutionPrice || 0) * parseFloat(leg.ExecQuantity || 0) * 100;
+      });
+    });
+    Object.keys(agg).forEach(function(k) {
+      var t = agg[k];
+      if (!t.qty) return;
+      closedLines.push('  ' + t.action + ' ' + t.symbol + ' x' + t.qty);
+    });
+  } catch(e) { /* soft fail -- historical orders optional */ }
+
+  // Next trading day label -- Friday -> Monday, else -> Tomorrow
+  var dow = now.getDay(); // 0=Sun 5=Fri 6=Sat
+  var nextLabel = 'TOMORROW';
+  if (dow === 5) nextLabel = 'MONDAY';
+  else if (dow === 6) nextLabel = 'MONDAY';
+  else if (dow === 0) nextLabel = 'MONDAY';
+
+  // Market-closed agent status
+  var agentStatus = (dow === 0 || dow === 6) ? 'WEEKEND (market closed)' : 'OVERNIGHT (market closed, resumes 9:30 ET)';
+
+  var goalRemain = GOAL - gradeBasis;
   var journal = [
     'TRADING JOURNAL -- ' + today,
     '===============================',
-    'GRADE: ' + grade,
+    'GRADE: ' + grade + '   (basis: ' + (gradeBasis >= 0 ? '+' : '') + '$' + gradeBasis.toFixed(0) + ' vs $' + GOAL + ' goal)',
     '-------------------------------',
     'ACCOUNT',
     '  Equity:        $' + equity.toFixed(2),
@@ -478,22 +544,36 @@ async function eodJournal() {
     '  Realized P&L:  ' + (realizedPnL >= 0 ? '+' : '') + '$' + realizedPnL.toFixed(2),
     '  Unrealized:    ' + (unrealizedPnL >= 0 ? '+' : '') + '$' + unrealizedPnL.toFixed(2),
     '  Buying power:  $' + buyingPower.toFixed(2),
-    '  Goal $400/day: ' + (realizedPnL >= 400 ? 'HIT' : '$' + (400 - realizedPnL).toFixed(0) + ' remaining'),
+    '  Goal $' + GOAL + '/day: ' + (gradeBasis >= GOAL ? 'HIT (+$' + (gradeBasis - GOAL).toFixed(0) + ' over)' : '$' + goalRemain.toFixed(0) + ' short'),
     '-------------------------------',
-    'OPEN POSITIONS: ' + optPositions.length,
-  ].concat(posLines).concat([
-    '-------------------------------',
+  ];
+
+  if (closedLines.length > 0) {
+    journal.push('CLOSED TODAY:');
+    journal = journal.concat(closedLines);
+    journal.push('-------------------------------');
+  }
+
+  journal.push('OPEN (holding overnight): ' + liveOpt.length);
+  journal = journal.concat(liveOpt.map(fmtPosLine));
+  if (expiredOpt.length > 0) {
+    journal.push('EXPIRED TODAY (auto-clear by TS):');
+    journal = journal.concat(expiredOpt.map(fmtPosLine));
+  }
+  journal.push('-------------------------------');
+
+  journal = journal.concat([
     'Setups taken today: ' + agentState.setupsToday + ' / 5 max',
-    'Agent status: LIVE',
+    'Agent status: ' + agentStatus,
     '-------------------------------',
-    'TOMORROW:',
+    nextLabel + ':',
     '  Morning brief fires at 7:30AM automatically',
     '  Watch #execute-now ONLY',
     '  Agent will filter all signals',
   ]);
 
   await post(WEBHOOKS.journal, journal.join('\n'), 'Stratum Journal');
-  console.log('[AGENT] EOD journal posted -- grade=' + grade);
+  console.log('[AGENT] EOD journal posted -- grade=' + grade + ' basis=' + gradeBasis.toFixed(0));
 }
 
 // ================================================================
