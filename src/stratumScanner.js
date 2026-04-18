@@ -329,7 +329,7 @@ function calcVolRatio(bars) {
 // Also returns prior-period H/L for structural level calculations.
 // -----------------------------------------------------------------
 async function fetchContinuity(ticker, currentPrice, token) {
-  var out = { D: null, W: null, M: null, Q: null, levels: {} };
+  var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {} };
   try {
     var daily = await fetchBars(ticker, 'Daily', 1, 10, token);
     var weekly = await fetchBars(ticker, 'Weekly', 1, 6, token);
@@ -347,20 +347,27 @@ async function fetchContinuity(ticker, currentPrice, token) {
       var q = normBar(monthly[monthly.length - 4]);
       if (q && q.c) out.Q = currentPrice > q.c ? 'up' : (currentPrice < q.c ? 'down' : null);
     }
-    // Structural levels: PDH/PDL, PWH/PWL, PMH/PML, 52wk H/L
+    // Structural levels + MIDPOINTS (Rob Smith's 50% Rule)
+    // Midpoint = (high + low) / 2 of each TF's most recent bar (including the current forming one)
     if (daily && daily.length >= 2) {
       var pd = normBar(daily[daily.length - 2]);
+      var cd = normBar(daily[daily.length - 1]);
       if (pd) { out.levels.pdh = pd.h; out.levels.pdl = pd.l; }
+      if (cd) out.mids.daily = +((cd.h + cd.l) / 2).toFixed(2);
     }
     if (weekly && weekly.length >= 2) {
       var pw = normBar(weekly[weekly.length - 2]);
+      var cw = normBar(weekly[weekly.length - 1]);
       if (pw) { out.levels.pwh = pw.h; out.levels.pwl = pw.l; }
+      if (cw) out.mids.weekly = +((cw.h + cw.l) / 2).toFixed(2);
     }
     if (monthly && monthly.length >= 2) {
       var pm = normBar(monthly[monthly.length - 2]);
+      var cm = normBar(monthly[monthly.length - 1]);
       if (pm) { out.levels.pmh = pm.h; out.levels.pml = pm.l; }
+      if (cm) out.mids.monthly = +((cm.h + cm.l) / 2).toFixed(2);
     }
-    // 52-week high/low (approximate from last 12 monthly bars)
+    // 52-week high/low
     if (monthly && monthly.length >= 2) {
       var hi52 = 0, lo52 = Infinity;
       for (var i = 0; i < monthly.length - 1; i++) {
@@ -373,6 +380,18 @@ async function fetchContinuity(ticker, currentPrice, token) {
       if (lo52 < Infinity) out.levels.lo52 = lo52;
     }
   } catch(e) { /* soft */ }
+  return out;
+}
+
+// Compute mid-alignment stack: price vs weekly mid, vs daily mid
+// Returns { weekly: 'above'|'below'|null, daily: 'above'|'below'|null, aligned: 'BULL'|'BEAR'|null }
+function midpointStack(price, mids) {
+  var out = { weekly: null, daily: null, aligned: null };
+  if (!price || !mids) return out;
+  if (mids.weekly) out.weekly = price > mids.weekly ? 'above' : 'below';
+  if (mids.daily)  out.daily  = price > mids.daily  ? 'above' : 'below';
+  if (out.weekly === 'above' && out.daily === 'above') out.aligned = 'BULL';
+  else if (out.weekly === 'below' && out.daily === 'below') out.aligned = 'BEAR';
   return out;
 }
 
@@ -561,6 +580,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     return null;
   })();
   var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal, atrPct);
+  var midStack = midpointStack(price, dwmq.mids || {});
 
   return {
     ticker: ticker,
@@ -582,6 +602,14 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     tvAlert: tvAlerts,
     starred: isStarred(ticker),
     magnitude: magnitude,  // { level, label, pct } or null
+    midpoints: {           // Rob Smith's 50% Rule — buyers won if price > mid
+      daily: (dwmq.mids && dwmq.mids.daily) || null,
+      weekly: (dwmq.mids && dwmq.mids.weekly) || null,
+      monthly: (dwmq.mids && dwmq.mids.monthly) || null,
+      stack: midStack.aligned,          // 'BULL'|'BEAR'|null (weekly+daily agree?)
+      vsDaily: midStack.daily,          // 'above'|'below'
+      vsWeekly: midStack.weekly,        // 'above'|'below'
+    },
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {

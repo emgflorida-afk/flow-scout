@@ -106,6 +106,17 @@
   .col-tv { width: 50px; text-align: center; }
   .col-trade { width: 80px; text-align: center; }
   .col-mag   { width: 120px; }
+  .col-mid   { width: 70px; text-align: center; }
+
+  .mid-stack {
+    display: inline-flex; flex-direction: column; gap: 1px;
+    padding: 2px 5px; border-radius: 3px; font-size: 9px; font-weight: 700;
+    line-height: 1.2;
+  }
+  .mid-stack-bull { background: rgba(74,222,128,0.15); color: var(--green); border: 1px solid rgba(74,222,128,0.4); }
+  .mid-stack-bear { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.4); }
+  .mid-stack-mixed { background: rgba(251,191,36,0.15); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
+  .mid-stack-none { color: var(--muted); }
   .mag-label { color: var(--accent); font-weight: 600; font-size: 11px; }
   .mag-level { color: var(--text); }
   .mag-pct-up   { color: var(--green); font-size: 10px; display: block; }
@@ -434,6 +445,16 @@ function magHtml(m) {
   return '<span class="mag-label">' + m.label + '</span> <span class="mag-level">$' + m.level.toFixed(2) + '</span>' +
          '<span class="' + cls + '">' + sign + m.pct.toFixed(1) + '%</span>';
 }
+function midHtml(mp) {
+  if (!mp || (!mp.daily && !mp.weekly)) return '<span class="mid-stack-none">—</span>';
+  var w = mp.vsWeekly === 'above' ? '↑' : (mp.vsWeekly === 'below' ? '↓' : '–');
+  var d = mp.vsDaily  === 'above' ? '↑' : (mp.vsDaily  === 'below' ? '↓' : '–');
+  var cls = mp.stack === 'BULL' ? 'mid-stack-bull' :
+            mp.stack === 'BEAR' ? 'mid-stack-bear' : 'mid-stack-mixed';
+  var tip = 'W mid: $' + (mp.weekly || '?') + ' (' + (mp.vsWeekly || '?') + ')  |  D mid: $' + (mp.daily || '?') + ' (' + (mp.vsDaily || '?') + ')';
+  return '<span class="mid-stack ' + cls + '" title="' + tip + '">' +
+         '<span>W ' + w + '</span><span>D ' + d + '</span></span>';
+}
 
 function signalDir(sig) {
   if (!sig) return null;
@@ -492,6 +513,7 @@ function rowHtml(r) {
     '<td class="col-analyst">' + analystHtml(r) + '</td>' +
     '<td class="col-tv">' + tvHtml(r.tvAlert) + '</td>' +
     '<td class="col-mag">' + magHtml(r.magnitude) + '</td>' +
+    '<td class="col-mid">' + midHtml(r.midpoints) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
@@ -524,6 +546,7 @@ function groupHtml(name, rows) {
       '<th class="col-analyst">Analyst</th>' +
       '<th class="col-tv">TV</th>' +
       '<th class="col-mag">Magnitude</th>' +
+      '<th class="col-mid" title="Weekly + Daily midpoint stack. Green = both buyers won, Red = both sellers won, Yellow = mixed">Mid</th>' +
       '<th class="col-vol">Vol</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +
@@ -605,10 +628,11 @@ function applyFilters(data) {
         var bullSet = ['Failed 2D', 'Hammer', '2-1-2 Up', '3-1-2 Up', 'Continuation Up'];
         if (bullSet.indexOf(r.signal) === -1) return false;
         if (r.ftfcDir !== 'UP') return false;
+        // Primo alignment: Weekly + Daily midpoint stack must both agree BULL
+        if (!r.midpoints || r.midpoints.stack !== 'BULL') return false;
         // Magnitude: 1.5% min (enough room to trade) to 8% max (not a pipe dream)
         if (!r.magnitude || Math.abs(r.magnitude.pct) < 1.5 || Math.abs(r.magnitude.pct) > 8) return false;
         if (r.flow && r.flow.dominant === 'BEAR') return false;
-        // Volume 1.3x+ (loosened from 1.5x -- volume data often missing in off-hours scans)
         if (r.volRel && r.volRel < 1.3) return false;
         return true;
       }
