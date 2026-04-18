@@ -168,6 +168,15 @@ async function placeOrder(params) {
       }
     } catch(e) { /* soft fail — don't block on parse error */ }
 
+    // GATE: First 15 min of open (9:30-9:45 AM ET) -- block all entries.
+    // Opening auction chaos produces false breakouts. Let the 15-min bar
+    // close and establish direction before entering.
+    // Committed Apr 18 2026 — reinforces AB's "no trades before 9:45" rule.
+    if (etTotal >= (9 * 60 + 30) && etTotal < (9 * 60 + 45)) {
+      console.log('[EXECUTOR] BLOCKED -- first 15 min ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (wait for 9:45 candle close)');
+      return { error: 'First-15-min block. No new entries 9:30-9:45 AM ET. Wait for opening bar to close. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+    }
+
     // GATE: Dead zone (11:30 AM - 2:00 PM ET) -- no new entries, period
     if (etTotal >= (11 * 60 + 30) && etTotal < (14 * 60)) {
       console.log('[EXECUTOR] BLOCKED -- dead zone ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (11:30 AM - 2 PM no-trade window)');
