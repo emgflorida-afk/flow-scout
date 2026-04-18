@@ -554,11 +554,14 @@ function applyFilters(data) {
   Object.keys(data.groups).forEach(function(k) {
     var confidenceMode = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
     var rows = data.groups[k].filter(function(r) {
-      // CONFIDENCE MODE -- single-setup, high-conviction filter.
-      // Only Failed 2D with FTFC UP + magnitude 2-5% + flow not bearish + volume 1.5x+
-      // Designed to rebuild win rate with one mechanical setup at a time.
+      // CONFIDENCE MODE -- bullish-only, trend-aligned rebuild filter.
+      // Any of the 4 BULLISH Strat patterns (Failed 2D / Hammer / 2-1-2 Up / 3-1-2 Up)
+      // WITH FTFC UP + magnitude 2-5% + flow not bearish + volume 1.5x+.
+      // Designed to rebuild win rate with one class of setups (bullish + trend).
+      // Typical yield: 2-6 candidates per day (vs 0-2 for strict Failed 2D only).
       if (confidenceMode) {
-        if (r.signal !== 'Failed 2D') return false;
+        var bullSet = ['Failed 2D', 'Hammer', '2-1-2 Up', '3-1-2 Up'];
+        if (bullSet.indexOf(r.signal) === -1) return false;
         if (r.ftfcDir !== 'UP') return false;
         if (!r.magnitude || Math.abs(r.magnitude.pct) < 2 || Math.abs(r.magnitude.pct) > 5) return false;
         if (r.flow && r.flow.dominant === 'BEAR') return false;
