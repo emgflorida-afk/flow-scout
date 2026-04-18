@@ -306,6 +306,7 @@
 
 <script>
 var GROUP_ORDER = [
+  'Continuation Up', 'Continuation Down',
   'Failed 2U', 'Failed 2D',
   '2-1-2 Up', '2-1-2 Down', '2-1-2 Continuation',
   '3-1-2 Up', '3-1-2 Down',
@@ -424,8 +425,8 @@ function magHtml(m) {
 
 function signalDir(sig) {
   if (!sig) return null;
-  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down') return 'BEAR';
-  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up')   return 'BULL';
+  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Continuation Down') return 'BEAR';
+  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up'   || sig === 'Continuation Up')   return 'BULL';
   return null;
 }
 function tradeBtnHtml(r) {
@@ -580,7 +581,7 @@ function applyFilters(data) {
       // Designed to rebuild win rate with one class of setups (bullish + trend).
       // Typical yield: 2-6 candidates per day (vs 0-2 for strict Failed 2D only).
       if (confidenceMode) {
-        var bullSet = ['Failed 2D', 'Hammer', '2-1-2 Up', '3-1-2 Up'];
+        var bullSet = ['Failed 2D', 'Hammer', '2-1-2 Up', '3-1-2 Up', 'Continuation Up'];
         if (bullSet.indexOf(r.signal) === -1) return false;
         if (r.ftfcDir !== 'UP') return false;
         // Magnitude: 1.5% min (enough room to trade) to 8% max (not a pipe dream)

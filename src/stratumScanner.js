@@ -491,6 +491,33 @@ async function scanTicker(ticker, token, earningsMap) {
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
 
+  // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
+  // Reversal patterns fire on intraday exhaustion. On strong TREND days
+  // (like today: SPY +0.5%, near highs, weekly 2U#2) most stocks run with
+  // the tape -- no reversal, so scanner goes silent on the winners.
+  //
+  // Fix: if no reversal signal AND price closes green above prior day close
+  // AND FTFC direction aligns, surface as "Continuation Up" (CALL).
+  // Mirror for "Continuation Down" (PUT).
+  //
+  // Conditions for Continuation Up:
+  //   - No reversal signal fired above
+  //   - FTFC direction = UP
+  //   - Current bar closed above prior bar close (green day)
+  //   - Current bar took prior day high (2U bar type) OR current close > PDH
+  //   - Not an Inside / Outside / Compression bar (those have their own signals)
+  if (!signal && ftfcDir && B) {
+    var pdhBreak = dwmq.levels && dwmq.levels.pdh && price > dwmq.levels.pdh;
+    var pdlBreak = dwmq.levels && dwmq.levels.pdl && price < dwmq.levels.pdl;
+    var greenDay = prev && prev.c && price > prev.c;
+    var redDay   = prev && prev.c && price < prev.c;
+    if (ftfcDir === 'UP' && greenDay && (cType === '2U' || pdhBreak)) {
+      signal = 'Continuation Up';
+    } else if (ftfcDir === 'DOWN' && redDay && (cType === '2D' || pdlBreak)) {
+      signal = 'Continuation Down';
+    }
+  }
+
   var badge = earningsBadge(earningsMap[ticker]);
 
   // Enrich: Bullflow + Finnhub + TradingView alerts (all non-blocking)
@@ -505,10 +532,10 @@ async function scanTicker(ticker, token, earningsMap) {
     priceTargetPct = ((finn.target - price) / price) * 100;
   }
 
-  // Magnitude: next structural target in signal's direction (call Primo-style "ride to next level")
+  // Magnitude: next structural target in signal's direction (Primo "ride to next level")
   var sigDirLocal = (function() {
-    if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down') return 'BEAR';
-    if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up')   return 'BULL';
+    if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down') return 'BEAR';
+    if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up')   return 'BULL';
     return null;
   })();
   var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal);
@@ -539,8 +566,8 @@ async function scanTicker(ticker, token, earningsMap) {
       var C = normed[normed.length - 1];
       var B = normed[normed.length - 2];
       if (!C || !B) return null;
-      if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down') return C.l;
-      if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up')   return C.h;
+      if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down') return C.l;
+      if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up')   return C.h;
       if (signal === 'Outside Bar' || signal === 'Inside' || signal === '1-1 Compression') return null; // both sides
       return null;
     })(),
@@ -553,8 +580,8 @@ async function scanTicker(ticker, token, earningsMap) {
 // -----------------------------------------------------------------
 function signalDirectionOf(sig) {
   if (!sig) return null;
-  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down') return 'BEAR';
-  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up')   return 'BULL';
+  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Continuation Down') return 'BEAR';
+  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up'   || sig === 'Continuation Up')   return 'BULL';
   return null;
 }
 
@@ -763,6 +790,7 @@ async function scan(opts) {
 
     // Group by signal -- priority order matters for display
     var priority = [
+      'Continuation Up', 'Continuation Down',
       'Failed 2U', 'Failed 2D',
       '2-1-2 Up', '2-1-2 Down', '2-1-2 Continuation',
       '3-1-2 Up', '3-1-2 Down',
@@ -780,8 +808,8 @@ async function scan(opts) {
     // Signal -> preferred direction (for flow-alignment scoring)
     function signalDir(sig) {
       if (!sig) return null;
-      if (sig === 'Failed 2U' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Shooter') return 'BEAR';
-      if (sig === 'Failed 2D' || sig === '2-1-2 Up' || sig === '3-1-2 Up' || sig === 'Hammer') return 'BULL';
+      if (sig === 'Failed 2U' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Shooter' || sig === 'Continuation Down') return 'BEAR';
+      if (sig === 'Failed 2D' || sig === '2-1-2 Up' || sig === '3-1-2 Up' || sig === 'Hammer' || sig === 'Continuation Up') return 'BULL';
       return null;
     }
     function rowScore(r) {
