@@ -12,12 +12,46 @@
 // -----------------------------------------------------------------
 
 var fetch = require('node-fetch');
+var fs = require('fs');
+var path = require('path');
 var ts = null;
 try { ts = require('./tradestation'); } catch(e) {}
 var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
 var bullflow = null;
 try { bullflow = require('./bullflowStream'); } catch(e) {}
+
+// -----------------------------------------------------------------
+// PERSISTENT STATE -- stars + daily signal history
+// -----------------------------------------------------------------
+var STATE_DIR = process.env.STATE_DIR || '/tmp';
+try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
+var STARS_FILE   = path.join(STATE_DIR, 'scanner_stars.json');
+var HISTORY_FILE = path.join(STATE_DIR, 'scanner_history.json');
+var HISTORY_MAX_DAYS = 10;
+
+function loadJSON(file, fallback) {
+  try {
+    if (fs.existsSync(file)) return JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch(e) { console.error('[SCANNER] load ' + file + ':', e.message); }
+  return fallback;
+}
+function saveJSON(file, data) {
+  try { fs.writeFileSync(file, JSON.stringify(data)); }
+  catch(e) { console.error('[SCANNER] save ' + file + ':', e.message); }
+}
+
+var _stars = loadJSON(STARS_FILE, {}); // { TICKER: true }
+function getStars()     { return Object.keys(_stars); }
+function isStarred(t)   { return !!_stars[t]; }
+function setStar(t, v)  {
+  t = (t || '').toUpperCase();
+  if (!t) return { ok: false, reason: 'no ticker' };
+  if (v) _stars[t] = true;
+  else   delete _stars[t];
+  saveJSON(STARS_FILE, _stars);
+  return { ok: true, ticker: t, starred: !!_stars[t] };
+}
 
 // -----------------------------------------------------------------
 // FINNHUB ENRICHMENT -- analyst recommendations + news sentiment
@@ -431,7 +465,194 @@ async function scanTicker(ticker, token, earningsMap) {
     analyst: analyst,                 // 'BUY' | 'HOLD' | 'SELL'
     priceTargetPct: priceTargetPct,   // % upside to analyst mean target
     tvAlert: tvAlerts,                // { count, latest } or null
+    starred: isStarred(ticker),
+
+    // Structural trigger level (where to enter / where stop sits)
+    trigger: (function() {
+      var C = normed[normed.length - 1];
+      var B = normed[normed.length - 2];
+      if (!C || !B) return null;
+      if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down') return C.l;
+      if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up')   return C.h;
+      if (signal === 'Outside Bar' || signal === 'Inside' || signal === '1-1 Compression') return null; // both sides
+      return null;
+    })(),
   };
+}
+
+// -----------------------------------------------------------------
+// HISTORY: snapshot today's scan and evaluate past wins/losses
+// A signal is WIN if price moved in the signal's favor within 3 trading days.
+// -----------------------------------------------------------------
+function signalDirectionOf(sig) {
+  if (!sig) return null;
+  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down') return 'BEAR';
+  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up')   return 'BULL';
+  return null;
+}
+
+function todayET() {
+  try { return new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); }
+  catch(e) { return new Date().toISOString().slice(0,10); }
+}
+
+function loadHistory() { return loadJSON(HISTORY_FILE, { days: [] }); }
+function saveHistory(h) { saveJSON(HISTORY_FILE, h); }
+
+async function snapshotHistory(scanResult) {
+  if (!scanResult || !scanResult.groups) return;
+  var today = todayET();
+  var history = loadHistory();
+  // Drop any existing entry for today
+  history.days = (history.days || []).filter(function(d) { return d.date !== today; });
+  // Flatten all rows with minimal data
+  var rows = [];
+  Object.keys(scanResult.groups).forEach(function(sig) {
+    (scanResult.groups[sig] || []).forEach(function(r) {
+      var dir = signalDirectionOf(sig);
+      if (!dir) return; // skip non-directional signals for the "winners" tracking
+      rows.push({
+        ticker:  r.ticker,
+        signal:  sig,
+        dir:     dir,
+        price:   r.price,
+        trigger: r.trigger,
+        ftfc:    r.ftfc,
+        flow:    r.flow ? r.flow.dominant : null,
+      });
+    });
+  });
+  history.days.push({ date: today, rows: rows });
+  // Trim
+  history.days.sort(function(a,b){ return a.date.localeCompare(b.date); });
+  if (history.days.length > HISTORY_MAX_DAYS) {
+    history.days = history.days.slice(history.days.length - HISTORY_MAX_DAYS);
+  }
+  // Evaluate wins/losses on older days (requires TS bars)
+  try {
+    var token = await getToken();
+    if (token) {
+      for (var i = 0; i < history.days.length - 1; i++) {
+        var day = history.days[i];
+        for (var j = 0; j < (day.rows || []).length; j++) {
+          var row = day.rows[j];
+          if (row.outcome) continue; // already evaluated
+          var bars = await fetchBars(row.ticker, 'Daily', 1, 6, token);
+          if (!bars || bars.length < 3) continue;
+          // Compare signal-day close to max favorable/adverse over next 3 bars
+          // Find bar index for day.date
+          var anchorIdx = -1;
+          for (var k = 0; k < bars.length; k++) {
+            var bd = (bars[k].TimeStamp || bars[k].timestamp || '').slice(0, 10);
+            if (bd === day.date) { anchorIdx = k; break; }
+          }
+          if (anchorIdx < 0 || anchorIdx + 1 >= bars.length) continue;
+          var anchor = normBar(bars[anchorIdx]);
+          var winBars = [];
+          for (var w = anchorIdx + 1; w < Math.min(anchorIdx + 4, bars.length); w++) {
+            winBars.push(normBar(bars[w]));
+          }
+          if (winBars.length === 0) continue;
+          var maxUp = Math.max.apply(null, winBars.map(function(b){return b.h;})) - anchor.c;
+          var maxDn = anchor.c - Math.min.apply(null, winBars.map(function(b){return b.l;}));
+          var movePct = anchor.c ? (row.dir === 'BULL' ? (maxUp / anchor.c) : (maxDn / anchor.c)) * 100 : 0;
+          var advPct  = anchor.c ? (row.dir === 'BULL' ? (maxDn / anchor.c) : (maxUp / anchor.c)) * 100 : 0;
+          // WIN = favorable move >= 1% before adverse move >= 1%
+          if (movePct >= 1.0 && movePct > advPct) row.outcome = 'WIN';
+          else if (advPct >= 1.0) row.outcome = 'LOSS';
+          else row.outcome = 'FLAT';
+          row.movePct = +movePct.toFixed(2);
+          row.advPct  = +advPct.toFixed(2);
+        }
+      }
+    }
+  } catch(e) { console.error('[SCANNER] snapshot eval error:', e.message); }
+  saveHistory(history);
+}
+
+function getHistory(days) {
+  days = days || 5;
+  var h = loadHistory();
+  var recent = (h.days || []).slice(-days);
+  // Aggregate stats
+  var stats = { total: 0, wins: 0, losses: 0, flat: 0, pending: 0, bySignal: {} };
+  recent.forEach(function(d) {
+    (d.rows || []).forEach(function(r) {
+      stats.total++;
+      var bucket = stats.bySignal[r.signal] = stats.bySignal[r.signal] || { total: 0, wins: 0, losses: 0, flat: 0 };
+      bucket.total++;
+      if (r.outcome === 'WIN')  { stats.wins++;   bucket.wins++; }
+      else if (r.outcome === 'LOSS') { stats.losses++; bucket.losses++; }
+      else if (r.outcome === 'FLAT') { stats.flat++;   bucket.flat++; }
+      else stats.pending++;
+    });
+  });
+  return { days: recent, stats: stats };
+}
+
+// -----------------------------------------------------------------
+// TRADE BUILDER: turn a scanner row into a bulkAddQueuedTrades item
+// -----------------------------------------------------------------
+function nextFriday(daysMin) {
+  daysMin = daysMin || 5;
+  var d = new Date();
+  d.setDate(d.getDate() + daysMin);
+  while (d.getDay() !== 5) d.setDate(d.getDate() + 1);
+  return d;
+}
+function buildOSISymbol(ticker, dir, strike, exp) {
+  var yy = String(exp.getFullYear()).slice(2);
+  var mm = String(exp.getMonth() + 1).padStart(2, '0');
+  var dd = String(exp.getDate()).padStart(2, '0');
+  var cp = dir === 'CALLS' ? 'C' : 'P';
+  return ticker + ' ' + yy + mm + dd + cp + strike;
+}
+
+function buildTradeItem(opts) {
+  opts = opts || {};
+  var ticker = (opts.ticker || '').toUpperCase();
+  var signal = opts.signal || '';
+  var dir = signalDirectionOf(signal) === 'BULL' ? 'CALLS' : signalDirectionOf(signal) === 'BEAR' ? 'PUTS' : (opts.direction || null);
+  if (!ticker || !dir) return null;
+  var contracts = parseInt(opts.contracts || 2, 10);
+  var price = parseFloat(opts.price || 0);
+  var trigger = parseFloat(opts.trigger || price);
+  var strike = Math.round(price);
+  var exp = nextFriday(opts.dte || 5);
+  var mm = String(exp.getMonth() + 1).padStart(2, '0');
+  var dd = String(exp.getDate()).padStart(2, '0');
+  var yyyy = String(exp.getFullYear());
+  return {
+    ticker: ticker,
+    direction: dir,
+    triggerPrice: +trigger.toFixed(2),
+    contractSymbol: buildOSISymbol(ticker, dir, strike, exp),
+    strike: strike,
+    expiration: mm + '-' + dd + '-' + yyyy,
+    contractType: dir === 'CALLS' ? 'Call' : 'Put',
+    maxEntryPrice: 6.00,
+    stopPct: -0.30,
+    targets: [0.25, 0.50, 1.00],
+    contracts: contracts,
+    management: 'STRAT',
+    tradeType: 'DAY',
+    grade: opts.ftfc ? 'A+' : 'A',
+    source: 'STRATUMSCANNER_' + signal.replace(/\s+/g, '_').toUpperCase(),
+    note: 'Queued from /scanner UI — ' + signal + (opts.ftfc ? ' (FTFC)' : '') + (opts.flow ? ' flow=' + opts.flow : ''),
+  };
+}
+
+async function queueFromRow(opts) {
+  var item = buildTradeItem(opts);
+  if (!item) return { ok: false, reason: 'Could not build trade (missing ticker or non-directional signal)' };
+  try {
+    var be = require('./brainEngine');
+    if (be && be.bulkAddQueuedTrades) {
+      be.bulkAddQueuedTrades([item], { replaceAll: false });
+      return { ok: true, queued: item };
+    }
+    return { ok: false, reason: 'brainEngine.bulkAddQueuedTrades not available' };
+  } catch(e) { return { ok: false, reason: e.message }; }
 }
 
 // -----------------------------------------------------------------
@@ -524,8 +745,11 @@ async function scan(opts) {
       scanned: tickers.length,
       matched: rows.length,
       groups: groups,
+      stars: getStars(),
     };
     _lastScan = result;
+    // Snapshot for history + win/loss eval (non-blocking)
+    snapshotHistory(result).catch(function(e) { console.error('[SCANNER] history:', e.message); });
     return result;
   } finally {
     _running = false;
@@ -537,6 +761,16 @@ module.exports = {
   getLastScan: function() { return _lastScan; },
   ingestTVAlert: ingestTVAlert,
   getTVAlertsFor: getTVAlertsFor,
+  // Stars
+  getStars: getStars,
+  setStar: setStar,
+  isStarred: isStarred,
+  // History
+  getHistory: getHistory,
+  snapshotHistory: snapshotHistory,
+  // Trade builder
+  buildTradeItem: buildTradeItem,
+  queueFromRow: queueFromRow,
   // exported for testing
   classifyBar: classifyBar,
   detectSignal: detectSignal,

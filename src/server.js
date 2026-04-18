@@ -144,10 +144,38 @@ app.post('/api/tv-alert', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   try {
     var body = req.body || {};
-    // TV sometimes sends as string body
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e){} }
     var result = stratumScanner.ingestTVAlert(body);
     console.log('[TV-ALERT]', JSON.stringify(body).slice(0, 200), '->', JSON.stringify(result));
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+// Star / unstar a ticker
+app.post('/api/stratum-scanner/star', function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  var body = req.body || {};
+  var ticker = (body.ticker || req.query.ticker || '').toUpperCase();
+  var starred = body.starred === undefined ? true : !!body.starred;
+  res.json(stratumScanner.setStar(ticker, starred));
+});
+app.get('/api/stratum-scanner/stars', function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  res.json({ stars: stratumScanner.getStars() });
+});
+// Historical signals + W/L stats
+app.get('/api/stratum-scanner/history', function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  var days = parseInt(req.query.days || '5', 10);
+  res.json(stratumScanner.getHistory(days));
+});
+// Queue a trade from a scanner row
+app.post('/api/stratum-scanner/queue', async function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  try {
+    var body = req.body || {};
+    if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e){} }
+    var result = await stratumScanner.queueFromRow(body);
+    console.log('[SCANNER-QUEUE]', JSON.stringify(body).slice(0, 200), '->', JSON.stringify(result).slice(0, 200));
     res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });

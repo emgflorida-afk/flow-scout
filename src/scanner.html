@@ -97,6 +97,76 @@
   .col-flow { width: 110px; }
   .col-analyst { width: 80px; }
   .col-tv { width: 50px; text-align: center; }
+  .col-trade { width: 80px; text-align: center; }
+
+  .star-btn {
+    background: none; border: 0; cursor: pointer; color: var(--muted);
+    font-size: 16px; padding: 0; line-height: 1;
+  }
+  .star-btn.on { color: var(--yellow); }
+  .star-btn:hover { color: var(--yellow); }
+
+  .trade-btn {
+    background: rgba(74,222,128,0.15);
+    color: var(--green);
+    border: 1px solid rgba(74,222,128,0.4);
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .trade-btn.puts {
+    background: rgba(248,113,113,0.15);
+    color: var(--red);
+    border-color: rgba(248,113,113,0.4);
+  }
+  .trade-btn:hover { opacity: 0.8; }
+  .trade-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .tabs { display: flex; gap: 2px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab {
+    background: transparent;
+    color: var(--muted);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  .filter-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 14px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .filter-row label { color: var(--muted); cursor: pointer; }
+  .filter-row input[type=checkbox] { vertical-align: middle; margin-right: 5px; }
+
+  .history-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: var(--panel);
+    padding: 12px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
+  .outcome-win  { color: var(--green); }
+  .outcome-loss { color: var(--red); }
+  .outcome-flat { color: var(--muted); }
+  .outcome-pending { color: var(--yellow); }
 
   .flow-bull { color: var(--green); font-weight: 600; }
   .flow-bear { color: var(--red); font-weight: 600; }
@@ -201,8 +271,26 @@
     <button id="refresh-btn" onclick="loadScan(true)">⟳ Refresh</button>
   </div>
 </header>
-<div class="container" id="root">
-  <div class="loading">Scanning the universe…</div>
+<div class="container">
+  <div class="tabs">
+    <button class="tab active" data-tab="scan" onclick="switchTab('scan')">SCAN</button>
+    <button class="tab" data-tab="history" onclick="switchTab('history')">HISTORY</button>
+    <button class="tab" data-tab="starred" onclick="switchTab('starred')">★ STARRED</button>
+  </div>
+  <div id="tab-scan">
+    <div class="filter-row">
+      <label><input type="checkbox" id="filter-ftfc">FTFC only</label>
+      <label><input type="checkbox" id="filter-flow">Flow-aligned only</label>
+      <label><input type="checkbox" id="filter-tv">TV alerts only</label>
+    </div>
+    <div id="root"><div class="loading">Scanning the universe…</div></div>
+  </div>
+  <div id="tab-history" style="display:none">
+    <div id="history-root"><div class="loading">Loading history…</div></div>
+  </div>
+  <div id="tab-starred" style="display:none">
+    <div id="starred-root"><div class="loading">Loading stars…</div></div>
+  </div>
 </div>
 
 <script>
@@ -302,6 +390,30 @@ function tvHtml(tv) {
   return '<span class="tv-badge" title="' + (tv.latest && tv.latest.message ? tv.latest.message.replace(/"/g,'') : '') + '">TV ×' + tv.count + '</span>';
 }
 
+function signalDir(sig) {
+  if (!sig) return null;
+  if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down') return 'BEAR';
+  if (sig === 'Failed 2D' || sig === 'Hammer'  || sig === '2-1-2 Up'   || sig === '3-1-2 Up')   return 'BULL';
+  return null;
+}
+function tradeBtnHtml(r) {
+  var dir = signalDir(r.signal);
+  if (!dir) return '<span class="flow-mixed">—</span>';
+  var label = dir === 'BULL' ? 'CALL' : 'PUT';
+  var cls = dir === 'BULL' ? 'trade-btn' : 'trade-btn puts';
+  var payload = encodeURIComponent(JSON.stringify({
+    ticker: r.ticker, signal: r.signal, price: r.price,
+    trigger: r.trigger || r.price, ftfc: r.ftfc,
+    flow: r.flow && r.flow.dominant
+  }));
+  return '<button class="' + cls + '" onclick="queueTrade(\'' + payload + '\', this)">▶ ' + label + '</button>';
+}
+function starBtnHtml(r) {
+  var on = r.starred ? ' on' : '';
+  var star = r.starred ? '★' : '☆';
+  return '<button class="star-btn' + on + '" onclick="toggleStar(\'' + r.ticker + '\', this)">' + star + '</button>';
+}
+
 function rowHtml(r) {
   var volRelClass = '';
   if (r.volRel != null) {
@@ -309,7 +421,7 @@ function rowHtml(r) {
     else if (r.volRel >= 1.5) volRelClass = 'vol-warm';
   }
   return '<tr>' +
-    '<td class="col-star">☆</td>' +
+    '<td class="col-star">' + starBtnHtml(r) + '</td>' +
     '<td class="col-ticker">' +
       '<div class="ticker-cell">' +
         '<span class="ticker-sym">' + r.ticker + '</span>' +
@@ -333,6 +445,7 @@ function rowHtml(r) {
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
     '</td>' +
+    '<td class="col-trade">' + tradeBtnHtml(r) + '</td>' +
   '</tr>';
 }
 
@@ -360,6 +473,7 @@ function groupHtml(name, rows) {
       '<th class="col-analyst">Analyst</th>' +
       '<th class="col-tv">TV</th>' +
       '<th class="col-vol">Vol</th>' +
+      '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +
     '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
     '</table>' +
@@ -390,12 +504,35 @@ function render(data) {
   document.getElementById('root').innerHTML = html;
 }
 
+var _cachedData = null;
+function applyFilters(data) {
+  if (!data || !data.groups) return data;
+  var ftfcOnly = document.getElementById('filter-ftfc').checked;
+  var flowOnly = document.getElementById('filter-flow').checked;
+  var tvOnly   = document.getElementById('filter-tv').checked;
+  if (!ftfcOnly && !flowOnly && !tvOnly) return data;
+  var filtered = { generatedAt: data.generatedAt, tookMs: data.tookMs, scanned: data.scanned, matched: 0, groups: {} };
+  Object.keys(data.groups).forEach(function(k) {
+    var rows = data.groups[k].filter(function(r) {
+      if (ftfcOnly && !r.ftfc) return false;
+      if (tvOnly && !(r.tvAlert && r.tvAlert.count)) return false;
+      if (flowOnly) {
+        var sd = signalDir(r.signal);
+        if (!sd || !r.flow || r.flow.dominant !== sd) return false;
+      }
+      return true;
+    });
+    if (rows.length) { filtered.groups[k] = rows; filtered.matched += rows.length; }
+  });
+  return filtered;
+}
+
 function loadScan(force) {
   document.getElementById('refresh-btn').disabled = true;
   document.getElementById('refresh-btn').textContent = '⟳ Scanning…';
   fetch('/api/stratum-scanner' + (force ? '?force=1' : ''))
     .then(function(r) { return r.json(); })
-    .then(function(data) { render(data); })
+    .then(function(data) { _cachedData = data; render(applyFilters(data)); })
     .catch(function(e) {
       document.getElementById('root').innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>';
     })
@@ -405,8 +542,166 @@ function loadScan(force) {
     });
 }
 
+// Tab switching
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(function(b) {
+    b.classList.toggle('active', b.dataset.tab === name);
+  });
+  ['scan','history','starred'].forEach(function(n) {
+    document.getElementById('tab-' + n).style.display = (n === name ? '' : 'none');
+  });
+  if (name === 'history') loadHistory();
+  if (name === 'starred') renderStarred();
+}
+
+function toggleStar(ticker, btn) {
+  var on = btn.classList.contains('on');
+  fetch('/api/stratum-scanner/star', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker: ticker, starred: !on })
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(r){
+      if (r.ok) {
+        btn.classList.toggle('on', r.starred);
+        btn.textContent = r.starred ? '★' : '☆';
+        if (_cachedData && _cachedData.groups) {
+          Object.keys(_cachedData.groups).forEach(function(k){
+            _cachedData.groups[k].forEach(function(row){
+              if (row.ticker === ticker) row.starred = r.starred;
+            });
+          });
+        }
+      }
+    });
+}
+
+function queueTrade(payloadEncoded, btn) {
+  var payload = JSON.parse(decodeURIComponent(payloadEncoded));
+  if (!confirm('Queue ' + payload.ticker + ' ' + (signalDir(payload.signal) === 'BULL' ? 'CALL' : 'PUT') + ' from ' + payload.signal + '?\n\nTrigger: $' + (payload.trigger || payload.price))) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/api/stratum-scanner/queue', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  })
+    .then(function(r){ return r.json(); })
+    .then(function(r){
+      if (r.ok) {
+        btn.textContent = '✓ QUEUED';
+        btn.style.background = 'rgba(167,139,250,0.2)';
+      } else {
+        btn.textContent = '✗';
+        alert('Queue failed: ' + (r.reason || 'unknown'));
+        setTimeout(function(){ btn.disabled = false; btn.textContent = '▶ ' + (signalDir(payload.signal) === 'BULL' ? 'CALL' : 'PUT'); }, 2000);
+      }
+    })
+    .catch(function(e){
+      btn.textContent = '✗';
+      alert('Fetch failed: ' + e.message);
+    });
+}
+
+// --- HISTORY TAB ---
+function loadHistory() {
+  var root = document.getElementById('history-root');
+  root.innerHTML = '<div class="loading">Loading history…</div>';
+  fetch('/api/stratum-scanner/history?days=5')
+    .then(function(r){ return r.json(); })
+    .then(renderHistory)
+    .catch(function(e){ root.innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>'; });
+}
+function renderHistory(h) {
+  var root = document.getElementById('history-root');
+  var stats = h.stats || {};
+  var hitRate = stats.wins + stats.losses > 0 ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(0) : '—';
+  var html = '<div class="history-stats">' +
+    '<div class="stat-card"><div class="stat-label">Total Signals (5d)</div><div class="stat-value">' + (stats.total || 0) + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Hit Rate</div><div class="stat-value outcome-win">' + hitRate + (hitRate === '—' ? '' : '%') + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Wins / Losses / Flat</div><div class="stat-value"><span class="outcome-win">' + (stats.wins||0) + '</span> / <span class="outcome-loss">' + (stats.losses||0) + '</span> / <span class="outcome-flat">' + (stats.flat||0) + '</span></div></div>' +
+    '<div class="stat-card"><div class="stat-label">Pending (today)</div><div class="stat-value outcome-pending">' + (stats.pending||0) + '</div></div>' +
+  '</div>';
+  // By-signal breakdown
+  if (stats.bySignal) {
+    html += '<div class="group"><div class="group-header"><div class="group-title">Hit rate by signal type</div></div>';
+    html += '<table><thead><tr><th>Signal</th><th>Total</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Hit Rate</th></tr></thead><tbody>';
+    var sigs = Object.keys(stats.bySignal).sort(function(a,b){ return stats.bySignal[b].total - stats.bySignal[a].total; });
+    sigs.forEach(function(s) {
+      var b = stats.bySignal[s];
+      var hr = (b.wins + b.losses) > 0 ? ((b.wins / (b.wins + b.losses)) * 100).toFixed(0) + '%' : '—';
+      html += '<tr><td>' + s + '</td><td>' + b.total + '</td><td class="outcome-win">' + b.wins + '</td><td class="outcome-loss">' + b.losses + '</td><td class="outcome-flat">' + b.flat + '</td><td><b>' + hr + '</b></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  // Per-day rows
+  (h.days || []).slice().reverse().forEach(function(d) {
+    html += '<div class="group"><div class="group-header"><div class="group-title">' + d.date + '</div><div class="group-count">' + (d.rows || []).length + ' signals</div></div>';
+    html += '<table><thead><tr><th>Ticker</th><th>Signal</th><th>Dir</th><th>Price at signal</th><th>Trigger</th><th>3d Move</th><th>Outcome</th></tr></thead><tbody>';
+    (d.rows || []).forEach(function(r) {
+      var outCls = r.outcome === 'WIN' ? 'outcome-win' : r.outcome === 'LOSS' ? 'outcome-loss' : r.outcome === 'FLAT' ? 'outcome-flat' : 'outcome-pending';
+      var outLabel = r.outcome || 'pending';
+      html += '<tr>' +
+        '<td><b>' + r.ticker + '</b></td>' +
+        '<td>' + r.signal + '</td>' +
+        '<td class="' + (r.dir === 'BULL' ? 'chg-pos' : 'chg-neg') + '">' + r.dir + '</td>' +
+        '<td>' + (r.price ? '$' + r.price.toFixed(2) : '—') + '</td>' +
+        '<td>' + (r.trigger ? '$' + r.trigger.toFixed(2) : '—') + '</td>' +
+        '<td>' + (r.movePct != null ? '+' + r.movePct + '% fav / ' + (r.advPct || 0) + '% adv' : '—') + '</td>' +
+        '<td class="' + outCls + '"><b>' + outLabel + '</b></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  });
+  root.innerHTML = html || '<div class="empty">No history yet. History builds as scans run.</div>';
+}
+
+// --- STARRED TAB ---
+function renderStarred() {
+  var root = document.getElementById('starred-root');
+  if (!_cachedData || !_cachedData.groups) {
+    root.innerHTML = '<div class="empty">Run a scan first to see starred signals.</div>';
+    return;
+  }
+  var starred = { generatedAt: _cachedData.generatedAt, tookMs: _cachedData.tookMs, scanned: _cachedData.scanned, matched: 0, groups: {} };
+  Object.keys(_cachedData.groups).forEach(function(k) {
+    var rows = _cachedData.groups[k].filter(function(r){ return r.starred; });
+    if (rows.length) { starred.groups[k] = rows; starred.matched += rows.length; }
+  });
+  if (!starred.matched) {
+    root.innerHTML = '<div class="empty">No starred tickers have signals right now. Click ☆ on any row to star.</div>';
+    return;
+  }
+  // Render using same groupHtml logic
+  var html = '';
+  GROUP_ORDER.forEach(function(k) { if (starred.groups[k]) html += groupHtml(k, starred.groups[k]); });
+  root.innerHTML = html;
+}
+
+// Wire filter checkboxes
+['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+  document.addEventListener('DOMContentLoaded', function() {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
+  });
+});
+// Attach when DOM ready
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', function() {
+    ['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
+    });
+  });
+} else {
+  ['filter-ftfc','filter-flow','filter-tv'].forEach(function(id) {
+    var el = document.getElementById(id);
+    if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
+  });
+}
+
 loadScan(false);
-// Auto-refresh every 5 minutes
 setInterval(function(){ loadScan(true); }, 5 * 60 * 1000);
 </script>
 </body>
