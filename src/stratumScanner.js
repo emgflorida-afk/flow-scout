@@ -352,14 +352,18 @@ async function fetchContinuity(ticker, currentPrice, token) {
   return out;
 }
 
-function isFTFC(dwmq) {
-  if (!dwmq) return false;
+// Returns 'UP', 'DOWN', or null. When all available D/W/M/Q point same direction
+// and we have at least 3 TFs, return that direction. Otherwise null.
+function ftfcDirection(dwmq) {
+  if (!dwmq) return null;
   var vals = [dwmq.D, dwmq.W, dwmq.M, dwmq.Q].filter(function(v){ return v; });
-  if (vals.length < 3) return false;
-  var allUp = vals.every(function(v){ return v === 'up'; });
-  var allDown = vals.every(function(v){ return v === 'down'; });
-  return allUp || allDown;
+  if (vals.length < 3) return null;
+  if (vals.every(function(v){ return v === 'up'; }))   return 'UP';
+  if (vals.every(function(v){ return v === 'down'; })) return 'DOWN';
+  return null;
 }
+// Legacy boolean check for simpler UI code
+function isFTFC(dwmq) { return !!ftfcDirection(dwmq); }
 
 // -----------------------------------------------------------------
 // EARNINGS LOOKUP -- returns number of days until next earnings, or null
@@ -432,7 +436,8 @@ async function scanTicker(ticker, token, earningsMap) {
   var vol = calcVolRatio(normed);
 
   var dwmq = await fetchContinuity(ticker, price, token);
-  var ftfc = isFTFC(dwmq);
+  var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
+  var ftfc = !!ftfcDir;
 
   var badge = earningsBadge(earningsMap[ticker]);
 
@@ -456,7 +461,8 @@ async function scanTicker(ticker, token, earningsMap) {
     signal: signal,
     combo: [aType, bType, cType],
     dwmq: dwmq,
-    ftfc: ftfc,
+    ftfc: ftfc,            // boolean (for UI badge compat)
+    ftfcDir: ftfcDir,      // 'UP' | 'DOWN' | null
     volAbs: vol ? vol.abs : null,
     volRel: vol ? vol.rel : null,
     earnings: badge,
@@ -719,11 +725,29 @@ async function scan(opts) {
     }
     function rowScore(r) {
       var score = 0;
-      if (r.ftfc) score += 3;
+      var sd = signalDir(r.signal);  // 'BULL' | 'BEAR' | null
+      // FTFC direction must MATCH signal direction to earn the boost.
+      // FTFC opposing signal (e.g. all ↑ but signal is Failed 2U PUT) is
+      // counter-trend -- per Rob Smith, only valid at exhaustion, so push down.
+      if (r.ftfcDir && sd) {
+        var ftfcBull = r.ftfcDir === 'UP';
+        var sigBull  = sd === 'BULL';
+        if (ftfcBull === sigBull) score += 3;   // aligned = high conviction
+        else                      score -= 3;   // counter-trend = penalty
+      } else if (r.ftfc) {
+        // We know FTFC is aligned across TFs but signal is non-directional
+        // (Inside, Outside, 1-1 Comp). Still a small boost for clarity.
+        score += 1;
+      }
       if (r.tvAlert) score += 3; // user-curated = big boost
-      var sd = signalDir(r.signal);
-      if (sd && r.flow && r.flow.dominant === sd) score += 2; // flow aligns with signal
-      if (sd && r.flow && r.flow.dominant && r.flow.dominant !== sd && r.flow.dominant !== 'MIXED') score -= 2;
+      if (sd && r.flow && r.flow.dominant) {
+        var flowBull = r.flow.dominant === 'BULL';
+        var sigBullF = sd === 'BULL';
+        if (r.flow.dominant === 'MIXED') {
+          // neutral flow -- no change
+        } else if (flowBull === sigBullF) score += 2;
+        else                              score -= 2;
+      }
       if (r.volRel && r.volRel >= 1.5) score += 1;
       if (r.volRel && r.volRel >= 3)   score += 1;
       return score;

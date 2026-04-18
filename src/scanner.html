@@ -243,6 +243,9 @@
     vertical-align: middle;
   }
   .badge-ftfc { background: rgba(96,165,250,0.2); color: var(--blue); border: 1px solid rgba(96,165,250,0.4); }
+  .badge-ftfc-up    { background: rgba(74,222,128,0.18); color: var(--green); border: 1px solid rgba(74,222,128,0.5); }
+  .badge-ftfc-down  { background: rgba(248,113,113,0.18); color: var(--red);   border: 1px solid rgba(248,113,113,0.5); }
+  .badge-ftfc-against { background: rgba(251,191,36,0.18); color: var(--yellow); border: 1px solid rgba(251,191,36,0.5); }
   .badge-earnings { background: rgba(251,191,36,0.15); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
   .badge-earnings-hot { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.4); }
 
@@ -356,9 +359,23 @@ function earningsBadgeHtml(code) {
   var cls = hot ? 'badge badge-earnings-hot' : 'badge badge-earnings';
   return '<span class="' + cls + '">📅 ' + code + '</span>';
 }
-function ftfcBadgeHtml(ftfc) {
-  if (!ftfc) return '';
-  return '<span class="badge badge-ftfc">FTFC</span>';
+function ftfcBadgeHtml(r) {
+  if (!r || !r.ftfc) return '';
+  var sd = signalDir(r.signal);
+  var dir = r.ftfcDir; // 'UP' | 'DOWN' | null
+  if (!dir) return '<span class="badge badge-ftfc">FTFC</span>';
+  if (sd) {
+    var aligned = (dir === 'UP' && sd === 'BULL') || (dir === 'DOWN' && sd === 'BEAR');
+    if (aligned) {
+      var cls = dir === 'UP' ? 'badge-ftfc-up' : 'badge-ftfc-down';
+      return '<span class="badge ' + cls + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + '</span>';
+    } else {
+      return '<span class="badge badge-ftfc-against" title="FTFC against signal — counter-trend, skip unless exhaustion">FTFC ' + (dir === 'UP' ? '↑' : '↓') + ' ⚠</span>';
+    }
+  }
+  // non-directional signal (Inside / Outside / 1-1)
+  var cls2 = dir === 'UP' ? 'badge-ftfc-up' : 'badge-ftfc-down';
+  return '<span class="badge ' + cls2 + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + '</span>';
 }
 
 function fmtPrem(n) {
@@ -425,7 +442,7 @@ function rowHtml(r) {
     '<td class="col-ticker">' +
       '<div class="ticker-cell">' +
         '<span class="ticker-sym">' + r.ticker + '</span>' +
-        ftfcBadgeHtml(r.ftfc) +
+        ftfcBadgeHtml(r) +
         earningsBadgeHtml(r.earnings) +
       '</div>' +
     '</td>' +
@@ -514,11 +531,20 @@ function applyFilters(data) {
   var filtered = { generatedAt: data.generatedAt, tookMs: data.tookMs, scanned: data.scanned, matched: 0, groups: {} };
   Object.keys(data.groups).forEach(function(k) {
     var rows = data.groups[k].filter(function(r) {
-      if (ftfcOnly && !r.ftfc) return false;
+      if (ftfcOnly) {
+        // "FTFC only" now means FTFC DIRECTION ALIGNS WITH SIGNAL
+        // (old behavior was just "ftfc true" which missed the point)
+        var sd = signalDir(r.signal);
+        if (!r.ftfcDir) return false;
+        if (sd) {
+          var aligned = (r.ftfcDir === 'UP' && sd === 'BULL') || (r.ftfcDir === 'DOWN' && sd === 'BEAR');
+          if (!aligned) return false;
+        }
+      }
       if (tvOnly && !(r.tvAlert && r.tvAlert.count)) return false;
       if (flowOnly) {
-        var sd = signalDir(r.signal);
-        if (!sd || !r.flow || r.flow.dominant !== sd) return false;
+        var sd2 = signalDir(r.signal);
+        if (!sd2 || !r.flow || r.flow.dominant !== sd2) return false;
       }
       return true;
     });
