@@ -378,9 +378,11 @@ async function fetchContinuity(ticker, currentPrice, token) {
 
 // -----------------------------------------------------------------
 // MAGNITUDE: pick next structural target in signal's direction
-// Returns { level: price, label: 'PWH' | 'PMH' | 'ATH' | '52wH', pct: +3.2 }
+// Returns { level: price, label: 'PWH' | 'PMH' | '52wH' | 'TRND', pct: +3.2 }
+// atrPct is optional -- used for fallback trend projection when a stock
+// has already broken all structural levels (e.g. SPY/QQQ at new ATHs).
 // -----------------------------------------------------------------
-function nextMagnitude(currentPrice, levels, direction) {
+function nextMagnitude(currentPrice, levels, direction, atrPct) {
   if (!currentPrice || !levels) return null;
   var candidates = [];
   if (direction === 'BULL') {
@@ -388,20 +390,34 @@ function nextMagnitude(currentPrice, levels, direction) {
     if (levels.pwh && levels.pwh > currentPrice) candidates.push({ level: levels.pwh, label: 'PWH' });
     if (levels.pmh && levels.pmh > currentPrice) candidates.push({ level: levels.pmh, label: 'PMH' });
     if (levels.hi52 && levels.hi52 > currentPrice) candidates.push({ level: levels.hi52, label: '52wH' });
-    candidates.sort(function(a,b){ return a.level - b.level; }); // nearest first
+    candidates.sort(function(a,b){ return a.level - b.level; });
   } else if (direction === 'BEAR') {
     if (levels.pdl && levels.pdl < currentPrice) candidates.push({ level: levels.pdl, label: 'PDL' });
     if (levels.pwl && levels.pwl < currentPrice) candidates.push({ level: levels.pwl, label: 'PWL' });
     if (levels.pml && levels.pml < currentPrice) candidates.push({ level: levels.pml, label: 'PML' });
     if (levels.lo52 && levels.lo52 < currentPrice) candidates.push({ level: levels.lo52, label: '52wL' });
-    candidates.sort(function(a,b){ return b.level - a.level; }); // nearest first (highest below)
+    candidates.sort(function(a,b){ return b.level - a.level; });
   } else {
     return null;
   }
-  if (!candidates.length) return null;
-  var best = candidates[0];
-  var pct = ((best.level - currentPrice) / currentPrice) * 100;
-  return { level: +best.level.toFixed(2), label: best.label, pct: +pct.toFixed(1) };
+  if (candidates.length) {
+    var best = candidates[0];
+    var pct = ((best.level - currentPrice) / currentPrice) * 100;
+    return { level: +best.level.toFixed(2), label: best.label, pct: +pct.toFixed(1) };
+  }
+  // FALLBACK: trend projection when no structural level remains
+  // (stock has broken above 52wH for BULL, below 52wL for BEAR)
+  // Use 2x ATR as target. If ATR unavailable, default to 3%.
+  var projPct = atrPct && isFinite(atrPct) ? atrPct * 2 : 3.0;
+  if (direction === 'BULL') {
+    var target = currentPrice * (1 + projPct / 100);
+    return { level: +target.toFixed(2), label: 'TRND', pct: +projPct.toFixed(1) };
+  }
+  if (direction === 'BEAR') {
+    var tgt = currentPrice * (1 - projPct / 100);
+    return { level: +tgt.toFixed(2), label: 'TRND', pct: -projPct.toFixed(1) };
+  }
+  return null;
 }
 
 // Returns 'UP', 'DOWN', or null. When all available D/W/M/Q point same direction
@@ -538,7 +554,7 @@ async function scanTicker(ticker, token, earningsMap) {
     if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up')   return 'BULL';
     return null;
   })();
-  var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal);
+  var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal, atrPct);
 
   return {
     ticker: ticker,
