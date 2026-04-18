@@ -123,6 +123,20 @@ app.get('/dashboard', function(req, res) {
 app.get('/mobile', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'mobile.html'));
 });
+app.get('/scanner', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'scanner.html'));
+});
+var stratumScanner = null;
+try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
+catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }
+app.get('/api/stratum-scanner', async function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  try {
+    var force = req.query && req.query.force === '1';
+    var data = await stratumScanner.scan({ force: force });
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 app.get('/dashboard/data', async function(req, res) {
   try { var data = await dashboard.getDashboardData((req.query.mode || 'DAY').toUpperCase()); res.json(data); }
   catch(e) { res.status(500).json({ error: e.message }); }

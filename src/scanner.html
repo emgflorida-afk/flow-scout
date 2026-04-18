@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Stratum Scanner</title>
+<style>
+  :root {
+    --bg: #0a0b0d;
+    --panel: #111318;
+    --border: #1f2229;
+    --text: #d7dae0;
+    --muted: #6b7280;
+    --accent: #a78bfa;
+    --green: #4ade80;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --blue: #60a5fa;
+    --purple: #a855f7;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+    font-size: 13px;
+  }
+  header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header h1 { margin: 0; font-size: 16px; letter-spacing: 1px; color: var(--accent); }
+  .meta { color: var(--muted); font-size: 11px; }
+  .meta span { margin-left: 12px; }
+  button {
+    background: var(--accent);
+    color: #0a0b0d;
+    border: 0;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  button:hover { opacity: 0.85; }
+  .container { padding: 16px 20px; }
+  .group { margin-bottom: 28px; }
+  .group-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+    padding: 6px 8px;
+    background: linear-gradient(90deg, rgba(167,139,250,0.15), transparent);
+    border-left: 3px solid var(--accent);
+  }
+  .group-title { font-size: 14px; font-weight: 600; color: var(--accent); text-transform: uppercase; letter-spacing: 1px; }
+  .group-count { font-size: 11px; color: var(--muted); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+  th, td {
+    padding: 8px 10px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  th {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    background: var(--panel);
+  }
+  tr:hover td { background: rgba(167,139,250,0.05); }
+  .col-star { width: 28px; text-align: center; }
+  .col-ticker { width: 140px; }
+  .col-atr { width: 60px; }
+  .col-price { width: 80px; }
+  .col-chg { width: 70px; }
+  .col-signal { width: 140px; }
+  .col-combo { width: 130px; }
+  .col-tf { width: 32px; text-align: center; }
+  .col-vol { width: 90px; text-align: right; }
+
+  .ticker-cell { display: flex; align-items: center; gap: 6px; }
+  .ticker-sym { font-weight: 700; color: var(--text); }
+  .ticker-name { color: var(--muted); font-size: 10px; display: block; margin-top: 1px; }
+  .arrow-up { color: var(--green); }
+  .arrow-down { color: var(--red); }
+
+  .chg-pos { color: var(--green); }
+  .chg-neg { color: var(--red); }
+  .atr-high { color: var(--red); }
+  .atr-mid  { color: var(--yellow); }
+
+  .signal-badge {
+    color: var(--purple);
+    font-weight: 500;
+  }
+  .signal-f2u { color: var(--red); }
+  .signal-f2d { color: var(--green); }
+  .signal-hammer { color: var(--green); }
+  .signal-shooter { color: var(--red); }
+
+  .combo { display: flex; gap: 2px; }
+  .bar {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 700;
+    font-family: monospace;
+    min-width: 24px;
+    text-align: center;
+  }
+  .bar-2U { background: rgba(74,222,128,0.15); color: var(--green); border: 1px solid rgba(74,222,128,0.4); }
+  .bar-2D { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.4); }
+  .bar-1  { background: rgba(251,191,36,0.15); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
+  .bar-3  { background: rgba(168,85,247,0.15); color: var(--purple); border: 1px solid rgba(168,85,247,0.4); }
+  .bar-sep { color: var(--muted); padding: 3px 2px; }
+
+  .tf-up { color: var(--green); font-weight: 600; }
+  .tf-down { color: var(--red); font-weight: 600; }
+  .tf-none { color: var(--muted); }
+
+  .badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin-left: 4px;
+    vertical-align: middle;
+  }
+  .badge-ftfc { background: rgba(96,165,250,0.2); color: var(--blue); border: 1px solid rgba(96,165,250,0.4); }
+  .badge-earnings { background: rgba(251,191,36,0.15); color: var(--yellow); border: 1px solid rgba(251,191,36,0.4); }
+  .badge-earnings-hot { background: rgba(248,113,113,0.15); color: var(--red); border: 1px solid rgba(248,113,113,0.4); }
+
+  .vol-main { color: var(--text); }
+  .vol-rel { color: var(--muted); font-size: 11px; display: block; }
+  .vol-hot { color: var(--red); font-weight: 600; }
+  .vol-warm { color: var(--yellow); }
+
+  .empty { color: var(--muted); padding: 20px; text-align: center; }
+  .loading { color: var(--muted); padding: 40px; text-align: center; font-size: 14px; }
+  .error { color: var(--red); padding: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>STRATUM SCANNER</h1>
+    <div class="meta">
+      <span id="meta-asof">Loading…</span>
+      <span id="meta-scanned"></span>
+      <span id="meta-matched"></span>
+      <span id="meta-took"></span>
+    </div>
+  </div>
+  <div>
+    <button id="refresh-btn" onclick="loadScan(true)">⟳ Refresh</button>
+  </div>
+</header>
+<div class="container" id="root">
+  <div class="loading">Scanning the universe…</div>
+</div>
+
+<script>
+var GROUP_ORDER = [
+  'Failed 2U', 'Failed 2D',
+  '2-1-2 Up', '2-1-2 Down', '2-1-2 Continuation',
+  '3-1-2 Up', '3-1-2 Down',
+  'Outside Bar', 'Hammer', 'Shooter',
+  '1-1 Compression', 'Inside'
+];
+
+function fmtPrice(p) {
+  if (p == null) return '—';
+  if (p >= 1000) return '$' + p.toFixed(0);
+  return '$' + p.toFixed(2);
+}
+function fmtPct(p) {
+  if (p == null || !isFinite(p)) return '—';
+  var sign = p >= 0 ? '+' : '';
+  return sign + p.toFixed(1) + '%';
+}
+function fmtAtr(p) {
+  if (p == null) return '—';
+  return p.toFixed(1) + '%';
+}
+function fmtVol(v) {
+  if (v == null) return '—';
+  if (v >= 1e6) return (v / 1e6).toFixed(1) + 'M';
+  if (v >= 1e3) return (v / 1e3).toFixed(0) + 'K';
+  return String(v);
+}
+function signalClass(sig) {
+  if (!sig) return 'signal-badge';
+  if (sig.indexOf('Failed 2U') === 0) return 'signal-badge signal-f2u';
+  if (sig.indexOf('Failed 2D') === 0) return 'signal-badge signal-f2d';
+  if (sig === 'Hammer') return 'signal-badge signal-hammer';
+  if (sig === 'Shooter') return 'signal-badge signal-shooter';
+  return 'signal-badge';
+}
+function atrClass(a) {
+  if (a == null) return '';
+  if (a >= 5) return 'atr-high';
+  if (a >= 3) return 'atr-mid';
+  return '';
+}
+function comboHtml(combo) {
+  if (!combo || combo.length !== 3) return '';
+  return '<div class="combo">' +
+    combo.map(function(b, i) {
+      var cls = b ? 'bar bar-' + b : 'bar';
+      var sep = i < 2 ? '<span class="bar-sep">–</span>' : '';
+      return '<span class="' + cls + '">' + (b || '?') + '</span>' + sep;
+    }).join('') + '</div>';
+}
+function tfArrow(v) {
+  if (v === 'up')   return '<span class="tf-up">↑</span>';
+  if (v === 'down') return '<span class="tf-down">↓</span>';
+  return '<span class="tf-none">–</span>';
+}
+function earningsBadgeHtml(code) {
+  if (!code) return '';
+  var hot = code === 'NOW' || code === 'TMR';
+  var cls = hot ? 'badge badge-earnings-hot' : 'badge badge-earnings';
+  return '<span class="' + cls + '">📅 ' + code + '</span>';
+}
+function ftfcBadgeHtml(ftfc) {
+  if (!ftfc) return '';
+  return '<span class="badge badge-ftfc">FTFC</span>';
+}
+
+function rowHtml(r) {
+  var volRelClass = '';
+  if (r.volRel != null) {
+    if (r.volRel >= 3) volRelClass = 'vol-hot';
+    else if (r.volRel >= 1.5) volRelClass = 'vol-warm';
+  }
+  return '<tr>' +
+    '<td class="col-star">☆</td>' +
+    '<td class="col-ticker">' +
+      '<div class="ticker-cell">' +
+        '<span class="ticker-sym">' + r.ticker + '</span>' +
+        ftfcBadgeHtml(r.ftfc) +
+        earningsBadgeHtml(r.earnings) +
+      '</div>' +
+    '</td>' +
+    '<td class="col-atr ' + atrClass(r.atrPct) + '">' + fmtAtr(r.atrPct) + '</td>' +
+    '<td class="col-price">' + fmtPrice(r.price) + '</td>' +
+    '<td class="col-chg ' + (r.chgPct >= 0 ? 'chg-pos' : 'chg-neg') + '">' + fmtPct(r.chgPct) + '</td>' +
+    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span></td>' +
+    '<td class="col-combo">' + comboHtml(r.combo) + '</td>' +
+    '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.D) + '</td>' +
+    '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
+    '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.M) + '</td>' +
+    '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.Q) + '</td>' +
+    '<td class="col-vol">' +
+      '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
+      (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
+    '</td>' +
+  '</tr>';
+}
+
+function groupHtml(name, rows) {
+  if (!rows || rows.length === 0) return '';
+  return '<div class="group">' +
+    '<div class="group-header">' +
+      '<div class="group-title">' + name + '</div>' +
+      '<div class="group-count">' + rows.length + '</div>' +
+    '</div>' +
+    '<table>' +
+    '<thead><tr>' +
+      '<th class="col-star"></th>' +
+      '<th class="col-ticker">Ticker ↓</th>' +
+      '<th class="col-atr">ATR%</th>' +
+      '<th class="col-price">Price</th>' +
+      '<th class="col-chg">Chg%</th>' +
+      '<th class="col-signal">Signal</th>' +
+      '<th class="col-combo">Combo</th>' +
+      '<th class="col-tf">D</th>' +
+      '<th class="col-tf">W</th>' +
+      '<th class="col-tf">M</th>' +
+      '<th class="col-tf">Q</th>' +
+      '<th class="col-vol">Vol</th>' +
+    '</tr></thead>' +
+    '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
+    '</table>' +
+  '</div>';
+}
+
+function render(data) {
+  if (!data || data.error) {
+    document.getElementById('root').innerHTML =
+      '<div class="error">Error: ' + (data && data.error || 'unknown') + '</div>';
+    return;
+  }
+  document.getElementById('meta-asof').textContent = 'As of: ' + new Date(data.generatedAt).toLocaleString();
+  document.getElementById('meta-scanned').textContent = 'Scanned: ' + data.scanned;
+  document.getElementById('meta-matched').textContent = 'Matched: ' + data.matched;
+  document.getElementById('meta-took').textContent = 'Took: ' + (data.tookMs / 1000).toFixed(1) + 's';
+
+  var groups = data.groups || {};
+  var html = '';
+  GROUP_ORDER.forEach(function(k) {
+    if (groups[k] && groups[k].length) html += groupHtml(k, groups[k]);
+  });
+  // Render any other groups not in priority order
+  Object.keys(groups).forEach(function(k) {
+    if (GROUP_ORDER.indexOf(k) === -1 && groups[k].length) html += groupHtml(k, groups[k]);
+  });
+  if (!html) html = '<div class="empty">No Strat signals matched on the current watchlist.</div>';
+  document.getElementById('root').innerHTML = html;
+}
+
+function loadScan(force) {
+  document.getElementById('refresh-btn').disabled = true;
+  document.getElementById('refresh-btn').textContent = '⟳ Scanning…';
+  fetch('/api/stratum-scanner' + (force ? '?force=1' : ''))
+    .then(function(r) { return r.json(); })
+    .then(function(data) { render(data); })
+    .catch(function(e) {
+      document.getElementById('root').innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>';
+    })
+    .finally(function() {
+      document.getElementById('refresh-btn').disabled = false;
+      document.getElementById('refresh-btn').textContent = '⟳ Refresh';
+    });
+}
+
+loadScan(false);
+// Auto-refresh every 5 minutes
+setInterval(function(){ loadScan(true); }, 5 * 60 * 1000);
+</script>
+</body>
+</html>
