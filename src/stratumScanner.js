@@ -323,17 +323,17 @@ function calcVolRatio(bars) {
 }
 
 // -----------------------------------------------------------------
-// CONTINUITY ARROWS (D/W/M/Q)
+// CONTINUITY ARROWS (D/W/M/Q) + STRUCTURAL LEVELS
 // Each: 'up' if current price > previous-period close,
 //       'down' if <, null if unknown
+// Also returns prior-period H/L for structural level calculations.
 // -----------------------------------------------------------------
 async function fetchContinuity(ticker, currentPrice, token) {
-  var out = { D: null, W: null, M: null, Q: null };
+  var out = { D: null, W: null, M: null, Q: null, levels: {} };
   try {
-    var daily = await fetchBars(ticker, 'Daily', 1, 3, token);
-    var weekly = await fetchBars(ticker, 'Weekly', 1, 3, token);
-    var monthly = await fetchBars(ticker, 'Monthly', 1, 3, token);
-    // Quarterly: synthesize from monthly (3-month aggregate) -- approximate using 3 monthly closes
+    var daily = await fetchBars(ticker, 'Daily', 1, 10, token);
+    var weekly = await fetchBars(ticker, 'Weekly', 1, 6, token);
+    var monthly = await fetchBars(ticker, 'Monthly', 1, 12, token);
     function dirFromPrevClose(bars) {
       if (!bars || bars.length < 2) return null;
       var prev = normBar(bars[bars.length - 2]);
@@ -343,13 +343,65 @@ async function fetchContinuity(ticker, currentPrice, token) {
     out.D = dirFromPrevClose(daily);
     out.W = dirFromPrevClose(weekly);
     out.M = dirFromPrevClose(monthly);
-    // Quarter approx: use close of 3 monthly bars ago
     if (monthly && monthly.length >= 4) {
       var q = normBar(monthly[monthly.length - 4]);
       if (q && q.c) out.Q = currentPrice > q.c ? 'up' : (currentPrice < q.c ? 'down' : null);
     }
+    // Structural levels: PDH/PDL, PWH/PWL, PMH/PML, 52wk H/L
+    if (daily && daily.length >= 2) {
+      var pd = normBar(daily[daily.length - 2]);
+      if (pd) { out.levels.pdh = pd.h; out.levels.pdl = pd.l; }
+    }
+    if (weekly && weekly.length >= 2) {
+      var pw = normBar(weekly[weekly.length - 2]);
+      if (pw) { out.levels.pwh = pw.h; out.levels.pwl = pw.l; }
+    }
+    if (monthly && monthly.length >= 2) {
+      var pm = normBar(monthly[monthly.length - 2]);
+      if (pm) { out.levels.pmh = pm.h; out.levels.pml = pm.l; }
+    }
+    // 52-week high/low (approximate from last 12 monthly bars)
+    if (monthly && monthly.length >= 2) {
+      var hi52 = 0, lo52 = Infinity;
+      for (var i = 0; i < monthly.length - 1; i++) {
+        var b = normBar(monthly[i]);
+        if (!b) continue;
+        if (b.h > hi52) hi52 = b.h;
+        if (b.l < lo52) lo52 = b.l;
+      }
+      if (hi52 > 0)      out.levels.hi52 = hi52;
+      if (lo52 < Infinity) out.levels.lo52 = lo52;
+    }
   } catch(e) { /* soft */ }
   return out;
+}
+
+// -----------------------------------------------------------------
+// MAGNITUDE: pick next structural target in signal's direction
+// Returns { level: price, label: 'PWH' | 'PMH' | 'ATH' | '52wH', pct: +3.2 }
+// -----------------------------------------------------------------
+function nextMagnitude(currentPrice, levels, direction) {
+  if (!currentPrice || !levels) return null;
+  var candidates = [];
+  if (direction === 'BULL') {
+    if (levels.pdh && levels.pdh > currentPrice) candidates.push({ level: levels.pdh, label: 'PDH' });
+    if (levels.pwh && levels.pwh > currentPrice) candidates.push({ level: levels.pwh, label: 'PWH' });
+    if (levels.pmh && levels.pmh > currentPrice) candidates.push({ level: levels.pmh, label: 'PMH' });
+    if (levels.hi52 && levels.hi52 > currentPrice) candidates.push({ level: levels.hi52, label: '52wH' });
+    candidates.sort(function(a,b){ return a.level - b.level; }); // nearest first
+  } else if (direction === 'BEAR') {
+    if (levels.pdl && levels.pdl < currentPrice) candidates.push({ level: levels.pdl, label: 'PDL' });
+    if (levels.pwl && levels.pwl < currentPrice) candidates.push({ level: levels.pwl, label: 'PWL' });
+    if (levels.pml && levels.pml < currentPrice) candidates.push({ level: levels.pml, label: 'PML' });
+    if (levels.lo52 && levels.lo52 < currentPrice) candidates.push({ level: levels.lo52, label: '52wL' });
+    candidates.sort(function(a,b){ return b.level - a.level; }); // nearest first (highest below)
+  } else {
+    return null;
+  }
+  if (!candidates.length) return null;
+  var best = candidates[0];
+  var pct = ((best.level - currentPrice) / currentPrice) * 100;
+  return { level: +best.level.toFixed(2), label: best.label, pct: +pct.toFixed(1) };
 }
 
 // Returns 'UP', 'DOWN', or null. When all available D/W/M/Q point same direction
@@ -453,6 +505,14 @@ async function scanTicker(ticker, token, earningsMap) {
     priceTargetPct = ((finn.target - price) / price) * 100;
   }
 
+  // Magnitude: next structural target in signal's direction (call Primo-style "ride to next level")
+  var sigDirLocal = (function() {
+    if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down') return 'BEAR';
+    if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up')   return 'BULL';
+    return null;
+  })();
+  var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal);
+
   return {
     ticker: ticker,
     price: price,
@@ -467,11 +527,12 @@ async function scanTicker(ticker, token, earningsMap) {
     volRel: vol ? vol.rel : null,
     earnings: badge,
     // Enrichments:
-    flow: flow,                       // { callPrem, putPrem, dominant, total }
-    analyst: analyst,                 // 'BUY' | 'HOLD' | 'SELL'
-    priceTargetPct: priceTargetPct,   // % upside to analyst mean target
-    tvAlert: tvAlerts,                // { count, latest } or null
+    flow: flow,
+    analyst: analyst,
+    priceTargetPct: priceTargetPct,
+    tvAlert: tvAlerts,
     starred: isStarred(ticker),
+    magnitude: magnitude,  // { level, label, pct } or null
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {

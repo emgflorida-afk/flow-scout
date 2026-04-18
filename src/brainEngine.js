@@ -897,10 +897,13 @@ async function runQueueCycle() {
         // A percentage stop (25% of $0.35 = $0.09) gets eaten by the spread instantly.
         // Enforce minimum $0.15 distance on contracts under $1, $0.20 under $0.50.
         var rawStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
-        var minStopDistance = 0.10; // default minimum
-        if (limitPrice < 0.50) minStopDistance = 0.20;
-        else if (limitPrice < 1.00) minStopDistance = 0.15;
-        else if (limitPrice < 2.00) minStopDistance = 0.12;
+        // Raised floor Apr 17 2026 after SPY $0.67 -> $0.52 stop-out in 10 sec.
+        // Old $0.10/$0.12/$0.15/$0.20 was inside typical bid-ask spread noise.
+        // New floor: $0.30 default, $0.40 on $2-5, $0.50 on $5+.
+        var minStopDistance = 0.30;
+        if (limitPrice < 1.00) minStopDistance = 0.25;
+        else if (limitPrice >= 2.00 && limitPrice < 5.00) minStopDistance = 0.40;
+        else if (limitPrice >= 5.00) minStopDistance = 0.50;
         var minStop = parseFloat((limitPrice - minStopDistance).toFixed(2));
         // If the percentage stop is tighter than our minimum distance, use the floor
         if (rawStop > minStop) {
@@ -3503,10 +3506,11 @@ async function runBrainCycle() {
                   var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
                   // Stop with minimum dollar distance (same logic as runQueueCycle)
                   var rawStop2 = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
-                  var minStopDist2 = 0.10;
-                  if (limitPrice < 0.50) minStopDist2 = 0.20;
-                  else if (limitPrice < 1.00) minStopDist2 = 0.15;
-                  else if (limitPrice < 2.00) minStopDist2 = 0.12;
+                  // Raised floor Apr 17 2026 -- match brainCycle logic above
+                  var minStopDist2 = 0.30;
+                  if (limitPrice < 1.00) minStopDist2 = 0.25;
+                  else if (limitPrice >= 2.00 && limitPrice < 5.00) minStopDist2 = 0.40;
+                  else if (limitPrice >= 5.00) minStopDist2 = 0.50;
                   var minStop2 = parseFloat((limitPrice - minStopDist2).toFixed(2));
                   if (rawStop2 > minStop2) {
                     logBrain('[STOP-FLOOR] ' + qt.ticker + ': pct stop $' + rawStop2.toFixed(2) + ' too tight on $' + limitPrice.toFixed(2) + ' contract. Using floor $' + minStop2.toFixed(2));

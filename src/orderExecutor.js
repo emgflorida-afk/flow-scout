@@ -28,6 +28,10 @@ function round2(n) {
 // ================================================================
 var dailyRiskDeployed = 0;
 var dailyRiskDate     = '';
+// Re-entry cooldown: symbol -> timestamp of last SELLTOCLOSE fill.
+// Prevents re-buying same contract within 15 min of closing it.
+// Committed Apr 17 2026 after SPY 260416C702 +$12 -> re-entry -$28 chop.
+var _lastSellBySymbol = {};
 
 function getTodayET() {
   return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
@@ -125,6 +129,72 @@ async function placeOrder(params) {
       console.log('[EXECUTOR] BLOCKED -- outside RTH:', etH + ':' + (etM < 10 ? '0' : '') + etM, 'ET');
       return { error: 'Market closed -- outside 9:30AM-4PM ET. Current time: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
     }
+
+    // ============================================================
+    // HARD GATES -- committed Apr 17 2026 after loss-pattern audit
+    // (SPY dead-zone / 0DTE / re-entry chop cost -$52 Apr 15-17)
+    // ============================================================
+    var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
+
+    // GATE: TSLA blacklist -- hard reject regardless of signal grade
+    if (baseTicker === 'TSLA') {
+      console.log('[EXECUTOR] BLOCKED -- TSLA is blacklisted per SESSION_START_RULES.md');
+      return { error: 'TSLA is blacklisted. Hard reject.' };
+    }
+
+    // GATE: 0DTE hard reject -- parse OSI YYMMDD from symbol
+    // OSI format: "TSLA 260417C385" where 260417 = expiration
+    try {
+      var osiMatch = (symbol || '').match(/\s(\d{6})[CP]\d/);
+      if (osiMatch) {
+        var yy = parseInt(osiMatch[1].substring(0, 2), 10);
+        var mm = parseInt(osiMatch[1].substring(2, 4), 10) - 1;
+        var dd = parseInt(osiMatch[1].substring(4, 6), 10);
+        var expDate = new Date(2000 + yy, mm, dd);
+        var todayET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+        todayET.setHours(0,0,0,0);
+        var daysToExp = Math.round((expDate - todayET) / (1000 * 60 * 60 * 24));
+        if (daysToExp <= 0) {
+          console.log('[EXECUTOR] BLOCKED -- 0DTE contract ' + symbol + ' (exp ' + expDate.toISOString().slice(0,10) + ')');
+          return { error: '0DTE blocked. ' + symbol + ' expires today. Per rule: no 0DTE.' };
+        }
+        if (daysToExp === 1) {
+          // Check if market open (AM): allow 1DTE only in first 2 hours
+          if (etTotal >= (11 * 60 + 30)) {
+            console.log('[EXECUTOR] BLOCKED -- 1DTE after 11:30 AM: ' + symbol);
+            return { error: '1DTE contract after 11:30 AM ET blocked. Theta crush zone.' };
+          }
+        }
+      }
+    } catch(e) { /* soft fail — don't block on parse error */ }
+
+    // GATE: Dead zone (11:30 AM - 2:00 PM ET) -- no new entries, period
+    if (etTotal >= (11 * 60 + 30) && etTotal < (14 * 60)) {
+      console.log('[EXECUTOR] BLOCKED -- dead zone ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (11:30 AM - 2 PM no-trade window)');
+      return { error: 'Dead zone block. No new entries 11:30 AM - 2:00 PM ET. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+    }
+
+    // GATE: Re-entry cooldown -- 15 min after a sell of the SAME contract symbol
+    var lastSellAt = _lastSellBySymbol[symbol];
+    if (lastSellAt) {
+      var minsSince = (Date.now() - lastSellAt) / 60000;
+      if (minsSince < 15) {
+        console.log('[EXECUTOR] BLOCKED -- re-entry cooldown ' + symbol + ' (' + minsSince.toFixed(1) + ' min since sell, need 15)');
+        return { error: 'Re-entry cooldown: sold ' + symbol + ' ' + minsSince.toFixed(0) + ' min ago. Wait 15 min before buying back same contract.' };
+      }
+    }
+
+    // GATE: Market orders auto-convert to Limit on entry (fills suck at Market)
+    // If caller passed no limit, compute one from current bid/ask or fail safely.
+    if (!limit || limit === 0) {
+      console.log('[EXECUTOR] BLOCKED -- Market order attempted without limit price. Set limit = ask + $0.05 and retry.');
+      return { error: 'Market orders not allowed for entries. Pass a limit price (ask + $0.05 recommended).' };
+    }
+  }
+
+  // Track sells for re-entry cooldown
+  if (action === 'SELLTOCLOSE') {
+    _lastSellBySymbol[symbol] = Date.now();
   }
 
   // DYNAMIC T1 -- if no T1 passed in, calculate based on ticker volatility

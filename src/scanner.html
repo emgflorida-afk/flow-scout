@@ -98,6 +98,11 @@
   .col-analyst { width: 80px; }
   .col-tv { width: 50px; text-align: center; }
   .col-trade { width: 80px; text-align: center; }
+  .col-mag   { width: 120px; }
+  .mag-label { color: var(--accent); font-weight: 600; font-size: 11px; }
+  .mag-level { color: var(--text); }
+  .mag-pct-up   { color: var(--green); font-size: 10px; display: block; }
+  .mag-pct-dn   { color: var(--red);   font-size: 10px; display: block; }
 
   .star-btn {
     background: none; border: 0; cursor: pointer; color: var(--muted);
@@ -190,6 +195,8 @@
     font-weight: 700;
   }
   .tv-none { color: var(--muted); }
+  .tv-chart-link { text-decoration: none; font-size: 14px; opacity: 0.6; }
+  .tv-chart-link:hover { opacity: 1; }
 
   .ticker-cell { display: flex; align-items: center; gap: 6px; }
   .ticker-sym { font-weight: 700; color: var(--text); }
@@ -406,6 +413,13 @@ function tvHtml(tv) {
   if (!tv || !tv.count) return '<span class="tv-none">—</span>';
   return '<span class="tv-badge" title="' + (tv.latest && tv.latest.message ? tv.latest.message.replace(/"/g,'') : '') + '">TV ×' + tv.count + '</span>';
 }
+function magHtml(m) {
+  if (!m) return '<span class="flow-mixed">—</span>';
+  var cls = m.pct >= 0 ? 'mag-pct-up' : 'mag-pct-dn';
+  var sign = m.pct >= 0 ? '+' : '';
+  return '<span class="mag-label">' + m.label + '</span> <span class="mag-level">$' + m.level.toFixed(2) + '</span>' +
+         '<span class="' + cls + '">' + sign + m.pct.toFixed(1) + '%</span>';
+}
 
 function signalDir(sig) {
   if (!sig) return null;
@@ -430,6 +444,11 @@ function starBtnHtml(r) {
   var star = r.starred ? '★' : '☆';
   return '<button class="star-btn' + on + '" onclick="toggleStar(\'' + r.ticker + '\', this)">' + star + '</button>';
 }
+function tickerCellHtml(r) {
+  var tvUrl = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(r.ticker);
+  return '<span class="ticker-sym">' + r.ticker + '</span>' +
+         ' <a href="' + tvUrl + '" target="_blank" class="tv-chart-link" title="Open on TradingView">📈</a>';
+}
 
 function rowHtml(r) {
   var volRelClass = '';
@@ -441,7 +460,7 @@ function rowHtml(r) {
     '<td class="col-star">' + starBtnHtml(r) + '</td>' +
     '<td class="col-ticker">' +
       '<div class="ticker-cell">' +
-        '<span class="ticker-sym">' + r.ticker + '</span>' +
+        tickerCellHtml(r) +
         ftfcBadgeHtml(r) +
         earningsBadgeHtml(r.earnings) +
       '</div>' +
@@ -458,6 +477,7 @@ function rowHtml(r) {
     '<td class="col-flow">' + flowHtml(r.flow) + '</td>' +
     '<td class="col-analyst">' + analystHtml(r) + '</td>' +
     '<td class="col-tv">' + tvHtml(r.tvAlert) + '</td>' +
+    '<td class="col-mag">' + magHtml(r.magnitude) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
@@ -489,6 +509,7 @@ function groupHtml(name, rows) {
       '<th class="col-flow">Flow</th>' +
       '<th class="col-analyst">Analyst</th>' +
       '<th class="col-tv">TV</th>' +
+      '<th class="col-mag">Magnitude</th>' +
       '<th class="col-vol">Vol</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +

@@ -168,6 +168,34 @@ app.get('/api/stratum-scanner/history', function(req, res) {
   var days = parseInt(req.query.days || '5', 10);
   res.json(stratumScanner.getHistory(days));
 });
+// Structural levels for a ticker (PDH/PDL/PWH/PWL/PMH/PML/52wH/52wL)
+// Used by external integrations, Pine scripts that webhook for data, mobile apps.
+app.get('/api/stratum-scanner/levels/:ticker', async function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  try {
+    var ticker = (req.params.ticker || '').toUpperCase();
+    var last = stratumScanner.getLastScan();
+    if (last && last.groups) {
+      var found = null;
+      Object.keys(last.groups).forEach(function(k){
+        last.groups[k].forEach(function(r){
+          if (r.ticker === ticker) found = r;
+        });
+      });
+      if (found) {
+        return res.json({
+          ticker: ticker,
+          price: found.price,
+          levels: found.dwmq && found.dwmq.levels || {},
+          magnitude: found.magnitude,
+          trigger: found.trigger,
+          signal: found.signal,
+        });
+      }
+    }
+    res.status(404).json({ error: 'Ticker not in current scan. Force /api/stratum-scanner first.' });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 // Queue a trade from a scanner row
 app.post('/api/stratum-scanner/queue', async function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
