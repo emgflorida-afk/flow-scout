@@ -14,7 +14,7 @@ var TS_LOGIN    = 'https://signin.tradestation.com/authorize';
 
 function clientId()     { return process.env.TS_CLIENT_ID; }
 function clientSecret() { return process.env.TS_CLIENT_SECRET; }
-function redirectUri()  { return process.env.TS_REDIRECT_URI || 'https://flow-scout-production-f021.up.railway.app/ts-callback'; }
+function redirectUri()  { return process.env.TS_REDIRECT_URI || 'https://flow-scout-production.up.railway.app/ts-callback'; }
 
 var _accessToken    = null;
 var _refreshToken   = null;

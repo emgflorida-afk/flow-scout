@@ -139,7 +139,9 @@ app.get('/api/stratum-scanner', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 // TradingView webhook receiver -- in TV alert, set Webhook URL to:
-//   https://flow-scout-production-f021.up.railway.app/api/tv-alert
+//   https://flow-scout-production.up.railway.app/api/tv-alert
+// (The old -f021 domain points to a dead-twin `upbeat-flow` project with no
+// env vars. Do NOT send TV alerts there.)
 // And body to JSON like: {"ticker":"{{ticker}}","action":"buy","tf":"{{interval}}","price":{{close}},"message":"{{strategy.order.alert_message}}"}
 app.post('/api/tv-alert', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
