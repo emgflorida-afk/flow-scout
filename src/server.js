@@ -208,6 +208,36 @@ app.post('/api/stratum-scanner/queue', async function(req, res) {
     res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+// Diagnostic: env var presence probe. Reports which of a known set of Railway
+// vars are visible to this process — no values echoed. If BULLFLOW_API_KEY
+// is missing here but set in Railway UI, the service is either stale (needs
+// redeploy) or pointing at a different project/env.
+app.get('/api/env-probe', function(req, res) {
+  var names = [
+    'BULLFLOW_API_KEY', 'ANTHROPIC_API_KEY', 'ACCOUNT_SIZE', 'AGENT_MODE',
+    'CONFIDENCE_THRESHOLD', 'DISCORD_BOT_TOKEN', 'FINNHUB_KEY', 'FINNHUB_API_KEY',
+    'STATE_DIR', 'RAILWAY_SERVICE_NAME', 'RAILWAY_PROJECT_NAME',
+    'RAILWAY_ENVIRONMENT_NAME', 'RAILWAY_PUBLIC_DOMAIN', 'PORT'
+  ];
+  var out = {};
+  names.forEach(function(n) { out[n] = typeof process.env[n] === 'string' && process.env[n].length > 0; });
+  // also count bullflow-like var names in case it's typo'd
+  var bullVariants = Object.keys(process.env).filter(function(k){ return /bull|bf/i.test(k); });
+  // report the railway project/env so we can confirm we're hitting the right service
+  res.json({
+    presenceByName: out,
+    bullflowVariantNames: bullVariants,
+    totalEnvVarCount: Object.keys(process.env).length,
+    railwayServiceName: process.env.RAILWAY_SERVICE_NAME || null,
+    railwayProjectName: process.env.RAILWAY_PROJECT_NAME || null,
+    railwayEnvName: process.env.RAILWAY_ENVIRONMENT_NAME || null,
+    railwayPublicDomain: process.env.RAILWAY_PUBLIC_DOMAIN || null,
+    railwayGitCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    pid: process.pid,
+    startedAt: process.env.RAILWAY_DEPLOYMENT_STARTED_AT || null,
+  });
+});
+
 // Diagnostic: report scanner eval config + live peakReturn test for one row.
 // Helps confirm BULLFLOW_API_KEY is set and OCC symbol construction works.
 // Usage: /api/stratum-scanner/debug-eval?ticker=NVDA&date=2026-04-17
