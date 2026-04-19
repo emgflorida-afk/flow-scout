@@ -2341,6 +2341,21 @@ app.post('/api/jsmith/poll', async function(req, res) {
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Peek at the latest messages in a JSmith channel WITHOUT touching dedup.
+// Use to see what John just posted so Claude can evaluate against Strat + 9-gate.
+// Channel keys: VIP_FLOW_OPTIONS | OPTION_TRADE_IDEAS | CAPITAL_FLOW
+// Example: /api/jsmith/peek?channel=VIP_FLOW_OPTIONS&limit=5
+app.get('/api/jsmith/peek', async function(req, res) {
+  if (!jsmithPoller) return res.status(500).json({ error: 'jsmithPoller not loaded' });
+  if (typeof jsmithPoller.peekLatest !== 'function') return res.status(501).json({ error: 'peekLatest not available in this build' });
+  try {
+    var channel = req.query.channel || 'VIP_FLOW_OPTIONS';
+    var limit = parseInt(req.query.limit || '5', 10);
+    var data = await jsmithPoller.peekLatest(channel, limit);
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 app.get('/api/jsmith/diag', function(req, res) {
   res.json({
     hasToken: !!process.env.DISCORD_USER_TOKEN,

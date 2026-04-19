@@ -324,10 +324,39 @@ async function runPollCycle(opts) {
   }
 }
 
+// Fetch latest messages from a named JSmith channel without touching the
+// dedup store. Used by the /api/jsmith/peek diagnostic so Claude can see
+// what John posted most recently, regardless of whether the poller already
+// processed it. Returns raw Discord message objects trimmed to useful fields.
+async function peekLatest(channelKey, limit) {
+  var token = process.env.DISCORD_USER_TOKEN;
+  if (!token) return { error: 'DISCORD_USER_TOKEN not set' };
+  var chanId = CHAN[channelKey];
+  if (!chanId) return { error: 'unknown channel key: ' + channelKey, valid: Object.keys(CHAN) };
+  var raw = await fetchMessages(chanId, limit || 5, token);
+  if (!Array.isArray(raw)) return { error: 'fetch returned non-array', raw: raw };
+  return {
+    channel: channelKey,
+    channelId: chanId,
+    count: raw.length,
+    messages: raw.map(function(m) {
+      return {
+        id: m.id,
+        timestamp: m.timestamp,
+        author: m.author && (m.author.global_name || m.author.username),
+        content: m.content,
+        embeds: (m.embeds || []).map(function(e){ return { title: e.title, description: e.description, fields: e.fields }; }),
+        attachments: (m.attachments || []).map(function(a){ return { filename: a.filename, url: a.url }; }),
+      };
+    }),
+  };
+}
+
 module.exports = {
   runPollCycle,
   pollChannel,
   johnIdeaToQueueItem,
   flowEventsForTicker,
+  peekLatest,
   CHAN,
 };
