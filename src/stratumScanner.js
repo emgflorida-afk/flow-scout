@@ -797,13 +797,16 @@ async function snapshotHistory(scanResult) {
     history.days = history.days.slice(history.days.length - HISTORY_MAX_DAYS);
   }
 
-  // Evaluate wins/losses on older days. Prefer Bullflow peakReturn (real option
-  // P&L); fall back to TS bar underlying-% when API key missing.
+  // Evaluate wins/losses on all non-today days. Prefer Bullflow peakReturn
+  // (real option P&L); fall back to TS bar underlying-% when API key missing.
+  // Earlier logic used `length - 1` which skipped the latest day — that broke
+  // whenever weekend pruning left only one prior day, so Apr 17 stayed pending.
   try {
     var haveBullflow = !!process.env.BULLFLOW_API_KEY;
     var token = haveBullflow ? null : await getToken();
-    for (var i = 0; i < history.days.length - 1; i++) {
+    for (var i = 0; i < history.days.length; i++) {
       var day = history.days[i];
+      if (day.date === today) continue; // don't score in-flight day
       for (var j = 0; j < (day.rows || []).length; j++) {
         var row = day.rows[j];
         if (row.outcome) continue; // already evaluated
