@@ -25,6 +25,9 @@ try { bullflow = require('./bullflowStream'); } catch(e) {}
 // PERSISTENT STATE -- stars + daily signal history
 // -----------------------------------------------------------------
 var STATE_DIR = process.env.STATE_DIR || '/tmp';
+if (STATE_DIR === '/tmp') {
+  console.warn('[SCANNER] ⚠ STATE_DIR=/tmp — scanner history + stars will be WIPED on redeploy. Mount a Railway volume and set STATE_DIR=/data to persist.');
+}
 try { fs.mkdirSync(STATE_DIR, { recursive: true }); } catch(e) {}
 var STARS_FILE   = path.join(STATE_DIR, 'scanner_stars.json');
 var HISTORY_FILE = path.join(STATE_DIR, 'scanner_history.json');
@@ -638,7 +641,9 @@ async function scanTicker(ticker, token, earningsMap, tf) {
 
 // -----------------------------------------------------------------
 // HISTORY: snapshot today's scan and evaluate past wins/losses
-// A signal is WIN if price moved in the signal's favor within 3 trading days.
+// A signal is WIN if the ATM option peak return ≥ 50% within 3 trading days,
+// measured via Bullflow /v1/data/peakReturn. Falls back to underlying-%
+// evaluation (legacy) when BULLFLOW_API_KEY is missing.
 // -----------------------------------------------------------------
 function signalDirectionOf(sig) {
   if (!sig) return null;
@@ -652,6 +657,103 @@ function todayET() {
   catch(e) { return new Date().toISOString().slice(0,10); }
 }
 
+// Weekday + non-US-market-holiday check. Covers the biggest holiday gaps but is
+// best-effort; TS bar eval already no-ops when no bar exists, so false positives
+// (snapshotting on a holiday) cost at most one wasted row.
+function isTradingDayET(dateStr) {
+  var d = new Date(dateStr + 'T12:00:00-05:00');
+  if (isNaN(d.getTime())) return true;
+  var dow = d.getDay();
+  if (dow === 0 || dow === 6) return false; // Sat, Sun
+  var mmdd = dateStr.slice(5); // MM-DD
+  // Fixed-date US market holidays (NYSE + Nasdaq)
+  var fixed = ['01-01', '06-19', '07-04', '12-25'];
+  if (fixed.indexOf(mmdd) !== -1) return false;
+  return true;
+}
+
+// Next Friday at least `minDTE` days out, in OCC YYMMDD format.
+// Used to build a representative ATM contract for peakReturn scoring.
+function nextFridayYYMMDD(fromDateStr, minDTE) {
+  var base = new Date(fromDateStr + 'T12:00:00-05:00');
+  if (isNaN(base.getTime())) base = new Date();
+  var d = new Date(base.getTime());
+  var targetMs = base.getTime() + (minDTE * 86400000);
+  while (true) {
+    d = new Date(d.getTime() + 86400000);
+    if (d.getDay() === 5 && d.getTime() >= targetMs) break;
+    if (d.getTime() - base.getTime() > 45 * 86400000) break; // safety cap
+  }
+  var yy = String(d.getFullYear()).slice(-2);
+  var mm = String(d.getMonth() + 1).padStart(2, '0');
+  var dd = String(d.getDate()).padStart(2, '0');
+  return yy + mm + dd;
+}
+
+// Build OCC option symbol for Bullflow: O:SYMBOL + YYMMDD + C|P + strike×1000 padded to 8 digits.
+// Example: HD 5/15/2026 $350 Call → O:HD260515C00350000
+function occSymbol(ticker, yymmdd, callOrPut, strike) {
+  var strikePadded = String(Math.round(strike * 1000)).padStart(8, '0');
+  return 'O:' + String(ticker).toUpperCase() + yymmdd + callOrPut + strikePadded;
+}
+
+// ATM premium estimator (proxy for peakReturn old_price). 2% of spot is a
+// working heuristic for 14-DTE ATM in normal IV regimes; Bullflow returns %
+// return on whatever we pass, so relative accuracy matters more than absolute.
+function estimateATMPremium(spotPrice) {
+  return Math.max(0.05, +(spotPrice * 0.02).toFixed(2));
+}
+
+// Bullflow peakReturn: highest % return an option contract reached since the
+// signal timestamp. Returns null on error so caller can fall back gracefully.
+async function fetchPeakReturn(sym, oldPrice, tradeTimestamp) {
+  var apiKey = process.env.BULLFLOW_API_KEY;
+  if (!apiKey) return null;
+  var url = 'https://api.bullflow.io/v1/data/peakReturn'
+    + '?key=' + encodeURIComponent(apiKey)
+    + '&sym=' + encodeURIComponent(sym)
+    + '&old_price=' + encodeURIComponent(oldPrice)
+    + '&trade_timestamp=' + encodeURIComponent(tradeTimestamp);
+  try {
+    var res = await fetch(url, { timeout: 15000 });
+    if (!res.ok) return null;
+    var json = await res.json();
+    if (json && typeof json.peakPercentReturnSinceTimestamp === 'number') {
+      return json.peakPercentReturnSinceTimestamp;
+    }
+    return null;
+  } catch(e) {
+    console.error('[SCANNER] peakReturn error for ' + sym + ':', e.message);
+    return null;
+  }
+}
+
+// Evaluate one signal row via Bullflow peakReturn. Sets row.outcome and row.peakPct.
+// WIN: peak ≥ 50% (AB's trim rule), PARTIAL: 25–49% (bill-paying min),
+// LOSS: ≤ −30% (approximates structural stop), FLAT: between.
+async function evaluateRowWithPeakReturn(row, signalDate) {
+  if (!process.env.BULLFLOW_API_KEY) return false;
+  var dir = row.dir;
+  if (!dir || !row.price || !row.ticker) return false;
+  var callOrPut = dir === 'BULL' ? 'C' : 'P';
+  var strike = Math.round(row.price); // ATM
+  var yymmdd = nextFridayYYMMDD(signalDate, 14);
+  var sym = occSymbol(row.ticker, yymmdd, callOrPut, strike);
+  var oldPrice = estimateATMPremium(row.price);
+  // Signal timestamp = 9:35 AM ET on signal date (first 5-min bar close)
+  var tsUnix = Math.floor(new Date(signalDate + 'T13:35:00Z').getTime() / 1000);
+  var pct = await fetchPeakReturn(sym, oldPrice, tsUnix);
+  if (pct === null) return false;
+  row.peakPct = +pct.toFixed(2);
+  row.evalMethod = 'peakReturn';
+  row.evalContract = sym;
+  if (pct >= 50) row.outcome = 'WIN';
+  else if (pct >= 25) row.outcome = 'PARTIAL';
+  else if (pct <= -30) row.outcome = 'LOSS';
+  else row.outcome = 'FLAT';
+  return true;
+}
+
 function loadHistory() { return loadJSON(HISTORY_FILE, { days: [] }); }
 function saveHistory(h) { saveJSON(HISTORY_FILE, h); }
 
@@ -659,67 +761,86 @@ async function snapshotHistory(scanResult) {
   if (!scanResult || !scanResult.groups) return;
   var today = todayET();
   var history = loadHistory();
-  // Drop any existing entry for today
-  history.days = (history.days || []).filter(function(d) { return d.date !== today; });
-  // Flatten all rows with minimal data
-  var rows = [];
-  Object.keys(scanResult.groups).forEach(function(sig) {
-    (scanResult.groups[sig] || []).forEach(function(r) {
-      var dir = signalDirectionOf(sig);
-      if (!dir) return; // skip non-directional signals for the "winners" tracking
-      rows.push({
-        ticker:  r.ticker,
-        signal:  sig,
-        dir:     dir,
-        price:   r.price,
-        trigger: r.trigger,
-        ftfc:    r.ftfc,
-        flow:    r.flow ? r.flow.dominant : null,
+
+  // Skip weekend/holiday snapshots — they create phantom rows that can never
+  // evaluate (no underlying bar and no option trading). We still evaluate prior
+  // days on weekend calls, just don't add a new row.
+  var isToday = isTradingDayET(today);
+  if (isToday) {
+    // Drop any existing entry for today (re-scan)
+    history.days = (history.days || []).filter(function(d) { return d.date !== today; });
+    // Flatten all rows with minimal data
+    var rows = [];
+    Object.keys(scanResult.groups).forEach(function(sig) {
+      (scanResult.groups[sig] || []).forEach(function(r) {
+        var dir = signalDirectionOf(sig);
+        if (!dir) return; // skip non-directional signals for the "winners" tracking
+        rows.push({
+          ticker:  r.ticker,
+          signal:  sig,
+          dir:     dir,
+          price:   r.price,
+          trigger: r.trigger,
+          ftfc:    r.ftfc,
+          flow:    r.flow ? r.flow.dominant : null,
+        });
       });
     });
-  });
-  history.days.push({ date: today, rows: rows });
+    history.days.push({ date: today, rows: rows });
+  }
+
+  // Also prune any phantom weekend/holiday entries from prior runs
+  history.days = (history.days || []).filter(function(d) { return isTradingDayET(d.date); });
   // Trim
   history.days.sort(function(a,b){ return a.date.localeCompare(b.date); });
   if (history.days.length > HISTORY_MAX_DAYS) {
     history.days = history.days.slice(history.days.length - HISTORY_MAX_DAYS);
   }
-  // Evaluate wins/losses on older days (requires TS bars)
+
+  // Evaluate wins/losses on older days. Prefer Bullflow peakReturn (real option
+  // P&L); fall back to TS bar underlying-% when API key missing.
   try {
-    var token = await getToken();
-    if (token) {
-      for (var i = 0; i < history.days.length - 1; i++) {
-        var day = history.days[i];
-        for (var j = 0; j < (day.rows || []).length; j++) {
-          var row = day.rows[j];
-          if (row.outcome) continue; // already evaluated
-          var bars = await fetchBars(row.ticker, 'Daily', 1, 6, token);
-          if (!bars || bars.length < 3) continue;
-          // Compare signal-day close to max favorable/adverse over next 3 bars
-          // Find bar index for day.date
-          var anchorIdx = -1;
-          for (var k = 0; k < bars.length; k++) {
-            var bd = (bars[k].TimeStamp || bars[k].timestamp || '').slice(0, 10);
-            if (bd === day.date) { anchorIdx = k; break; }
-          }
-          if (anchorIdx < 0 || anchorIdx + 1 >= bars.length) continue;
-          var anchor = normBar(bars[anchorIdx]);
-          var winBars = [];
-          for (var w = anchorIdx + 1; w < Math.min(anchorIdx + 4, bars.length); w++) {
-            winBars.push(normBar(bars[w]));
-          }
-          if (winBars.length === 0) continue;
-          var maxUp = Math.max.apply(null, winBars.map(function(b){return b.h;})) - anchor.c;
-          var maxDn = anchor.c - Math.min.apply(null, winBars.map(function(b){return b.l;}));
-          var movePct = anchor.c ? (row.dir === 'BULL' ? (maxUp / anchor.c) : (maxDn / anchor.c)) * 100 : 0;
-          var advPct  = anchor.c ? (row.dir === 'BULL' ? (maxDn / anchor.c) : (maxUp / anchor.c)) * 100 : 0;
-          // WIN = favorable move >= 1% before adverse move >= 1%
-          if (movePct >= 1.0 && movePct > advPct) row.outcome = 'WIN';
-          else if (advPct >= 1.0) row.outcome = 'LOSS';
-          else row.outcome = 'FLAT';
-          row.movePct = +movePct.toFixed(2);
-          row.advPct  = +advPct.toFixed(2);
+    var haveBullflow = !!process.env.BULLFLOW_API_KEY;
+    var token = haveBullflow ? null : await getToken();
+    for (var i = 0; i < history.days.length - 1; i++) {
+      var day = history.days[i];
+      for (var j = 0; j < (day.rows || []).length; j++) {
+        var row = day.rows[j];
+        if (row.outcome) continue; // already evaluated
+
+        // Primary path: peakReturn via Bullflow
+        if (haveBullflow) {
+          var ok = await evaluateRowWithPeakReturn(row, day.date);
+          if (ok) continue;
+          // fall through to TS-bar fallback if peakReturn errored
         }
+
+        // Fallback path: underlying % (legacy logic, used only if Bullflow unavailable)
+        if (!token) continue;
+        var bars = await fetchBars(row.ticker, 'Daily', 1, 6, token);
+        if (!bars || bars.length < 3) continue;
+        var anchorIdx = -1;
+        for (var k = 0; k < bars.length; k++) {
+          var bd = (bars[k].TimeStamp || bars[k].timestamp || '').slice(0, 10);
+          if (bd === day.date) { anchorIdx = k; break; }
+        }
+        if (anchorIdx < 0 || anchorIdx + 1 >= bars.length) continue;
+        var anchor = normBar(bars[anchorIdx]);
+        var winBars = [];
+        for (var w = anchorIdx + 1; w < Math.min(anchorIdx + 4, bars.length); w++) {
+          winBars.push(normBar(bars[w]));
+        }
+        if (winBars.length === 0) continue;
+        var maxUp = Math.max.apply(null, winBars.map(function(b){return b.h;})) - anchor.c;
+        var maxDn = anchor.c - Math.min.apply(null, winBars.map(function(b){return b.l;}));
+        var movePct = anchor.c ? (row.dir === 'BULL' ? (maxUp / anchor.c) : (maxDn / anchor.c)) * 100 : 0;
+        var advPct  = anchor.c ? (row.dir === 'BULL' ? (maxDn / anchor.c) : (maxUp / anchor.c)) * 100 : 0;
+        if (movePct >= 1.0 && movePct > advPct) row.outcome = 'WIN';
+        else if (advPct >= 1.0) row.outcome = 'LOSS';
+        else row.outcome = 'FLAT';
+        row.movePct = +movePct.toFixed(2);
+        row.advPct  = +advPct.toFixed(2);
+        row.evalMethod = 'underlying-fallback';
       }
     }
   } catch(e) { console.error('[SCANNER] snapshot eval error:', e.message); }
@@ -730,18 +851,39 @@ function getHistory(days) {
   days = days || 5;
   var h = loadHistory();
   var recent = (h.days || []).slice(-days);
-  // Aggregate stats
-  var stats = { total: 0, wins: 0, losses: 0, flat: 0, pending: 0, bySignal: {} };
+  // Aggregate stats. WIN = option peak ≥ 50%, PARTIAL = 25–49%, LOSS = ≤ −30%,
+  // FLAT = middle, pending = not yet evaluated. Tracks avg peak % when available.
+  var stats = {
+    total: 0, wins: 0, partials: 0, losses: 0, flat: 0, pending: 0,
+    avgPeakPct: null, bySignal: {}
+  };
+  var peakPcts = [];
   recent.forEach(function(d) {
     (d.rows || []).forEach(function(r) {
       stats.total++;
-      var bucket = stats.bySignal[r.signal] = stats.bySignal[r.signal] || { total: 0, wins: 0, losses: 0, flat: 0 };
+      var bucket = stats.bySignal[r.signal] = stats.bySignal[r.signal]
+        || { total: 0, wins: 0, partials: 0, losses: 0, flat: 0, avgPeakPct: null, _peaks: [] };
       bucket.total++;
-      if (r.outcome === 'WIN')  { stats.wins++;   bucket.wins++; }
-      else if (r.outcome === 'LOSS') { stats.losses++; bucket.losses++; }
-      else if (r.outcome === 'FLAT') { stats.flat++;   bucket.flat++; }
+      if (r.outcome === 'WIN')          { stats.wins++;     bucket.wins++; }
+      else if (r.outcome === 'PARTIAL') { stats.partials++; bucket.partials++; }
+      else if (r.outcome === 'LOSS')    { stats.losses++;   bucket.losses++; }
+      else if (r.outcome === 'FLAT')    { stats.flat++;     bucket.flat++; }
       else stats.pending++;
+      if (typeof r.peakPct === 'number') {
+        peakPcts.push(r.peakPct);
+        bucket._peaks.push(r.peakPct);
+      }
     });
+  });
+  if (peakPcts.length) {
+    stats.avgPeakPct = +(peakPcts.reduce(function(a,b){return a+b;}, 0) / peakPcts.length).toFixed(2);
+  }
+  Object.keys(stats.bySignal).forEach(function(s) {
+    var b = stats.bySignal[s];
+    if (b._peaks.length) {
+      b.avgPeakPct = +(b._peaks.reduce(function(a,b){return a+b;}, 0) / b._peaks.length).toFixed(2);
+    }
+    delete b._peaks;
   });
   return { days: recent, stats: stats };
 }

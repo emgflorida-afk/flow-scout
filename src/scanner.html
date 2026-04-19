@@ -194,6 +194,7 @@
   .stat-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
   .stat-value { font-size: 22px; font-weight: 700; margin-top: 4px; }
   .outcome-win  { color: var(--green); }
+  .outcome-partial { color: #a6e3a1; }
   .outcome-loss { color: var(--red); }
   .outcome-flat { color: var(--muted); }
   .outcome-pending { color: var(--yellow); }
@@ -774,22 +775,34 @@ function loadHistory() {
 function renderHistory(h) {
   var root = document.getElementById('history-root');
   var stats = h.stats || {};
-  var hitRate = stats.wins + stats.losses > 0 ? ((stats.wins / (stats.wins + stats.losses)) * 100).toFixed(0) : '—';
+  // Hit rate counts WIN + PARTIAL (both ≥25% option return = bill-paying threshold) vs LOSS.
+  var wCount = (stats.wins || 0) + (stats.partials || 0);
+  var hitRate = wCount + (stats.losses||0) > 0 ? ((wCount / (wCount + (stats.losses||0))) * 100).toFixed(0) : '—';
+  var avgPeak = stats.avgPeakPct != null ? (stats.avgPeakPct >= 0 ? '+' : '') + stats.avgPeakPct + '%' : '—';
   var html = '<div class="history-stats">' +
     '<div class="stat-card"><div class="stat-label">Total Signals (5d)</div><div class="stat-value">' + (stats.total || 0) + '</div></div>' +
-    '<div class="stat-card"><div class="stat-label">Hit Rate</div><div class="stat-value outcome-win">' + hitRate + (hitRate === '—' ? '' : '%') + '</div></div>' +
-    '<div class="stat-card"><div class="stat-label">Wins / Losses / Flat</div><div class="stat-value"><span class="outcome-win">' + (stats.wins||0) + '</span> / <span class="outcome-loss">' + (stats.losses||0) + '</span> / <span class="outcome-flat">' + (stats.flat||0) + '</span></div></div>' +
-    '<div class="stat-card"><div class="stat-label">Pending (today)</div><div class="stat-value outcome-pending">' + (stats.pending||0) + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Hit Rate (WIN+PARTIAL)</div><div class="stat-value outcome-win">' + hitRate + (hitRate === '—' ? '' : '%') + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">W / P / L / F</div><div class="stat-value"><span class="outcome-win">' + (stats.wins||0) + '</span> / <span class="outcome-partial">' + (stats.partials||0) + '</span> / <span class="outcome-loss">' + (stats.losses||0) + '</span> / <span class="outcome-flat">' + (stats.flat||0) + '</span></div></div>' +
+    '<div class="stat-card"><div class="stat-label">Avg Peak % (option)</div><div class="stat-value outcome-win">' + avgPeak + '</div></div>' +
+    '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value outcome-pending">' + (stats.pending||0) + '</div></div>' +
   '</div>';
-  // By-signal breakdown
+  // By-signal breakdown (option-P&L based via Bullflow peakReturn)
   if (stats.bySignal) {
-    html += '<div class="group"><div class="group-header"><div class="group-title">Hit rate by signal type</div></div>';
-    html += '<table><thead><tr><th>Signal</th><th>Total</th><th>Wins</th><th>Losses</th><th>Flat</th><th>Hit Rate</th></tr></thead><tbody>';
+    html += '<div class="group"><div class="group-header"><div class="group-title">Hit rate by signal type (option peak % via Bullflow)</div></div>';
+    html += '<table><thead><tr><th>Signal</th><th>Total</th><th>W</th><th>P</th><th>L</th><th>F</th><th>Avg Peak %</th><th>Hit Rate</th></tr></thead><tbody>';
     var sigs = Object.keys(stats.bySignal).sort(function(a,b){ return stats.bySignal[b].total - stats.bySignal[a].total; });
     sigs.forEach(function(s) {
       var b = stats.bySignal[s];
-      var hr = (b.wins + b.losses) > 0 ? ((b.wins / (b.wins + b.losses)) * 100).toFixed(0) + '%' : '—';
-      html += '<tr><td>' + s + '</td><td>' + b.total + '</td><td class="outcome-win">' + b.wins + '</td><td class="outcome-loss">' + b.losses + '</td><td class="outcome-flat">' + b.flat + '</td><td><b>' + hr + '</b></td></tr>';
+      var bW = (b.wins || 0) + (b.partials || 0);
+      var hr = (bW + (b.losses||0)) > 0 ? ((bW / (bW + (b.losses||0))) * 100).toFixed(0) + '%' : '—';
+      var ap = b.avgPeakPct != null ? (b.avgPeakPct >= 0 ? '+' : '') + b.avgPeakPct + '%' : '—';
+      html += '<tr><td>' + s + '</td><td>' + b.total + '</td>'
+        + '<td class="outcome-win">' + (b.wins||0) + '</td>'
+        + '<td class="outcome-partial">' + (b.partials||0) + '</td>'
+        + '<td class="outcome-loss">' + (b.losses||0) + '</td>'
+        + '<td class="outcome-flat">' + (b.flat||0) + '</td>'
+        + '<td>' + ap + '</td>'
+        + '<td><b>' + hr + '</b></td></tr>';
     });
     html += '</tbody></table></div>';
   }
@@ -798,8 +811,13 @@ function renderHistory(h) {
     html += '<div class="group"><div class="group-header"><div class="group-title">' + d.date + '</div><div class="group-count">' + (d.rows || []).length + ' signals</div></div>';
     html += '<table><thead><tr><th>Ticker</th><th>Signal</th><th>Dir</th><th>Price at signal</th><th>Trigger</th><th>3d Move</th><th>Outcome</th></tr></thead><tbody>';
     (d.rows || []).forEach(function(r) {
-      var outCls = r.outcome === 'WIN' ? 'outcome-win' : r.outcome === 'LOSS' ? 'outcome-loss' : r.outcome === 'FLAT' ? 'outcome-flat' : 'outcome-pending';
+      var outCls = r.outcome === 'WIN' ? 'outcome-win'
+        : r.outcome === 'PARTIAL' ? 'outcome-partial'
+        : r.outcome === 'LOSS' ? 'outcome-loss'
+        : r.outcome === 'FLAT' ? 'outcome-flat'
+        : 'outcome-pending';
       var outLabel = r.outcome || 'pending';
+      if (typeof r.peakPct === 'number') outLabel += ' (' + (r.peakPct >= 0 ? '+' : '') + r.peakPct + '%)';
       html += '<tr>' +
         '<td><b>' + r.ticker + '</b></td>' +
         '<td>' + r.signal + '</td>' +
