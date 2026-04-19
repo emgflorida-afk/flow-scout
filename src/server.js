@@ -208,6 +208,72 @@ app.post('/api/stratum-scanner/queue', async function(req, res) {
     res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+// Diagnostic: report scanner eval config + live peakReturn test for one row.
+// Helps confirm BULLFLOW_API_KEY is set and OCC symbol construction works.
+// Usage: /api/stratum-scanner/debug-eval?ticker=NVDA&date=2026-04-17
+app.get('/api/stratum-scanner/debug-eval', async function(req, res) {
+  if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
+  var ticker = (req.query.ticker || 'NVDA').toUpperCase();
+  var date   = req.query.date || '2026-04-17';
+  var haveKey = !!process.env.BULLFLOW_API_KEY;
+  var history = null;
+  try { history = await stratumScanner.getHistory(10); } catch(e) {}
+  // Find the requested row
+  var row = null, foundDate = null;
+  if (history && history.days) {
+    for (var d = 0; d < history.days.length; d++) {
+      if (history.days[d].date !== date) continue;
+      foundDate = history.days[d].date;
+      (history.days[d].rows || []).forEach(function(r) { if (r.ticker === ticker) row = r; });
+    }
+  }
+  // If no history row, build a minimal stand-in so we can still test
+  if (!row) row = { ticker: ticker, dir: 'BULL', price: 200, signal: 'debug' };
+  // Fire the live peakReturn with a synthetic contract and return the raw response
+  var yymmdd = (function(fromDateStr, minDTE) {
+    var base = new Date(fromDateStr + 'T12:00:00-05:00');
+    var dd = new Date(base.getTime());
+    var targetMs = base.getTime() + minDTE * 86400000;
+    while (true) {
+      dd = new Date(dd.getTime() + 86400000);
+      if (dd.getDay() === 5 && dd.getTime() >= targetMs) break;
+      if (dd.getTime() - base.getTime() > 45 * 86400000) break;
+    }
+    var yy = String(dd.getFullYear()).slice(-2);
+    var mm = String(dd.getMonth() + 1).padStart(2, '0');
+    var d2 = String(dd.getDate()).padStart(2, '0');
+    return yy + mm + d2;
+  })(date, 14);
+  var cp = row.dir === 'BULL' ? 'C' : 'P';
+  var strike = Math.round(row.price);
+  var strikePad = String(strike * 1000).padStart(8, '0');
+  var sym = 'O:' + ticker + yymmdd + cp + strikePad;
+  var oldPrice = Math.max(0.05, +(row.price * 0.02).toFixed(2));
+  var ts = Math.floor(new Date(date + 'T13:35:00Z').getTime() / 1000);
+  var apiResult = { status: 'skipped — no api key' };
+  if (haveKey) {
+    try {
+      var fetchLib = require('node-fetch');
+      var url = 'https://api.bullflow.io/v1/data/peakReturn'
+        + '?key=' + encodeURIComponent(process.env.BULLFLOW_API_KEY)
+        + '&sym=' + encodeURIComponent(sym)
+        + '&old_price=' + encodeURIComponent(oldPrice)
+        + '&trade_timestamp=' + encodeURIComponent(ts);
+      var r = await fetchLib(url, { timeout: 15000 });
+      var bodyText = await r.text();
+      var parsed = null; try { parsed = JSON.parse(bodyText); } catch(e) {}
+      apiResult = { http: r.status, body: parsed || bodyText.slice(0, 400) };
+    } catch(e) { apiResult = { error: e.message }; }
+  }
+  res.json({
+    haveBullflowKey: haveKey,
+    requestedTicker: ticker, requestedDate: date, foundInHistory: !!foundDate,
+    row: row ? { ticker: row.ticker, dir: row.dir, price: row.price, signal: row.signal, outcome: row.outcome, peakPct: row.peakPct, evalMethod: row.evalMethod } : null,
+    contract: sym, oldPrice: oldPrice, tradeTimestamp: ts,
+    peakReturnResult: apiResult,
+  });
+});
+
 app.get('/dashboard/data', async function(req, res) {
   try { var data = await dashboard.getDashboardData((req.query.mode || 'DAY').toUpperCase()); res.json(data); }
   catch(e) { res.status(500).json({ error: e.message }); }
