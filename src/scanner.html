@@ -411,19 +411,46 @@ function ftfcBadgeHtml(r) {
   if (!r || !r.ftfc) return '';
   var sd = signalDir(r.signal);
   var dir = r.ftfcDir; // 'UP' | 'DOWN' | null
-  if (!dir) return '<span class="badge badge-ftfc">FTFC</span>';
+  // ALIGNED badge — all 4 TFs (D/W/M/Q) same direction (strict)
+  var alignedLabel = r.ftfcAligned ? ' ALIGNED' : '';
+  if (!dir) return '<span class="badge badge-ftfc">FTFC' + alignedLabel + '</span>';
   if (sd) {
     var aligned = (dir === 'UP' && sd === 'BULL') || (dir === 'DOWN' && sd === 'BEAR');
     if (aligned) {
       var cls = dir === 'UP' ? 'badge-ftfc-up' : 'badge-ftfc-down';
-      return '<span class="badge ' + cls + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + '</span>';
+      return '<span class="badge ' + cls + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + alignedLabel + '</span>';
     } else {
       return '<span class="badge badge-ftfc-against" title="FTFC against signal — counter-trend, skip unless exhaustion">FTFC ' + (dir === 'UP' ? '↑' : '↓') + ' ⚠</span>';
     }
   }
   // non-directional signal (Inside / Outside / 1-1)
   var cls2 = dir === 'UP' ? 'badge-ftfc-up' : 'badge-ftfc-down';
-  return '<span class="badge ' + cls2 + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + '</span>';
+  return '<span class="badge ' + cls2 + '">FTFC ' + (dir === 'UP' ? '↑' : '↓') + alignedLabel + '</span>';
+}
+
+// Gap % cell — color-coded, with size indicator for LARGE/EXTREME
+function gapHtml(gap) {
+  if (!gap || !gap.gapDir) return '<span style="color:#6b7280">—</span>';
+  var pct = (gap.gapPct * 100).toFixed(1);
+  var sign = gap.gapPct >= 0 ? '+' : '';
+  var color = gap.gapPct >= 0 ? '#4ac29a' : '#ef6f6c';
+  var sizeTag = '';
+  if (gap.gapSize === 'EXTREME') sizeTag = ' <span style="color:#ffb347;font-size:9px;font-weight:700" title="Gap >5% — news event">EX</span>';
+  else if (gap.gapSize === 'LARGE') sizeTag = ' <span style="color:#ffb347;font-size:9px" title="Gap 3-5%">LG</span>';
+  var filledTag = gap.gapFilled ? ' <span style="color:#6b7280;font-size:9px" title="Today crossed prior close — gap filled">●</span>' : '';
+  return '<span style="color:' + color + ';font-weight:600">' + sign + pct + '%</span>' + sizeTag + filledTag;
+}
+
+// Context badge next to signal name — REVERSAL / CONTINUATION / COMPRESSION
+function contextBadgeHtml(ctx) {
+  if (!ctx) return '';
+  var cfg = {
+    'REVERSAL':     { color: '#ffb347', bg: 'rgba(255,179,71,0.15)', label: 'REV' },
+    'CONTINUATION': { color: '#4ac29a', bg: 'rgba(74,194,154,0.15)', label: 'CONT' },
+    'COMPRESSION':  { color: '#7dd3fc', bg: 'rgba(125,211,252,0.15)', label: 'COMP' },
+  }[ctx];
+  if (!cfg) return '';
+  return ' <span style="display:inline-block;padding:1px 5px;margin-left:4px;font-size:9px;font-weight:600;color:' + cfg.color + ';background:' + cfg.bg + ';border-radius:3px" title="' + ctx + '">' + cfg.label + '</span>';
 }
 
 function fmtPrem(n) {
@@ -537,10 +564,11 @@ function rowHtml(r) {
         earningsBadgeHtml(r.earnings) +
       '</div>' +
     '</td>' +
-    '<td class="col-atr ' + atrClass(r.atrPct) + '">' + fmtAtr(r.atrPct) + '</td>' +
+    '<td class="col-atr ' + atrClass(r.atrPct) + '">' + fmtAtr(r.atrPct) + (r.atrExtreme ? ' <span style="color:#ef6f6c;font-size:9px;font-weight:600">EX</span>' : '') + '</td>' +
     '<td class="col-price">' + fmtPrice(r.price) + '</td>' +
     '<td class="col-chg ' + (r.chgPct >= 0 ? 'chg-pos' : 'chg-neg') + '">' + fmtPct(r.chgPct) + '</td>' +
-    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span></td>' +
+    '<td class="col-gap">' + gapHtml(r.gap) + '</td>' +
+    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span>' + contextBadgeHtml(r.signalContext) + '</td>' +
     '<td class="col-combo">' + comboHtml(r.combo) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.D) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
@@ -573,6 +601,7 @@ function groupHtml(name, rows) {
       '<th class="col-atr">ATR%</th>' +
       '<th class="col-price">Price</th>' +
       '<th class="col-chg">Chg%</th>' +
+      '<th class="col-gap" title="Gap from prior close to today open. EXTREME (>5%) = news event">Gap%</th>' +
       '<th class="col-signal">Signal</th>' +
       '<th class="col-combo">Combo</th>' +
       '<th class="col-tf">D</th>' +

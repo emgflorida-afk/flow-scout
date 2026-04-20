@@ -494,9 +494,26 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var atrPct = calcATRPct(normed, last.c);
   var vol = calcVolRatio(normed);
 
+  // Gap detection (today open vs prior close)
+  var gap = prev && last ? stratClassifier.computeGap(last, prev) : null;
+
+  // Signal context (REVERSAL / CONTINUATION / COMPRESSION)
+  var signalContext = stratClassifier.classifySignalContext(signal);
+
   var dwmq = await fetchContinuity(ticker, price, token);
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
+
+  // Strict FTFC ALIGNED badge — requires ALL 4 TFs (D/W/M/Q) pointing same direction
+  var ftfcAligned = false;
+  if (dwmq && dwmq.D && dwmq.W && dwmq.M && dwmq.Q) {
+    var allUp = dwmq.D === 'UP' && dwmq.W === 'UP' && dwmq.M === 'UP' && dwmq.Q === 'UP';
+    var allDown = dwmq.D === 'DOWN' && dwmq.W === 'DOWN' && dwmq.M === 'DOWN' && dwmq.Q === 'DOWN';
+    ftfcAligned = allUp || allDown;
+  }
+
+  // Extreme ATR flag (>7% = news/vol event)
+  var atrExtreme = atrPct >= 7;
 
   // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
   // Reversal patterns fire on intraday exhaustion. On strong TREND days
@@ -561,6 +578,11 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     volAbs: vol ? vol.abs : null,
     volRel: vol ? vol.rel : null,
     earnings: badge,
+    // Apr 20 2026 enrichments (shown on scanner table + badges):
+    gap: gap,                      // { gapPct, gapDir, gapSize, gapFilled } or null
+    signalContext: signalContext,  // 'REVERSAL' | 'CONTINUATION' | 'COMPRESSION' | null
+    ftfcAligned: ftfcAligned,      // strict: ALL 4 TFs (D/W/M/Q) same direction
+    atrExtreme: atrExtreme,        // true if ATR% >= 7 (news/vol event)
     // Enrichments:
     flow: flow,
     analyst: analyst,
