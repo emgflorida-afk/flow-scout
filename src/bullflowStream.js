@@ -311,11 +311,25 @@ function startBullflowStream(apiKeyOverride) {
       console.log('[BULLFLOW] Reconnect attempt ' + retryCount + '/' + MAX_RETRIES + '...');
     }
 
-    fetch('https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey, {
-      headers: { 'Accept': 'text/event-stream' }
-    }).then(function(res) {
+    // Apr 20 2026: try multiple auth methods — Bullflow may have changed format.
+    // Cycle through: query param → Authorization header → X-API-Key header.
+    var authAttempt = retryCount % 3;
+    var url, headers;
+    if (authAttempt === 0) {
+      url = 'https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey;
+      headers = { 'Accept': 'text/event-stream' };
+    } else if (authAttempt === 1) {
+      url = 'https://api.bullflow.io/v1/streaming/alerts';
+      headers = { 'Accept': 'text/event-stream', 'Authorization': 'Bearer ' + apiKey };
+    } else {
+      url = 'https://api.bullflow.io/v1/streaming/alerts';
+      headers = { 'Accept': 'text/event-stream', 'X-API-Key': apiKey };
+    }
+    console.log('[BULLFLOW] Attempt ' + retryCount + ' auth method=' + ['query', 'Bearer', 'X-API-Key'][authAttempt]);
+
+    fetch(url, { headers: headers }).then(function(res) {
       if (!res.ok) {
-        console.error('[BULLFLOW] Connection failed:', res.status);
+        console.error('[BULLFLOW] Connection failed:', res.status, 'via', ['query', 'Bearer', 'X-API-Key'][authAttempt]);
         retryCount++;
         setTimeout(connect, RETRY_DELAY_MS);
         return;
