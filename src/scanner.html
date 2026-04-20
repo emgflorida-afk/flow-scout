@@ -320,10 +320,18 @@
   </div>
   <div id="tab-scan">
     <div class="filter-row">
+      <input type="text" id="filter-search" placeholder="🔍 Search ticker (NVDA, AAPL, *LE...)"
+             style="background: var(--panel); color: var(--text); border: 1px solid var(--border);
+                    padding: 5px 10px; border-radius: 4px; font-size: 12px; width: 220px;
+                    font-family: inherit;" autocomplete="off" />
       <label><input type="checkbox" id="filter-ftfc">FTFC only</label>
       <label><input type="checkbox" id="filter-flow">Flow-aligned only</label>
       <label><input type="checkbox" id="filter-tv">TV alerts only</label>
+      <label><input type="checkbox" id="filter-starred">★ Starred only</label>
       <label style="color: var(--green); font-weight: 600;"><input type="checkbox" id="filter-confidence">🎯 Confidence Mode</label>
+      <button type="button" id="filter-clear" onclick="clearFilters()"
+              style="background: transparent; color: var(--muted); border: 1px solid var(--border);
+                     padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Clear</button>
     </div>
     <div id="root"><div class="loading">Scanning the universe…</div></div>
   </div>
@@ -643,11 +651,38 @@ function applyFilters(data) {
   var ftfcOnly = document.getElementById('filter-ftfc').checked;
   var flowOnly = document.getElementById('filter-flow').checked;
   var tvOnly   = document.getElementById('filter-tv').checked;
-  if (!ftfcOnly && !flowOnly && !tvOnly) return data;
+  var starredOnly = document.getElementById('filter-starred') && document.getElementById('filter-starred').checked;
+  var confidenceMode = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
+  var searchEl = document.getElementById('filter-search');
+  var searchRaw = searchEl ? (searchEl.value || '').trim().toUpperCase() : '';
+  // Support wildcard (*) and comma-separated multi-ticker search: "NVDA, AMD, *LE"
+  var searchTerms = searchRaw.split(/[\s,]+/).filter(function(t){ return t.length > 0; });
+  var hasSearch = searchTerms.length > 0;
+  if (!ftfcOnly && !flowOnly && !tvOnly && !starredOnly && !confidenceMode && !hasSearch) return data;
   var filtered = { generatedAt: data.generatedAt, tookMs: data.tookMs, scanned: data.scanned, matched: 0, groups: {} };
   Object.keys(data.groups).forEach(function(k) {
-    var confidenceMode = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
     var rows = data.groups[k].filter(function(r) {
+      // Ticker search — supports exact match + wildcard (* at start for "endsWith")
+      // Examples: "NVDA" matches NVDA only. "*LE" matches XLE, TSLE, etc. "NVDA,AMD" matches both.
+      if (hasSearch) {
+        var tick = (r.ticker || '').toUpperCase();
+        var matchedAny = searchTerms.some(function(term) {
+          if (term.indexOf('*') === 0) {
+            // Wildcard: "*LE" means ticker ends with "LE"
+            var suffix = term.slice(1);
+            return tick.endsWith(suffix);
+          }
+          if (term.indexOf('*') === term.length - 1) {
+            // Wildcard: "NV*" means ticker starts with "NV"
+            var prefix = term.slice(0, -1);
+            return tick.startsWith(prefix);
+          }
+          return tick === term;
+        });
+        if (!matchedAny) return false;
+      }
+      // Starred-only filter
+      if (starredOnly && !r.starred) return false;
       // CONFIDENCE MODE -- bullish-only, trend-aligned rebuild filter.
       // Any of the 4 BULLISH Strat patterns (Failed 2D / Hammer / 2-1-2 Up / 3-1-2 Up)
       // WITH FTFC UP + magnitude 2-5% + flow not bearish + volume 1.5x+.
@@ -856,7 +891,7 @@ function renderStarred() {
 }
 
 // Wire filter checkboxes
-['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
+['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
   document.addEventListener('DOMContentLoaded', function() {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
@@ -865,16 +900,49 @@ function renderStarred() {
 // Attach when DOM ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function() {
-    ['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
+    ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
     });
   });
 } else {
-  ['filter-ftfc','filter-flow','filter-tv','filter-confidence'].forEach(function(id) {
+  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
   });
+}
+
+// Clear all filters (called by the Clear button)
+function clearFilters() {
+  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el) el.checked = false;
+  });
+  var searchEl = document.getElementById('filter-search');
+  if (searchEl) searchEl.value = '';
+  if (_cachedData) render(applyFilters(_cachedData));
+}
+
+// Wire search box — live filter as user types (debounced 150ms)
+function wireSearchBox() {
+  var el = document.getElementById('filter-search');
+  if (!el) return;
+  var timer = null;
+  el.addEventListener('input', function() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function() {
+      if (_cachedData) render(applyFilters(_cachedData));
+    }, 150);
+  });
+  // Esc clears the search
+  el.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') { el.value = ''; if (_cachedData) render(applyFilters(_cachedData)); }
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireSearchBox);
+} else {
+  wireSearchBox();
 }
 
 loadScan(false);
