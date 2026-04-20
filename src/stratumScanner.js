@@ -376,9 +376,10 @@ function calcVolRatio(bars) {
 async function fetchContinuity(ticker, currentPrice, token) {
   var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {}, squeeze: null };
   try {
-    // Bump daily bars to 30 so we have enough for 20-period TTM Squeeze math
-    // (BB + Keltner need 20 bars, plus a few extra for ATR rolling)
-    var daily = await fetchBars(ticker, 'Daily', 1, 30, token);
+    // Daily bars at 22 — enough for 20-period TTM Squeeze math, minimal
+    // increase over the original 10 to stay under the observed rate-limit
+    // threshold that regressed match count when pushed to 30.
+    var daily = await fetchBars(ticker, 'Daily', 1, 22, token);
     var weekly = await fetchBars(ticker, 'Weekly', 1, 6, token);
     var monthly = await fetchBars(ticker, 'Monthly', 1, 12, token);
     function dirFromPrevClose(bars) {
@@ -692,22 +693,10 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
 
-  // GEX pull — limit to a curated set of high-volume tickers to avoid hitting
-  // CBOE 137 times per scan which regresses match count due to concurrency
-  // pressure. For other tickers, GEX stays null (column shows em-dash). Full
-  // coverage can be added later with a proper concurrency pool + dedicated
-  // background worker.
-  var GEX_TIER1 = ['SPY','QQQ','IWM','DIA','NVDA','TSLA','AAPL','MSFT','GOOGL','META','AMZN','AMD','NFLX','BAC','JPM','GS','XLE','XLF','XLK','SMH','SOXL'];
-  var gexData = null;
-  if (gexModule && GEX_TIER1.indexOf(ticker) !== -1) {
-    try {
-      gexData = await Promise.race([
-        gexModule.getGammaLevels(ticker),
-        new Promise(function(resolve){ setTimeout(function(){ resolve(null); }, 3000); }),
-      ]);
-    } catch(e) { /* soft */ }
-  }
-  var gexSignal = computeGexSignal(price, gexData);
+  // GEX per-ticker disabled for now — causing scanner match-count regression.
+  // Will rebuild via Public.com options chain endpoint (has OI + Greeks + IV,
+  // free, already-authenticated) as a proper module in next session.
+  var gexSignal = null;
 
   // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
   // Reversal patterns fire on intraday exhaustion. On strong TREND days
