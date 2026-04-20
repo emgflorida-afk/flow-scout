@@ -515,6 +515,41 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   // Extreme ATR flag (>7% = news/vol event)
   var atrExtreme = atrPct >= 7;
 
+  // A+ WAR ROOM — recent big-dollar algo alert matching this ticker+direction
+  // Apr 20 2026 (AB rule): "one central place, peace that it'll move."
+  // Requires: algo alert in last 10 min, ≥ $500K premium, direction match.
+  var aPlusAlert = null;
+  try {
+    if (bullflow && bullflow.getRecentFlow) {
+      var recent = bullflow.getRecentFlow({ symbol: ticker, minPremium: 500000 }) || [];
+      var cutoff = Date.now() - 10 * 60 * 1000;
+      var matching = recent.filter(function(a) {
+        var t = new Date(a.timestamp).getTime();
+        if (t < cutoff) return false;
+        // Match direction: bullish signal wants CALL alerts, bearish wants PUT
+        if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down' || signal === '2-2 Reversal Down' || signal === '3-2D Broadening') {
+          return a.callPut === 'PUT';
+        }
+        if (signal === 'Failed 2D' || signal === 'Hammer' || signal === '2-1-2 Up' || signal === '3-1-2 Up' || signal === 'Continuation Up' || signal === '2-2 Reversal Up' || signal === '3-2U Broadening') {
+          return a.callPut === 'CALL';
+        }
+        return false;
+      });
+      if (matching.length) {
+        // Take biggest
+        matching.sort(function(x,y){ return y.premium - x.premium; });
+        var top = matching[0];
+        aPlusAlert = {
+          premium: top.premium,
+          alertType: top.alertType,
+          callPut: top.callPut,
+          timestamp: top.timestamp,
+          ageSeconds: Math.round((Date.now() - new Date(top.timestamp).getTime()) / 1000),
+        };
+      }
+    }
+  } catch(e) { /* non-blocking */ }
+
   // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
   // Reversal patterns fire on intraday exhaustion. On strong TREND days
   // (like today: SPY +0.5%, near highs, weekly 2U#2) most stocks run with
@@ -583,6 +618,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     signalContext: signalContext,  // 'REVERSAL' | 'CONTINUATION' | 'COMPRESSION' | null
     ftfcAligned: ftfcAligned,      // strict: ALL 4 TFs (D/W/M/Q) same direction
     atrExtreme: atrExtreme,        // true if ATR% >= 7 (news/vol event)
+    aPlusAlert: aPlusAlert,        // recent big-$ flow alert matching direction (or null)
     // Enrichments:
     flow: flow,
     analyst: analyst,

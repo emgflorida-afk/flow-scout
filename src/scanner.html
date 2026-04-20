@@ -704,6 +704,97 @@ function groupHtml(name, rows) {
   '</div>';
 }
 
+// Count how many of the 9 gates pass for a given row (mirror of gatesHtml logic).
+function countGatesPass(r) {
+  var dir = signalDir(r.signal);
+  var checks = 0;
+  if (dir) checks++;
+  if (dir && r.ftfcDir && ((r.ftfcDir === 'UP' && dir === 'BULL') || (r.ftfcDir === 'DOWN' && dir === 'BEAR'))) checks++;
+  if (r.magnitude && r.magnitude.pct && Math.abs(r.magnitude.pct) >= 1 && Math.abs(r.magnitude.pct) <= 5) checks++;
+  if (dir && r.midpoints && ((dir === 'BULL' && r.midpoints.stack === 'BULL') || (dir === 'BEAR' && r.midpoints.stack === 'BEAR'))) checks++;
+  // Flow match: true if flow aligns OR if no flow data (neutral)
+  var flowOk = true;
+  if (r.flow && r.flow.dominant && dir) {
+    if (dir === 'BULL' && r.flow.dominant === 'BEAR') flowOk = false;
+    if (dir === 'BEAR' && r.flow.dominant === 'BULL') flowOk = false;
+  }
+  if (flowOk) checks++;
+  if (r.volRel != null && r.volRel >= 1.5) checks++;
+  if (r.atrPct != null && r.atrPct < 7) checks++;
+  if (!r.earnings || r.earnings === 'NO_EARNINGS') checks++;
+  var gapOk = true;
+  if (r.gap && r.gap.gapSize === 'EXTREME' && dir) {
+    if (dir === 'BULL' && r.gap.gapDir === 'UP') gapOk = false;
+    if (dir === 'BEAR' && r.gap.gapDir === 'DOWN') gapOk = false;
+  }
+  if (gapOk) checks++;
+  return checks;
+}
+
+function warRoomHtml(groups) {
+  // Collect every row from every group into one list
+  var all = [];
+  Object.keys(groups).forEach(function(k) {
+    (groups[k] || []).forEach(function(r) { r._groupName = k; all.push(r); });
+  });
+  // Filter: must have aPlusAlert AND gateScore >= 8 AND directional signal
+  var aPlus = all.filter(function(r) {
+    if (!r.aPlusAlert) return false;
+    if (!signalDir(r.signal)) return false;
+    return countGatesPass(r) >= 8;
+  });
+  // Sort by biggest flow premium first
+  aPlus.sort(function(a,b){ return (b.aPlusAlert.premium || 0) - (a.aPlusAlert.premium || 0); });
+
+  var header = '<div id="war-room" style="background:linear-gradient(90deg,rgba(239,111,108,0.08),rgba(255,179,71,0.08));border:1px solid rgba(239,111,108,0.4);border-radius:8px;padding:14px;margin-bottom:20px">' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">' +
+      '<span style="font-size:20px">🔥</span>' +
+      '<span style="font-size:15px;font-weight:700;color:#ef6f6c;letter-spacing:0.5px">A+ WAR ROOM</span>' +
+      '<span style="font-size:10px;color:#8b98a9">(8+ gates · flow match · $500K+ alert · < 10 min old)</span>' +
+    '</div>';
+
+  if (!aPlus.length) {
+    return header +
+      '<div style="padding:12px;color:#6b7280;font-size:13px;text-align:center;font-style:italic">' +
+      'No A+ alerts right now. Keep waiting — empty = correct. A+ fires when everything aligns at once.' +
+      '</div></div>';
+  }
+
+  var cardsHtml = aPlus.map(function(r) {
+    var dir = signalDir(r.signal);
+    var dirLabel = dir === 'BULL' ? 'CALL' : 'PUT';
+    var dirColor = dir === 'BULL' ? '#4ac29a' : '#ef6f6c';
+    var premStr = '$' + (r.aPlusAlert.premium >= 1e6 ? (r.aPlusAlert.premium / 1e6).toFixed(1) + 'M' : (r.aPlusAlert.premium / 1e3).toFixed(0) + 'K');
+    var ageStr = r.aPlusAlert.ageSeconds < 60 ? r.aPlusAlert.ageSeconds + 's' : Math.round(r.aPlusAlert.ageSeconds / 60) + 'm';
+    var gateCount = countGatesPass(r);
+    var alignedTag = r.ftfcAligned ? ' <span style="color:#4ac29a;font-weight:600;font-size:10px">ALIGNED</span>' : '';
+    var midTag = (r.midpoints && r.midpoints.stack) ? ' <span style="color:#7dd3fc;font-size:10px">Mid ' + r.midpoints.stack + '</span>' : '';
+    return '<div style="background:#141b24;border:1px solid ' + dirColor + ';border-radius:6px;padding:12px;margin-top:8px">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
+        '<div>' +
+          '<span style="font-size:16px;font-weight:700">' + r.ticker + '</span>' +
+          ' <span style="color:' + dirColor + ';font-weight:700">' + dirLabel + '</span>' +
+          ' <span style="color:#8b98a9;font-size:11px">· ' + r.signal + '</span>' +
+          alignedTag + midTag +
+        '</div>' +
+        '<div style="font-size:12px;color:#ffb347;font-weight:600">' +
+          gateCount + '/9 gates ✓' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-top:6px;color:#e6edf3;font-size:13px">' +
+        '🚨 ' + premStr + ' ' + r.aPlusAlert.alertType.toUpperCase() + ' alert · ' + ageStr + ' ago' +
+      '</div>' +
+      '<div style="margin-top:4px;color:#8b98a9;font-size:11px">' +
+        'Price $' + fmtPrice(r.price) + ' · Trigger $' + (r.trigger ? r.trigger.toFixed(2) : '—') +
+        (r.magnitude ? ' · Target ' + r.magnitude.label + ' (' + r.magnitude.pct.toFixed(1) + '%)' : '') +
+      '</div>' +
+      '<div style="margin-top:8px">' + tradeBtnHtml(r) + '</div>' +
+    '</div>';
+  }).join('');
+
+  return header + cardsHtml + '</div>';
+}
+
 function render(data) {
   if (!data || data.error) {
     document.getElementById('root').innerHTML =
@@ -717,6 +808,17 @@ function render(data) {
 
   var groups = data.groups || {};
   var html = '';
+
+  // ============================================================
+  // A+ WAR ROOM — Apr 20 2026 (AB "one central place" rule)
+  // Shows only rows that pass ALL of:
+  //   - Directional signal (not Inside/Outside/Compression)
+  //   - 8+/9 gates passing
+  //   - Recent big-$ flow alert matching direction
+  // Empty most of the time = correct. Only lights up when it's THE ONE.
+  // ============================================================
+  html += warRoomHtml(groups);
+
   GROUP_ORDER.forEach(function(k) {
     if (groups[k] && groups[k].length) html += groupHtml(k, groups[k]);
   });
