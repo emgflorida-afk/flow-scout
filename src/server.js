@@ -210,6 +210,34 @@ app.post('/api/stratum-scanner/queue', async function(req, res) {
     res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+// Diagnostic: fetch Finnhub stock/metric directly and return the raw field
+// names that come back. Helps diagnose whether shortInterestSharesPercentFloat
+// is a valid field on this Finnhub plan, or if we need a different field name.
+app.get('/api/debug/finnhub-metric/:ticker', async function(req, res) {
+  var key = process.env.FINNHUB_API_KEY || process.env.FINNHUB_KEY;
+  if (!key) return res.status(500).json({ error: 'no FINNHUB key' });
+  var ticker = req.params.ticker.toUpperCase();
+  try {
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib('https://finnhub.io/api/v1/stock/metric?symbol=' + ticker + '&metric=all&token=' + key);
+    var body = await r.json();
+    // Return only the field names + any short-related values
+    var m = (body && body.metric) || {};
+    var shortFields = {};
+    Object.keys(m).forEach(function(k) {
+      if (/short|float|ratio/i.test(k)) shortFields[k] = m[k];
+    });
+    res.json({
+      http: r.status,
+      allMetricKeys: Object.keys(m).sort(),
+      shortRelatedFields: shortFields,
+      shortInterestSharesPercentFloat: m.shortInterestSharesPercentFloat,
+      shortRatio: m.shortRatio,
+      responseMetricType: body && body.metricType || null,
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Diagnostic: env var presence probe. Reports which of a known set of Railway
 // vars are visible to this process — no values echoed. If BULLFLOW_API_KEY
 // is missing here but set in Railway UI, the service is either stale (needs
