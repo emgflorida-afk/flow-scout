@@ -526,6 +526,15 @@ function tradeBtnHtml(r) {
   if (!dir) return '<span class="flow-mixed">—</span>';
   var label = dir === 'BULL' ? 'CALL' : 'PUT';
   var cls = dir === 'BULL' ? 'trade-btn' : 'trade-btn puts';
+  var brainDir = dir === 'BULL' ? 'CALLS' : 'PUTS';
+  // Already queued in brain? Show UNQUEUE button instead of Trade.
+  if (isQueued(r.ticker, brainDir)) {
+    var qid = getQueueId(r.ticker, brainDir);
+    return '<button class="trade-btn" ' +
+      'style="background:rgba(239,111,108,0.15);border:1px solid rgba(239,111,108,0.4);color:#ef6f6c" ' +
+      'onclick="unqueueTrade(\'' + qid + '\', \'' + r.ticker + '\', this)" ' +
+      'title="Remove this pending trade from brain queue">✗ UNQUEUE</button>';
+  }
   var payload = encodeURIComponent(JSON.stringify({
     ticker: r.ticker, signal: r.signal, price: r.price,
     trigger: r.trigger || r.price, ftfc: r.ftfc,
@@ -749,13 +758,39 @@ function applyFilters(data) {
   return filtered;
 }
 
+// Live brain-queue state (ticker+direction → queue ID). Refreshed on every scan.
+var _queueMap = {};
+function refreshQueueMap() {
+  return fetch('/api/brain/queue')
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      var map = {};
+      (d.queuedTrades || []).forEach(function(t) {
+        if (t.status !== 'PENDING') return;
+        var key = t.ticker + '|' + t.direction;
+        map[key] = t.id;
+      });
+      _queueMap = map;
+    })
+    .catch(function(){ /* silent */ });
+}
+function isQueued(ticker, direction) {
+  return !!_queueMap[ticker + '|' + direction];
+}
+function getQueueId(ticker, direction) {
+  return _queueMap[ticker + '|' + direction] || null;
+}
+
 function loadScan(force) {
   document.getElementById('refresh-btn').disabled = true;
   document.getElementById('refresh-btn').textContent = '⟳ Scanning ' + _currentTF + '…';
   var qs = 'tf=' + encodeURIComponent(_currentTF) + (force ? '&force=1' : '');
-  fetch('/api/stratum-scanner?' + qs)
-    .then(function(r) { return r.json(); })
-    .then(function(data) { _cachedData = data; render(applyFilters(data)); })
+  // Refresh queue state alongside scanner so Trade/Unqueue buttons reflect truth
+  Promise.all([
+    fetch('/api/stratum-scanner?' + qs).then(function(r){ return r.json(); }),
+    refreshQueueMap()
+  ])
+    .then(function(results) { _cachedData = results[0]; render(applyFilters(results[0])); })
     .catch(function(e) {
       document.getElementById('root').innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>';
     })
@@ -815,6 +850,8 @@ function queueTrade(payloadEncoded, btn) {
       if (r.ok) {
         btn.textContent = '✓ QUEUED';
         btn.style.background = 'rgba(167,139,250,0.2)';
+        // Refresh queue map so row re-renders with UNQUEUE on next scan
+        refreshQueueMap();
       } else {
         btn.textContent = '✗';
         alert('Queue failed: ' + (r.reason || 'unknown'));
@@ -824,6 +861,34 @@ function queueTrade(payloadEncoded, btn) {
     .catch(function(e){
       btn.textContent = '✗';
       alert('Fetch failed: ' + e.message);
+    });
+}
+
+// Unqueue a pending trade from the brain queue (sent here from rowHtml when already pending).
+function unqueueTrade(qid, ticker, btn) {
+  if (!confirm('Remove ' + ticker + ' from brain queue?\n\nThe trade will NOT fire even if the trigger is hit.')) return;
+  btn.disabled = true;
+  btn.textContent = '…';
+  fetch('/api/brain/queue/' + encodeURIComponent(qid), { method: 'DELETE' })
+    .then(function(r){ return r.json(); })
+    .then(function(r){
+      if (r.status === 'OK' || r.ok) {
+        btn.textContent = '✓ REMOVED';
+        btn.style.background = 'rgba(107,114,128,0.2)';
+        btn.style.border = '1px solid rgba(107,114,128,0.4)';
+        btn.style.color = '#9ca3af';
+        // Refresh queue map so next scan hides the unqueue button
+        refreshQueueMap().then(function(){ setTimeout(function(){ loadScan(false); }, 800); });
+      } else {
+        btn.textContent = '✗';
+        alert('Unqueue failed: ' + (r.reason || r.error || 'unknown'));
+        setTimeout(function(){ btn.disabled = false; btn.textContent = '✗ UNQUEUE'; }, 2000);
+      }
+    })
+    .catch(function(e){
+      btn.textContent = '✗';
+      alert('Fetch failed: ' + e.message);
+      setTimeout(function(){ btn.disabled = false; btn.textContent = '✗ UNQUEUE'; }, 2000);
     });
 }
 
