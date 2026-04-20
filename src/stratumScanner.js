@@ -468,7 +468,28 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   else                     { barUnit = 'Daily';  barInterval = 1; barCount = 30; tf = 'Daily'; }
 
   var bars = await fetchBars(ticker, barUnit, barInterval, barCount, token);
-  if (!bars || bars.length < 5) return null;
+  // Apr 20 2026: if bars fetch fails BUT ticker has TV alert or is starred,
+  // still surface a minimal row in TV Watch / Starred group so AB can see it.
+  if (!bars || bars.length < 5) {
+    var _tvFallback = getTVAlertsFor(ticker);
+    var _starFallback = isStarred(ticker);
+    if (_tvFallback || _starFallback) {
+      return {
+        ticker: ticker,
+        price: null, chgPct: null, atrPct: null,
+        signal: _tvFallback ? 'TV Watch' : 'Starred',
+        combo: [], dwmq: {}, ftfc: false, ftfcDir: null,
+        volAbs: null, volRel: null, earnings: null,
+        gap: null, signalContext: null, ftfcAligned: false,
+        atrExtreme: false, aPlusAlert: null,
+        flow: null, analyst: null, priceTargetPct: null,
+        tvAlert: _tvFallback, starred: _starFallback,
+        magnitude: null, midpoints: {},
+        trigger: null,
+      };
+    }
+    return null;
+  }
 
   var normed = bars.map(normBar).filter(Boolean);
   if (normed.length < 4) return null;
