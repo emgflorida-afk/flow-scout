@@ -157,18 +157,21 @@ function detectSignal(bars, currentPrice) {
 }
 
 // -----------------------------------------------------------------
-// FTFC VETO (strict) -- bearish signal requires non-UP FTFC, bullish requires non-DOWN.
+// FTFC VETO (STRICT — no MIXED, no soft-fail on errors).
+// Apr 20: AB's rule locked — MIXED is NOT alignment, it's indecision.
+// If FTFC is MIXED or unverifiable, SKIP the trade.
 // Primo: "trade in the direction of Full Timeframe Continuity."
 // -----------------------------------------------------------------
 function ftfcAgrees(direction, ftfc) {
-  if (!ftfc || ftfc.state === 'ERR' || ftfc.state === undefined) return true; // soft-fail
+  // HARD-FAIL on missing/error FTFC (was soft-fail pre-Apr 20; caused mixed fires)
+  if (!ftfc || ftfc.state === 'ERR' || ftfc.state === undefined) return false;
   var state = ftfc.state;
   if (direction === 'CALLS') {
-    // must not be fully or mostly DOWN
-    return state === 'FTFC UP' || state === 'mostly UP' || state === 'MIXED';
+    // Bullish signal must have clean UP alignment — MIXED is no longer acceptable
+    return state === 'FTFC UP' || state === 'mostly UP';
   }
-  // PUTS
-  return state === 'FTFC DOWN' || state === 'mostly DOWN' || state === 'MIXED';
+  // PUTS — bearish signal must have clean DOWN alignment
+  return state === 'FTFC DOWN' || state === 'mostly DOWN';
 }
 
 // -----------------------------------------------------------------
