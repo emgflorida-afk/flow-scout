@@ -298,7 +298,7 @@ function startBullflowStream(apiKeyOverride) {
   console.log('[BULLFLOW] Connecting to stream (key length=' + apiKey.length + ')...');
 
   var MAX_RETRIES     = 10;
-  var RETRY_DELAY_MS  = 5000;
+  var RETRY_DELAY_MS  = 60 * 1000;  // Apr 20 2026: 5s → 60s. Bullflow 429s on rapid retries.
   var retryCount      = 0;
 
   var connect = function() {
@@ -311,27 +311,16 @@ function startBullflowStream(apiKeyOverride) {
       console.log('[BULLFLOW] Reconnect attempt ' + retryCount + '/' + MAX_RETRIES + '...');
     }
 
-    // Apr 20 2026: try multiple auth methods — Bullflow may have changed format.
-    // Cycle through: query param → Authorization header → X-API-Key header.
-    var authAttempt = retryCount % 3;
-    var url, headers;
-    if (authAttempt === 0) {
-      url = 'https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey;
-      headers = { 'Accept': 'text/event-stream' };
-    } else if (authAttempt === 1) {
-      url = 'https://api.bullflow.io/v1/streaming/alerts';
-      headers = { 'Accept': 'text/event-stream', 'Authorization': 'Bearer ' + apiKey };
-    } else {
-      url = 'https://api.bullflow.io/v1/streaming/alerts';
-      headers = { 'Accept': 'text/event-stream', 'X-API-Key': apiKey };
-    }
-    console.log('[BULLFLOW] Attempt ' + retryCount + ' auth method=' + ['query', 'Bearer', 'X-API-Key'][authAttempt]);
-
-    fetch(url, { headers: headers }).then(function(res) {
+    // Auth via query param (confirmed by 429 response on Apr 20 2026 — key works, was rate-limited)
+    fetch('https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey, {
+      headers: { 'Accept': 'text/event-stream' }
+    }).then(function(res) {
       if (!res.ok) {
-        console.error('[BULLFLOW] Connection failed:', res.status, 'via', ['query', 'Bearer', 'X-API-Key'][authAttempt]);
+        // 429 = rate-limited; longer backoff
+        var delay = res.status === 429 ? RETRY_DELAY_MS * 2 : RETRY_DELAY_MS;
+        console.error('[BULLFLOW] Connection failed:', res.status, '— retrying in', Math.round(delay/1000) + 's');
         retryCount++;
-        setTimeout(connect, RETRY_DELAY_MS);
+        setTimeout(connect, delay);
         return;
       }
       // Reset retry count on successful connection
