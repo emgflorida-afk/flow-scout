@@ -246,6 +246,27 @@ app.get('/api/debug/finnhub-metric/:ticker', async function(req, res) {
 // Railway's lazy env injection apparently exposes BULLFLOW_API_KEY to
 // request-bound code but not to module-load / setInterval paths. Calling
 // startBullflowStream from here captures the request-context env.
+app.get('/api/bullflow/status', function(req, res) {
+  var fs = require('fs');
+  var keyFile = (process.env.STATE_DIR || '/tmp') + '/bullflow_key.txt';
+  var fileExists = false;
+  var fileLen = 0;
+  try {
+    if (fs.existsSync(keyFile)) {
+      fileExists = true;
+      fileLen = fs.readFileSync(keyFile, 'utf8').trim().length;
+    }
+  } catch(e) {}
+  res.json({
+    keyFile: keyFile,
+    fileExists: fileExists,
+    fileKeyLength: fileLen,
+    envKeyPresent: !!(process.env.BULLFLOW_API_KEY),
+    envKeyLength: process.env.BULLFLOW_API_KEY ? process.env.BULLFLOW_API_KEY.length : 0,
+    stateDir: process.env.STATE_DIR || null,
+  });
+});
+
 app.get('/api/bullflow/init', function(req, res) {
   console.log('[INIT-ENDPOINT] /api/bullflow/init called. pid=' + process.pid);
   try {
