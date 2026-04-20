@@ -188,8 +188,13 @@ async function processAlert(alert) {
 
   console.log('[FLOW] ' + ticker + ' (' + rawSymbol + ') score:' + score + ' watchlist:' + onList + ' prem:$' + Math.round(prem));
 
+  // Apr 20 2026: FLOW_DISCORD_DISABLED env var lets AB route flow to scanner only.
+  // liveAggregator still receives alerts (so scanner rows populate); only the
+  // Discord posts are suppressed.
+  var discordDisabled = (process.env.FLOW_DISCORD_DISABLED || '').toLowerCase() === 'true';
+
   // Wide net -- ALL watchlist tickers post to #flow-alerts, no score gate
-  if (onList) {
+  if (onList && !discordDisabled) {
     var card = formatFlowCard(alert, ticker, score);
     await sendToDiscord(FLOW_WEBHOOK, card);
     console.log('[FLOW] Sent to #flow-alerts -- ' + ticker);
@@ -200,6 +205,8 @@ async function processAlert(alert) {
       await sendToDiscord(CONVICTION_WEBHOOK, convCard);
       console.log('[FLOW] Sent to #conviction-flow -- ' + ticker + ' score:' + score);
     }
+  } else if (onList && discordDisabled) {
+    console.log('[FLOW] ' + ticker + ' scanner-only (Discord suppressed via FLOW_DISCORD_DISABLED)');
   }
 }
 
