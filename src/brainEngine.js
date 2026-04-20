@@ -413,6 +413,27 @@ function loadBrainState() {
 }
 
 function addQueuedTrade(trade) {
+  // ============================================================
+  // STRAT_ONLY CENTRAL GATE (Apr 20 2026)
+  // AB rule: only stratumBar (Primo Strat) may auto-queue.
+  // Casey / WP / AYCE / JSmith / flow / hedge / spread = signal-only.
+  // The gate lives HERE at the single chokepoint so no caller can
+  // bypass by importing addQueuedTrade directly.
+  // ============================================================
+  try {
+    var mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+    if (mode === 'STRAT_ONLY') {
+      var src = String(trade && trade.source || '').toUpperCase();
+      var isStrat = src.indexOf('STRATUMBAR') === 0;  // STRATUMBAR_F2U, STRATUMBAR_F2D, STRATUMBAR_INSIDE_BO, etc.
+      if (!isStrat) {
+        console.log('[BRAIN] STRAT_ONLY blocked non-Strat queue: ' + (trade && trade.ticker) + ' source=' + src);
+        return null;
+      }
+    }
+  } catch(gateErr) {
+    console.error('[BRAIN] STRAT_ONLY gate error (allowing through):', gateErr.message);
+  }
+
   var qt = {
     id: 'QT_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     ticker: (trade.ticker || '').toUpperCase(),
