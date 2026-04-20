@@ -84,8 +84,12 @@ async function getFinnhubData(ticker) {
     var target = await targetRes.json().catch(function(){return{};});
     var metric = await metricRes.json().catch(function(){return{};});
     var latest = Array.isArray(rec) && rec.length ? rec[0] : null;
-    // Finnhub free tier doesn't expose short interest — we use Yahoo Finance
-    // below for that. Keep metric fetch anyway for future fields we might want.
+    // Short interest removed — Finnhub free tier doesn't have it, Yahoo
+    // defaultKeyStatistics returns null for most tickers now, and the Yahoo
+    // fetch was adding latency that regressed scanner match count.
+    // Keep the 'short' field on the data shape (returns null) so Short column
+    // renders safely. Fill from a paid source (Polygon, Ortex, S3 Partners)
+    // next Saturday.
     var data = {
       rec: latest ? {
         buy: (latest.strongBuy || 0) + (latest.buy || 0),
@@ -93,44 +97,10 @@ async function getFinnhubData(ticker) {
         sell: (latest.sell || 0) + (latest.strongSell || 0),
       } : null,
       target: target && target.targetMean ? target.targetMean : null,
-      short: await getYahooShortInterest(ticker),
+      short: null,
     };
     _finnhubCache[ticker] = { data: data, ts: Date.now() };
     return data;
-  } catch(e) { return null; }
-}
-
-// Short interest via Yahoo Finance quoteSummary defaultKeyStatistics. Free,
-// no key, unofficial endpoint. Returns { floatPct, daysToCover } or null.
-// Yahoo fields used:
-//   shortPercentOfFloat.raw      → 0.15 means 15% short float
-//   shortRatio.raw               → days to cover (SI / avg volume)
-//   sharesShortPriorMonth.raw    → raw count (not used directly but avail)
-var _yahooShortCache = {};
-async function getYahooShortInterest(ticker) {
-  var cached = _yahooShortCache[ticker];
-  if (cached && (Date.now() - cached.ts) < FINNHUB_TTL_MS) return cached.data;
-  try {
-    var url = 'https://query2.finance.yahoo.com/v10/finance/quoteSummary/' + ticker
-      + '?modules=defaultKeyStatistics';
-    var res = await fetch(url, {
-      headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 stratum-scanner' },
-      timeout: 8000,
-    });
-    if (!res.ok) { _yahooShortCache[ticker] = { data: null, ts: Date.now() }; return null; }
-    var j = await res.json();
-    var stats = j && j.quoteSummary && j.quoteSummary.result && j.quoteSummary.result[0]
-              && j.quoteSummary.result[0].defaultKeyStatistics;
-    if (!stats) { _yahooShortCache[ticker] = { data: null, ts: Date.now() }; return null; }
-    var sp = stats.shortPercentOfFloat && stats.shortPercentOfFloat.raw;
-    var sr = stats.shortRatio && stats.shortRatio.raw;
-    if (sp == null && sr == null) { _yahooShortCache[ticker] = { data: null, ts: Date.now() }; return null; }
-    var out = {
-      floatPct: sp != null ? +(sp * 100).toFixed(2) : null,  // convert 0.15 -> 15.00
-      daysToCover: sr != null ? +Number(sr).toFixed(2) : null,
-    };
-    _yahooShortCache[ticker] = { data: out, ts: Date.now() };
-    return out;
   } catch(e) { return null; }
 }
 
