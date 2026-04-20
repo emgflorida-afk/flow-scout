@@ -129,6 +129,15 @@
   .gex-fired-up    { background: rgba(34,197,94,0.3); color: #bbf7d0; }
   .gex-trend       { color: var(--muted); font-size: 10px; }
 
+  .col-short { width: 78px; text-align: center; }
+  .short-badge {
+    display: inline-block; padding: 2px 5px; border-radius: 3px;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.2px;
+  }
+  .short-hot   { background: rgba(239,68,68,0.25); color: #fca5a5; }
+  .short-warm  { background: rgba(250,204,21,0.2); color: #fde68a; }
+  .short-cold  { color: var(--muted); font-size: 10px; }
+
   .mid-stack {
     display: inline-flex; flex-direction: column; gap: 1px;
     padding: 2px 5px; border-radius: 3px; font-size: 9px; font-weight: 700;
@@ -485,6 +494,18 @@ function midHtml(mp) {
          '<span>W ' + w + '</span><span>D ' + d + '</span></span>';
 }
 
+// Short interest squeeze badge. HOT = SI >20% + DTC >5 days (classic
+// squeeze candidate). WARM = elevated SI or DTC (watch). Hover shows SI% + DTC.
+function shortHtml(sq) {
+  if (!sq || !sq.state) return '<span class="short-cold">—</span>';
+  var si  = sq.floatPct != null ? sq.floatPct.toFixed(1) + '%' : 'n/a';
+  var dtc = sq.daysToCover != null ? sq.daysToCover.toFixed(1) + 'd' : 'n/a';
+  var tip = 'Short Float: ' + si + '  |  Days to Cover: ' + dtc;
+  if (sq.state === 'HOT')  return '<span class="short-badge short-hot"  title="' + tip + '">🔥 HOT</span>';
+  if (sq.state === 'WARM') return '<span class="short-badge short-warm" title="' + tip + '">⚠ WARM</span>';
+  return '<span class="short-cold" title="' + tip + '">' + si + '</span>';
+}
+
 // GEX regime badge. Combines dealer-positioning magnet (pin) + gamma-flip
 // proximity. "ARMED_DOWN" = above flip, close to tipping = cascade setup.
 // "ARMED_UP" = below flip, close to regime squeeze up. "PIN" = price glued.
@@ -602,6 +623,7 @@ function rowHtml(r) {
     '<td class="col-mid">' + midHtml(r.midpoints) + '</td>' +
     '<td class="col-coil">' + coilHtml(r.squeeze) + '</td>' +
     '<td class="col-gex">' + gexHtml(r.gex) + '</td>' +
+    '<td class="col-short">' + shortHtml(r.shortSqueeze) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
@@ -637,6 +659,7 @@ function groupHtml(name, rows) {
       '<th class="col-mid" title="Weekly + Daily midpoint stack. Green = both buyers won, Red = both sellers won, Yellow = mixed">Mid</th>' +
       '<th class="col-coil" title="TTM Squeeze on Daily — COILED = compression armed, FIRED↑/↓ = just released with momentum direction, — = normal regime">Coil</th>' +
       '<th class="col-gex" title="GEX regime — PIN = price glued to max +GEX, ARMED↓/↑ = near flip zone, CASCADE/SQUEEZE = crossed flip with regime momentum">GEX</th>' +
+      '<th class="col-short" title="Short Interest squeeze setup — HOT = SI >20% + DTC >5d, WARM = elevated but not extreme, — = no squeeze signal. Hover for exact SI% + Days to Cover.">Short</th>' +
       '<th class="col-vol">Vol</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +

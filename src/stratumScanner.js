@@ -73,11 +73,22 @@ async function getFinnhubData(ticker) {
   if (cached && (Date.now() - cached.ts) < FINNHUB_TTL_MS) return cached.data;
   try {
     var base = 'https://finnhub.io/api/v1';
-    var recRes = await fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
-    var targetRes = await fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
-    var rec = await recRes.json().catch(function(){return[];});
+    // Fetch three endpoints in parallel: recommendations, price-target, metrics (for short interest)
+    var recP    = fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
+    var targetP = fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
+    var metricP = fetch(base + '/stock/metric?symbol=' + ticker + '&metric=all&token=' + key);
+    var recRes    = await recP;
+    var targetRes = await targetP;
+    var metricRes = await metricP;
+    var rec    = await recRes.json().catch(function(){return[];});
     var target = await targetRes.json().catch(function(){return{};});
+    var metric = await metricRes.json().catch(function(){return{};});
     var latest = Array.isArray(rec) && rec.length ? rec[0] : null;
+    // Finnhub metric.metric returns {shortInterest, shortRatio (days to cover), ...}
+    var m = (metric && metric.metric) || {};
+    // shortInterestSharesPercentFloat → sometimes called "shortFloat%"
+    var shortFloatPct = m.shortInterestSharesPercentFloat || null;
+    var daysToCover   = m.shortRatio || null;
     var data = {
       rec: latest ? {
         buy: (latest.strongBuy || 0) + (latest.buy || 0),
@@ -85,10 +96,36 @@ async function getFinnhubData(ticker) {
         sell: (latest.sell || 0) + (latest.strongSell || 0),
       } : null,
       target: target && target.targetMean ? target.targetMean : null,
+      short: (shortFloatPct != null || daysToCover != null) ? {
+        floatPct: shortFloatPct != null ? +Number(shortFloatPct).toFixed(2) : null,
+        daysToCover: daysToCover != null ? +Number(daysToCover).toFixed(2) : null,
+      } : null,
     };
     _finnhubCache[ticker] = { data: data, ts: Date.now() };
     return data;
   } catch(e) { return null; }
+}
+
+// Classify short-interest into squeeze-potential badge state.
+// Based on widely-used squeeze thresholds:
+//   HOT:    SI > 20% AND DTC > 5   (squeeze candidates, watch for catalyst)
+//   WARM:   SI > 10% AND DTC > 3   (elevated interest, worth watching)
+//   COLD:   everything else         (no squeeze signal)
+function classifyShortSqueeze(shortObj) {
+  if (!shortObj) return null;
+  var si = shortObj.floatPct;
+  var dtc = shortObj.daysToCover;
+  if (si == null && dtc == null) return null;
+  var state;
+  if (si != null && si >= 20 && dtc != null && dtc >= 5) state = 'HOT';
+  else if (si != null && si >= 10 && dtc != null && dtc >= 3) state = 'WARM';
+  else if ((si != null && si >= 20) || (dtc != null && dtc >= 5)) state = 'WARM';
+  else state = 'COLD';
+  return {
+    state: state,
+    floatPct: si,
+    daysToCover: dtc,
+  };
 }
 
 function recToLabel(rec) {
@@ -753,6 +790,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     },
     squeeze: dwmq.squeeze || null,  // TTM Squeeze on Daily: {state, ratio, momentum, bbWidth, kcWidth} or null
     gex: gexSignal || null,          // GEX regime via CBOE: {regime, pin, flip, state, expectedMove, ...} or null
+    shortSqueeze: classifyShortSqueeze(finn && finn.short) || null,  // Short interest squeeze: {state, floatPct, daysToCover}
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {
