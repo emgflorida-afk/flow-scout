@@ -20,6 +20,8 @@ var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
 var bullflow = null;
 try { bullflow = require('./bullflowStream'); } catch(e) {}
+var gexModule = null;
+try { gexModule = require('./gex'); } catch(e) { console.error('[SCANNER] gex module load error:', e.message); }
 
 // -----------------------------------------------------------------
 // PERSISTENT STATE -- stars + daily signal history
@@ -405,6 +407,51 @@ async function fetchContinuity(ticker, currentPrice, token) {
   return out;
 }
 
+// GEX regime signal for the scanner row. Takes the full gex.js output and
+// distills a compact state for the Coil/GEX column to render quickly.
+//
+// Returns: {
+//   regime:    'POSITIVE' | 'NEGATIVE' | null   (from gex.js)
+//   pin:       price level of max +GEX
+//   flip:      gamma flip price (where dealers change direction)
+//   distToPinPct:  |price - pin| / price * 100  (how magnet-close)
+//   distToFlipPct: signed distance to flip (negative = price below flip)
+//   state:     'PIN' (within 0.3% of pin) |
+//              'ARMED_DOWN' (price <= 1% above flip, flip armed to cascade) |
+//              'ARMED_UP' (price >= 1% below flip, flip armed to squeeze) |
+//              'FIRED_DOWN' (price crossed below flip) |
+//              'FIRED_UP' (price crossed above flip) |
+//              'TREND' (far from flip, no near-term magnet)
+//   expectedMove: daily expected move ± from ATM IV
+// }
+function computeGexSignal(price, gex) {
+  if (!gex || !gex.spot) return null;
+  var pin = gex.pin;
+  var flip = gex.gammaFlip;
+  var regime = gex.regime;
+  var distToPinPct = pin ? Math.abs(price - pin) / price * 100 : null;
+  var distToFlipPct = flip ? (price - flip) / price * 100 : null;
+
+  var state = 'TREND';
+  if (pin && distToPinPct != null && distToPinPct <= 0.3) state = 'PIN';
+  else if (flip && distToFlipPct != null) {
+    if (distToFlipPct >= 0 && distToFlipPct <= 1.0)  state = 'ARMED_DOWN'; // above flip but near, could cascade
+    else if (distToFlipPct < 0 && distToFlipPct >= -1.0) state = 'ARMED_UP'; // below flip but near, could squeeze up
+    else if (distToFlipPct < -1.0) state = regime === 'NEGATIVE' ? 'FIRED_DOWN' : 'TREND';
+    else if (distToFlipPct > 1.0)  state = regime === 'POSITIVE' ? 'TREND' : 'FIRED_UP';
+  }
+  return {
+    regime: regime,
+    pin: pin ? +pin.toFixed(2) : null,
+    flip: flip ? +flip.toFixed(2) : null,
+    distToPinPct: distToPinPct != null ? +distToPinPct.toFixed(2) : null,
+    distToFlipPct: distToFlipPct != null ? +distToFlipPct.toFixed(2) : null,
+    state: state,
+    expectedMove: gex.expectedMove || null,
+    totalNetGex: gex.totalNetGex || null,
+  };
+}
+
 // TTM Squeeze compute. Pure math, no external calls. Returns null when
 // insufficient bars (needs >= 22 daily bars).
 //
@@ -617,6 +664,15 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
 
+  // GEX pull from existing gex.js module (CBOE free API, 15-min TTL cache).
+  // Soft-fails if CBOE returns 404 for a symbol (common for thin ETFs).
+  var gexData = null;
+  if (gexModule) {
+    try { gexData = await gexModule.getGammaLevels(ticker); }
+    catch(e) { /* soft */ }
+  }
+  var gexSignal = computeGexSignal(price, gexData);
+
   // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
   // Reversal patterns fire on intraday exhaustion. On strong TREND days
   // (like today: SPY +0.5%, near highs, weekly 2U#2) most stocks run with
@@ -696,6 +752,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
       vsWeekly: midStack.weekly,        // 'above'|'below'
     },
     squeeze: dwmq.squeeze || null,  // TTM Squeeze on Daily: {state, ratio, momentum, bbWidth, kcWidth} or null
+    gex: gexSignal || null,          // GEX regime via CBOE: {regime, pin, flip, state, expectedMove, ...} or null
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {
