@@ -247,16 +247,26 @@ app.get('/api/debug/finnhub-metric/:ticker', async function(req, res) {
 // request-bound code but not to module-load / setInterval paths. Calling
 // startBullflowStream from here captures the request-context env.
 app.get('/api/bullflow/init', function(req, res) {
+  console.log('[INIT-ENDPOINT] /api/bullflow/init called. pid=' + process.pid);
   try {
     var k = process.env.BULLFLOW_API_KEY;
+    console.log('[INIT-ENDPOINT] process.env.BULLFLOW_API_KEY: ' + (k ? 'len=' + k.length : 'MISSING'));
     if (!k || k.length < 5) {
       return res.json({ ok: false, reason: 'BULLFLOW_API_KEY still not visible in request env' });
     }
+    // Write to disk directly so we don't depend on startBullflowStream's internal logic
+    var fs = require('fs');
+    var keyFile = (process.env.STATE_DIR || '/tmp') + '/bullflow_key.txt';
+    fs.writeFileSync(keyFile, k);
+    console.log('[INIT-ENDPOINT] Wrote key to ' + keyFile);
+
     var bf = require('./bullflowStream');
-    // Pass key DIRECTLY as override — no module-scope caching ambiguity
+    console.log('[INIT-ENDPOINT] bullflow module loaded, calling startBullflowStream...');
     bf.startBullflowStream(k);
-    res.json({ ok: true, keyLength: k.length, keyStart: k.slice(0, 3) + '...', started: true });
+    console.log('[INIT-ENDPOINT] startBullflowStream call returned');
+    res.json({ ok: true, keyLength: k.length, keyStart: k.slice(0, 3) + '...', started: true, wroteDisk: true });
   } catch(e) {
+    console.error('[INIT-ENDPOINT] ERROR:', e.message, e.stack);
     res.json({ ok: false, error: e.message });
   }
 });
