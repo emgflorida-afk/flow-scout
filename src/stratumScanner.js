@@ -699,12 +699,20 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
 
-  // GEX pull from existing gex.js module (CBOE free API, 15-min TTL cache).
-  // Soft-fails if CBOE returns 404 for a symbol (common for thin ETFs).
+  // GEX pull — limit to a curated set of high-volume tickers to avoid hitting
+  // CBOE 137 times per scan which regresses match count due to concurrency
+  // pressure. For other tickers, GEX stays null (column shows em-dash). Full
+  // coverage can be added later with a proper concurrency pool + dedicated
+  // background worker.
+  var GEX_TIER1 = ['SPY','QQQ','IWM','DIA','NVDA','TSLA','AAPL','MSFT','GOOGL','META','AMZN','AMD','NFLX','BAC','JPM','GS','XLE','XLF','XLK','SMH','SOXL'];
   var gexData = null;
-  if (gexModule) {
-    try { gexData = await gexModule.getGammaLevels(ticker); }
-    catch(e) { /* soft */ }
+  if (gexModule && GEX_TIER1.indexOf(ticker) !== -1) {
+    try {
+      gexData = await Promise.race([
+        gexModule.getGammaLevels(ticker),
+        new Promise(function(resolve){ setTimeout(function(){ resolve(null); }, 3000); }),
+      ]);
+    } catch(e) { /* soft */ }
   }
   var gexSignal = computeGexSignal(price, gexData);
 
