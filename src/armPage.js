@@ -208,7 +208,7 @@ function renderQueue(trades) {
 }
 
 async function killQueueItem(id, ticker) {
-  if (!confirm('Remove ' + ticker + ' from queue?\nThis pending trade will NOT fire even if trigger hits.')) return;
+  if (!confirm('Remove ' + ticker + ' from queue? This pending trade will NOT fire even if trigger hits.')) return;
   try {
     var r = await fetch('/api/brain/queue/' + encodeURIComponent(id), { method: 'DELETE' });
     var d = await r.json();
