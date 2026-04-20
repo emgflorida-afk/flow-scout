@@ -228,15 +228,41 @@ function setCachedApiKey(k) {
   }
 }
 
+// -- DISK-BASED KEY STORE (Railway lazy-env workaround) --
+// HTTP request context can see process.env.BULLFLOW_API_KEY and writes it
+// to a persistent file. setInterval/startup paths (which can't see the env)
+// read from that file on each retry.
+var _keyFile = (process.env.STATE_DIR || '/tmp') + '/bullflow_key.txt';
+function readKeyFromDisk() {
+  try {
+    var fs = require('fs');
+    if (fs.existsSync(_keyFile)) {
+      var k = fs.readFileSync(_keyFile, 'utf8').trim();
+      if (k && k.length > 5) return k;
+    }
+  } catch(e) {}
+  return null;
+}
+function writeKeyToDisk(k) {
+  try {
+    var fs = require('fs');
+    fs.writeFileSync(_keyFile, k);
+    console.log('[BULLFLOW] Wrote key to disk at ' + _keyFile);
+    return true;
+  } catch(e) {
+    console.error('[BULLFLOW] Failed writing key to disk:', e.message);
+    return false;
+  }
+}
+
 // -- MAIN STREAM --------------------------------------------------
-// Apr 20 2026: apiKeyOverride param lets HTTP handlers pass the key directly
-// (Railway lazy env workaround).
 function startBullflowStream(apiKeyOverride) {
-  var apiKey = apiKeyOverride || _cachedApiKey || process.env.BULLFLOW_API_KEY;
-  console.log('[BULLFLOW] startBullflowStream called. override=' + (apiKeyOverride ? 'YES len='+apiKeyOverride.length : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no') + ', env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no'));
-  if (apiKeyOverride && !_cachedApiKey) {
+  var diskKey = readKeyFromDisk();
+  var apiKey = apiKeyOverride || _cachedApiKey || process.env.BULLFLOW_API_KEY || diskKey;
+  console.log('[BULLFLOW] startBullflowStream called. override=' + (apiKeyOverride ? 'YES len='+apiKeyOverride.length : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no') + ', env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', disk=' + (diskKey ? 'YES len='+diskKey.length : 'no'));
+  if (apiKeyOverride) {
     _cachedApiKey = apiKeyOverride;
-    console.log('[BULLFLOW] Cached override key for future reconnects');
+    writeKeyToDisk(apiKeyOverride);
   }
   if (!apiKey) {
     // Apr 20 2026: self-heal mode. Instead of giving up, re-check every 60s
@@ -245,14 +271,15 @@ function startBullflowStream(apiKeyOverride) {
     var envKeys = Object.keys(process.env).filter(function(k){ return k.indexOf('BULLFLOW') >= 0 || k.indexOf('FLOW') >= 0; });
     console.error('[BULLFLOW] No API key on startup. Process sees env keys matching FLOW/BULLFLOW: ' + JSON.stringify(envKeys) + '. Will retry every 60s...');
     var retryTimer = setInterval(function() {
-      var k = process.env.BULLFLOW_API_KEY || _cachedApiKey;
-      console.log('[BULLFLOW] retry: env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no'));
+      var diskK = readKeyFromDisk();
+      var k = process.env.BULLFLOW_API_KEY || _cachedApiKey || diskK;
+      console.log('[BULLFLOW] retry: env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no') + ', disk=' + (diskK ? 'YES' : 'no'));
       if (k && typeof k === 'string' && k.length > 5) {
-        console.log('[BULLFLOW] API key detected on retry (length ' + k.length + '). Connecting now.');
+        console.log('[BULLFLOW] API key available (length ' + k.length + '). Connecting now.');
         clearInterval(retryTimer);
-        startBullflowStream();
+        startBullflowStream(k);
       }
-    }, 60 * 1000);
+    }, 20 * 1000);  // retry every 20s
     return;
   }
   console.log('[BULLFLOW] Connecting to stream (key length=' + apiKey.length + ')...');
