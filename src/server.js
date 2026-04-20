@@ -242,6 +242,24 @@ app.get('/api/debug/finnhub-metric/:ticker', async function(req, res) {
 // vars are visible to this process — no values echoed. If BULLFLOW_API_KEY
 // is missing here but set in Railway UI, the service is either stale (needs
 // redeploy) or pointing at a different project/env.
+// Manually kick the Bullflow stream from inside an HTTP handler.
+// Railway's lazy env injection apparently exposes BULLFLOW_API_KEY to
+// request-bound code but not to module-load / setInterval paths. Calling
+// startBullflowStream from here captures the request-context env.
+app.get('/api/bullflow/init', function(req, res) {
+  try {
+    var k = process.env.BULLFLOW_API_KEY;
+    if (!k || k.length < 5) {
+      return res.json({ ok: false, reason: 'BULLFLOW_API_KEY still not visible in request env' });
+    }
+    var bf = require('./bullflowStream');
+    bf.startBullflowStream();
+    res.json({ ok: true, keyLength: k.length, keyStart: k.slice(0, 3) + '...', started: true });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/env-probe', function(req, res) {
   var names = [
     'BULLFLOW_API_KEY', 'ANTHROPIC_API_KEY', 'ACCOUNT_SIZE', 'AGENT_MODE',
