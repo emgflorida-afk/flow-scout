@@ -178,6 +178,8 @@ var DEFAULT_WATCHLIST = [
   // Growth / momentum
   'MU','MSTR','COIN','PLTR','ARM','PANW','CRWD','SNOW','WDAY','NOW','SHOP','UBER','ABNB','HOOD','SOFI','DKNG',
   'ANET','DELL','SMCI','AMAT','LRCX','KLAC','MRVL','QCOM','TSM','ASML',
+  // John VIP watchlist (Apr 20 adds): BABA, CRWV
+  'BABA','CRWV',
   // Financials
   'JPM','BAC','GS','MS','WFC','C','BLK','SCHW','V','MA','PYPL','AXP','PNC','FITB','CB',
   // Healthcare
