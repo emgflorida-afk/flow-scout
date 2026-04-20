@@ -189,12 +189,37 @@ function renderQueue(trades) {
   el.innerHTML = pending.map(function(t) {
     var g = (t.grade || '').replace('+','plus');
     var dirCls = t.direction === 'CALLS' ? 'calls' : 'puts';
-    return '<div class="q-item">'
-      + '<div class="q-head"><span>'+ t.ticker +' <span class="'+ dirCls +'">'+ t.direction +'</span></span>'
-      + '<span class="grade-'+ g +'">'+ (t.grade || '—') +'</span></div>'
+    var src = (t.source || '').toUpperCase();
+    var isStrat = src.indexOf('STRATUMBAR') === 0 || src.indexOf('STRATUMSCANNER') === 0 || src.indexOf('STRATUM_') === 0;
+    var nonStratFlag = isStrat ? '' : ' <span style="color:#ef6f6c;font-size:10px;font-weight:700" title="Non-Strat source (Casey/WP/AYCE/etc) — click ✗ to kill">⚠ NON-STRAT</span>';
+    return '<div class="q-item" id="qi-'+ t.id +'">'
+      + '<div class="q-head">'
+        + '<span>'+ t.ticker +' <span class="'+ dirCls +'">'+ t.direction +'</span>' + nonStratFlag + '</span>'
+        + '<span style="display:flex;align-items:center;gap:10px">'
+          + '<span class="grade-'+ g +'">'+ (t.grade || '—') +'</span>'
+          + '<button onclick="killQueueItem(\''+ t.id +'\', \''+ t.ticker +'\')" '
+            + 'style="background:rgba(239,111,108,0.15);border:1px solid rgba(239,111,108,0.4);color:#ef6f6c;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer" '
+            + 'title="Remove this pending trade">✗ KILL</button>'
+        + '</span>'
+      + '</div>'
       + '<div class="q-sub">'+ (t.contractSymbol||'') +' · trig '+ t.triggerPrice +' · x'+ t.contracts +' · '+ (t.source||'') +'</div>'
       + '</div>';
   }).join('');
+}
+
+async function killQueueItem(id, ticker) {
+  if (!confirm('Remove ' + ticker + ' from queue?\nThis pending trade will NOT fire even if trigger hits.')) return;
+  try {
+    var r = await fetch('/api/brain/queue/' + encodeURIComponent(id), { method: 'DELETE' });
+    var d = await r.json();
+    if (d.status === 'OK' || d.ok) {
+      refresh();
+    } else {
+      alert('Kill failed: ' + (d.error || d.reason || 'unknown'));
+    }
+  } catch(e) {
+    alert('Fetch failed: ' + e.message);
+  }
 }
 
 async function refresh() {

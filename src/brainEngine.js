@@ -421,6 +421,18 @@ function addQueuedTrade(trade) {
   // bypass by importing addQueuedTrade directly.
   // ============================================================
   try {
+    // BLACKLIST GATE (Apr 20 PM) — tickers that hard-reject BEFORE anything else.
+    // Mirrors orderExecutor blacklist so bad trades never even enter the queue.
+    var BRAIN_BLACKLIST = [
+      'TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'IREN', 'CIFR', 'HIVE', 'SOFI',
+      'UPST', 'RKLB', 'LUNR', 'HOOD', 'AFRM', 'HIMS', 'APP', 'SNAP', 'RDDT', 'MRVL'
+    ];
+    var btTicker = (trade && trade.ticker || '').toUpperCase();
+    if (BRAIN_BLACKLIST.indexOf(btTicker) !== -1) {
+      console.log('[BRAIN] BLACKLIST blocked: ' + btTicker + ' source=' + (trade && trade.source));
+      return null;
+    }
+
     var mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
     if (mode === 'STRAT_ONLY') {
       var src = String(trade && trade.source || '').toUpperCase();
