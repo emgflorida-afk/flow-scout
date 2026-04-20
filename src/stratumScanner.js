@@ -579,6 +579,15 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     }
   }
 
+  // Apr 20 2026: force-include tickers with fresh TV alerts OR starred —
+  // surfaces John VIP / Reversal Indicator alerts on scanner even when
+  // no Strat signal is present yet.
+  var _tvAlertsLocal = getTVAlertsFor(ticker);
+  var _starred = isStarred(ticker);
+  if (!signal && (_tvAlertsLocal || _starred)) {
+    signal = _tvAlertsLocal ? 'TV Watch' : 'Starred';
+  }
+
   var badge = earningsBadge(earningsMap[ticker]);
 
   // Enrich: Bullflow + Finnhub + TradingView alerts (all non-blocking)
