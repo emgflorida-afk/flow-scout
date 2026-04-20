@@ -649,6 +649,14 @@ async function pollOnce() {
   var alerts = [];
   var signals = [];
 
+  // Apr 20 PM — HARD ABORT if STRAT_ONLY
+  var _mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+  if (_mode === 'STRAT_ONLY') {
+    _running = false;
+    console.log('[AYCE] STRAT_ONLY hard-abort — scan skipped');
+    return { ok: true, checked: 0, queued: 0, skipped: 0, signals: [], skippedReason: 'STRAT_ONLY' };
+  }
+
   try {
     var ts;
     try { ts = require('./tradestation'); }

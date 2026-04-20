@@ -301,6 +301,16 @@ async function pollOnce() {
 
   var checked = 0, queued = 0, skipped = 0;
 
+  // Apr 20 PM — HARD ABORT if STRAT_ONLY mode is active.
+  // Belt-and-suspenders with brainEngine.addQueuedTrade gate.
+  // Casey posts to Discord via a different path; this skips the scan entirely.
+  var _mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+  if (_mode === 'STRAT_ONLY') {
+    _running = false;
+    console.log('[CASEY] STRAT_ONLY hard-abort — scan skipped (AB rule)');
+    return { ok: true, checked: 0, queued: 0, skipped: 0, skippedReason: 'STRAT_ONLY' };
+  }
+
   try {
     var ts = require('./tradestation');
     var token = await ts.getAccessToken();

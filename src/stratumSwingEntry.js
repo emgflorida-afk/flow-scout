@@ -281,6 +281,14 @@ async function pollOnce() {
   var queued = 0;
   var skipped = 0;
 
+  // Apr 20 PM — HARD ABORT if STRAT_ONLY
+  var _mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+  if (_mode === 'STRAT_ONLY') {
+    _running = false;
+    console.log('[WP] STRAT_ONLY hard-abort — scan skipped');
+    return { ok: true, checked: 0, queued: 0, skipped: 0, skippedReason: 'STRAT_ONLY' };
+  }
+
   try {
     var token;
     try {

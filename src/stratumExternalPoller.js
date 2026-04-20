@@ -267,6 +267,13 @@ async function runPollCycle(opts) {
     return { skipped: 'no DISCORD_USER_TOKEN' };
   }
 
+  // Apr 20 PM — HARD ABORT if STRAT_ONLY
+  var _mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+  if (_mode === 'STRAT_ONLY') {
+    console.log('[JSMITH] STRAT_ONLY hard-abort — poll skipped');
+    return { skipped: 'STRAT_ONLY' };
+  }
+
   _cycleRunning = true;
   try {
     var webhookUrl = process.env.DISCORD_STRATUMEXTERNAL_WEBHOOK || process.env.DISCORD_JSMITH_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
