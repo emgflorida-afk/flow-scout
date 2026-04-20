@@ -250,7 +250,15 @@ app.get('/api/env-probe', function(req, res) {
     'RAILWAY_ENVIRONMENT_NAME', 'RAILWAY_PUBLIC_DOMAIN', 'PORT'
   ];
   var out = {};
-  names.forEach(function(n) { out[n] = typeof process.env[n] === 'string' && process.env[n].length > 0; });
+  names.forEach(function(n) {
+    var v = process.env[n];
+    out[n] = {
+      present: typeof v === 'string' && v.length > 0,
+      length: typeof v === 'string' ? v.length : null,
+      startsWith: typeof v === 'string' && v.length > 0 ? v.slice(0, 3) + '...' : null,
+      looksLikeTemplate: typeof v === 'string' && (v.indexOf('${{') >= 0 || v.indexOf('{{') >= 0),
+    };
+  });
   // also count bullflow-like var names in case it's typo'd
   var bullVariants = Object.keys(process.env).filter(function(k){ return /bull|bf/i.test(k); });
   // report the railway project/env so we can confirm we're hitting the right service

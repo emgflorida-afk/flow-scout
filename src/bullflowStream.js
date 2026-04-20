@@ -228,12 +228,11 @@ function startBullflowStream() {
     console.error('[BULLFLOW] No API key on startup. Process sees env keys matching FLOW/BULLFLOW: ' + JSON.stringify(envKeys) + '. Will retry every 60s...');
     var retryTimer = setInterval(function() {
       var k = process.env.BULLFLOW_API_KEY;
-      if (k) {
-        console.log('[BULLFLOW] API key detected on retry. Connecting now.');
+      console.log('[BULLFLOW] retry: typeof=' + typeof k + ', length=' + (k ? k.length : 'N/A') + ', truthy=' + !!k);
+      if (k && typeof k === 'string' && k.length > 5) {
+        console.log('[BULLFLOW] API key detected on retry (length ' + k.length + '). Connecting now.');
         clearInterval(retryTimer);
         startBullflowStream();
-      } else {
-        console.log('[BULLFLOW] Still no API key (retry heartbeat)');
       }
     }, 60 * 1000);
     return;
