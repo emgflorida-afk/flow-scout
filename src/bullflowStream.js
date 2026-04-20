@@ -220,8 +220,25 @@ var liveAggregator = {
 // -- MAIN STREAM --------------------------------------------------
 function startBullflowStream() {
   var apiKey = process.env.BULLFLOW_API_KEY;
-  if (!apiKey) { console.error('[BULLFLOW] No API key'); return; }
-  console.log('[BULLFLOW] Connecting to stream...');
+  if (!apiKey) {
+    // Apr 20 2026: self-heal mode. Instead of giving up, re-check every 60s
+    // so the stream connects as soon as the env var becomes available (e.g.
+    // Railway variable shared-group update or late env injection).
+    var envKeys = Object.keys(process.env).filter(function(k){ return k.indexOf('BULLFLOW') >= 0 || k.indexOf('FLOW') >= 0; });
+    console.error('[BULLFLOW] No API key on startup. Process sees env keys matching FLOW/BULLFLOW: ' + JSON.stringify(envKeys) + '. Will retry every 60s...');
+    var retryTimer = setInterval(function() {
+      var k = process.env.BULLFLOW_API_KEY;
+      if (k) {
+        console.log('[BULLFLOW] API key detected on retry. Connecting now.');
+        clearInterval(retryTimer);
+        startBullflowStream();
+      } else {
+        console.log('[BULLFLOW] Still no API key (retry heartbeat)');
+      }
+    }, 60 * 1000);
+    return;
+  }
+  console.log('[BULLFLOW] Connecting to stream (key length=' + apiKey.length + ')...');
 
   var MAX_RETRIES     = 10;
   var RETRY_DELAY_MS  = 5000;
