@@ -20,8 +20,6 @@ var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
 var bullflow = null;
 try { bullflow = require('./bullflowStream'); } catch(e) {}
-var gexModule = null;
-try { gexModule = require('./gex'); } catch(e) { console.error('[SCANNER] gex module load error:', e.message); }
 
 // -----------------------------------------------------------------
 // PERSISTENT STATE -- stars + daily signal history
@@ -73,14 +71,9 @@ async function getFinnhubData(ticker) {
   if (cached && (Date.now() - cached.ts) < FINNHUB_TTL_MS) return cached.data;
   try {
     var base = 'https://finnhub.io/api/v1';
-    // Only 2 calls per ticker. We previously added a 3rd call (stock/metric)
-    // for short interest, but Finnhub free tier doesn't return SI data AND the
-    // third call pushed 137 tickers × 3 calls = 411 calls per scan past
-    // Finnhub's 60/min free rate limit, which cascaded into scanner match
-    // count collapse. Reverted to 2 calls.
     var recRes = await fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
     var targetRes = await fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
-    var rec    = await recRes.json().catch(function(){return[];});
+    var rec = await recRes.json().catch(function(){return[];});
     var target = await targetRes.json().catch(function(){return{};});
     var latest = Array.isArray(rec) && rec.length ? rec[0] : null;
     var data = {
@@ -90,33 +83,10 @@ async function getFinnhubData(ticker) {
         sell: (latest.sell || 0) + (latest.strongSell || 0),
       } : null,
       target: target && target.targetMean ? target.targetMean : null,
-      short: null,
     };
     _finnhubCache[ticker] = { data: data, ts: Date.now() };
     return data;
   } catch(e) { return null; }
-}
-
-// Classify short-interest into squeeze-potential badge state.
-// Based on widely-used squeeze thresholds:
-//   HOT:    SI > 20% AND DTC > 5   (squeeze candidates, watch for catalyst)
-//   WARM:   SI > 10% AND DTC > 3   (elevated interest, worth watching)
-//   COLD:   everything else         (no squeeze signal)
-function classifyShortSqueeze(shortObj) {
-  if (!shortObj) return null;
-  var si = shortObj.floatPct;
-  var dtc = shortObj.daysToCover;
-  if (si == null && dtc == null) return null;
-  var state;
-  if (si != null && si >= 20 && dtc != null && dtc >= 5) state = 'HOT';
-  else if (si != null && si >= 10 && dtc != null && dtc >= 3) state = 'WARM';
-  else if ((si != null && si >= 20) || (dtc != null && dtc >= 5)) state = 'WARM';
-  else state = 'COLD';
-  return {
-    state: state,
-    floatPct: si,
-    daysToCover: dtc,
-  };
 }
 
 function recToLabel(rec) {
@@ -374,12 +344,9 @@ function calcVolRatio(bars) {
 // Also returns prior-period H/L for structural level calculations.
 // -----------------------------------------------------------------
 async function fetchContinuity(ticker, currentPrice, token) {
-  var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {}, squeeze: null };
+  var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {} };
   try {
-    // Daily bars at 22 — enough for 20-period TTM Squeeze math, minimal
-    // increase over the original 10 to stay under the observed rate-limit
-    // threshold that regressed match count when pushed to 30.
-    var daily = await fetchBars(ticker, 'Daily', 1, 22, token);
+    var daily = await fetchBars(ticker, 'Daily', 1, 10, token);
     var weekly = await fetchBars(ticker, 'Weekly', 1, 6, token);
     var monthly = await fetchBars(ticker, 'Monthly', 1, 12, token);
     function dirFromPrevClose(bars) {
@@ -427,121 +394,8 @@ async function fetchContinuity(ticker, currentPrice, token) {
       if (hi52 > 0)      out.levels.hi52 = hi52;
       if (lo52 < Infinity) out.levels.lo52 = lo52;
     }
-    // TTM Squeeze — volatility compression detector on Daily bars.
-    // Bollinger Bands (20, 2σ) inside Keltner Channels (20, 1.5×ATR(14)) = COILED.
-    // When BB expands past KC = FIRED, direction from close vs 20-SMA.
-    // Signals imminent breakout magnitude; pair with Strat trigger for direction.
-    out.squeeze = computeTTMSqueeze(daily);
   } catch(e) { /* soft */ }
   return out;
-}
-
-// GEX regime signal for the scanner row. Takes the full gex.js output and
-// distills a compact state for the Coil/GEX column to render quickly.
-//
-// Returns: {
-//   regime:    'POSITIVE' | 'NEGATIVE' | null   (from gex.js)
-//   pin:       price level of max +GEX
-//   flip:      gamma flip price (where dealers change direction)
-//   distToPinPct:  |price - pin| / price * 100  (how magnet-close)
-//   distToFlipPct: signed distance to flip (negative = price below flip)
-//   state:     'PIN' (within 0.3% of pin) |
-//              'ARMED_DOWN' (price <= 1% above flip, flip armed to cascade) |
-//              'ARMED_UP' (price >= 1% below flip, flip armed to squeeze) |
-//              'FIRED_DOWN' (price crossed below flip) |
-//              'FIRED_UP' (price crossed above flip) |
-//              'TREND' (far from flip, no near-term magnet)
-//   expectedMove: daily expected move ± from ATM IV
-// }
-function computeGexSignal(price, gex) {
-  if (!gex || !gex.spot) return null;
-  var pin = gex.pin;
-  var flip = gex.gammaFlip;
-  var regime = gex.regime;
-  var distToPinPct = pin ? Math.abs(price - pin) / price * 100 : null;
-  var distToFlipPct = flip ? (price - flip) / price * 100 : null;
-
-  var state = 'TREND';
-  if (pin && distToPinPct != null && distToPinPct <= 0.3) state = 'PIN';
-  else if (flip && distToFlipPct != null) {
-    if (distToFlipPct >= 0 && distToFlipPct <= 1.0)  state = 'ARMED_DOWN'; // above flip but near, could cascade
-    else if (distToFlipPct < 0 && distToFlipPct >= -1.0) state = 'ARMED_UP'; // below flip but near, could squeeze up
-    else if (distToFlipPct < -1.0) state = regime === 'NEGATIVE' ? 'FIRED_DOWN' : 'TREND';
-    else if (distToFlipPct > 1.0)  state = regime === 'POSITIVE' ? 'TREND' : 'FIRED_UP';
-  }
-  return {
-    regime: regime,
-    pin: pin ? +pin.toFixed(2) : null,
-    flip: flip ? +flip.toFixed(2) : null,
-    distToPinPct: distToPinPct != null ? +distToPinPct.toFixed(2) : null,
-    distToFlipPct: distToFlipPct != null ? +distToFlipPct.toFixed(2) : null,
-    state: state,
-    expectedMove: gex.expectedMove || null,
-    totalNetGex: gex.totalNetGex || null,
-  };
-}
-
-// TTM Squeeze compute. Pure math, no external calls. Returns null when
-// insufficient bars (needs >= 22 daily bars).
-//
-// Returns: {
-//   state:      'COILED'    - BB fully inside Keltner, compression armed
-//                'FIRED_UP' - just released with bullish momentum
-//                'FIRED_DOWN' - just released with bearish momentum
-//                'OFF'      - normal regime, BB wider than Keltner
-//   ratio:     BB width / KC width (< 1.0 means squeezed)
-//   momentum:  close - 20-SMA (signed; positive = bull bias)
-//   bbWidth, kcWidth: raw values
-// }
-function computeTTMSqueeze(dailyBarsRaw) {
-  if (!dailyBarsRaw || dailyBarsRaw.length < 22) return null;
-  var bars = dailyBarsRaw.map(normBar).filter(function(b){ return b && b.c; });
-  if (bars.length < 22) return null;
-
-  function calcBBKC(window) {
-    var N = window.length;
-    var closes = window.map(function(b){ return b.c; });
-    var mean = closes.reduce(function(a,b){ return a+b; }, 0) / N;
-    var variance = closes.reduce(function(a,b){ return a + Math.pow(b-mean, 2); }, 0) / N;
-    var stdDev = Math.sqrt(variance);
-    var bbUpper = mean + 2 * stdDev;
-    var bbLower = mean - 2 * stdDev;
-    // ATR over the same window using true range
-    var trs = [];
-    for (var i = 1; i < window.length; i++) {
-      var h = window[i].h, l = window[i].l, pc = window[i-1].c;
-      trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
-    }
-    var atr = trs.reduce(function(a,b){ return a+b; }, 0) / trs.length;
-    var kcUpper = mean + 1.5 * atr;
-    var kcLower = mean - 1.5 * atr;
-    return { mean: mean, bbUpper: bbUpper, bbLower: bbLower, kcUpper: kcUpper, kcLower: kcLower, atr: atr };
-  }
-
-  var N = 20;
-  var current = calcBBKC(bars.slice(-N));
-  var previous = bars.length >= N + 1 ? calcBBKC(bars.slice(-N-1, -1)) : null;
-
-  var isSqueezedNow  = (current.bbUpper < current.kcUpper) && (current.bbLower > current.kcLower);
-  var wasSqueezed    = previous ? (previous.bbUpper < previous.kcUpper) && (previous.bbLower > previous.kcLower) : false;
-
-  var lastClose = bars[bars.length - 1].c;
-  var momentum  = lastClose - current.mean;
-  var bbWidth   = current.bbUpper - current.bbLower;
-  var kcWidth   = current.kcUpper - current.kcLower;
-
-  var state;
-  if (isSqueezedNow) state = 'COILED';
-  else if (wasSqueezed && !isSqueezedNow) state = momentum >= 0 ? 'FIRED_UP' : 'FIRED_DOWN';
-  else state = 'OFF';
-
-  return {
-    state: state,
-    ratio: kcWidth > 0 ? +(bbWidth / kcWidth).toFixed(3) : null,
-    momentum: +momentum.toFixed(2),
-    bbWidth: +bbWidth.toFixed(2),
-    kcWidth: +kcWidth.toFixed(2),
-  };
 }
 
 // Compute mid-alignment stack: price vs weekly mid, vs daily mid
@@ -693,11 +547,6 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var ftfcDir = ftfcDirection(dwmq); // 'UP' | 'DOWN' | null
   var ftfc = !!ftfcDir;
 
-  // GEX per-ticker disabled for now — causing scanner match-count regression.
-  // Will rebuild via Public.com options chain endpoint (has OI + Greeks + IV,
-  // free, already-authenticated) as a proper module in next session.
-  var gexSignal = null;
-
   // CONTINUATION DETECTION (added Apr 17 2026 after AB caught the gap):
   // Reversal patterns fire on intraday exhaustion. On strong TREND days
   // (like today: SPY +0.5%, near highs, weekly 2U#2) most stocks run with
@@ -776,9 +625,6 @@ async function scanTicker(ticker, token, earningsMap, tf) {
       vsDaily: midStack.daily,          // 'above'|'below'
       vsWeekly: midStack.weekly,        // 'above'|'below'
     },
-    squeeze: dwmq.squeeze || null,  // TTM Squeeze on Daily: {state, ratio, momentum, bbWidth, kcWidth} or null
-    gex: gexSignal || null,          // GEX regime via CBOE: {regime, pin, flip, state, expectedMove, ...} or null
-    shortSqueeze: classifyShortSqueeze(finn && finn.short) || null,  // Short interest squeeze: {state, floatPct, daysToCover}
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {
