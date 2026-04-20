@@ -107,6 +107,15 @@
   .col-trade { width: 80px; text-align: center; }
   .col-mag   { width: 120px; }
   .col-mid   { width: 70px; text-align: center; }
+  .col-coil  { width: 80px; text-align: center; }
+  .coil-badge {
+    display: inline-block; padding: 2px 6px; border-radius: 3px;
+    font-size: 9px; font-weight: 700; letter-spacing: 0.3px;
+  }
+  .coil-coiled    { background: rgba(167,139,250,0.2); color: #c4b5fd; }
+  .coil-fired-up  { background: rgba(134,239,172,0.2); color: #86efac; }
+  .coil-fired-dn  { background: rgba(252,165,165,0.2); color: #fca5a5; }
+  .coil-off       { color: var(--muted); font-size: 10px; }
 
   .mid-stack {
     display: inline-flex; flex-direction: column; gap: 1px;
@@ -464,6 +473,21 @@ function midHtml(mp) {
          '<span>W ' + w + '</span><span>D ' + d + '</span></span>';
 }
 
+// TTM Squeeze coil badge.
+// COILED = compression armed (BB inside KC, imminent breakout).
+// FIRED_UP / FIRED_DOWN = just released with momentum direction.
+// OFF = normal regime.
+function coilHtml(sq) {
+  if (!sq || !sq.state) return '<span class="coil-off">—</span>';
+  var ratio = sq.ratio != null ? sq.ratio.toFixed(2) : '?';
+  var mom = sq.momentum != null ? (sq.momentum >= 0 ? '+' : '') + sq.momentum.toFixed(2) : '?';
+  var tip = 'BB/KC ratio: ' + ratio + ' (<1.0 = squeezed)  |  Momentum: ' + mom;
+  if (sq.state === 'COILED')     return '<span class="coil-badge coil-coiled" title="' + tip + '">⚫ COILED</span>';
+  if (sq.state === 'FIRED_UP')   return '<span class="coil-badge coil-fired-up" title="' + tip + '">🟢 FIRED↑</span>';
+  if (sq.state === 'FIRED_DOWN') return '<span class="coil-badge coil-fired-dn" title="' + tip + '">🔴 FIRED↓</span>';
+  return '<span class="coil-off" title="' + tip + '">—</span>';
+}
+
 function signalDir(sig) {
   if (!sig) return null;
   if (sig === 'Failed 2U' || sig === 'Shooter' || sig === '2-1-2 Down' || sig === '3-1-2 Down' || sig === 'Continuation Down') return 'BEAR';
@@ -543,6 +567,7 @@ function rowHtml(r) {
     '<td class="col-tv">' + tvHtml(r.tvAlert) + '</td>' +
     '<td class="col-mag">' + magHtml(r.magnitude) + '</td>' +
     '<td class="col-mid">' + midHtml(r.midpoints) + '</td>' +
+    '<td class="col-coil">' + coilHtml(r.squeeze) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
       (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
@@ -576,6 +601,7 @@ function groupHtml(name, rows) {
       '<th class="col-tv">TV</th>' +
       '<th class="col-mag">Magnitude</th>' +
       '<th class="col-mid" title="Weekly + Daily midpoint stack. Green = both buyers won, Red = both sellers won, Yellow = mixed">Mid</th>' +
+      '<th class="col-coil" title="TTM Squeeze on Daily — COILED = compression armed, FIRED↑/↓ = just released with momentum direction, — = normal regime">Coil</th>' +
       '<th class="col-vol">Vol</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +

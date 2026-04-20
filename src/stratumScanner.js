@@ -344,9 +344,11 @@ function calcVolRatio(bars) {
 // Also returns prior-period H/L for structural level calculations.
 // -----------------------------------------------------------------
 async function fetchContinuity(ticker, currentPrice, token) {
-  var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {} };
+  var out = { D: null, W: null, M: null, Q: null, levels: {}, mids: {}, squeeze: null };
   try {
-    var daily = await fetchBars(ticker, 'Daily', 1, 10, token);
+    // Bump daily bars to 30 so we have enough for 20-period TTM Squeeze math
+    // (BB + Keltner need 20 bars, plus a few extra for ATR rolling)
+    var daily = await fetchBars(ticker, 'Daily', 1, 30, token);
     var weekly = await fetchBars(ticker, 'Weekly', 1, 6, token);
     var monthly = await fetchBars(ticker, 'Monthly', 1, 12, token);
     function dirFromPrevClose(bars) {
@@ -394,8 +396,76 @@ async function fetchContinuity(ticker, currentPrice, token) {
       if (hi52 > 0)      out.levels.hi52 = hi52;
       if (lo52 < Infinity) out.levels.lo52 = lo52;
     }
+    // TTM Squeeze — volatility compression detector on Daily bars.
+    // Bollinger Bands (20, 2σ) inside Keltner Channels (20, 1.5×ATR(14)) = COILED.
+    // When BB expands past KC = FIRED, direction from close vs 20-SMA.
+    // Signals imminent breakout magnitude; pair with Strat trigger for direction.
+    out.squeeze = computeTTMSqueeze(daily);
   } catch(e) { /* soft */ }
   return out;
+}
+
+// TTM Squeeze compute. Pure math, no external calls. Returns null when
+// insufficient bars (needs >= 22 daily bars).
+//
+// Returns: {
+//   state:      'COILED'    - BB fully inside Keltner, compression armed
+//                'FIRED_UP' - just released with bullish momentum
+//                'FIRED_DOWN' - just released with bearish momentum
+//                'OFF'      - normal regime, BB wider than Keltner
+//   ratio:     BB width / KC width (< 1.0 means squeezed)
+//   momentum:  close - 20-SMA (signed; positive = bull bias)
+//   bbWidth, kcWidth: raw values
+// }
+function computeTTMSqueeze(dailyBarsRaw) {
+  if (!dailyBarsRaw || dailyBarsRaw.length < 22) return null;
+  var bars = dailyBarsRaw.map(normBar).filter(function(b){ return b && b.c; });
+  if (bars.length < 22) return null;
+
+  function calcBBKC(window) {
+    var N = window.length;
+    var closes = window.map(function(b){ return b.c; });
+    var mean = closes.reduce(function(a,b){ return a+b; }, 0) / N;
+    var variance = closes.reduce(function(a,b){ return a + Math.pow(b-mean, 2); }, 0) / N;
+    var stdDev = Math.sqrt(variance);
+    var bbUpper = mean + 2 * stdDev;
+    var bbLower = mean - 2 * stdDev;
+    // ATR over the same window using true range
+    var trs = [];
+    for (var i = 1; i < window.length; i++) {
+      var h = window[i].h, l = window[i].l, pc = window[i-1].c;
+      trs.push(Math.max(h - l, Math.abs(h - pc), Math.abs(l - pc)));
+    }
+    var atr = trs.reduce(function(a,b){ return a+b; }, 0) / trs.length;
+    var kcUpper = mean + 1.5 * atr;
+    var kcLower = mean - 1.5 * atr;
+    return { mean: mean, bbUpper: bbUpper, bbLower: bbLower, kcUpper: kcUpper, kcLower: kcLower, atr: atr };
+  }
+
+  var N = 20;
+  var current = calcBBKC(bars.slice(-N));
+  var previous = bars.length >= N + 1 ? calcBBKC(bars.slice(-N-1, -1)) : null;
+
+  var isSqueezedNow  = (current.bbUpper < current.kcUpper) && (current.bbLower > current.kcLower);
+  var wasSqueezed    = previous ? (previous.bbUpper < previous.kcUpper) && (previous.bbLower > previous.kcLower) : false;
+
+  var lastClose = bars[bars.length - 1].c;
+  var momentum  = lastClose - current.mean;
+  var bbWidth   = current.bbUpper - current.bbLower;
+  var kcWidth   = current.kcUpper - current.kcLower;
+
+  var state;
+  if (isSqueezedNow) state = 'COILED';
+  else if (wasSqueezed && !isSqueezedNow) state = momentum >= 0 ? 'FIRED_UP' : 'FIRED_DOWN';
+  else state = 'OFF';
+
+  return {
+    state: state,
+    ratio: kcWidth > 0 ? +(bbWidth / kcWidth).toFixed(3) : null,
+    momentum: +momentum.toFixed(2),
+    bbWidth: +bbWidth.toFixed(2),
+    kcWidth: +kcWidth.toFixed(2),
+  };
 }
 
 // Compute mid-alignment stack: price vs weekly mid, vs daily mid
@@ -625,6 +695,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
       vsDaily: midStack.daily,          // 'above'|'below'
       vsWeekly: midStack.weekly,        // 'above'|'below'
     },
+    squeeze: dwmq.squeeze || null,  // TTM Squeeze on Daily: {state, ratio, momentum, bbWidth, kcWidth} or null
 
     // Structural trigger level (where to enter / where stop sits)
     trigger: (function() {
