@@ -924,27 +924,81 @@ async function runQueueCycle() {
         } catch(ivErr) { /* IV filter is nice-to-have, don't block on error */ }
 
         var limitPrice = parseFloat((optPrice + 0.05).toFixed(2));
-        // Calculate stop with minimum dollar distance on cheap contracts.
-        // On contracts under $1.00, the bid-ask spread at open can be $0.10-$0.20.
-        // A percentage stop (25% of $0.35 = $0.09) gets eaten by the spread instantly.
-        // Enforce minimum $0.15 distance on contracts under $1, $0.20 under $0.50.
-        var rawStop = parseFloat((limitPrice * (1 + qt.stopPct)).toFixed(2));
-        // Raised floor Apr 17 2026 after SPY $0.67 -> $0.52 stop-out in 10 sec.
-        // Old $0.10/$0.12/$0.15/$0.20 was inside typical bid-ask spread noise.
-        // New floor: $0.30 default, $0.40 on $2-5, $0.50 on $5+.
+
+        // ============================================================
+        // Apr 20 2026 — STOP PRICING REWRITE
+        //
+        // Priority order:
+        //   1. STRUCTURAL — if qt.structuralStop (underlying price) is
+        //      stamped by stopManager, convert to option premium via
+        //      a delta-aware approximation. Use that.
+        //   2. WIDER-% FALLBACK — if no structural, apply by signal type:
+        //        Reversal (F2U/F2D/Hammer/Shooter):    -35% (room for retest)
+        //        Continuation (2U/2D/3-1-2/3-2):       -30%
+        //        Compression break (Inside/1-1):       -25% (tight trigger)
+        //        Legacy / Casey / gamma (blocked now): -30%
+        //   3. FLOOR — minimum $ distance based on premium size, preventing
+        //      spread-eaten stops. Unchanged from prior logic.
+        //
+        // Prior behavior (flat -25% to -30%) was getting stop-hunted on
+        // breakouts where the first pullback exceeded the tight stop.
+        // ============================================================
+        var stopSource = 'pct';
+        var rawStop;
+        var qtDelta = Math.abs(parseFloat(qt.delta || 0)) || 0.40;  // fallback delta 0.40 if unknown
+
+        if (qt.structuralStop && qt.triggerPrice) {
+          // Convert structural (underlying) stop → option premium via delta
+          // For CALLS: structural < current → option loses value
+          // For PUTS:  structural > current → option loses value
+          // optionStopPremium = entry + delta × (structural - triggerPrice)
+          //   delta is positive-magnitude; direction handled by sign of (structural - trigger)
+          var priceMoveToStop = parseFloat(qt.structuralStop) - parseFloat(qt.triggerPrice);
+          var isCall = (qt.direction || '').toUpperCase() === 'CALLS';
+          // For CALLS: stop is below trigger → priceMoveToStop is negative → option loses
+          // For PUTS: stop is above trigger → priceMoveToStop is positive → option loses (because delta effectively negative)
+          var expectedLoss = isCall ? (qtDelta * priceMoveToStop) : (-qtDelta * priceMoveToStop);
+          var structuralOptionStop = parseFloat((limitPrice + expectedLoss).toFixed(2));
+          if (structuralOptionStop > 0 && structuralOptionStop < limitPrice) {
+            rawStop = structuralOptionStop;
+            stopSource = 'structural';
+            logBrain('[STOP-STRUCT] ' + qt.ticker + ' structural stop $' + qt.structuralStop + ' (underlying) → $' + rawStop.toFixed(2) + ' (option) via delta ' + qtDelta.toFixed(2));
+          }
+        }
+
+        if (rawStop == null) {
+          // Wider % fallback by signal type
+          var src = String(qt.source || '').toUpperCase();
+          var stopPct;
+          if (src.indexOf('F2U') >= 0 || src.indexOf('F2D') >= 0 || src.indexOf('HAMMER') >= 0 || src.indexOf('SHOOTER') >= 0) {
+            stopPct = -0.35;  // Reversal — give room for retest
+          } else if (src.indexOf('INSIDE_BO') >= 0 || src.indexOf('COMPRESSION') >= 0) {
+            stopPct = -0.25;  // Compression break — trigger already confirms direction
+          } else if (src.indexOf('CONTINUATION') >= 0 || src.indexOf('BROADENING') >= 0 || src.indexOf('212') >= 0 || src.indexOf('312') >= 0) {
+            stopPct = -0.30;  // Continuation — moderate room
+          } else {
+            // Honor qt.stopPct if explicitly set, else use -0.30 as new default
+            stopPct = qt.stopPct && qt.stopPct < 0 ? qt.stopPct : -0.30;
+          }
+          rawStop = parseFloat((limitPrice * (1 + stopPct)).toFixed(2));
+          stopSource = 'pct(' + Math.round(Math.abs(stopPct) * 100) + '%)';
+        }
+
+        // FLOOR PROTECTION — prevent spread-eaten stops on cheap contracts
+        // Raised Apr 17 2026 after SPY $0.67 → $0.52 stop-out in 10 sec.
         var minStopDistance = 0.30;
         if (limitPrice < 1.00) minStopDistance = 0.25;
         else if (limitPrice >= 2.00 && limitPrice < 5.00) minStopDistance = 0.40;
         else if (limitPrice >= 5.00) minStopDistance = 0.50;
         var minStop = parseFloat((limitPrice - minStopDistance).toFixed(2));
-        // If the percentage stop is tighter than our minimum distance, use the floor
         if (rawStop > minStop) {
-          logBrain('[STOP-FLOOR] ' + qt.ticker + ': pct stop $' + rawStop.toFixed(2) + ' too tight on $' + limitPrice.toFixed(2) + ' contract. Using floor $' + minStop.toFixed(2) + ' (min distance $' + minStopDistance.toFixed(2) + ')');
+          logBrain('[STOP-FLOOR] ' + qt.ticker + ': ' + stopSource + ' stop $' + rawStop.toFixed(2) + ' too tight on $' + limitPrice.toFixed(2) + ' contract. Using floor $' + minStop.toFixed(2) + ' (min distance $' + minStopDistance.toFixed(2) + ')');
           rawStop = minStop;
+          stopSource += '+floor';
         }
-        // Never set a stop below $0.05 (worthless territory, just let it expire)
         if (rawStop < 0.05) rawStop = 0.05;
         var qtStop = rawStop;
+        logBrain('[STOP] ' + qt.ticker + ' entry $' + limitPrice.toFixed(2) + ' → stop $' + qtStop.toFixed(2) + ' (' + stopSource + ', ' + Math.round((1 - qtStop/limitPrice) * 100) + '% loss)');
         var qtExec = await orderExecutor.placeOrder({
           account: LIVE_ACCOUNT,
           symbol: qt.contractSymbol,
