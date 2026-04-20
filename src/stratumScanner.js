@@ -73,23 +73,16 @@ async function getFinnhubData(ticker) {
   if (cached && (Date.now() - cached.ts) < FINNHUB_TTL_MS) return cached.data;
   try {
     var base = 'https://finnhub.io/api/v1';
-    // Fetch three endpoints in parallel: recommendations, price-target, metrics (for short interest)
-    var recP    = fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
-    var targetP = fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
-    var metricP = fetch(base + '/stock/metric?symbol=' + ticker + '&metric=all&token=' + key);
-    var recRes    = await recP;
-    var targetRes = await targetP;
-    var metricRes = await metricP;
+    // Only 2 calls per ticker. We previously added a 3rd call (stock/metric)
+    // for short interest, but Finnhub free tier doesn't return SI data AND the
+    // third call pushed 137 tickers × 3 calls = 411 calls per scan past
+    // Finnhub's 60/min free rate limit, which cascaded into scanner match
+    // count collapse. Reverted to 2 calls.
+    var recRes = await fetch(base + '/stock/recommendation?symbol=' + ticker + '&token=' + key);
+    var targetRes = await fetch(base + '/stock/price-target?symbol=' + ticker + '&token=' + key);
     var rec    = await recRes.json().catch(function(){return[];});
     var target = await targetRes.json().catch(function(){return{};});
-    var metric = await metricRes.json().catch(function(){return{};});
     var latest = Array.isArray(rec) && rec.length ? rec[0] : null;
-    // Short interest removed — Finnhub free tier doesn't have it, Yahoo
-    // defaultKeyStatistics returns null for most tickers now, and the Yahoo
-    // fetch was adding latency that regressed scanner match count.
-    // Keep the 'short' field on the data shape (returns null) so Short column
-    // renders safely. Fill from a paid source (Polygon, Ortex, S3 Partners)
-    // next Saturday.
     var data = {
       rec: latest ? {
         buy: (latest.strongBuy || 0) + (latest.buy || 0),
