@@ -272,7 +272,7 @@ function writeKeyToDisk(k) {
 // 2. Update Railway env var
 // 3. DELETE this hardcode + the FALLBACK_KEY constant
 // 4. Investigate Railway STATE_DIR setup (it was null — should be /data volume)
-var FALLBACK_KEY = 'bul_153b9a8368e718cb43b45b26ab692fe59205d1f7b3315509';
+var FALLBACK_KEY = 'bul_3ea4d29262a9cda5b0ee9d951b389d1fe60c0185e67cd43c';
 
 // -- MAIN STREAM --------------------------------------------------
 function startBullflowStream(apiKeyOverride) {
