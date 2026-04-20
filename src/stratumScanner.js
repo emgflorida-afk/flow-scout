@@ -24,7 +24,21 @@ try { bullflow = require('./bullflowStream'); } catch(e) {}
 // -----------------------------------------------------------------
 // PERSISTENT STATE -- stars + daily signal history
 // -----------------------------------------------------------------
-var STATE_DIR = process.env.STATE_DIR || '/tmp';
+// Apr 20 2026 PM: auto-use /data if it exists (Railway volume default) so we
+// don't wipe stars/TV alerts on every deploy. AB's feedback: stars kept
+// disappearing because /tmp was ephemeral.
+var STATE_DIR = process.env.STATE_DIR;
+if (!STATE_DIR) {
+  try {
+    var fsTest = require('fs');
+    if (fsTest.existsSync('/data')) {
+      STATE_DIR = '/data';
+      console.log('[SCANNER] STATE_DIR auto-detected /data (Railway volume)');
+    } else {
+      STATE_DIR = '/tmp';
+    }
+  } catch(e) { STATE_DIR = '/tmp'; }
+}
 if (STATE_DIR === '/tmp') {
   console.warn('[SCANNER] ⚠ STATE_DIR=/tmp — scanner history + stars will be WIPED on redeploy. Mount a Railway volume and set STATE_DIR=/data to persist.');
 }
@@ -132,7 +146,22 @@ function getFlowForTicker(ticker) {
 // TRADINGVIEW ALERT RECEIVER -- in-memory store, 4hr TTL
 // Wire to /api/tv-alert in server.js
 // -----------------------------------------------------------------
-var _tvAlerts = {};  // ticker -> [{ message, tf, action, time }]
+// Apr 20 2026 PM: TV alerts persisted to disk so Railway redeploys don't
+// wipe them. Saved after every ingest, loaded at startup.
+var TV_ALERTS_FILE = path.join(STATE_DIR, 'tv_alerts.json');
+var _tvAlerts = (function() {
+  try {
+    if (fs.existsSync(TV_ALERTS_FILE)) {
+      var d = JSON.parse(fs.readFileSync(TV_ALERTS_FILE, 'utf8'));
+      console.log('[SCANNER] Loaded TV alerts for ' + Object.keys(d).length + ' tickers from disk');
+      return d;
+    }
+  } catch(e) { console.error('[SCANNER] TV alerts load error:', e.message); }
+  return {};
+})();
+function persistTVAlerts() {
+  try { fs.writeFileSync(TV_ALERTS_FILE, JSON.stringify(_tvAlerts)); } catch(e) {}
+}
 var TV_TTL_MS = 4 * 60 * 60 * 1000;
 
 function ingestTVAlert(payload) {
@@ -150,6 +179,7 @@ function ingestTVAlert(payload) {
   // Prune old
   var cutoff = Date.now() - TV_TTL_MS;
   _tvAlerts[ticker] = _tvAlerts[ticker].filter(function(a) { return a.time > cutoff; });
+  persistTVAlerts();  // persist to disk so deploy doesn't wipe
   return { ok: true, ticker: ticker, count: _tvAlerts[ticker].length };
 }
 
