@@ -229,9 +229,15 @@ function setCachedApiKey(k) {
 }
 
 // -- MAIN STREAM --------------------------------------------------
-function startBullflowStream() {
-  var apiKey = process.env.BULLFLOW_API_KEY || _cachedApiKey;
-  console.log('[BULLFLOW] startBullflowStream called. process.env key=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no'));
+// Apr 20 2026: apiKeyOverride param lets HTTP handlers pass the key directly
+// (Railway lazy env workaround).
+function startBullflowStream(apiKeyOverride) {
+  var apiKey = apiKeyOverride || _cachedApiKey || process.env.BULLFLOW_API_KEY;
+  console.log('[BULLFLOW] startBullflowStream called. override=' + (apiKeyOverride ? 'YES len='+apiKeyOverride.length : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no') + ', env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no'));
+  if (apiKeyOverride && !_cachedApiKey) {
+    _cachedApiKey = apiKeyOverride;
+    console.log('[BULLFLOW] Cached override key for future reconnects');
+  }
   if (!apiKey) {
     // Apr 20 2026: self-heal mode. Instead of giving up, re-check every 60s
     // so the stream connects as soon as the env var becomes available (e.g.
