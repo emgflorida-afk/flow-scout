@@ -253,8 +253,10 @@ app.get('/api/bullflow/init', function(req, res) {
       return res.json({ ok: false, reason: 'BULLFLOW_API_KEY still not visible in request env' });
     }
     var bf = require('./bullflowStream');
+    // Cache the key in the module so background retry/setInterval can use it
+    if (bf.setCachedApiKey) bf.setCachedApiKey(k);
     bf.startBullflowStream();
-    res.json({ ok: true, keyLength: k.length, keyStart: k.slice(0, 3) + '...', started: true });
+    res.json({ ok: true, keyLength: k.length, keyStart: k.slice(0, 3) + '...', started: true, cached: true });
   } catch(e) {
     res.json({ ok: false, error: e.message });
   }

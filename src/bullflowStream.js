@@ -217,9 +217,21 @@ var liveAggregator = {
   },
 };
 
+// Apr 20 2026 — CACHED KEY (for Railway lazy-env workaround).
+// When HTTP requests resolve the env var (lazy injection works for request
+// context), they can call setCachedApiKey to save it for background code.
+var _cachedApiKey = null;
+function setCachedApiKey(k) {
+  if (typeof k === 'string' && k.length > 5) {
+    _cachedApiKey = k;
+    console.log('[BULLFLOW] API key cached via setCachedApiKey (length ' + k.length + ')');
+  }
+}
+
 // -- MAIN STREAM --------------------------------------------------
 function startBullflowStream() {
-  var apiKey = process.env.BULLFLOW_API_KEY;
+  var apiKey = process.env.BULLFLOW_API_KEY || _cachedApiKey;
+  console.log('[BULLFLOW] startBullflowStream called. process.env key=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no'));
   if (!apiKey) {
     // Apr 20 2026: self-heal mode. Instead of giving up, re-check every 60s
     // so the stream connects as soon as the env var becomes available (e.g.
@@ -227,8 +239,8 @@ function startBullflowStream() {
     var envKeys = Object.keys(process.env).filter(function(k){ return k.indexOf('BULLFLOW') >= 0 || k.indexOf('FLOW') >= 0; });
     console.error('[BULLFLOW] No API key on startup. Process sees env keys matching FLOW/BULLFLOW: ' + JSON.stringify(envKeys) + '. Will retry every 60s...');
     var retryTimer = setInterval(function() {
-      var k = process.env.BULLFLOW_API_KEY;
-      console.log('[BULLFLOW] retry: typeof=' + typeof k + ', length=' + (k ? k.length : 'N/A') + ', truthy=' + !!k);
+      var k = process.env.BULLFLOW_API_KEY || _cachedApiKey;
+      console.log('[BULLFLOW] retry: env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no'));
       if (k && typeof k === 'string' && k.length > 5) {
         console.log('[BULLFLOW] API key detected on retry (length ' + k.length + '). Connecting now.');
         clearInterval(retryTimer);
@@ -323,4 +335,4 @@ function startBullflowStream() {
   connect();
 }
 
-module.exports = { startBullflowStream, liveAggregator, getRecentFlow };
+module.exports = { startBullflowStream, liveAggregator, getRecentFlow, setCachedApiKey };
