@@ -82,44 +82,11 @@ async function tsBars(ticker, unit, interval, barsback, token) {
   }
 }
 
-function normBar(b) {
-  if (!b) return null;
-  return {
-    o: parseFloat(b.Open || b.open || 0),
-    h: parseFloat(b.High || b.high || 0),
-    l: parseFloat(b.Low  || b.low  || 0),
-    c: parseFloat(b.Close|| b.close|| 0),
-  };
-}
-
-// -----------------------------------------------------------------
-// STRAT CLASSIFICATION (Primo)
-// -----------------------------------------------------------------
-function classify(bar, prev) {
-  if (!bar || !prev) return null;
-  var took2U = bar.h > prev.h;
-  var took2D = bar.l < prev.l;
-  var body = Math.abs(bar.c - bar.o);
-  var upperWick = bar.h - Math.max(bar.c, bar.o);
-  var lowerWick = Math.min(bar.c, bar.o) - bar.l;
-  var mid = (bar.h + bar.l) / 2;
-
-  var inside  = (bar.h <= prev.h) && (bar.l >= prev.l);
-  var outside = took2U && took2D;
-
-  // F2U: bar was 2U (broke high) but closed bearish and below mid
-  var f2u = took2U && !outside && (bar.c < bar.o) && (bar.c < mid);
-  // F2D: bar was 2D (broke low) but closed bullish and above mid
-  var f2d = took2D && !outside && (bar.c > bar.o) && (bar.c > mid);
-
-  var hammer  = body > 0 && (lowerWick >= 2 * body) && (bar.c > bar.o);
-  var shooter = body > 0 && (upperWick >= 2 * body) && (bar.c < bar.o);
-
-  return {
-    took2U: took2U, took2D: took2D, inside: inside, outside: outside,
-    f2u: f2u, f2d: f2d, hammer: hammer, shooter: shooter,
-  };
-}
+// Apr 20 2026: classification now delegated to shared stratClassifier.js
+// (single source of truth between scanner and brain).
+var stratClassifier = require('./stratClassifier');
+var normBar = stratClassifier.normBar;
+var classify = stratClassifier.evalBar;
 
 // Pick the single strongest signal on a timeframe (priority: F2U/F2D > Inside > Hammer/Shooter)
 function detectSignal(bars, currentPrice) {

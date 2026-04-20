@@ -244,64 +244,15 @@ function normBar(b) {
 }
 
 // -----------------------------------------------------------------
-// STRAT BAR CLASSIFICATION
+// STRAT BAR CLASSIFICATION + SIGNAL DETECTION
+// Now delegated to shared src/stratClassifier.js — single source of
+// truth used by both scanner (display) AND brain (auto-fire).
+// Apr 20 2026: AB asked to unify scanner + brain so fresh positions
+// open cleanly.
 // -----------------------------------------------------------------
-function classifyBar(bar, prev) {
-  if (!bar || !prev) return null;
-  var tookHigh = bar.h > prev.h;
-  var tookLow  = bar.l < prev.l;
-  if (tookHigh && tookLow) return '3';   // outside
-  if (!tookHigh && !tookLow) return '1'; // inside
-  if (tookHigh) return '2U';             // up
-  return '2D';                           // down
-}
-
-// -----------------------------------------------------------------
-// SIGNAL DETECTION
-// Last 3 closed bars A (oldest) -> B -> C (most recent closed)
-// -----------------------------------------------------------------
-function detectSignal(A, B, C, aType, bType, cType) {
-  if (!A || !B || !C || !aType || !bType || !cType) return null;
-
-  // 1-1 Compression: B and C both inside
-  if (bType === '1' && cType === '1') return '1-1 Compression';
-
-  // Inside bar (single)
-  if (cType === '1') return 'Inside';
-
-  // Outside bar
-  if (cType === '3') return 'Outside Bar';
-
-  // Failed 2U: C broke prior high, reversed, closed red and below midpoint
-  var midC = (C.h + C.l) / 2;
-  var tookHighC = C.h > B.h;
-  var tookLowC  = C.l < B.l;
-  if (tookHighC && !tookLowC && C.c < C.o && C.c < midC) return 'Failed 2U';
-  if (tookLowC && !tookHighC && C.c > C.o && C.c > midC) return 'Failed 2D';
-
-  // 2-1-2 (inside reversal): A directional, B inside, C opposite directional
-  if (bType === '1') {
-    if (aType === '2U' && cType === '2D') return '2-1-2 Down';
-    if (aType === '2D' && cType === '2U') return '2-1-2 Up';
-    if (aType === '2U' && cType === '2U') return '2-1-2 Continuation';
-    if (aType === '2D' && cType === '2D') return '2-1-2 Continuation';
-  }
-
-  // 3-1-2 (outside -> inside -> directional)
-  if (aType === '3' && bType === '1') {
-    if (cType === '2U') return '3-1-2 Up';
-    if (cType === '2D') return '3-1-2 Down';
-  }
-
-  // Hammer / Shooter on closed bar
-  var body = Math.abs(C.c - C.o);
-  var upperWick = C.h - Math.max(C.c, C.o);
-  var lowerWick = Math.min(C.c, C.o) - C.l;
-  if (body > 0 && lowerWick >= 2 * body && C.c > C.o) return 'Hammer';
-  if (body > 0 && upperWick >= 2 * body && C.c < C.o) return 'Shooter';
-
-  return null;
-}
+var stratClassifier = require('./stratClassifier');
+var classifyBar = stratClassifier.classifyBar;
+var detectSignal = stratClassifier.detect3BarSignalWithTypes;
 
 // -----------------------------------------------------------------
 // ATR (14-day, simple)

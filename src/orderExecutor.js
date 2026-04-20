@@ -139,7 +139,12 @@ async function placeOrder(params) {
     // GATE: Blacklisted tickers -- hard reject regardless of signal grade
     // TSLA: per SESSION_START_RULES.md
     // BTC-correlated (Apr 18 2026): AB personal preference, BTC beta exposure
-    var BLACKLIST = ['TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'IREN', 'CIFR', 'HIVE', 'SOFI'];
+    // Apr 20 2026: added high-IV small-cap names that keep stopping out on
+    // gamma chop — UPST/RKLB/LUNR/HOOD/AFRM/HIMS/APP/SNAP/RDDT. AB's rule.
+    var BLACKLIST = [
+      'TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'IREN', 'CIFR', 'HIVE', 'SOFI',
+      'UPST', 'RKLB', 'LUNR', 'HOOD', 'AFRM', 'HIMS', 'APP', 'SNAP', 'RDDT'
+    ];
     if (BLACKLIST.indexOf(baseTicker) !== -1) {
       console.log('[EXECUTOR] BLOCKED -- ' + baseTicker + ' is blacklisted');
       return { error: baseTicker + ' is blacklisted. Hard reject.' };
