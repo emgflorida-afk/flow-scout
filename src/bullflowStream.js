@@ -255,10 +255,23 @@ function writeKeyToDisk(k) {
   }
 }
 
+// ⚠️ TEMPORARY HARDCODE — Apr 20 2026 PM ⚠️
+// Railway lazy env injection can't inject to background contexts (setInterval,
+// module load). HTTP request context CAN see process.env.BULLFLOW_API_KEY but
+// the streaming setup needs to run in background. 9 attempts to bridge failed.
+// AB provided the key for hardcode so flow column can populate today.
+//
+// TODO FOR NEXT SESSION:
+// 1. Rotate key at https://bullflow.io/ → Settings → API
+// 2. Update Railway env var
+// 3. DELETE this hardcode + the FALLBACK_KEY constant
+// 4. Investigate Railway STATE_DIR setup (it was null — should be /data volume)
+var FALLBACK_KEY = 'bul_153b9a8368e718cb43b45b26ab692fe59205d1f7b3315509';
+
 // -- MAIN STREAM --------------------------------------------------
 function startBullflowStream(apiKeyOverride) {
   var diskKey = readKeyFromDisk();
-  var apiKey = apiKeyOverride || _cachedApiKey || process.env.BULLFLOW_API_KEY || diskKey;
+  var apiKey = apiKeyOverride || _cachedApiKey || process.env.BULLFLOW_API_KEY || diskKey || FALLBACK_KEY;
   console.log('[BULLFLOW] startBullflowStream called. override=' + (apiKeyOverride ? 'YES len='+apiKeyOverride.length : 'no') + ', cached=' + (_cachedApiKey ? 'YES' : 'no') + ', env=' + (process.env.BULLFLOW_API_KEY ? 'YES' : 'no') + ', disk=' + (diskKey ? 'YES len='+diskKey.length : 'no'));
   if (apiKeyOverride) {
     _cachedApiKey = apiKeyOverride;
