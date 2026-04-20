@@ -726,6 +726,47 @@ async function runQueueCycle() {
 
     var pendingQueued = queuedTrades.filter(function(qt) { return qt.status === 'PENDING'; });
     if (!pendingQueued.length) return { checked: 0 };
+
+    // ============================================================
+    // Apr 20 2026 — STRAT_ONLY EXECUTION FILTER (4th layer of defense)
+    //
+    // Even if a non-Strat trade snuck into the queue via a race
+    // condition (deploy-in-progress, etc.), this filter BLOCKS IT
+    // FROM FIRING at the execution point. Mark them CANCELLED so
+    // they clear from the queue and never consume a trigger check.
+    //
+    // Allowed sources: STRATUMBAR_*, STRATUMSCANNER_*, STRATUM_*
+    // Blocked: everything else (CASEY/WP/AYCE/JSMITH/FLOW/HEDGE).
+    // ============================================================
+    try {
+      var _execMode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
+      if (_execMode === 'STRAT_ONLY') {
+        var cleanCount = 0;
+        pendingQueued = pendingQueued.filter(function(qt) {
+          var src = String(qt.source || '').toUpperCase();
+          var allowed = src.indexOf('STRATUMBAR') === 0
+                     || src.indexOf('STRATUMSCANNER') === 0
+                     || src.indexOf('STRATUM_') === 0;
+          if (!allowed) {
+            // Auto-cancel this stale queue item so it doesn't keep being evaluated
+            qt.status = 'CANCELLED';
+            qt.cancelReason = 'STRAT_ONLY exec filter: source=' + src;
+            cleanCount++;
+            logBrain('[EXEC-FILTER] cancelled ' + qt.ticker + ' ' + qt.direction + ' source=' + src + ' (not Strat under STRAT_ONLY)');
+          }
+          return allowed;
+        });
+        if (cleanCount > 0) {
+          saveQueuedTrades();
+          logBrain('[EXEC-FILTER] auto-cancelled ' + cleanCount + ' non-Strat queue item(s) this cycle');
+        }
+      }
+    } catch(filterErr) {
+      console.error('[EXEC-FILTER] error (allowing through):', filterErr.message);
+    }
+
+    if (!pendingQueued.length) return { checked: 0 };
+
     var queuedWindowEnd = 11 * 60 + 30;
     var pendingSwingQueued = pendingQueued.filter(function(qt) { return qt.tradeType === 'SWING'; });
     var activePendingQueued = [];
