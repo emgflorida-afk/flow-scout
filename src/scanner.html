@@ -590,10 +590,83 @@ function rowHtml(r) {
     '<td class="col-mid">' + midHtml(r.midpoints) + '</td>' +
     '<td class="col-vol">' +
       '<span class="vol-main">' + fmtVol(r.volAbs) + '</span>' +
-      (r.volRel != null ? '<span class="vol-rel ' + volRelClass + '">' + r.volRel.toFixed(1) + 'x</span>' : '') +
+      volRelHtml(r.volRel) +
     '</td>' +
+    '<td class="col-gates" title="9-gate pass count. Click row for detail.">' + gatesHtml(r) + '</td>' +
     '<td class="col-trade">' + tradeBtnHtml(r) + '</td>' +
   '</tr>';
+}
+
+// Volume relative badge — RED if below 1.5x rule, yellow if borderline, green if hot
+function volRelHtml(rel) {
+  if (rel == null) return '';
+  if (rel >= 3)   return '<span class="vol-rel" style="color:#4ac29a;font-weight:700">' + rel.toFixed(1) + 'x 🔥</span>';
+  if (rel >= 1.5) return '<span class="vol-rel" style="color:#4ac29a">' + rel.toFixed(1) + 'x ✓</span>';
+  if (rel >= 1)   return '<span class="vol-rel" style="color:#ffb347">' + rel.toFixed(1) + 'x ⚠</span>';
+  return '<span class="vol-rel" style="color:#ef6f6c;font-weight:700" title="BELOW 1.5x rule — skip or size down">' + rel.toFixed(1) + 'x ✗</span>';
+}
+
+// 9-gate pass count — each row gets a green-count X/9 badge
+// Makes it impossible to forget the rule checklist AB keeps missing.
+function gatesHtml(r) {
+  var checks = [];
+  // Gate 1: Directional Strat signal (not Inside/Outside/Compression)
+  var dir = signalDir(r.signal);
+  checks.push({ name: 'Dir', pass: !!dir });
+  // Gate 2: FTFC aligned matches signal direction
+  var ftfcOk = false;
+  if (dir && r.ftfcDir) {
+    ftfcOk = (r.ftfcDir === 'UP' && dir === 'BULL') || (r.ftfcDir === 'DOWN' && dir === 'BEAR');
+  }
+  checks.push({ name: 'FTFC', pass: ftfcOk });
+  // Gate 3: Magnitude target 1-5% in direction
+  var magOk = false;
+  if (r.magnitude && r.magnitude.pct) {
+    var p = Math.abs(r.magnitude.pct);
+    magOk = p >= 1 && p <= 5;
+  }
+  checks.push({ name: 'Mag', pass: magOk });
+  // Gate 4: Mid stack matches direction
+  var midOk = false;
+  if (dir && r.midpoints && r.midpoints.stack) {
+    midOk = (dir === 'BULL' && r.midpoints.stack === 'BULL') || (dir === 'BEAR' && r.midpoints.stack === 'BEAR');
+  }
+  checks.push({ name: 'Mid', pass: midOk });
+  // Gate 5: Flow matches or blank (never opposing)
+  var flowOk = true;
+  if (r.flow && r.flow.dominant && dir) {
+    if (dir === 'BULL' && r.flow.dominant === 'BEAR') flowOk = false;
+    if (dir === 'BEAR' && r.flow.dominant === 'BULL') flowOk = false;
+  }
+  checks.push({ name: 'Flow', pass: flowOk });
+  // Gate 6: Volume >= 1.5x
+  checks.push({ name: 'Vol', pass: r.volRel != null && r.volRel >= 1.5 });
+  // Gate 7: ATR < 7% (EXTREME skip)
+  checks.push({ name: 'ATR', pass: r.atrPct != null && r.atrPct < 7 });
+  // Gate 8: No earnings (r.earnings === null or 'HAS_EARNINGS' = false, inverted)
+  var earnOk = !r.earnings || r.earnings === 'NO_EARNINGS';
+  checks.push({ name: 'Earn', pass: earnOk });
+  // Gate 9: Gap not EXTREME same-direction (trap filter)
+  var gapOk = true;
+  if (r.gap && r.gap.gapSize === 'EXTREME' && dir) {
+    if (dir === 'BULL' && r.gap.gapDir === 'UP') gapOk = false;
+    if (dir === 'BEAR' && r.gap.gapDir === 'DOWN') gapOk = false;
+  }
+  checks.push({ name: 'Gap', pass: gapOk });
+
+  var passCount = checks.filter(function(c){ return c.pass; }).length;
+  var total = checks.length;
+  var color, emoji;
+  if (passCount >= 8) { color = '#4ac29a'; emoji = '🟢'; }
+  else if (passCount >= 6) { color = '#ffb347'; emoji = '🟡'; }
+  else { color = '#ef6f6c'; emoji = '🔴'; }
+
+  var failList = checks.filter(function(c){ return !c.pass; }).map(function(c){ return c.name; }).join(',');
+  var title = passCount + '/' + total + ' gates pass. ' + (failList ? 'FAILS: ' + failList : 'ALL PASS ✓');
+
+  return '<span style="color:' + color + ';font-weight:700;font-size:12px" title="' + title + '">' +
+    emoji + ' ' + passCount + '/' + total +
+    '</span>';
 }
 
 function groupHtml(name, rows) {
@@ -623,6 +696,7 @@ function groupHtml(name, rows) {
       '<th class="col-mag">Magnitude</th>' +
       '<th class="col-mid" title="Weekly + Daily midpoint stack. Green = both buyers won, Red = both sellers won, Yellow = mixed">Mid</th>' +
       '<th class="col-vol">Vol</th>' +
+      '<th class="col-gates" title="9-gate pass count. 🟢 8+ = full size. 🟡 6-7 = size down. 🔴 &lt;6 = skip.">Gates</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +
     '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
