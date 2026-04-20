@@ -197,7 +197,7 @@ function renderQueue(trades) {
         + '<span>'+ t.ticker +' <span class="'+ dirCls +'">'+ t.direction +'</span>' + nonStratFlag + '</span>'
         + '<span style="display:flex;align-items:center;gap:10px">'
           + '<span class="grade-'+ g +'">'+ (t.grade || '—') +'</span>'
-          + '<button onclick="killQueueItem(\''+ t.id +'\', \''+ t.ticker +'\')" '
+          + '<button onclick="killQueueItem(\\''+ t.id +'\\', \\''+ t.ticker +'\\')" '
             + 'style="background:rgba(239,111,108,0.15);border:1px solid rgba(239,111,108,0.4);color:#ef6f6c;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer" '
             + 'title="Remove this pending trade">✗ KILL</button>'
         + '</span>'
