@@ -424,8 +424,19 @@ function addQueuedTrade(trade) {
     var mode = process.env.BRAIN_AUTOFIRE_MODE || 'FULL';
     if (mode === 'STRAT_ONLY') {
       var src = String(trade && trade.source || '').toUpperCase();
-      var isStrat = src.indexOf('STRATUMBAR') === 0;  // STRATUMBAR_F2U, STRATUMBAR_F2D, STRATUMBAR_INSIDE_BO, etc.
-      if (!isStrat) {
+      // ALLOW:
+      //  - STRATUMBAR_*   = Primo Strat auto-fire (the mechanical engine)
+      //  - STRATUMSCANNER_* = manual Trade button click on /scanner
+      //                     (AB already vetted it against the 9-gate guide by clicking)
+      //  - STRATUM_*      = pre-market auto-queue + quick-queue form on /dashboard
+      //                     (manual human-curated entries)
+      // BLOCK everything else (Casey, WP, AYCE, JSmith, flow, hedge, spread, flow concentration).
+      var allowedPrefixes = ['STRATUMBAR', 'STRATUMSCANNER', 'STRATUM_'];
+      var allowed = false;
+      for (var i = 0; i < allowedPrefixes.length; i++) {
+        if (src.indexOf(allowedPrefixes[i]) === 0) { allowed = true; break; }
+      }
+      if (!allowed) {
         console.log('[BRAIN] STRAT_ONLY blocked non-Strat queue: ' + (trade && trade.ticker) + ' source=' + src);
         return null;
       }
