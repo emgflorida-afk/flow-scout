@@ -678,11 +678,13 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   // ----------------------------------------------------------------
   var contractCardData = null;
   var skipCard = !sigDirLocal || !signal || signal === 'Inside' || signal === 'Outside Bar' || signal === '1-1 Compression' || signal === 'TV Watch' || signal === 'Starred';
-  // Apr 21 2026 PM — only enrich War Room tickers with full card.
-  // Scanner scans all ~139 tickers, but contract-card API calls are expensive
-  // (chain + quote + delta per row). Limiting enrichment to the 10 top
-  // names keeps total scan time under the request timeout.
-  if (!skipCard && WAR_ROOM_TICKERS.indexOf(ticker) === -1) skipCard = true;
+  // Apr 21 2026 PM v2 — enrich ANY directional row (not just WAR_ROOM).
+  // Previous version limited to top 10 to avoid scan timeout. AB hit real
+  // setups outside the list (SOXL Hammer). Freshness/conviction already
+  // computed fast; only chain/quote fetch is slow. Relying on:
+  //   1. 60s quote cache (raised from 10s) to dedup repeat scans
+  //   2. Existing 1.5s TS rate limiter to avoid 429s
+  //   3. try/catch per row — one card failure doesn't break the scan
   if (!skipCard && contractCard && contractCard.buildCard) {
     try {
       var triggerLvl = null;

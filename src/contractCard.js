@@ -177,10 +177,11 @@ function formatTitanCard(e) {
 }
 
 // -----------------------------------------------------------------
-// 10-SECOND QUOTE CACHE — protects the TS rate limiter on hot scans.
+// 60-SECOND QUOTE CACHE — protects the TS rate limiter on hot scans.
+// Raised from 10s → 60s Apr 21 PM v2 to handle broader enrichment set.
 // -----------------------------------------------------------------
 var _quoteCache = {};
-var QUOTE_TTL_MS = 10000;
+var QUOTE_TTL_MS = 60000;
 
 async function liveQuote(tsSymbol) {
   if (!contractResolver || !contractResolver.getOptionSnapshot) return null;
