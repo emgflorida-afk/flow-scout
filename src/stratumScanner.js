@@ -572,13 +572,17 @@ async function scanTicker(ticker, token, earningsMap, tf) {
 
   // A+ WAR ROOM — recent big-dollar algo alert matching this ticker+direction
   // Apr 20 2026 (AB rule): "one central place, peace that it'll move."
-  // Requires: algo alert in last 10 min, ≥ $500K premium, direction match.
+  // Requires: algo alert in last 10 min, ≥ $250K premium, direction match.
+  //
+  // Apr 21 2026 PM: AB limited War Room to top 10 tickers (Mag 7 + hot picks)
+  // so the room stays signal-dense. Scanner still scans full watchlist, but
+  // A+ alert only fires when one of these top names triggers.
+  // Customize via WAR_ROOM_TICKERS env var (comma list) — falls back to hardcoded.
+  var WAR_ROOM_TICKERS = (process.env.WAR_ROOM_TICKERS || 'SPY,QQQ,AAPL,MSFT,NVDA,AMZN,GOOGL,META,ORCL,CRWV').split(',').map(function(s){ return s.trim().toUpperCase(); });
   var aPlusAlert = null;
+  var warRoomEligible = WAR_ROOM_TICKERS.indexOf(ticker) !== -1;
   try {
-    if (bullflow && bullflow.getRecentFlow) {
-      // Apr 21 2026: AB lowered War Room threshold from $500K → $250K.
-      // With reduced 10-ticker watchlist, fewer big prints will hit, and
-      // $250K is still institutional-size conviction on smaller names.
+    if (warRoomEligible && bullflow && bullflow.getRecentFlow) {
       var recent = bullflow.getRecentFlow({ symbol: ticker, minPremium: 250000 }) || [];
       var cutoff = Date.now() - 10 * 60 * 1000;
       var matching = recent.filter(function(a) {
@@ -703,6 +707,22 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     }
   }
 
+  // CONVICTION TAG (Apr 21 2026 — drives FAST vs REVIEW button in UI)
+  // HIGH: War Room A+ hit, OR JSmith alert matching, OR FTFC-aligned + volume-confirmed
+  // NORMAL: directional signal present, no boost
+  // null: non-directional / TV Watch / Starred only
+  var conviction = null;
+  if (sigDirLocal && signal && signal !== 'TV Watch' && signal !== 'Starred' && signal !== 'Inside' && signal !== 'Outside Bar' && signal !== '1-1 Compression') {
+    var jsmithHit = !!(tvAlerts && tvAlerts.latest && /jsmith|john/i.test((tvAlerts.latest.message || tvAlerts.latest.source || '')));
+    if (aPlusAlert || jsmithHit) {
+      conviction = 'high';
+    } else if (ftfcAligned && vol && vol.rel >= 1.5) {
+      conviction = 'high';
+    } else {
+      conviction = 'normal';
+    }
+  }
+
   return {
     ticker: ticker,
     price: price,
@@ -752,6 +772,11 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     // Apr 21 2026 — Titan-ready contract card (display only; no auto-fire)
     // See: memory/OPERATING_MODEL_apr21.md + memory/SCANNER_CONTRACT_CARD_SPEC.md
     contractCard: contractCardData,
+
+    // Apr 21 2026 PM — conviction tag ('high'|'normal'|null) drives UI
+    // FAST vs REVIEW button. High-conviction → can fast-fire via MCP
+    // without manual confirm-order preview step.
+    conviction: conviction,
   };
 }
 

@@ -165,6 +165,84 @@ app.get('/api/stratum-scanner/stars', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   res.json({ stars: stratumScanner.getStars() });
 });
+
+// ============================================================
+// CARD DISPATCH QUEUE (Apr 21 2026 PM — Hybrid MCP button)
+// Scanner ⚡FAST or 📨REVIEW button POSTs to /api/card-dispatch.
+// Persisted to /data (survives redeploys). Active Claude session
+// polls /api/card-dispatch/pending and processes via TS MCP.
+//
+// mode=fast   → Claude auto-executes via confirm-order + place-order
+//               (ONLY for rows tagged conviction='high' by scanner)
+// mode=review → Claude shows confirm-order preview, waits for AB "go"
+//
+// Per OPERATING_MODEL_apr21 — AB explicitly re-authorized fast-mode
+// for high-conviction setups (Apr 21 PM session).
+// ============================================================
+var CARDS_FILE = (process.env.STATE_DIR || '/tmp') + '/pending_mcp_cards.json';
+function loadCards() {
+  try { return JSON.parse(fs.readFileSync(CARDS_FILE, 'utf8')); } catch(e) { return []; }
+}
+function saveCards(cards) {
+  try { fs.writeFileSync(CARDS_FILE, JSON.stringify(cards, null, 2)); } catch(e) { console.error('[CARDS] save error:', e.message); }
+}
+app.post('/api/card-dispatch', function(req, res) {
+  var body = req.body || {};
+  if (!body.ticker || !body.titanCard) return res.status(400).json({ ok: false, reason: 'missing ticker or titanCard' });
+  var mode = body.mode === 'fast' ? 'fast' : 'review';
+  // Fast mode requires high conviction per OPERATING_MODEL_apr21
+  if (mode === 'fast' && body.conviction !== 'high') {
+    return res.status(400).json({ ok: false, reason: 'FAST mode requires conviction=high (from scanner row tag)' });
+  }
+  var cards = loadCards();
+  // Dedup: if same ticker+titanCard already pending, skip
+  var existing = cards.find(function(c){ return c.status === 'pending' && c.ticker === body.ticker && c.titanCard === body.titanCard; });
+  if (existing) return res.json({ ok: true, deduped: true, id: existing.id });
+  var entry = {
+    id: 'C_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+    ticker: body.ticker,
+    mode: mode,
+    conviction: body.conviction || null,
+    card: body.card || null,
+    titanCard: body.titanCard,
+    source: body.source || 'scanner',
+    queuedAt: new Date().toISOString(),
+    status: 'pending',
+  };
+  cards.push(entry);
+  saveCards(cards);
+  console.log('[CARDS] dispatched:', entry.id, entry.ticker, entry.mode);
+  return res.json({ ok: true, id: entry.id, mode: mode });
+});
+app.get('/api/card-dispatch/pending', function(req, res) {
+  var cards = loadCards();
+  var pending = cards.filter(function(c){ return c.status === 'pending'; });
+  return res.json({ count: pending.length, cards: pending });
+});
+app.get('/api/card-dispatch/all', function(req, res) {
+  var cards = loadCards();
+  return res.json({ count: cards.length, cards: cards });
+});
+app.post('/api/card-dispatch/:id/mark', function(req, res) {
+  var id = req.params.id;
+  var body = req.body || {};
+  var status = body.status || 'processed';
+  var note = body.note || null;
+  var cards = loadCards();
+  var found = false;
+  cards = cards.map(function(c) {
+    if (c.id === id) {
+      c.status = status;
+      c.processedAt = new Date().toISOString();
+      if (note) c.note = note;
+      found = true;
+    }
+    return c;
+  });
+  saveCards(cards);
+  return res.json({ ok: found });
+});
+
 // Historical signals + W/L stats
 app.get('/api/stratum-scanner/history', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });

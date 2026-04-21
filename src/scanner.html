@@ -105,16 +105,21 @@
   .col-analyst { width: 80px; }
   .col-tv { width: 50px; text-align: center; }
   .col-trade { width: 80px; text-align: center; }
-  .col-card { width: 120px; text-align: center; }
+  .col-card { width: 180px; text-align: center; white-space: nowrap; }
   .card-btn {
     background: #2d4a3e; color: #a8e0c8; border: 1px solid #4a7560;
     border-radius: 4px; padding: 4px 7px; cursor: pointer; font-size: 10px;
     font-family: ui-monospace, monospace; white-space: nowrap;
-    transition: background 0.15s, transform 0.1s;
+    transition: background 0.15s, transform 0.1s; margin-right: 3px;
   }
   .card-btn:hover { background: #3d5f4e; }
   .card-btn:active { transform: scale(0.97); }
   .card-btn.copied { background: #1e7a42; color: #ffffff; border-color: #2e9a5a; }
+  .card-btn.fast { background: #5a2626; color: #ffc8c8; border-color: #8a3a3a; font-weight: 700; }
+  .card-btn.fast:hover { background: #7a3030; }
+  .card-btn.review { background: #2d3a5a; color: #c8d8f0; border-color: #4a5a8a; }
+  .card-btn.review:hover { background: #3d4a6e; }
+  .card-btn.dispatched { background: #7a6026; color: #ffffff; border-color: #aa8030; }
   .col-mag   { width: 120px; }
   .col-mid   { width: 70px; text-align: center; }
 
@@ -612,29 +617,70 @@ function rowHtml(r) {
   '</tr>';
 }
 
-// Apr 21 2026 — Titan-ready contract card button. Click = copy card
-// string to clipboard. Display-only; scanner never fires orders.
+// Apr 21 2026 — Titan-ready contract card buttons.
+// Copy: clipboard only.
+// ⚡ FAST (high-conviction only): dispatches to /api/card-dispatch for
+//    Claude session to auto-execute via TS MCP confirm-order + place-order.
+// 📨 REVIEW: dispatches for Claude to show preview + wait for AB confirm.
+// Per OPERATING_MODEL_apr21: AB explicitly re-authorized fast mode for
+// high-conviction setups (A+ War Room, JSmith, FTFC-aligned + vol).
 function cardBtnHtml(r) {
   if (!r.contractCard || !r.contractCard.titanCard) return '';
   var c = r.contractCard;
   var strike = c.contract.strike;
   var type = c.isCall ? 'C' : 'P';
   var exp = c.contract.expiry || '';
-  // Prefer short form 'MM/DD' for display
   var shortExp = exp;
   if (/^\d{4}-\d{2}-\d{2}/.test(exp)) {
     var parts = exp.split('-');
     shortExp = parts[1] + '/' + parts[2];
   }
   var summary = shortExp + ' ' + strike + type;
-  // Encode card text safely into data attribute + title
   var encoded = c.titanCard
     .replace(/&/g, '&amp;')
     .replace(/"/g, '&quot;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/\n/g, '&#10;');
-  return '<button class="card-btn" onclick="copyCard(this, event)" data-card="' + encoded + '" title="' + encoded + '">📋 ' + summary + '</button>';
+  var tickerEnc = (r.ticker || '').replace(/"/g, '&quot;');
+  var conviction = r.conviction || 'normal';
+  var cardJson = JSON.stringify(c).replace(/"/g, '&quot;');
+  var html = '<button class="card-btn" onclick="copyCard(this, event)" data-card="' + encoded + '" title="' + encoded + '">📋</button>';
+  if (conviction === 'high') {
+    html += '<button class="card-btn fast" onclick="dispatchCard(this, event, \'fast\')" data-ticker="' + tickerEnc + '" data-conviction="high" data-card="' + encoded + '" data-cardjson="' + cardJson + '" title="⚡ FAST — auto-execute via MCP (high conviction)">⚡</button>';
+  }
+  html += '<button class="card-btn review" onclick="dispatchCard(this, event, \'review\')" data-ticker="' + tickerEnc + '" data-conviction="' + conviction + '" data-card="' + encoded + '" data-cardjson="' + cardJson + '" title="📨 REVIEW — Claude previews, you confirm">📨</button>';
+  html += ' <span style="color:#888;font-size:9px">' + summary + '</span>';
+  return html;
+}
+
+function dispatchCard(btn, ev, mode) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  var ticker = btn.getAttribute('data-ticker');
+  var conviction = btn.getAttribute('data-conviction');
+  var titanEncoded = btn.getAttribute('data-card') || '';
+  var titanCard = titanEncoded
+    .replace(/&#10;/g, '\n')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  var cardObj = null;
+  try { cardObj = JSON.parse((btn.getAttribute('data-cardjson') || '').replace(/&quot;/g, '"')); } catch(e) {}
+  var body = { ticker: ticker, mode: mode, conviction: conviction, titanCard: titanCard, card: cardObj, source: 'scanner' };
+  fetch('/api/card-dispatch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.ok) {
+        var original = btn.innerHTML;
+        btn.innerHTML = '✓ sent';
+        btn.classList.add('dispatched');
+        setTimeout(function(){ btn.innerHTML = original; btn.classList.remove('dispatched'); }, 2500);
+      } else {
+        alert('Dispatch failed: ' + (d.reason || 'unknown'));
+      }
+    })
+    .catch(function(e) { alert('Dispatch error: ' + e.message); });
 }
 
 function copyCard(btn, ev) {
