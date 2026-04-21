@@ -24,6 +24,28 @@ var contractCard = null;
 try { contractCard = require('./contractCard'); } catch(e) {}
 
 // -----------------------------------------------------------------
+// CARD ENRICHMENT BUDGET (Apr 21 2026 PM v3)
+// The TS rate limiter gates option-chain calls at 1500ms gaps globally,
+// so >15 enrichments in a scan push the request past Railway's HTTP
+// timeout -> "Fetch failed: Unexpected end of JSON input" on scanner.
+// We cap total card enrichments per scan, with WAR_ROOM tickers always
+// privileged (they get enriched even past the cap because AB watches them).
+// Reset at the top of scan(); read inside scanTicker().
+// -----------------------------------------------------------------
+var _enrichBudget = { count: 0, cap: parseInt(process.env.CARD_ENRICH_CAP, 10) || 12 };
+function _resetEnrichBudget() {
+  _enrichBudget.count = 0;
+  _enrichBudget.cap = parseInt(process.env.CARD_ENRICH_CAP, 10) || 12;
+}
+// Race a promise against a hard timeout so one slow card can't blow the scan.
+function _withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise(function(resolve) { setTimeout(function() { resolve(null); }, ms); }),
+  ]);
+}
+
+// -----------------------------------------------------------------
 // PERSISTENT STATE -- stars + daily signal history
 // -----------------------------------------------------------------
 // Apr 20 2026 PM: auto-use /data if it exists (Railway volume default) so we
@@ -678,39 +700,52 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   // ----------------------------------------------------------------
   var contractCardData = null;
   var skipCard = !sigDirLocal || !signal || signal === 'Inside' || signal === 'Outside Bar' || signal === '1-1 Compression' || signal === 'TV Watch' || signal === 'Starred';
-  // Apr 21 2026 PM v2 — enrich ANY directional row (not just WAR_ROOM).
-  // Previous version limited to top 10 to avoid scan timeout. AB hit real
-  // setups outside the list (SOXL Hammer). Freshness/conviction already
-  // computed fast; only chain/quote fetch is slow. Relying on:
-  //   1. 60s quote cache (raised from 10s) to dedup repeat scans
-  //   2. Existing 1.5s TS rate limiter to avoid 429s
-  //   3. try/catch per row — one card failure doesn't break the scan
+  // Apr 21 2026 PM v3 — budget-gated enrichment.
+  // WAR_ROOM tickers always enrich (AB's primary watch). Non-WAR_ROOM
+  // directional rows compete for a shared budget (CARD_ENRICH_CAP, default 12)
+  // so the scan never exceeds Railway's HTTP timeout. Rows that don't get
+  // enriched this scan simply render without a ⚡/📨 button — they still
+  // show up with all normal scanner data. On the next refresh, the 60s
+  // quote cache eats most of the cost so cards backfill quickly.
   if (!skipCard && contractCard && contractCard.buildCard) {
-    try {
-      var triggerLvl = null;
-      if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down' || signal === '2-2 Reversal Down' || signal === '3-2D Broadening') triggerLvl = C.l;
-      if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up'   || signal === '2-2 Reversal Up'   || signal === '3-2U Broadening') triggerLvl = C.h;
+    var isWarRoom = warRoomEligible; // computed earlier in this function
+    var budgetAvail = _enrichBudget.count < _enrichBudget.cap;
+    var shouldEnrich = isWarRoom || budgetAvail;
+    if (shouldEnrich) {
+      if (!isWarRoom) _enrichBudget.count++;
+      try {
+        var triggerLvl = null;
+        if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down' || signal === '2-2 Reversal Down' || signal === '3-2D Broadening') triggerLvl = C.l;
+        if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up'   || signal === '2-2 Reversal Up'   || signal === '3-2U Broadening') triggerLvl = C.h;
 
-      // Binary catalyst detection: earnings next 1-2 days OR env flag
-      var binaryCatalyst = false;
-      if (badge && /EARN/.test(badge)) binaryCatalyst = true;
-      if (process.env.BINARY_CATALYST_TODAY === 'true') binaryCatalyst = true;
+        // Binary catalyst detection: earnings next 1-2 days OR env flag
+        var binaryCatalyst = false;
+        if (badge && /EARN/.test(badge)) binaryCatalyst = true;
+        if (process.env.BINARY_CATALYST_TODAY === 'true') binaryCatalyst = true;
 
-      if (triggerLvl) {
-        contractCardData = await contractCard.buildCard({
-          ticker: ticker,
-          direction: sigDirLocal,
-          signal: signal,
-          bars: { A: A, B: B, C: C },
-          stockPrice: price,
-          trigger: triggerLvl,
-          timeframe: tf || 'Daily',
-          source: 'SCANNER',
-          binaryCatalyst: binaryCatalyst,
-        });
+        if (triggerLvl) {
+          // 4s hard cap per card — ensures one stuck chain call can't hang
+          // the scan. Rate limiter is 1.5s, chain fetch ~2s best case, so
+          // 4s is generous. Null return just means "render row without card."
+          contractCardData = await _withTimeout(
+            contractCard.buildCard({
+              ticker: ticker,
+              direction: sigDirLocal,
+              signal: signal,
+              bars: { A: A, B: B, C: C },
+              stockPrice: price,
+              trigger: triggerLvl,
+              timeframe: tf || 'Daily',
+              source: 'SCANNER',
+              binaryCatalyst: binaryCatalyst,
+            }),
+            4000,
+            ticker + '-card'
+          );
+        }
+      } catch(e) {
+        contractCardData = null; // non-blocking; leave row un-enriched
       }
-    } catch(e) {
-      contractCardData = null; // non-blocking; leave row un-enriched
     }
   }
 
@@ -1174,6 +1209,7 @@ async function scan(opts) {
   if (_running[tf] && !opts.force) return _lastScan[tf];
   _running[tf] = true;
   var startedAt = Date.now();
+  _resetEnrichBudget(); // Apr 21 2026 PM v3 — fresh card budget per scan
 
   try {
     var token = await getToken();
