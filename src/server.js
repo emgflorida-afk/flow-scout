@@ -2609,6 +2609,27 @@ catch(e) { console.log('[SERVER] ayceScout not loaded:', e.message); }
 try { spreadScout = require('./spreadScout'); console.log('[SERVER] spreadScout loaded OK'); }
 catch(e) { console.log('[SERVER] spreadScout not loaded:', e.message); }
 
+// ============================================================
+// SCOUT KILL SWITCH (Apr 21 2026 — AB reduce-burn directive)
+// Per OPERATING_MODEL_apr21: no auto-fire ever. Scouts were still running
+// on their crons every minute burning TS API rate limit with 429 storms
+// even though queue-cycle bug was fixed. When DISABLE_SCOUTS=true is set
+// on Railway env, all scout module references are nulled so the existing
+// `if (scoutVar) scoutVar.run()` cron guards silently no-op.
+//
+// To re-enable: unset the env var and redeploy. No code change needed.
+// ============================================================
+if (process.env.DISABLE_SCOUTS === 'true') {
+  jsmithPoller  = null;
+  spyHedgeScout = null;
+  caseyEntry    = null;
+  wpEntry       = null;
+  stratEntry    = null;
+  ayceScout     = null;
+  spreadScout   = null;
+  console.log('[SERVER] 🔒 DISABLE_SCOUTS=true — all 7 scouts nulled, crons will no-op. TS API burn reduced.');
+}
+
 // AYCE fires opportunistically: 9:30-11:30 AM for Miyagi/4HR/Failed9/322,
 // then every 5 min 11-15 ET for 7HR liquidity sweep.
 // AYCE: every 2 min all session. Strategy-level gating lives inside the
