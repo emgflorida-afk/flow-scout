@@ -596,7 +596,7 @@ function rowHtml(r) {
     '<td class="col-price">' + fmtPrice(r.price) + '</td>' +
     '<td class="col-chg ' + (r.chgPct >= 0 ? 'chg-pos' : 'chg-neg') + '">' + fmtPct(r.chgPct) + '</td>' +
     '<td class="col-gap">' + gapHtml(r.gap) + '</td>' +
-    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span>' + contextBadgeHtml(r.signalContext) + '</td>' +
+    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span>' + contextBadgeHtml(r.signalContext) + freshnessBadgeHtml(r) + '</td>' +
     '<td class="col-combo">' + comboHtml(r.combo) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.D) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
@@ -615,6 +615,26 @@ function rowHtml(r) {
     '<td class="col-card">' + cardBtnHtml(r) + '</td>' +
     '<td class="col-trade">' + tradeBtnHtml(r) + '</td>' +
   '</tr>';
+}
+
+// Apr 21 2026 PM — freshness badge. Tells AB whether today's move
+// already captured magnitude (exhausted), or setup is still cocked.
+function freshnessBadgeHtml(r) {
+  if (!r.freshness) return '';
+  var icon, label, color, pct;
+  pct = r.magnitudePctCaptured != null ? ' ' + r.magnitudePctCaptured + '%' : '';
+  if (r.freshness === 'fresh')     { icon = '🟢'; label = 'FRESH';     color = '#4ac29a'; }
+  else if (r.freshness === 'partial')   { icon = '🟡'; label = 'PARTIAL'; color = '#ffb347'; }
+  else if (r.freshness === 'exhausted') { icon = '🔴'; label = 'EXHAUSTED'; color = '#ef6f6c'; }
+  else if (r.freshness === 'faded')     { icon = '⚫'; label = 'FADED';   color = '#999999'; }
+  else return '';
+  var tooltip = label + pct + ' — ' + (
+    r.freshness === 'fresh'     ? 'setup cocked, magnitude not captured today' :
+    r.freshness === 'partial'   ? 'partial capture today, room left to magnitude' :
+    r.freshness === 'exhausted' ? 'today hit/exceeded magnitude target — low R:R' :
+    r.freshness === 'faded'     ? 'wide-range bar closed rejecting direction (whipsaw)' : ''
+  );
+  return ' <span style="color:' + color + ';font-size:9px;font-weight:600;margin-left:4px" title="' + tooltip + '">' + icon + pct + '</span>';
 }
 
 // Apr 21 2026 — Titan-ready contract card buttons.

@@ -712,6 +712,48 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     }
   }
 
+  // FRESHNESS TAG (Apr 21 2026 PM — AB's stale/fresh question)
+  // Tells AB if today's magnitude was already captured (exhausted), or
+  // if the setup is still cocked for tomorrow. Prevents "did I miss it?"
+  // second-guessing on post-close scans.
+  //
+  //   🟢 fresh     — setup cocked, today didn't consume magnitude
+  //   🟡 partial   — 50%+ of magnitude distance captured today, room left
+  //   🔴 exhausted — today's high/low hit or exceeded magnitude target
+  //   ⚫ faded     — wide-range bar that closed rejecting (intraday whipsaw)
+  var freshness = null;
+  if (sigDirLocal && signal && signal !== 'TV Watch' && signal !== 'Starred' && signal !== 'Inside' && signal !== 'Outside Bar' && signal !== '1-1 Compression') {
+    var magHit = false;
+    var magPct = 0;
+    if (magnitude && magnitude.level && C) {
+      var magLvl = magnitude.level;
+      var prevClose = prev ? prev.c : (B ? B.c : null);
+      if (sigDirLocal === 'BULL') {
+        magHit = C.h >= magLvl;
+        if (prevClose && magLvl > prevClose) {
+          magPct = Math.min(Math.max((C.h - prevClose) / (magLvl - prevClose), 0), 1);
+        }
+      } else if (sigDirLocal === 'BEAR') {
+        magHit = C.l <= magLvl;
+        if (prevClose && prevClose > magLvl) {
+          magPct = Math.min(Math.max((prevClose - C.l) / (prevClose - magLvl), 0), 1);
+        }
+      }
+    }
+    // Intraday fade detection: wide-range bar with close rejecting the direction
+    var rng = C ? (C.h - C.l) : 0;
+    var closePos = rng > 0 ? (price - C.l) / rng : 0.5; // 0=at low, 1=at high
+    var faded = false;
+    if (C && rng > (C.h * 0.015)) { // at least 1.5% range
+      if (sigDirLocal === 'BULL' && closePos < 0.35) faded = true;
+      if (sigDirLocal === 'BEAR' && closePos > 0.65) faded = true;
+    }
+    if (magHit) freshness = 'exhausted';
+    else if (faded) freshness = 'faded';
+    else if (magPct >= 0.5) freshness = 'partial';
+    else freshness = 'fresh';
+  }
+
   // CONVICTION TAG (Apr 21 2026 — drives FAST vs REVIEW button in UI)
   // HIGH: War Room A+ hit, OR JSmith alert matching, OR FTFC-aligned + volume-confirmed
   // NORMAL: directional signal present, no boost
@@ -782,6 +824,20 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     // FAST vs REVIEW button. High-conviction → can fast-fire via MCP
     // without manual confirm-order preview step.
     conviction: conviction,
+
+    // Apr 21 2026 PM — freshness tag tells AB if today's move already
+    // captured magnitude. 🟢fresh · 🟡partial · 🔴exhausted · ⚫faded
+    freshness: freshness,
+    magnitudePctCaptured: (function() {
+      if (!magnitude || !magnitude.level || !prev || !C) return null;
+      if (sigDirLocal === 'BULL' && magnitude.level > prev.c) {
+        return Math.round(Math.min(Math.max((C.h - prev.c) / (magnitude.level - prev.c), 0), 1) * 100);
+      }
+      if (sigDirLocal === 'BEAR' && prev.c > magnitude.level) {
+        return Math.round(Math.min(Math.max((prev.c - C.l) / (prev.c - magnitude.level), 0), 1) * 100);
+      }
+      return null;
+    })(),
   };
 }
 
