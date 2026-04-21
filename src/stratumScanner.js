@@ -20,6 +20,8 @@ var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
 var bullflow = null;
 try { bullflow = require('./bullflowStream'); } catch(e) {}
+var contractCard = null;
+try { contractCard = require('./contractCard'); } catch(e) {}
 
 // -----------------------------------------------------------------
 // PERSISTENT STATE -- stars + daily signal history
@@ -662,6 +664,42 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal, atrPct);
   var midStack = midpointStack(price, dwmq.mids || {});
 
+  // ----------------------------------------------------------------
+  // CONTRACT CARD ENRICHMENT (Apr 21 2026)
+  // Per OPERATING_MODEL_apr21.md: produce Titan-ready contract cards per
+  // directional signal row. Display only — scanner never fires orders.
+  // ----------------------------------------------------------------
+  var contractCardData = null;
+  var skipCard = !sigDirLocal || !signal || signal === 'Inside' || signal === 'Outside Bar' || signal === '1-1 Compression' || signal === 'TV Watch' || signal === 'Starred';
+  if (!skipCard && contractCard && contractCard.buildCard) {
+    try {
+      var triggerLvl = null;
+      if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down' || signal === '2-2 Reversal Down' || signal === '3-2D Broadening') triggerLvl = C.l;
+      if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up'   || signal === '2-2 Reversal Up'   || signal === '3-2U Broadening') triggerLvl = C.h;
+
+      // Binary catalyst detection: earnings next 1-2 days OR env flag
+      var binaryCatalyst = false;
+      if (badge && /EARN/.test(badge)) binaryCatalyst = true;
+      if (process.env.BINARY_CATALYST_TODAY === 'true') binaryCatalyst = true;
+
+      if (triggerLvl) {
+        contractCardData = await contractCard.buildCard({
+          ticker: ticker,
+          direction: sigDirLocal,
+          signal: signal,
+          bars: { A: A, B: B, C: C },
+          stockPrice: price,
+          trigger: triggerLvl,
+          timeframe: tf || 'Daily',
+          source: 'SCANNER',
+          binaryCatalyst: binaryCatalyst,
+        });
+      }
+    } catch(e) {
+      contractCardData = null; // non-blocking; leave row un-enriched
+    }
+  }
+
   return {
     ticker: ticker,
     price: price,
@@ -707,6 +745,10 @@ async function scanTicker(ticker, token, earningsMap, tf) {
       if (signal === 'Outside Bar' || signal === 'Inside' || signal === '1-1 Compression') return null; // both sides
       return null;
     })(),
+
+    // Apr 21 2026 — Titan-ready contract card (display only; no auto-fire)
+    // See: memory/OPERATING_MODEL_apr21.md + memory/SCANNER_CONTRACT_CARD_SPEC.md
+    contractCard: contractCardData,
   };
 }
 

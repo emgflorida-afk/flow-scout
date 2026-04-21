@@ -105,6 +105,16 @@
   .col-analyst { width: 80px; }
   .col-tv { width: 50px; text-align: center; }
   .col-trade { width: 80px; text-align: center; }
+  .col-card { width: 120px; text-align: center; }
+  .card-btn {
+    background: #2d4a3e; color: #a8e0c8; border: 1px solid #4a7560;
+    border-radius: 4px; padding: 4px 7px; cursor: pointer; font-size: 10px;
+    font-family: ui-monospace, monospace; white-space: nowrap;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .card-btn:hover { background: #3d5f4e; }
+  .card-btn:active { transform: scale(0.97); }
+  .card-btn.copied { background: #1e7a42; color: #ffffff; border-color: #2e9a5a; }
   .col-mag   { width: 120px; }
   .col-mid   { width: 70px; text-align: center; }
 
@@ -597,8 +607,65 @@ function rowHtml(r) {
       volRelHtml(r.volRel) +
     '</td>' +
     '<td class="col-gates" title="9-gate pass count. Click row for detail.">' + gatesHtml(r) + '</td>' +
+    '<td class="col-card">' + cardBtnHtml(r) + '</td>' +
     '<td class="col-trade">' + tradeBtnHtml(r) + '</td>' +
   '</tr>';
+}
+
+// Apr 21 2026 — Titan-ready contract card button. Click = copy card
+// string to clipboard. Display-only; scanner never fires orders.
+function cardBtnHtml(r) {
+  if (!r.contractCard || !r.contractCard.titanCard) return '';
+  var c = r.contractCard;
+  var strike = c.contract.strike;
+  var type = c.isCall ? 'C' : 'P';
+  var exp = c.contract.expiry || '';
+  // Prefer short form 'MM/DD' for display
+  var shortExp = exp;
+  if (/^\d{4}-\d{2}-\d{2}/.test(exp)) {
+    var parts = exp.split('-');
+    shortExp = parts[1] + '/' + parts[2];
+  }
+  var summary = shortExp + ' ' + strike + type;
+  // Encode card text safely into data attribute + title
+  var encoded = c.titanCard
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/\n/g, '&#10;');
+  return '<button class="card-btn" onclick="copyCard(this, event)" data-card="' + encoded + '" title="' + encoded + '">📋 ' + summary + '</button>';
+}
+
+function copyCard(btn, ev) {
+  if (ev) { ev.stopPropagation(); ev.preventDefault(); }
+  var text = btn.getAttribute('data-card') || '';
+  // Decode HTML entities back to raw text for clipboard
+  var decoded = text
+    .replace(/&#10;/g, '\n')
+    .replace(/&quot;/g, '"')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(decoded).then(function() {
+      var original = btn.innerHTML;
+      btn.innerHTML = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(function() {
+        btn.innerHTML = original;
+        btn.classList.remove('copied');
+      }, 1500);
+    }).catch(function(err) { alert('Copy failed: ' + err.message); });
+  } else {
+    // Fallback for older browsers
+    var ta = document.createElement('textarea');
+    ta.value = decoded;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); btn.innerHTML = '✓ Copied'; } catch(e) {}
+    document.body.removeChild(ta);
+  }
 }
 
 // Volume relative badge — RED if below 1.5x rule, yellow if borderline, green if hot
@@ -701,6 +768,7 @@ function groupHtml(name, rows) {
       '<th class="col-mid" title="Weekly + Daily midpoint stack. Green = both buyers won, Red = both sellers won, Yellow = mixed">Mid</th>' +
       '<th class="col-vol">Vol</th>' +
       '<th class="col-gates" title="9-gate pass count. 🟢 8+ = full size. 🟡 6-7 = size down. 🔴 &lt;6 = skip.">Gates</th>' +
+      '<th class="col-card" title="Titan-ready contract card. Click to copy full card (entry LMT, stop, TP ladder, sizing) to clipboard.">Card</th>' +
       '<th class="col-trade">Trade</th>' +
     '</tr></thead>' +
     '<tbody>' + rows.map(rowHtml).join('') + '</tbody>' +
