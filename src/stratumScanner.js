@@ -678,6 +678,11 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   // ----------------------------------------------------------------
   var contractCardData = null;
   var skipCard = !sigDirLocal || !signal || signal === 'Inside' || signal === 'Outside Bar' || signal === '1-1 Compression' || signal === 'TV Watch' || signal === 'Starred';
+  // Apr 21 2026 PM — only enrich War Room tickers with full card.
+  // Scanner scans all ~139 tickers, but contract-card API calls are expensive
+  // (chain + quote + delta per row). Limiting enrichment to the 10 top
+  // names keeps total scan time under the request timeout.
+  if (!skipCard && WAR_ROOM_TICKERS.indexOf(ticker) === -1) skipCard = true;
   if (!skipCard && contractCard && contractCard.buildCard) {
     try {
       var triggerLvl = null;
