@@ -267,12 +267,11 @@ function writeKeyToDisk(k) {
 // the streaming setup needs to run in background. 9 attempts to bridge failed.
 // AB provided the key for hardcode so flow column can populate today.
 //
-// TODO FOR NEXT SESSION:
-// 1. Rotate key at https://bullflow.io/ → Settings → API
-// 2. Update Railway env var
-// 3. DELETE this hardcode + the FALLBACK_KEY constant
-// 4. Investigate Railway STATE_DIR setup (it was null — should be /data volume)
-var FALLBACK_KEY = 'bull_3ea4d29262a9cda5b0ee9d951b389d1fe60c0185e67cd43c';
+// Apr 21 2026 PM: Removed stale hardcoded FALLBACK_KEY (was causing 403
+// loop even after env was updated). Stream now uses env key only. If env
+// missing → stream fails loudly instead of using a dead key.
+// Old key (DELETED): bull_3ea4d29262a9cda5b0ee9d951b389d1fe60c0185e67cd43c
+var FALLBACK_KEY = null;
 
 // -- MAIN STREAM --------------------------------------------------
 function startBullflowStream(apiKeyOverride) {

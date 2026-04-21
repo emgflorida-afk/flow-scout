@@ -576,7 +576,10 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   var aPlusAlert = null;
   try {
     if (bullflow && bullflow.getRecentFlow) {
-      var recent = bullflow.getRecentFlow({ symbol: ticker, minPremium: 500000 }) || [];
+      // Apr 21 2026: AB lowered War Room threshold from $500K → $250K.
+      // With reduced 10-ticker watchlist, fewer big prints will hit, and
+      // $250K is still institutional-size conviction on smaller names.
+      var recent = bullflow.getRecentFlow({ symbol: ticker, minPremium: 250000 }) || [];
       var cutoff = Date.now() - 10 * 60 * 1000;
       var matching = recent.filter(function(a) {
         var t = new Date(a.timestamp).getTime();
