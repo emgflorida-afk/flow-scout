@@ -138,20 +138,57 @@ app.get('/api/stratum-scanner', async function(req, res) {
     res.json(data);
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
+// AI Curator — Apr 22 2026 PM build
+// Scores TV alerts via Claude API, pushes A+ verdicts to Discord.
+// Silent-logs everything for transparency.
+var aiCurator = null;
+try { aiCurator = require('./aiCurator'); console.log('[SERVER] aiCurator loaded OK'); }
+catch(e) { console.log('[SERVER] aiCurator not loaded:', e.message); }
+
 // TradingView webhook receiver -- in TV alert, set Webhook URL to:
 //   https://flow-scout-production.up.railway.app/api/tv-alert
 // (The old -f021 domain points to a dead-twin `upbeat-flow` project with no
 // env vars. Do NOT send TV alerts there.)
 // And body to JSON like: {"ticker":"{{ticker}}","action":"buy","tf":"{{interval}}","price":{{close}},"message":"{{strategy.order.alert_message}}"}
+//
+// Flow on receipt:
+//   1. Scanner ingests (persists tv alert for the TV Watch column)
+//   2. AI Curator scores the setup against AB's doctrine
+//   3. If score ≥ 8, Discord push fires
+//   4. Silent log to curator_log.jsonl either way
 app.post('/api/tv-alert', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   try {
     var body = req.body || {};
     if (typeof body === 'string') { try { body = JSON.parse(body); } catch(e){} }
-    var result = stratumScanner.ingestTVAlert(body);
-    console.log('[TV-ALERT]', JSON.stringify(body).slice(0, 200), '->', JSON.stringify(result));
-    res.json(result);
+    var scanResult = stratumScanner.ingestTVAlert(body);
+    console.log('[TV-ALERT]', JSON.stringify(body).slice(0, 200), '->', JSON.stringify(scanResult));
+
+    // Fire curator async — don't block the response
+    if (aiCurator && aiCurator.processTVAlert) {
+      aiCurator.processTVAlert(body)
+        .then(function(r) { console.log('[CURATOR]', body.ticker, '->', r && r.verdict && r.verdict.verdict); })
+        .catch(function(e) { console.error('[CURATOR] error:', e.message); });
+    }
+
+    res.json({ ok: true, scanner: scanResult, curator: 'async' });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Recent curator decisions (for scanner UI AI Curator tab)
+app.get('/api/curator/decisions', function(req, res) {
+  if (!aiCurator) return res.json({ decisions: [] });
+  var limit = parseInt(req.query.limit, 10) || 50;
+  res.json({ decisions: aiCurator.getRecentDecisions(limit) });
+});
+
+// Manual trigger (for testing or EOD)
+app.post('/api/curator/score', function(req, res) {
+  if (!aiCurator) return res.status(500).json({ error: 'aiCurator not loaded' });
+  var body = req.body || {};
+  aiCurator.scoreSetup(body)
+    .then(function(verdict) { res.json({ ok: true, verdict: verdict }); })
+    .catch(function(e) { res.status(500).json({ error: e.message }); });
 });
 // Star / unstar a ticker
 app.post('/api/stratum-scanner/star', function(req, res) {
