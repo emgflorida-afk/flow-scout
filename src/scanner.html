@@ -693,8 +693,17 @@ function dispatchCard(btn, ev, mode) {
     .then(function(d) {
       if (d.ok) {
         var original = btn.innerHTML;
-        btn.innerHTML = '✓ sent';
+        btn.innerHTML = '✓ queued';
         btn.classList.add('dispatched');
+        // Apr 21 2026 PM v3 — clearer feedback. The card is now in the
+        // server's pending_mcp_cards.json queue. The next Claude session
+        // picks it up via GET /api/card-dispatch/pending. This does NOT
+        // go to Discord, a broker, or Titan — it's a handoff to Claude.
+        var toast = document.createElement('div');
+        toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#2d4a3e;color:#a8e0c8;border:1px solid #4a7560;padding:10px 14px;border-radius:6px;font-size:12px;z-index:2000;max-width:300px;box-shadow:0 4px 12px rgba(0,0,0,0.4)';
+        toast.innerHTML = '✓ <b>' + ticker + '</b> queued for Claude MCP (' + mode.toUpperCase() + ' mode)<br><span style="color:#888;font-size:11px">Say "check pending cards" in your Claude chat to process.</span>';
+        document.body.appendChild(toast);
+        setTimeout(function(){ if (toast.parentElement) toast.remove(); }, 5000);
         setTimeout(function(){ btn.innerHTML = original; btn.classList.remove('dispatched'); }, 2500);
       } else {
         alert('Dispatch failed: ' + (d.reason || 'unknown'));
@@ -1106,7 +1115,18 @@ function loadScan(force) {
   ])
     .then(function(results) { _cachedData = results[0]; render(applyFilters(results[0])); })
     .catch(function(e) {
-      document.getElementById('root').innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>';
+      // Apr 21 2026 PM v3 — do NOT wipe the rendered table on fetch fail.
+      // Previously the innerHTML replace blew away cards/buttons whenever a
+      // background refresh failed (cold start, rate-limit blip, timeout).
+      // Now: show a dismissible banner, keep the last good render on screen.
+      var root = document.getElementById('root');
+      var existing = document.getElementById('fetch-err-banner');
+      if (existing) existing.remove();
+      var banner = document.createElement('div');
+      banner.id = 'fetch-err-banner';
+      banner.style.cssText = 'position:sticky;top:0;z-index:1000;background:#3a1414;color:#ef6f6c;padding:8px 12px;border:1px solid #5a2020;border-radius:4px;margin-bottom:8px;font-size:12px';
+      banner.innerHTML = '⚠ Last refresh failed (' + e.message + ') — showing previous scan. Will retry on next cycle. <span style="float:right;cursor:pointer" onclick="this.parentElement.remove()">✕</span>';
+      root.insertBefore(banner, root.firstChild);
     })
     .finally(function() {
       document.getElementById('refresh-btn').disabled = false;

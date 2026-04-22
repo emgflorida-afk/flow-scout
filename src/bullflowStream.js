@@ -8,12 +8,21 @@
 
 const fetch = require('node-fetch');
 
-const WATCHLIST = new Set([
-  'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
-  'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
-  'MRNA','MRVL','GUSH','UVXY','KO','PEP',
-  'CRWV','BA','NFLX','MCD','DKNG','SBUX','HUM','TSLL'
-]);
+// Apr 21 2026 PM v3 — AB wants Mag7-only subscription to cut Bullflow
+// API burn while traveling. Override via BULLFLOW_WATCHLIST env
+// (comma list). Falls back to extended default for server-side use.
+var _bfList = (process.env.BULLFLOW_WATCHLIST || '')
+  .split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
+if (!_bfList.length) {
+  _bfList = [
+    'SPY','QQQ','IWM','NVDA','TSLA','META','GOOGL',
+    'AMZN','MSFT','AMD','JPM','GS','BAC','WFC',
+    'MRNA','MRVL','GUSH','UVXY','KO','PEP',
+    'CRWV','BA','NFLX','MCD','DKNG','SBUX','HUM','TSLL'
+  ];
+}
+const WATCHLIST = new Set(_bfList);
+console.log('[BULLFLOW] Watchlist:', _bfList.length, 'symbols', _bfList.slice(0,10).join(','), _bfList.length > 10 ? '...' : '');
 
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK;

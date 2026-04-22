@@ -685,9 +685,11 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   }
 
   // Magnitude: next structural target in signal's direction (Primo "ride to next level")
+  // Apr 21 2026 PM v3 — extend coverage to 2-2 Reversals + 3-2 Broadening
+  // so those signals produce conviction tags, freshness badges, AND contract cards.
   var sigDirLocal = (function() {
-    if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down') return 'BEAR';
-    if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up')   return 'BULL';
+    if (signal === 'Failed 2U' || signal === 'Shooter' || signal === '2-1-2 Down' || signal === '3-1-2 Down' || signal === 'Continuation Down' || signal === '2-2 Reversal Down' || signal === '3-2D Broadening') return 'BEAR';
+    if (signal === 'Failed 2D' || signal === 'Hammer'  || signal === '2-1-2 Up'   || signal === '3-1-2 Up'   || signal === 'Continuation Up'   || signal === '2-2 Reversal Up'   || signal === '3-2U Broadening') return 'BULL';
     return null;
   })();
   var magnitude = nextMagnitude(price, dwmq.levels || {}, sigDirLocal, atrPct);
