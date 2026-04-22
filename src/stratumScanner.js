@@ -726,9 +726,9 @@ async function scanTicker(ticker, token, earningsMap, tf) {
         if (process.env.BINARY_CATALYST_TODAY === 'true') binaryCatalyst = true;
 
         if (triggerLvl) {
-          // 4s hard cap per card — ensures one stuck chain call can't hang
-          // the scan. Rate limiter is 1.5s, chain fetch ~2s best case, so
-          // 4s is generous. Null return just means "render row without card."
+          // Apr 21 2026 PM v4 — 10s hard cap per card. With 400ms rate limiter
+          // and 60s quote cache, 12 cards queue fits easily in the budget.
+          // 10s per-card covers the worst case of rate-limit queue + chain fetch.
           contractCardData = await _withTimeout(
             contractCard.buildCard({
               ticker: ticker,
@@ -741,7 +741,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
               source: 'SCANNER',
               binaryCatalyst: binaryCatalyst,
             }),
-            4000,
+            10000,
             ticker + '-card'
           );
         }

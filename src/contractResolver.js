@@ -9,7 +9,11 @@ const fetch = require('node-fetch');
 // Prior version was a race: N concurrent callers all read _lastChainRequest at once
 // and fired simultaneously. This chains each call onto the tail of a promise so
 // requests leave with a guaranteed gap between them.
-var CHAIN_DELAY_MS = 1500;
+// Apr 21 2026 PM v4 — dropped 1500ms → 400ms. TS tier allows ~10 req/s and
+// 400ms leaves plenty of headroom. 1500ms was so conservative that 12 card
+// enrichments queued for 18s before each per-card timeout even started,
+// guaranteeing every card timed out. Override via TS_CHAIN_DELAY_MS env.
+var CHAIN_DELAY_MS = parseInt(process.env.TS_CHAIN_DELAY_MS, 10) || 400;
 var _chainTail = Promise.resolve();
 var _lastChainDone = 0;
 function rateLimit() {
