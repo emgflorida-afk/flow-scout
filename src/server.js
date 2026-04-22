@@ -2698,7 +2698,10 @@ catch(e) { console.log('[SERVER] spreadScout not loaded:', e.message); }
 // To re-enable: unset the env var and redeploy. No code change needed.
 // ============================================================
 if (process.env.DISABLE_SCOUTS === 'true') {
-  jsmithPoller  = null;
+  // Apr 21 2026 PM v4 — jsmithPoller is READ-ONLY (fetches John's Discord
+  // messages, no auto-fire). Keep it alive even when scouts are disabled so
+  // AB can pull John's VIP picks while the brain is locked down.
+  // jsmithPoller  = null;  ← intentionally NOT nulled
   spyHedgeScout = null;
   caseyEntry    = null;
   wpEntry       = null;
