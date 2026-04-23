@@ -2568,6 +2568,76 @@ app.get('/api/jsmith/diag', function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// RE-ENTRY RADAR — 2nd-chance entry pattern detector
+// Runs every 5 min during market hours. Monitors watchlist for
+// pullback-and-reclaim patterns on tickers with registered triggers.
+// Pushes Discord via pushCuratorAlert when pattern fires.
+// -----------------------------------------------------------------
+var reentryRadar = null;
+try { reentryRadar = require('./reentryRadar'); console.log('[SERVER] reentryRadar loaded OK'); }
+catch(e) { console.log('[SERVER] reentryRadar not loaded:', e.message); }
+
+// Cron: every 5 min, 9 AM - 3:55 PM ET, Mon-Fri
+cron.schedule('*/5 9-15 * * 1-5', function() {
+  if (reentryRadar) {
+    reentryRadar.runCycle().catch(function(e) { console.error('[RADAR]', e.message); });
+  }
+}, { timezone: 'America/New_York' });
+
+// Register a ticker + trigger price + direction for monitoring.
+// POST /api/radar/watch  { ticker, triggerPrice, direction: 'long'|'short' }
+app.post('/api/radar/watch', function(req, res) {
+  if (!reentryRadar) return res.status(500).json({ error: 'reentryRadar not loaded' });
+  try {
+    var b = req.body || {};
+    if (!b.ticker || !b.triggerPrice || !b.direction) {
+      return res.status(400).json({ error: 'required: ticker, triggerPrice, direction' });
+    }
+    if (b.direction !== 'long' && b.direction !== 'short') {
+      return res.status(400).json({ error: 'direction must be long or short' });
+    }
+    var result = reentryRadar.registerWatch(b.ticker, b.triggerPrice, b.direction);
+    res.json({ ok: true, watch: result });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Unregister a ticker
+app.delete('/api/radar/watch/:ticker', function(req, res) {
+  if (!reentryRadar) return res.status(500).json({ error: 'reentryRadar not loaded' });
+  try { res.json(reentryRadar.unregisterWatch(req.params.ticker)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// List all registered watches
+app.get('/api/radar/watches', function(req, res) {
+  if (!reentryRadar) return res.status(500).json({ error: 'reentryRadar not loaded' });
+  try { res.json(reentryRadar.listWatches()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Manual runCycle trigger (for testing + debug)
+app.post('/api/radar/run', async function(req, res) {
+  if (!reentryRadar) return res.status(500).json({ error: 'reentryRadar not loaded' });
+  try { res.json(await reentryRadar.runCycle()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Tail the radar event log
+app.get('/api/radar/log', function(req, res) {
+  try {
+    var fs = require('fs');
+    var path = require('path');
+    var STATE_DIR = process.env.STATE_DIR || '/tmp';
+    var logPath = path.join(STATE_DIR, 'reentry_radar.jsonl');
+    if (!fs.existsSync(logPath)) return res.json({ events: [] });
+    var limit = parseInt(req.query.limit || '50', 10);
+    var lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean);
+    var tail = lines.slice(-limit).map(function(l) { try { return JSON.parse(l); } catch(e) { return null; } }).filter(Boolean);
+    res.json({ count: tail.length, events: tail });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
 // SCOUT HEALTH TRACKER -- real-time heartbeat for the arm page
 // -----------------------------------------------------------------
 var scoutHealth = null;
