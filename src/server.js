@@ -190,6 +190,19 @@ app.post('/api/curator/score', function(req, res) {
     .then(function(verdict) { res.json({ ok: true, verdict: verdict }); })
     .catch(function(e) { res.status(500).json({ error: e.message }); });
 });
+
+// Manual push — ship a pre-built card directly to Discord, no Claude scoring.
+// Used for Claude-session-authored setup cards that are already vetted.
+app.post('/api/curator/push', function(req, res) {
+  try {
+    var pushNotifier = require('./pushNotifier');
+    var body = req.body || {};
+    if (!body.ticker) return res.status(400).json({ error: 'ticker required' });
+    pushNotifier.pushCuratorAlert(body)
+      .then(function() { res.json({ ok: true, pushed: true }); })
+      .catch(function(e) { res.status(500).json({ error: e.message }); });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 // Star / unstar a ticker
 app.post('/api/stratum-scanner/star', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
