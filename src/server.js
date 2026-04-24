@@ -293,11 +293,49 @@ app.post('/api/card-dispatch/:id/mark', function(req, res) {
   return res.json({ ok: found });
 });
 
-// Historical signals + W/L stats
+// Historical signals + W/L stats — optional tf filter (Daily/4HR/60m/30m)
 app.get('/api/stratum-scanner/history', function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   var days = parseInt(req.query.days || '5', 10);
-  res.json(stratumScanner.getHistory(days));
+  var tf = req.query.tf || null;
+  res.json(stratumScanner.getHistory(days, tf));
+});
+
+// Apr 24 2026 v1.5 — TIER 5: confluence-sliced breakdown
+// GET /api/stratum-scanner/history/breakdown?ftfcAligned=true&gexRegime=POSITIVE&flow=BULL&tf=Daily&days=30
+// Query-string keys become the filter map; reserved keys: tf, days
+app.get('/api/stratum-scanner/history/breakdown', function(req, res) {
+  if (!stratumScanner || !stratumScanner.getHistoryBreakdown) {
+    return res.status(500).json({ error: 'getHistoryBreakdown not available' });
+  }
+  var tf = req.query.tf || null;
+  var days = parseInt(req.query.days || '30', 10);
+  var filters = {};
+  Object.keys(req.query).forEach(function(k) {
+    if (k === 'tf' || k === 'days') return;
+    var v = req.query[k];
+    // Coerce common values
+    if (v === 'true') v = true;
+    else if (v === 'false') v = false;
+    else if (v === 'null') v = null;
+    else if (/^-?\d+$/.test(v)) v = parseInt(v, 10);
+    else if (/^-?\d+\.\d+$/.test(v)) v = parseFloat(v);
+    filters[k] = v;
+  });
+  res.json(stratumScanner.getHistoryBreakdown(filters, { tf: tf, days: days }));
+});
+
+// Manual live-score update (forces the cron logic on demand)
+app.get('/api/stratum-scanner/history/live-update', async function(req, res) {
+  if (!stratumScanner || !stratumScanner.updateLiveScores) {
+    return res.status(500).json({ error: 'updateLiveScores not available' });
+  }
+  try {
+    await stratumScanner.updateLiveScores();
+    res.json({ ok: true, ts: new Date().toISOString() });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
 });
 // Structural levels for a ticker (PDH/PDL/PWH/PWL/PMH/PML/52wH/52wL)
 // Used by external integrations, Pine scripts that webhook for data, mobile apps.
@@ -1695,6 +1733,53 @@ cron.schedule('*/10 9-16 * * 1-5', function() {
   if (executeNow && executeNow.cancelStaleOrders) {
     executeNow.cancelStaleOrders().catch(function(e) { console.error('[CANCEL-STALE]', e.message); });
   }
+}, { timezone: 'America/New_York' });
+
+// ============================================================================
+// MULTI-TF SCANNER HISTORY SNAPSHOTS — Apr 24 2026 v1.5
+// Drive every timeframe's history accumulation via scheduled scans so we can
+// measure win-rate per TF without relying on AB hitting the UI all day.
+// ============================================================================
+
+// 30m snapshot — 10:15 AM ET (first 30m bar closed), 12:15 PM (noon chop marker), 2:45 PM (PM session)
+cron.schedule('15 10,12 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.scan) return;
+  console.log('[HIST-CRON] 30m scan triggering history snapshot');
+  stratumScanner.scan({ tf: '30m', force: true }).catch(function(e) { console.error('[HIST-CRON 30m]', e.message); });
+}, { timezone: 'America/New_York' });
+cron.schedule('45 14 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.scan) return;
+  console.log('[HIST-CRON] 30m PM scan triggering history snapshot');
+  stratumScanner.scan({ tf: '30m', force: true }).catch(function(e) { console.error('[HIST-CRON 30m PM]', e.message); });
+}, { timezone: 'America/New_York' });
+
+// 60m snapshot — 11:00 AM (first 60m bar closed), 3:00 PM (PM 60m)
+cron.schedule('0 11,15 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.scan) return;
+  console.log('[HIST-CRON] 60m scan triggering history snapshot');
+  stratumScanner.scan({ tf: '60m', force: true }).catch(function(e) { console.error('[HIST-CRON 60m]', e.message); });
+}, { timezone: 'America/New_York' });
+
+// 4HR snapshot — 1:30 PM (first 4HR bar closed for US session)
+cron.schedule('30 13 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.scan) return;
+  console.log('[HIST-CRON] 4HR scan triggering history snapshot');
+  stratumScanner.scan({ tf: '4HR', force: true }).catch(function(e) { console.error('[HIST-CRON 4HR]', e.message); });
+}, { timezone: 'America/New_York' });
+
+// Daily snapshot — 4:15 PM ET (after close; 4:00 bar finalized)
+cron.schedule('15 16 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.scan) return;
+  console.log('[HIST-CRON] Daily EOD scan triggering history snapshot');
+  stratumScanner.scan({ tf: 'Daily', force: true }).catch(function(e) { console.error('[HIST-CRON Daily]', e.message); });
+}, { timezone: 'America/New_York' });
+
+// TIER 4 — live in-flight scoring every 15 min during market hours.
+// Updates today's rows with liveMovePct/liveAdvPct/liveStatus so History tab
+// shows partial progress before tomorrow's final eval.
+cron.schedule('*/15 9-16 * * 1-5', function() {
+  if (!stratumScanner || !stratumScanner.updateLiveScores) return;
+  stratumScanner.updateLiveScores().catch(function(e) { console.error('[HIST-LIVE]', e.message); });
 }, { timezone: 'America/New_York' });
 
 // 3:30 PM ET (19:30 UTC) -- hard close all day trade positions

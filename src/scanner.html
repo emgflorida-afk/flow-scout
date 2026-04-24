@@ -213,6 +213,17 @@
   .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab:hover:not(.active) { color: var(--text); }
 
+  .tf-btn {
+    padding: 6px 12px;
+    border: 1px solid #334;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    transition: all 0.15s;
+  }
+  .tf-btn:hover { filter: brightness(1.2); }
+
   .filter-row {
     display: flex;
     gap: 12px;
@@ -1357,14 +1368,20 @@ function unqueueTrade(qid, ticker, btn) {
     });
 }
 
-// --- HISTORY TAB ---
+// --- HISTORY TAB (v1.5 Apr 24 — TF filter + byTf breakdown + live status) ---
+var _historyTfFilter = null;  // null = all, or 'Daily' | '4HR' | '60m' | '30m'
 function loadHistory() {
   var root = document.getElementById('history-root');
   root.innerHTML = '<div class="loading">Loading history…</div>';
-  fetch('/api/stratum-scanner/history?days=5')
+  var qs = '?days=10' + (_historyTfFilter ? '&tf=' + encodeURIComponent(_historyTfFilter) : '');
+  fetch('/api/stratum-scanner/history' + qs)
     .then(function(r){ return r.json(); })
     .then(renderHistory)
     .catch(function(e){ root.innerHTML = '<div class="error">Fetch failed: ' + e.message + '</div>'; });
+}
+function setHistoryTf(tf) {
+  _historyTfFilter = tf;
+  loadHistory();
 }
 function renderHistory(h) {
   var root = document.getElementById('history-root');
@@ -1373,13 +1390,41 @@ function renderHistory(h) {
   var wCount = (stats.wins || 0) + (stats.partials || 0);
   var hitRate = wCount + (stats.losses||0) > 0 ? ((wCount / (wCount + (stats.losses||0))) * 100).toFixed(0) : '—';
   var avgPeak = stats.avgPeakPct != null ? (stats.avgPeakPct >= 0 ? '+' : '') + stats.avgPeakPct + '%' : '—';
-  var html = '<div class="history-stats">' +
-    '<div class="stat-card"><div class="stat-label">Total Signals (5d)</div><div class="stat-value">' + (stats.total || 0) + '</div></div>' +
+
+  // TF filter toolbar
+  var tfBtns = ['All','Daily','4HR','60m','30m'].map(function(t) {
+    var val = t === 'All' ? null : t;
+    var active = (_historyTfFilter || 'All') === (val || 'All') ? 'style="background:var(--blue);color:#fff;"' : 'style="background:#1a2332;color:var(--muted);"';
+    return '<button class="tf-btn" ' + active + ' onclick="setHistoryTf(' + (val ? "'" + val + "'" : 'null') + ')">' + t + '</button>';
+  }).join('');
+  var html = '<div style="display:flex;gap:8px;margin-bottom:12px;align-items:center"><span style="color:var(--muted);font-size:12px">TF:</span>' + tfBtns + '<button class="tf-btn" style="margin-left:auto;background:#1a2332;color:var(--blue)" onclick="fetch(\'/api/stratum-scanner/history/live-update\').then(function(r){return r.json()}).then(function(){ loadHistory(); })">↻ Live Update</button></div>';
+
+  html += '<div class="history-stats">' +
+    '<div class="stat-card"><div class="stat-label">Total Signals (10d)</div><div class="stat-value">' + (stats.total || 0) + '</div></div>' +
     '<div class="stat-card"><div class="stat-label">Hit Rate (WIN+PARTIAL)</div><div class="stat-value outcome-win">' + hitRate + (hitRate === '—' ? '' : '%') + '</div></div>' +
     '<div class="stat-card"><div class="stat-label">W / P / L / F</div><div class="stat-value"><span class="outcome-win">' + (stats.wins||0) + '</span> / <span class="outcome-partial">' + (stats.partials||0) + '</span> / <span class="outcome-loss">' + (stats.losses||0) + '</span> / <span class="outcome-flat">' + (stats.flat||0) + '</span></div></div>' +
     '<div class="stat-card"><div class="stat-label">Avg Peak % (option)</div><div class="stat-value outcome-win">' + avgPeak + '</div></div>' +
     '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value outcome-pending">' + (stats.pending||0) + '</div></div>' +
   '</div>';
+
+  // By-TF breakdown
+  if (stats.byTf && Object.keys(stats.byTf).length > 0) {
+    html += '<div class="group"><div class="group-header"><div class="group-title">By timeframe</div></div>';
+    html += '<table><thead><tr><th>TF</th><th>Total</th><th>W</th><th>P</th><th>L</th><th>F</th><th>Pending</th><th>Hit Rate</th></tr></thead><tbody>';
+    Object.keys(stats.byTf).sort().forEach(function(tf) {
+      var b = stats.byTf[tf];
+      var bW = (b.wins||0) + (b.partials||0);
+      var hr = (bW + (b.losses||0)) > 0 ? ((bW / (bW + (b.losses||0))) * 100).toFixed(0) + '%' : '—';
+      html += '<tr><td><b>' + tf + '</b></td><td>' + b.total + '</td>'
+        + '<td class="outcome-win">' + (b.wins||0) + '</td>'
+        + '<td class="outcome-partial">' + (b.partials||0) + '</td>'
+        + '<td class="outcome-loss">' + (b.losses||0) + '</td>'
+        + '<td class="outcome-flat">' + (b.flat||0) + '</td>'
+        + '<td class="outcome-pending">' + (b.pending||0) + '</td>'
+        + '<td><b>' + hr + '</b></td></tr>';
+    });
+    html += '</tbody></table></div>';
+  }
   // By-signal breakdown (option-P&L based via Bullflow peakReturn)
   if (stats.bySignal) {
     html += '<div class="group"><div class="group-header"><div class="group-title">Hit rate by signal type (option peak % via Bullflow)</div></div>';
@@ -1400,31 +1445,55 @@ function renderHistory(h) {
     });
     html += '</tbody></table></div>';
   }
-  // Per-day rows
+  // Per-day rows (grouped by date+tf)
   (h.days || []).slice().reverse().forEach(function(d) {
-    html += '<div class="group"><div class="group-header"><div class="group-title">' + d.date + '</div><div class="group-count">' + (d.rows || []).length + ' signals</div></div>';
-    html += '<table><thead><tr><th>Ticker</th><th>Signal</th><th>Dir</th><th>Price at signal</th><th>Trigger</th><th>3d Move</th><th>Outcome</th></tr></thead><tbody>';
+    var dTf = d.tf || 'Daily';
+    html += '<div class="group"><div class="group-header"><div class="group-title">' + d.date + ' · <span style="color:var(--blue)">' + dTf + '</span></div><div class="group-count">' + (d.rows || []).length + ' signals</div></div>';
+    html += '<table><thead><tr><th>Ticker</th><th>Signal</th><th>Dir</th><th>Price</th><th>Trig</th><th>FTFC</th><th>GEX</th><th>Flow</th><th>Move</th><th>Outcome</th></tr></thead><tbody>';
     (d.rows || []).forEach(function(r) {
       var outCls = r.outcome === 'WIN' ? 'outcome-win'
         : r.outcome === 'PARTIAL' ? 'outcome-partial'
         : r.outcome === 'LOSS' ? 'outcome-loss'
         : r.outcome === 'FLAT' ? 'outcome-flat'
+        : r.liveStatus === 'WIN_IN_PROGRESS' ? 'outcome-win'
+        : r.liveStatus === 'DRAWDOWN' ? 'outcome-loss'
         : 'outcome-pending';
-      var outLabel = r.outcome || 'pending';
+      var outLabel = r.outcome || (r.liveStatus ? '⏱ ' + r.liveStatus.replace('_',' ').toLowerCase() : 'pending');
       if (typeof r.peakPct === 'number') outLabel += ' (' + (r.peakPct >= 0 ? '+' : '') + r.peakPct + '%)';
+      // Move column: final eval if present, else live, else —
+      var moveTxt = '—';
+      if (r.movePct != null) moveTxt = '+' + r.movePct + '% fav / ' + (r.advPct || 0) + '% adv';
+      else if (r.liveMovePct != null) moveTxt = '⏱ +' + r.liveMovePct + '% / ' + (r.liveAdvPct || 0) + '% adv';
+      // FTFC badge
+      var ftfcTxt = r.ftfcAligned ? '<span style="color:var(--green);font-weight:700">ALIGNED</span>'
+                                  : r.ftfc ? '<span style="color:var(--blue)">OK</span>'
+                                  : '<span style="color:var(--muted)">—</span>';
+      // GEX regime
+      var gexTxt = r.gexRegime === 'POSITIVE' ? '<span style="color:var(--green)">+γ</span>'
+                 : r.gexRegime === 'NEGATIVE' ? '<span style="color:var(--red)">−γ</span>'
+                 : '<span style="color:var(--muted)">—</span>';
+      // Flow
+      var flowTxt = r.flow === 'BULL' ? '<span style="color:var(--green)">BULL</span>'
+                  : r.flow === 'BEAR' ? '<span style="color:var(--red)">BEAR</span>'
+                  : r.flow === 'MIXED' ? '<span style="color:var(--yellow)">MIXED</span>'
+                  : '<span style="color:var(--muted)">—</span>';
+      if (r.flowTotal) flowTxt += ' <span style="color:var(--muted);font-size:10px">$' + Math.round(r.flowTotal/1000) + 'K</span>';
       html += '<tr>' +
-        '<td><b>' + r.ticker + '</b></td>' +
+        '<td><b>' + r.ticker + '</b>' + (r.starred ? ' ★' : '') + '</td>' +
         '<td>' + r.signal + '</td>' +
         '<td class="' + (r.dir === 'BULL' ? 'chg-pos' : 'chg-neg') + '">' + r.dir + '</td>' +
         '<td>' + (r.price ? '$' + r.price.toFixed(2) : '—') + '</td>' +
         '<td>' + (r.trigger ? '$' + r.trigger.toFixed(2) : '—') + '</td>' +
-        '<td>' + (r.movePct != null ? '+' + r.movePct + '% fav / ' + (r.advPct || 0) + '% adv' : '—') + '</td>' +
+        '<td>' + ftfcTxt + '</td>' +
+        '<td>' + gexTxt + '</td>' +
+        '<td>' + flowTxt + '</td>' +
+        '<td style="font-size:11px">' + moveTxt + '</td>' +
         '<td class="' + outCls + '"><b>' + outLabel + '</b></td>' +
       '</tr>';
     });
     html += '</tbody></table></div>';
   });
-  root.innerHTML = html || '<div class="empty">No history yet. History builds as scans run.</div>';
+  root.innerHTML = html || '<div class="empty">No history yet. History builds as scans run (6 AM + intraday crons).</div>';
 }
 
 // --- STARRED TAB ---

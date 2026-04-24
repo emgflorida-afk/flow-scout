@@ -1026,26 +1026,61 @@ async function snapshotHistory(scanResult) {
   // days on weekend calls, just don't add a new row.
   var isToday = isTradingDayET(today);
   if (isToday) {
-    // Drop any existing entry for today (re-scan)
-    history.days = (history.days || []).filter(function(d) { return d.date !== today; });
-    // Flatten all rows with minimal data
+    // Drop any existing entry for today+tf (re-scan)
+    var snapTf = (scanResult.tf || scanResult.timeframe || 'Daily');
+    history.days = (history.days || []).filter(function(d) {
+      return !(d.date === today && (d.tf || 'Daily') === snapTf);
+    });
+    // Flatten all rows with RICH data — Apr 24 2026 v1.5 enrichment so we can
+    // slice win-rate by any criterion (FTFC aligned / GEX regime / flow size /
+    // midpoint stack / sector / conviction). Required for real edge discovery.
     var rows = [];
     Object.keys(scanResult.groups).forEach(function(sig) {
       (scanResult.groups[sig] || []).forEach(function(r) {
         var dir = signalDirectionOf(sig);
         if (!dir) return; // skip non-directional signals for the "winners" tracking
         rows.push({
-          ticker:  r.ticker,
-          signal:  sig,
-          dir:     dir,
-          price:   r.price,
-          trigger: r.trigger,
-          ftfc:    r.ftfc,
-          flow:    r.flow ? r.flow.dominant : null,
+          ticker:        r.ticker,
+          signal:        sig,
+          dir:           dir,
+          price:         r.price,
+          trigger:       r.trigger,
+          // Trend alignment
+          ftfc:          r.ftfc,
+          ftfcAligned:   !!r.ftfcAligned,           // strict 4-TF match
+          ftfcDir:       r.ftfcDir || null,
+          // Volatility + volume
+          atrPct:        r.atrPct,
+          atrExtreme:    !!r.atrExtreme,
+          volRel:        r.volRel,
+          // Flow (Bullflow aggregation at signal time)
+          flow:          r.flow ? r.flow.dominant : null,
+          flowTotal:     r.flow ? r.flow.total : null,
+          flowNet:       r.flow ? r.flow.net : null,
+          // Gamma regime (GEX enrichment)
+          gexRegime:     r.gex ? r.gex.regime : null,
+          gexPin:        r.gex ? r.gex.pin : null,
+          gexFlip:       r.gex ? r.gex.gammaFlip : null,
+          // Structural
+          inForce:       r.inForce || null,
+          magnitudePct:  r.magnitude ? r.magnitude.pct : null,
+          midpointStack: r.midpoints ? r.midpoints.stack : null,
+          // Context
+          sector:        r.sector || null,
+          conviction:    r.conviction || null,
+          starred:       !!r.starred,
+          gap:           r.gap ? r.gap.gapPct : null,
+          gapSize:       r.gap ? r.gap.gapSize : null,
+          earnings:      r.earnings || null,
+          signalContext: r.signalContext || null,
+          freshness:     r.freshness || null,
+          // Raw flow count so we can ask "did big-flow signals win more?"
+          flowCallCount: r.flow ? r.flow.callCount : 0,
+          flowPutCount:  r.flow ? r.flow.putCount : 0,
         });
       });
     });
-    history.days.push({ date: today, rows: rows });
+    history.days.push({ date: today, tf: snapTf, rows: rows });
   }
 
   // Also prune any phantom weekend/holiday entries from prior runs
@@ -1056,40 +1091,66 @@ async function snapshotHistory(scanResult) {
     history.days = history.days.slice(history.days.length - HISTORY_MAX_DAYS);
   }
 
-  // Evaluate wins/losses on all non-today days. Prefer Bullflow peakReturn
-  // (real option P&L); fall back to TS bar underlying-% when API key missing.
-  // Earlier logic used `length - 1` which skipped the latest day — that broke
-  // whenever weekend pruning left only one prior day, so Apr 17 stayed pending.
+  // Evaluate wins/losses on non-today+tf days. TF-aware eval windows:
+  //   Daily: 3 daily bars forward, 1% favorable = WIN
+  //   4HR:   2 4HR bars forward, 0.8% favorable = WIN (~1 day)
+  //   60m:   4 60m bars forward, 0.5% favorable = WIN (~4 hours)
+  //   30m:   4 30m bars forward, 0.3% favorable = WIN (~2 hours)
+  // Daily prefers Bullflow peakReturn (real option P&L); intraday uses underlying %.
   try {
     var haveBullflow = !!process.env.BULLFLOW_API_KEY;
-    var token = haveBullflow ? null : await getToken();
+    var token = await getToken();
     for (var i = 0; i < history.days.length; i++) {
       var day = history.days[i];
-      if (day.date === today) continue; // don't score in-flight day
+      var dayTf = day.tf || 'Daily';
+      // Skip in-flight day+tf. For intraday TFs a same-day eval is valid once
+      // enough forward bars have printed, but we defer to a later cron for
+      // simplicity — only eval full prior trading days here.
+      if (day.date === today) continue;
       for (var j = 0; j < (day.rows || []).length; j++) {
         var row = day.rows[j];
         if (row.outcome) continue; // already evaluated
 
-        // Primary path: peakReturn via Bullflow
-        if (haveBullflow) {
+        // Primary path for Daily: peakReturn via Bullflow (real option P&L)
+        if (dayTf === 'Daily' && haveBullflow) {
           var ok = await evaluateRowWithPeakReturn(row, day.date);
           if (ok) continue;
           // fall through to TS-bar fallback if peakReturn errored
         }
 
-        // Fallback path: underlying % (legacy logic, used only if Bullflow unavailable)
+        // TF-appropriate underlying eval
         if (!token) continue;
-        var bars = await fetchBars(row.ticker, 'Daily', 1, 6, token);
+        var evalCfg = {
+          'Daily': { unit: 'Daily',  interval: 1,   fwdBars: 3, winThresh: 1.0, lossThresh: 1.0 },
+          '4HR':   { unit: 'Minute', interval: 240, fwdBars: 2, winThresh: 0.8, lossThresh: 0.8 },
+          '60m':   { unit: 'Minute', interval: 60,  fwdBars: 4, winThresh: 0.5, lossThresh: 0.5 },
+          '1HR':   { unit: 'Minute', interval: 60,  fwdBars: 4, winThresh: 0.5, lossThresh: 0.5 },
+          '30m':   { unit: 'Minute', interval: 30,  fwdBars: 4, winThresh: 0.3, lossThresh: 0.3 },
+        }[dayTf] || { unit: 'Daily', interval: 1, fwdBars: 3, winThresh: 1.0, lossThresh: 1.0 };
+
+        var bars = await fetchBars(row.ticker, evalCfg.unit, evalCfg.interval, evalCfg.fwdBars + 10, token);
         if (!bars || bars.length < 3) continue;
+
+        // Find anchor bar (signal print). For Daily we match date string.
+        // For intraday we use the last bar with TimeStamp ≤ end-of-day(day.date) and >= signalTs (~close of session).
         var anchorIdx = -1;
-        for (var k = 0; k < bars.length; k++) {
-          var bd = (bars[k].TimeStamp || bars[k].timestamp || '').slice(0, 10);
-          if (bd === day.date) { anchorIdx = k; break; }
+        if (evalCfg.unit === 'Daily') {
+          for (var k = 0; k < bars.length; k++) {
+            var bd = (bars[k].TimeStamp || bars[k].timestamp || '').slice(0, 10);
+            if (bd === day.date) { anchorIdx = k; break; }
+          }
+        } else {
+          // Intraday: anchor = last bar with date ≤ day.date AND time ≤ end-of-session
+          for (var k = bars.length - 1; k >= 0; k--) {
+            var bts = (bars[k].TimeStamp || bars[k].timestamp || '');
+            if (bts.slice(0, 10) === day.date) { anchorIdx = k; break; }
+          }
         }
         if (anchorIdx < 0 || anchorIdx + 1 >= bars.length) continue;
+
         var anchor = normBar(bars[anchorIdx]);
         var winBars = [];
-        for (var w = anchorIdx + 1; w < Math.min(anchorIdx + 4, bars.length); w++) {
+        for (var w = anchorIdx + 1; w < Math.min(anchorIdx + 1 + evalCfg.fwdBars, bars.length); w++) {
           winBars.push(normBar(bars[w]));
         }
         if (winBars.length === 0) continue;
@@ -1097,40 +1158,153 @@ async function snapshotHistory(scanResult) {
         var maxDn = anchor.c - Math.min.apply(null, winBars.map(function(b){return b.l;}));
         var movePct = anchor.c ? (row.dir === 'BULL' ? (maxUp / anchor.c) : (maxDn / anchor.c)) * 100 : 0;
         var advPct  = anchor.c ? (row.dir === 'BULL' ? (maxDn / anchor.c) : (maxUp / anchor.c)) * 100 : 0;
-        if (movePct >= 1.0 && movePct > advPct) row.outcome = 'WIN';
-        else if (advPct >= 1.0) row.outcome = 'LOSS';
+        if (movePct >= evalCfg.winThresh && movePct > advPct) row.outcome = 'WIN';
+        else if (advPct >= evalCfg.lossThresh) row.outcome = 'LOSS';
         else row.outcome = 'FLAT';
         row.movePct = +movePct.toFixed(2);
         row.advPct  = +advPct.toFixed(2);
-        row.evalMethod = 'underlying-fallback';
+        row.evalMethod = 'underlying-' + dayTf;
+        row.evalWindow = evalCfg.fwdBars + 'x' + dayTf;
       }
     }
   } catch(e) { console.error('[SCANNER] snapshot eval error:', e.message); }
   saveHistory(history);
 }
 
-function getHistory(days) {
-  days = days || 5;
+// Apr 24 2026 v1.5 — live in-flight scoring for today's rows across all TFs.
+// Called from a 5-min cron during market hours. Updates row.liveMovePct /
+// row.liveAdvPct / row.liveStatus so the History tab shows partial progress
+// before tomorrow's final eval fires.
+async function updateLiveScores() {
+  try {
+    var history = loadHistory();
+    var today = todayET();
+    if (!isTradingDayET(today)) return;
+    var token = await getToken();
+    if (!token) return;
+    var updated = 0;
+    for (var i = 0; i < (history.days || []).length; i++) {
+      var day = history.days[i];
+      if (day.date !== today) continue;
+      var dayTf = day.tf || 'Daily';
+      var evalCfg = {
+        'Daily': { unit: 'Daily',  interval: 1,   winThresh: 1.0 },
+        '4HR':   { unit: 'Minute', interval: 240, winThresh: 0.8 },
+        '60m':   { unit: 'Minute', interval: 60,  winThresh: 0.5 },
+        '1HR':   { unit: 'Minute', interval: 60,  winThresh: 0.5 },
+        '30m':   { unit: 'Minute', interval: 30,  winThresh: 0.3 },
+      }[dayTf] || { unit: 'Daily', interval: 1, winThresh: 1.0 };
+      for (var j = 0; j < (day.rows || []).length; j++) {
+        var row = day.rows[j];
+        if (row.outcome) continue;
+        if (!row.price) continue;
+        // Get recent bars since signal — max 20 bars covers full session for intraday
+        try {
+          var bars = await fetchBars(row.ticker, evalCfg.unit, evalCfg.interval, 20, token);
+          if (!bars || bars.length < 2) continue;
+          var tfBars = bars.map(normBar).filter(Boolean);
+          if (!tfBars.length) continue;
+          // Max/min across today's bars after signal anchor (approximate: last N bars)
+          var anchor = row.price;
+          var maxUp = Math.max.apply(null, tfBars.map(function(b){return b.h;})) - anchor;
+          var maxDn = anchor - Math.min.apply(null, tfBars.map(function(b){return b.l;}));
+          var movePct = (row.dir === 'BULL' ? (maxUp / anchor) : (maxDn / anchor)) * 100;
+          var advPct  = (row.dir === 'BULL' ? (maxDn / anchor) : (maxUp / anchor)) * 100;
+          row.liveMovePct = +movePct.toFixed(2);
+          row.liveAdvPct  = +advPct.toFixed(2);
+          if (movePct >= evalCfg.winThresh && movePct > advPct) row.liveStatus = 'WIN_IN_PROGRESS';
+          else if (advPct >= evalCfg.winThresh) row.liveStatus = 'DRAWDOWN';
+          else row.liveStatus = 'FLAT';
+          row.liveUpdatedAt = new Date().toISOString();
+          updated++;
+        } catch(e) { /* skip row on error */ }
+      }
+    }
+    if (updated > 0) {
+      saveHistory(history);
+      console.log('[HIST-LIVE] Updated live scores on ' + updated + ' rows');
+    }
+  } catch(e) { console.error('[HIST-LIVE] updateLiveScores error:', e.message); }
+}
+
+// Apr 24 2026 v1.5 — TIER 5 confluence-sliced win-rate. Given a filter map
+// (e.g., {ftfcAligned: true, gexRegime: 'POSITIVE', flow: 'BULL'}), returns
+// aggregated stats only for rows that match ALL filters. This is the edge-
+// discovery engine — lets AB ask "what combination actually wins for me?"
+function getHistoryBreakdown(filters, opts) {
+  opts = opts || {};
+  var tfFilter = opts.tf || null;  // 'Daily' | '30m' | '60m' | '4HR' | null (all)
+  var days = opts.days || 30;
   var h = loadHistory();
   var recent = (h.days || []).slice(-days);
-  // Aggregate stats. WIN = option peak ≥ 50%, PARTIAL = 25–49%, LOSS = ≤ −30%,
-  // FLAT = middle, pending = not yet evaluated. Tracks avg peak % when available.
+  var stats = { total: 0, wins: 0, partials: 0, losses: 0, flat: 0, pending: 0, avgPeakPct: null, avgMovePct: null };
+  var peakPcts = [];
+  var movePcts = [];
+  var matchedRows = [];
+  recent.forEach(function(d) {
+    if (tfFilter && (d.tf || 'Daily') !== tfFilter) return;
+    (d.rows || []).forEach(function(r) {
+      // Apply every filter — row must match ALL
+      var pass = true;
+      Object.keys(filters || {}).forEach(function(k) {
+        if (!pass) return;
+        var want = filters[k];
+        var got = r[k];
+        // Support min-value filters via "min:X" prefix (e.g. flowTotal: "min:1000000")
+        if (typeof want === 'string' && want.indexOf('min:') === 0) {
+          var minV = parseFloat(want.slice(4));
+          if (!(typeof got === 'number' && got >= minV)) pass = false;
+        } else if (typeof want === 'string' && want.indexOf('max:') === 0) {
+          var maxV = parseFloat(want.slice(4));
+          if (!(typeof got === 'number' && got <= maxV)) pass = false;
+        } else {
+          if (got !== want) pass = false;
+        }
+      });
+      if (!pass) return;
+      stats.total++;
+      if (!r.outcome) { stats.pending++; return; }
+      if (r.outcome === 'WIN')     stats.wins++;
+      if (r.outcome === 'PARTIAL') stats.partials++;
+      if (r.outcome === 'LOSS')    stats.losses++;
+      if (r.outcome === 'FLAT')    stats.flat++;
+      if (typeof r.peakPct === 'number') peakPcts.push(r.peakPct);
+      if (typeof r.movePct === 'number') movePcts.push(r.movePct);
+      matchedRows.push({ date: d.date, tf: d.tf || 'Daily', ticker: r.ticker, signal: r.signal, dir: r.dir, outcome: r.outcome, peakPct: r.peakPct || null, movePct: r.movePct || null });
+    });
+  });
+  if (peakPcts.length) stats.avgPeakPct = +(peakPcts.reduce(function(a,b){return a+b;}, 0) / peakPcts.length).toFixed(1);
+  if (movePcts.length) stats.avgMovePct = +(movePcts.reduce(function(a,b){return a+b;}, 0) / movePcts.length).toFixed(2);
+  var graded = stats.wins + stats.partials + stats.losses;
+  stats.hitRate = graded > 0 ? +((stats.wins + stats.partials) / graded).toFixed(3) : null;
+  return { filters: filters || {}, tf: tfFilter, days: days, stats: stats, matchedRows: matchedRows.slice(-200) };
+}
+
+function getHistory(days, tfFilter) {
+  days = days || 5;
+  var h = loadHistory();
+  var allDays = h.days || [];
+  // Filter by tf if requested, else return all TFs (each day-entry has its own .tf)
+  var filtered = tfFilter ? allDays.filter(function(d) { return (d.tf || 'Daily') === tfFilter; }) : allDays;
+  var recent = filtered.slice(-days * 4);  // * 4 because up to 4 TFs can snapshot same date
   var stats = {
     total: 0, wins: 0, partials: 0, losses: 0, flat: 0, pending: 0,
-    avgPeakPct: null, bySignal: {}
+    avgPeakPct: null, bySignal: {}, byTf: {}
   };
   var peakPcts = [];
   recent.forEach(function(d) {
+    var dTf = d.tf || 'Daily';
+    var tfBucket = stats.byTf[dTf] = stats.byTf[dTf] || { total: 0, wins: 0, partials: 0, losses: 0, flat: 0, pending: 0 };
     (d.rows || []).forEach(function(r) {
-      stats.total++;
+      stats.total++; tfBucket.total++;
       var bucket = stats.bySignal[r.signal] = stats.bySignal[r.signal]
         || { total: 0, wins: 0, partials: 0, losses: 0, flat: 0, avgPeakPct: null, _peaks: [] };
       bucket.total++;
-      if (r.outcome === 'WIN')          { stats.wins++;     bucket.wins++; }
-      else if (r.outcome === 'PARTIAL') { stats.partials++; bucket.partials++; }
-      else if (r.outcome === 'LOSS')    { stats.losses++;   bucket.losses++; }
-      else if (r.outcome === 'FLAT')    { stats.flat++;     bucket.flat++; }
-      else stats.pending++;
+      if (r.outcome === 'WIN')          { stats.wins++;     bucket.wins++;     tfBucket.wins++; }
+      else if (r.outcome === 'PARTIAL') { stats.partials++; bucket.partials++; tfBucket.partials++; }
+      else if (r.outcome === 'LOSS')    { stats.losses++;   bucket.losses++;   tfBucket.losses++; }
+      else if (r.outcome === 'FLAT')    { stats.flat++;     bucket.flat++;     tfBucket.flat++; }
+      else { stats.pending++; tfBucket.pending++; }
       if (typeof r.peakPct === 'number') {
         peakPcts.push(r.peakPct);
         bucket._peaks.push(r.peakPct);
@@ -1427,10 +1601,10 @@ async function scan(opts) {
       stars: getStars(),
     };
     _lastScan[tf] = result;
-    // Snapshot Daily scans only for history tracking
-    if (tf === 'Daily') {
-      snapshotHistory(result).catch(function(e) { console.error('[SCANNER] history:', e.message); });
-    }
+    // Snapshot ALL timeframes for history — Apr 24 2026 v1.5 so scalp/day-trade
+    // setups accumulate outcome data alongside swings. Evaluation windows are
+    // TF-appropriate (30m→next 2hr, 60m→next 4hr, 4HR→next day, Daily→3 days).
+    snapshotHistory(result).catch(function(e) { console.error('[SCANNER] history ' + tf + ':', e.message); });
     return result;
   } finally {
     _running[tf] = false;
@@ -1449,6 +1623,8 @@ module.exports = {
   // History
   getHistory: getHistory,
   snapshotHistory: snapshotHistory,
+  updateLiveScores: updateLiveScores,
+  getHistoryBreakdown: getHistoryBreakdown,
   // Trade builder
   buildTradeItem: buildTradeItem,
   queueFromRow: queueFromRow,
