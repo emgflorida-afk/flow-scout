@@ -2651,6 +2651,32 @@ app.get('/api/radar/log', function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// LIQUIDITY CHECK — Trading-Desk Grade Pre-Entry Verification
+// Added 2026-04-24 after META session failure (stale pre-market quotes
+// led to unexecutable contract). This endpoint MUST be called before
+// ANY Titan card is proposed.
+//
+// Usage: GET /api/liquidity/check?symbols=META 260508C670,META 260515C670
+// Returns liquidity score + pass/fail per contract + ranked "best"
+// -----------------------------------------------------------------
+var liquidityCheck = null;
+try { liquidityCheck = require('./liquidityCheck'); console.log('[SERVER] liquidityCheck loaded OK'); }
+catch(e) { console.log('[SERVER] liquidityCheck not loaded:', e.message); }
+
+app.get('/api/liquidity/check', async function(req, res) {
+  if (!liquidityCheck) return res.status(500).json({ error: 'liquidityCheck not loaded' });
+  try {
+    var raw = (req.query.symbols || '').trim();
+    if (!raw) return res.status(400).json({ error: 'symbols query param required (comma-separated)' });
+    var symbols = raw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    if (!symbols.length) return res.status(400).json({ error: 'no valid symbols' });
+    if (symbols.length > 20) return res.status(400).json({ error: 'max 20 symbols per call' });
+    var result = await liquidityCheck.checkMany(symbols);
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
 // SCOUT HEALTH TRACKER -- real-time heartbeat for the arm page
 // -----------------------------------------------------------------
 var scoutHealth = null;
