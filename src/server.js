@@ -395,6 +395,17 @@ app.get('/api/bullflow/status', function(req, res) {
   });
 });
 
+// Apr 24 2026 — inspect live SSE connection state without tailing Railway logs
+app.get('/api/bullflow/health', function(req, res) {
+  try {
+    var bf = require('./bullflowStream');
+    var state = bf.getConnState ? bf.getConnState() : { state: 'unknown', note: 'getConnState not exported' };
+    res.json({ ok: true, conn: state, now: new Date().toISOString() });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 app.get('/api/bullflow/init', function(req, res) {
   console.log('[INIT-ENDPOINT] /api/bullflow/init called. pid=' + process.pid);
   try {

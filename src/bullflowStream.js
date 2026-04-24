@@ -31,6 +31,22 @@ const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_FLOW_WEBHOOK;
 var _recentFlowAlerts = [];
 var MAX_RECENT_FLOW = 200;
 
+// Apr 24 2026 — expose SSE connection state for /api/bullflow/health
+var _connState = {
+  state: 'idle',           // 'idle' | 'connecting' | 'open' | 'error' | 'retrying'
+  lastStatusCode: null,    // fetch response status
+  lastErrorMsg: null,      // error string from fetch or parse
+  lastConnectAt: null,     // ISO ts when stream opened
+  lastAlertAt: null,       // ISO ts when last alert arrived
+  lastDataAt: null,        // ISO ts when last SSE chunk arrived (even heartbeats)
+  alertsReceived: 0,       // total alert events since boot
+  chunksReceived: 0,       // total SSE chunks since boot (includes heartbeats)
+  retryCount: 0,
+};
+function getConnState() {
+  return Object.assign({}, _connState, { alertsBuffered: _recentFlowAlerts.length });
+}
+
 function pushRecentFlow(alert, ticker, score) {
   var rawSymbol = alert.symbol || '';
   var direction = parseDirection(rawSymbol);
@@ -64,6 +80,8 @@ function pushRecentFlow(alert, ticker, score) {
   };
 
   _recentFlowAlerts.push(entry);
+  _connState.alertsReceived++;
+  _connState.lastAlertAt = entry.timestamp;
   console.log('[FLOW] Alert stored:', ticker, type, prem > 0 ? '$' + Math.round(prem) : 'no-premium');
   // Trim to max size
   if (_recentFlowAlerts.length > MAX_RECENT_FLOW) {
@@ -325,13 +343,19 @@ function startBullflowStream(apiKeyOverride) {
       console.log('[BULLFLOW] Reconnect attempt ' + retryCount + '/' + MAX_RETRIES + '...');
     }
 
+    _connState.state = 'connecting';
+    _connState.retryCount = retryCount;
+
     // Auth via query param (confirmed by 429 response on Apr 20 2026 — key works, was rate-limited)
     fetch('https://api.bullflow.io/v1/streaming/alerts?key=' + apiKey, {
       headers: { 'Accept': 'text/event-stream' }
     }).then(function(res) {
+      _connState.lastStatusCode = res.status;
       if (!res.ok) {
         // 429 = rate-limited; longer backoff
         var delay = res.status === 429 ? RETRY_DELAY_MS * 2 : RETRY_DELAY_MS;
+        _connState.state = 'retrying';
+        _connState.lastErrorMsg = 'http ' + res.status;
         console.error('[BULLFLOW] Connection failed:', res.status, '— retrying in', Math.round(delay/1000) + 's');
         retryCount++;
         setTimeout(connect, delay);
@@ -339,10 +363,15 @@ function startBullflowStream(apiKeyOverride) {
       }
       // Reset retry count on successful connection
       retryCount = 0;
+      _connState.state = 'open';
+      _connState.lastConnectAt = new Date().toISOString();
+      _connState.lastErrorMsg = null;
       console.log('[BULLFLOW] Stream connected OK');
       var buffer = '';
 
       res.body.on('data', function(chunk) {
+        _connState.chunksReceived++;
+        _connState.lastDataAt = new Date().toISOString();
         buffer += chunk.toString();
         var lines = buffer.split('\n');
         buffer = lines.pop();
@@ -383,12 +412,16 @@ function startBullflowStream(apiKeyOverride) {
       });
 
       res.body.on('end', function() {
+        _connState.state = 'retrying';
+        _connState.lastErrorMsg = 'stream ended';
         console.log('[BULLFLOW] Stream ended -- reconnecting in ' + (RETRY_DELAY_MS / 1000) + 's...');
         retryCount++;
         setTimeout(connect, RETRY_DELAY_MS);
       });
 
     }).catch(function(err) {
+      _connState.state = 'error';
+      _connState.lastErrorMsg = err && err.message ? err.message : String(err);
       console.error('[BULLFLOW] Connection error:', err.message);
       retryCount++;
       setTimeout(connect, RETRY_DELAY_MS);
@@ -398,4 +431,4 @@ function startBullflowStream(apiKeyOverride) {
   connect();
 }
 
-module.exports = { startBullflowStream, liveAggregator, getRecentFlow, setCachedApiKey };
+module.exports = { startBullflowStream, liveAggregator, getRecentFlow, setCachedApiKey, getConnState };
