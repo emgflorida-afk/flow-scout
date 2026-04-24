@@ -521,8 +521,12 @@ function earningsBadge(dateStr) {
 async function scanTicker(ticker, token, earningsMap, tf) {
   tf = tf || 'Daily';
   var barUnit, barInterval, barCount;
-  if (tf === '4HR')       { barUnit = 'Minute'; barInterval = 240; barCount = 60; }
-  else if (tf === 'Weekly') { barUnit = 'Weekly'; barInterval = 1; barCount = 20; }
+  // Apr 24 2026 — added 30m, 60m, Monthly timeframe support
+  if (tf === '30m')       { barUnit = 'Minute'; barInterval = 30; barCount = 60; }
+  else if (tf === '60m' || tf === '1HR')  { barUnit = 'Minute'; barInterval = 60; barCount = 60; }
+  else if (tf === '4HR' || tf === '4h')   { barUnit = 'Minute'; barInterval = 240; barCount = 60; tf = '4HR'; }
+  else if (tf === 'Weekly' || tf === 'W') { barUnit = 'Weekly'; barInterval = 1; barCount = 20; tf = 'Weekly'; }
+  else if (tf === 'Monthly' || tf === 'M') { barUnit = 'Monthly'; barInterval = 1; barCount = 20; tf = 'Monthly'; }
   else                     { barUnit = 'Daily';  barInterval = 1; barCount = 30; tf = 'Daily'; }
 
   var bars = await fetchBars(ticker, barUnit, barInterval, barCount, token);
@@ -1296,7 +1300,9 @@ function computeInForceForRow(r) {
 async function scan(opts) {
   opts = opts || {};
   var tf = opts.tf || 'Daily';
-  if (['Daily','4HR','Weekly'].indexOf(tf) === -1) tf = 'Daily';
+  // Apr 24 2026 — accept more timeframes
+  var validTFs = ['30m','60m','1HR','4HR','4h','Daily','Weekly','W','Monthly','M'];
+  if (validTFs.indexOf(tf) === -1) tf = 'Daily';
   var concurrency = opts.concurrency || 6;
   if (_running[tf] && !opts.force) return _lastScan[tf];
   _running[tf] = true;

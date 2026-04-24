@@ -349,9 +349,12 @@
   </div>
   <div style="display:flex; gap:8px; align-items:center;">
     <div class="tf-selector" style="display:flex; gap:2px; background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:2px;">
-      <button class="tf-btn active" data-tf="Daily" onclick="setTF('Daily')">D</button>
+      <button class="tf-btn" data-tf="30m" onclick="setTF('30m')">30m</button>
+      <button class="tf-btn" data-tf="60m" onclick="setTF('60m')">60m</button>
       <button class="tf-btn" data-tf="4HR" onclick="setTF('4HR')">4HR</button>
+      <button class="tf-btn active" data-tf="Daily" onclick="setTF('Daily')">D</button>
       <button class="tf-btn" data-tf="Weekly" onclick="setTF('Weekly')">W</button>
+      <button class="tf-btn" data-tf="Monthly" onclick="setTF('Monthly')">M</button>
     </div>
     <button id="refresh-btn" onclick="loadScan(true)">⟳ Refresh</button>
   </div>

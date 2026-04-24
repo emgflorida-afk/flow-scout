@@ -2719,6 +2719,47 @@ app.get('/api/planner/latest', function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// CHART MARKUP QUEUE — local Claude reads this + runs TV MCP commands
+// -----------------------------------------------------------------
+var chartMarkup = null;
+try { chartMarkup = require('./chartMarkup'); console.log('[SERVER] chartMarkup loaded OK'); }
+catch(e) { console.log('[SERVER] chartMarkup not loaded:', e.message); }
+
+app.post('/api/chart-markup/queue', function(req, res) {
+  if (!chartMarkup) return res.status(500).json({ error: 'chartMarkup not loaded' });
+  try {
+    var b = req.body || {};
+    if (!b.ticker || !b.trigger || !b.stop) {
+      return res.status(400).json({ error: 'ticker, trigger, stop required' });
+    }
+    var job = chartMarkup.queueSetup(b);
+    res.json({ ok: true, job: job });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/chart-markup/pending', function(req, res) {
+  if (!chartMarkup) return res.status(500).json({ error: 'chartMarkup not loaded' });
+  var jobs = chartMarkup.getPendingJobs();
+  // Include pre-generated draw commands for easy Claude execution
+  var jobsWithCommands = jobs.map(function(j) {
+    return { job: j, commands: chartMarkup.generateDrawCommands(j) };
+  });
+  res.json({ count: jobs.length, jobs: jobsWithCommands });
+});
+
+app.post('/api/chart-markup/complete/:id', function(req, res) {
+  if (!chartMarkup) return res.status(500).json({ error: 'chartMarkup not loaded' });
+  chartMarkup.markJobComplete(req.params.id);
+  res.json({ ok: true });
+});
+
+app.post('/api/chart-markup/clear', function(req, res) {
+  if (!chartMarkup) return res.status(500).json({ error: 'chartMarkup not loaded' });
+  chartMarkup.clearQueue();
+  res.json({ ok: true });
+});
+
+// -----------------------------------------------------------------
 // SCOUT HEALTH TRACKER -- real-time heartbeat for the arm page
 // -----------------------------------------------------------------
 var scoutHealth = null;
