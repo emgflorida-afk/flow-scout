@@ -314,6 +314,14 @@ var stratClassifier = require('./stratClassifier');
 var classifyBar = stratClassifier.classifyBar;
 var detectSignal = stratClassifier.detect3BarSignalWithTypes;
 
+// Apr 24 2026 — sector lookup for scanner UI color coding
+var sectorMap = null;
+try { sectorMap = require('./sectorMap'); } catch(e) {}
+function getSector(ticker) {
+  try { return sectorMap && sectorMap.getSector ? sectorMap.getSector(ticker) : null; }
+  catch(e) { return null; }
+}
+
 // -----------------------------------------------------------------
 // ATR (14-day, simple)
 // -----------------------------------------------------------------
@@ -538,6 +546,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
     if (_tvFallback || _starFallback) {
       return {
         ticker: ticker,
+        sector: getSector(ticker),   // Apr 24 2026 — populate in fallback row too
         price: null, chgPct: null, atrPct: null,
         signal: _tvFallback ? 'TV Watch' : 'Starred',
         combo: [], dwmq: {}, ftfc: false, ftfcDir: null,
@@ -819,6 +828,7 @@ async function scanTicker(ticker, token, earningsMap, tf) {
 
   return {
     ticker: ticker,
+    sector: getSector(ticker),   // Apr 24 2026 — for scanner UI sector column
     price: price,
     chgPct: chgPct,
     atrPct: atrPct,
