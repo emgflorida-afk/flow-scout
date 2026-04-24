@@ -372,6 +372,11 @@
       <label><input type="checkbox" id="filter-flow">Flow-aligned only</label>
       <label><input type="checkbox" id="filter-tv">TV alerts only</label>
       <label><input type="checkbox" id="filter-starred">★ Starred only</label>
+      <!-- Apr 24 2026 — Phase 4 filters: gamma regime + in-force + flow thresholds -->
+      <label style="color: var(--green);"><input type="checkbox" id="filter-gamma-pos">+γ only</label>
+      <label style="color: var(--red);"><input type="checkbox" id="filter-gamma-neg">−γ only</label>
+      <label><input type="checkbox" id="filter-in-force">In Force only</label>
+      <label><input type="checkbox" id="filter-big-flow">Big Flow ($1M+)</label>
       <label style="color: var(--green); font-weight: 600;"><input type="checkbox" id="filter-confidence">🎯 Confidence Mode</label>
       <button type="button" id="filter-clear" onclick="clearFilters()"
               style="background: transparent; color: var(--muted); border: 1px solid var(--border);
@@ -1126,12 +1131,18 @@ function applyFilters(data) {
   var tvOnly   = document.getElementById('filter-tv').checked;
   var starredOnly = document.getElementById('filter-starred') && document.getElementById('filter-starred').checked;
   var confidenceMode = document.getElementById('filter-confidence') && document.getElementById('filter-confidence').checked;
+  // Apr 24 2026 — Phase 4 filters
+  var gammaPosOnly = document.getElementById('filter-gamma-pos') && document.getElementById('filter-gamma-pos').checked;
+  var gammaNegOnly = document.getElementById('filter-gamma-neg') && document.getElementById('filter-gamma-neg').checked;
+  var inForceOnly = document.getElementById('filter-in-force') && document.getElementById('filter-in-force').checked;
+  var bigFlowOnly = document.getElementById('filter-big-flow') && document.getElementById('filter-big-flow').checked;
   var searchEl = document.getElementById('filter-search');
   var searchRaw = searchEl ? (searchEl.value || '').trim().toUpperCase() : '';
   // Support wildcard (*) and comma-separated multi-ticker search: "NVDA, AMD, *LE"
   var searchTerms = searchRaw.split(/[\s,]+/).filter(function(t){ return t.length > 0; });
   var hasSearch = searchTerms.length > 0;
-  if (!ftfcOnly && !flowOnly && !tvOnly && !starredOnly && !confidenceMode && !hasSearch) return data;
+  if (!ftfcOnly && !flowOnly && !tvOnly && !starredOnly && !confidenceMode && !hasSearch
+      && !gammaPosOnly && !gammaNegOnly && !inForceOnly && !bigFlowOnly) return data;
   var filtered = { generatedAt: data.generatedAt, tookMs: data.tookMs, scanned: data.scanned, matched: 0, groups: {} };
   Object.keys(data.groups).forEach(function(k) {
     var rows = data.groups[k].filter(function(r) {
@@ -1186,6 +1197,11 @@ function applyFilters(data) {
         var sd2 = signalDir(r.signal);
         if (!sd2 || !r.flow || r.flow.dominant !== sd2) return false;
       }
+      // Apr 24 2026 — Phase 4 filters
+      if (gammaPosOnly && (!r.gex || r.gex.regime !== 'POSITIVE')) return false;
+      if (gammaNegOnly && (!r.gex || r.gex.regime !== 'NEGATIVE')) return false;
+      if (inForceOnly && (!r.inForce || (r.inForce !== 'ACTIVE' && r.inForce !== 'TRIGGERED'))) return false;
+      if (bigFlowOnly && (!r.flow || !r.flow.total || r.flow.total < 1000000)) return false;
       return true;
     });
     if (rows.length) { filtered.groups[k] = rows; filtered.matched += rows.length; }
@@ -1431,7 +1447,7 @@ function renderStarred() {
 }
 
 // Wire filter checkboxes
-['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
+['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred','filter-gamma-pos','filter-gamma-neg','filter-in-force','filter-big-flow'].forEach(function(id) {
   document.addEventListener('DOMContentLoaded', function() {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
@@ -1440,13 +1456,13 @@ function renderStarred() {
 // Attach when DOM ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', function() {
-    ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
+    ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred','filter-gamma-pos','filter-gamma-neg','filter-in-force','filter-big-flow'].forEach(function(id) {
       var el = document.getElementById(id);
       if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
     });
   });
 } else {
-  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id) {
+  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred','filter-gamma-pos','filter-gamma-neg','filter-in-force','filter-big-flow'].forEach(function(id) {
     var el = document.getElementById(id);
     if (el) el.addEventListener('change', function(){ if (_cachedData) render(applyFilters(_cachedData)); });
   });
@@ -1454,7 +1470,7 @@ if (document.readyState === 'loading') {
 
 // Clear all filters (called by the Clear button)
 function clearFilters() {
-  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred'].forEach(function(id){
+  ['filter-ftfc','filter-flow','filter-tv','filter-confidence','filter-starred','filter-gamma-pos','filter-gamma-neg','filter-in-force','filter-big-flow'].forEach(function(id){
     var el = document.getElementById(id);
     if (el) el.checked = false;
   });

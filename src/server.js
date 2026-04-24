@@ -2677,6 +2677,48 @@ app.get('/api/liquidity/check', async function(req, res) {
 });
 
 // -----------------------------------------------------------------
+// MORNING PLANNER — 6:00 AM ET cron pre-market routine
+// Ranks top setups by confluence + runs liquidity check on top 3
+// Pushes Discord brief with candidate contracts (pre-market, flagged DRAFT)
+// -----------------------------------------------------------------
+var morningPlanner = null;
+try { morningPlanner = require('./morningPlanner'); console.log('[SERVER] morningPlanner loaded OK'); }
+catch(e) { console.log('[SERVER] morningPlanner not loaded:', e.message); }
+
+// Cron: 6:00 AM ET every weekday
+cron.schedule('0 6 * * 1-5', async function() {
+  if (morningPlanner) {
+    try {
+      var report = await morningPlanner.runMorningRoutine();
+      console.log('[PLANNER-CRON] complete:', (report.cards || []).length, 'cards');
+    } catch(e) { console.error('[PLANNER-CRON] error:', e.message); }
+  }
+}, { timezone: 'America/New_York' });
+
+// Cron: 9:15 AM ET = LIVE RE-VERIFY (the one that would have saved 4/24)
+cron.schedule('15 9 * * 1-5', async function() {
+  if (morningPlanner) {
+    try {
+      var report = await morningPlanner.runMorningRoutine();
+      console.log('[PLANNER-915] live re-verify complete');
+    } catch(e) { console.error('[PLANNER-915] error:', e.message); }
+  }
+}, { timezone: 'America/New_York' });
+
+app.post('/api/planner/run', async function(req, res) {
+  if (!morningPlanner) return res.status(500).json({ error: 'morningPlanner not loaded' });
+  try { res.json(await morningPlanner.runMorningRoutine()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/planner/latest', function(req, res) {
+  if (!morningPlanner) return res.status(500).json({ error: 'morningPlanner not loaded' });
+  var report = morningPlanner.getLatestReport();
+  if (!report) return res.json({ error: 'no report yet — run /api/planner/run or wait for 6 AM cron' });
+  res.json(report);
+});
+
+// -----------------------------------------------------------------
 // SCOUT HEALTH TRACKER -- real-time heartbeat for the arm page
 // -----------------------------------------------------------------
 var scoutHealth = null;
