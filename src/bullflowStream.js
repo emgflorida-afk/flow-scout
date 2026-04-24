@@ -388,6 +388,9 @@ function startBullflowStream(apiKeyOverride) {
           try {
             var parsed = JSON.parse(raw);
             var event  = parsed.event || '';
+            // Apr 24 2026 — track every event type for health diagnostic
+            _connState.eventTypeCounts = _connState.eventTypeCounts || {};
+            _connState.eventTypeCounts[event || '(no-event-field)'] = (_connState.eventTypeCounts[event || '(no-event-field)'] || 0) + 1;
             if (event === 'heartbeat' || event === 'init') return;
             if (event === 'alert') {
               var data = parsed.data || parsed;
@@ -398,9 +401,17 @@ function startBullflowStream(apiKeyOverride) {
               // Store flow BEFORE processing alert -- ensures data is captured even if processAlert throws
               pushRecentFlow(data, ticker, alertScore);
               processAlert(data);
+              return;
+            }
+            // Apr 24 2026 — if we get an event we don't recognize, store a sample so
+            // we can inspect it via the health endpoint (first 2 unknown events only)
+            _connState.unknownSamples = _connState.unknownSamples || [];
+            if (_connState.unknownSamples.length < 2) {
+              _connState.unknownSamples.push({ event: event, keys: Object.keys(parsed).slice(0, 10), raw: raw.slice(0, 300) });
             }
           } catch(e) {
             console.log('[BULLFLOW] Parse error:', e.message);
+            _connState.lastParseError = e.message;
           }
         });
       });
