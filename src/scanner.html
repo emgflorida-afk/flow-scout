@@ -50,7 +50,15 @@
     font-size: 12px;
   }
   button:hover { opacity: 0.85; }
+  /* Apr 24 2026 — make TF buttons more prominent */
+  .tf-selector { padding: 3px !important; }
   .tf-btn {
+    min-width: 48px !important;
+    padding: 8px 14px !important;
+    font-size: 12px !important;
+    font-weight: 700 !important;
+  }
+  .tf-btn-legacy {
     background: transparent; color: var(--muted); padding: 4px 12px;
     border: 0; border-radius: 3px; cursor: pointer; font-weight: 600;
     font-size: 11px; letter-spacing: 0.5px; font-family: inherit;
@@ -100,11 +108,26 @@
   .col-signal { width: 140px; }
   .col-combo { width: 130px; }
   /* Apr 24 2026 — scanner upgrade new columns */
+  .col-sector { width: 110px; }
   .col-trigger { width: 75px; }
   .col-inforce { width: 110px; }
   .col-gex-pin { width: 55px; text-align: center; }
   .col-gex-regime { width: 40px; text-align: center; }
   .col-exp-range { width: 95px; }
+  /* Apr 24 2026 — timeframe tabs */
+  .tf-tabs { display: flex; gap: 4px; margin: 8px 0; padding: 0 12px; }
+  .tf-tab {
+    padding: 6px 14px; border-radius: 6px;
+    background: var(--bg-2); color: var(--text-dim);
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    border: 1px solid var(--border); cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tf-tab:hover { background: var(--bg-3); color: var(--text); }
+  .tf-tab.active {
+    background: rgba(96,165,250,0.15); color: var(--blue);
+    border-color: var(--blue);
+  }
   .col-tf { width: 32px; text-align: center; }
   .col-vol { width: 90px; text-align: right; }
   .col-flow { width: 110px; }
@@ -583,6 +606,32 @@ function tickerCellHtml(r) {
          ' <a href="' + tvUrl + '" target="_blank" class="tv-chart-link" title="Open on TradingView">📈</a>';
 }
 
+// Apr 24 2026 — Scanner UI Phase 4: sector + timeframe tabs
+function sectorHtml(sector) {
+  if (!sector) return '<span style="color:var(--muted)">—</span>';
+  // Color-code by sector for quick visual scan
+  var colorMap = {
+    'Technology': '#60a5fa',
+    'Healthcare': '#4ade80',
+    'Financial Services': '#fbbf24',
+    'Financials': '#fbbf24',
+    'Consumer Cyclical': '#f472b6',
+    'Consumer Cyclicals': '#f472b6',
+    'Consumer Defensive': '#a78bfa',
+    'Consumer Non-Cyclicals': '#a78bfa',
+    'Energy': '#ef6f6c',
+    'Industrials': '#94a3b8',
+    'Communication Services': '#06b6d4',
+    'Basic Materials': '#f59e0b',
+    'Real Estate': '#8b5cf6',
+    'Utilities': '#64748b',
+  };
+  var color = colorMap[sector] || 'var(--muted)';
+  // Truncate long sector names
+  var short = sector.length > 15 ? sector.substring(0, 13) + '…' : sector;
+  return '<span style="color:' + color + ';font-size:10px;font-weight:600" title="' + sector + '">' + short + '</span>';
+}
+
 // Apr 24 2026 — Phase 3 scanner upgrade helpers
 function gexPinHtml(gex, spotPrice) {
   if (!gex || gex.pin == null) return '<span style="color:var(--muted)">—</span>';
@@ -643,6 +692,7 @@ function rowHtml(r) {
         earningsBadgeHtml(r.earnings) +
       '</div>' +
     '</td>' +
+    '<td class="col-sector">' + sectorHtml(r.sector) + '</td>' +
     '<td class="col-atr ' + atrClass(r.atrPct) + '">' + fmtAtr(r.atrPct) + (r.atrExtreme ? ' <span style="color:#ef6f6c;font-size:9px;font-weight:600">EX</span>' : '') + '</td>' +
     '<td class="col-price">' + fmtPrice(r.price) + '</td>' +
     '<td class="col-chg ' + (r.chgPct >= 0 ? 'chg-pos' : 'chg-neg') + '">' + fmtPct(r.chgPct) + '</td>' +
@@ -882,6 +932,7 @@ function groupHtml(name, rows) {
     '<thead><tr>' +
       '<th class="col-star"></th>' +
       '<th class="col-ticker">Ticker ↓</th>' +
+      '<th class="col-sector" title="Sector rotation filter">Sector</th>' +
       '<th class="col-atr">ATR%</th>' +
       '<th class="col-price">Price</th>' +
       '<th class="col-chg">Chg%</th>' +
