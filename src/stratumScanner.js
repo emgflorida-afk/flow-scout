@@ -18,6 +18,10 @@ var ts = null;
 try { ts = require('./tradestation'); } catch(e) {}
 var calendar = null;
 try { calendar = require('./economicCalendar'); } catch(e) {}
+// Apr 24 2026 — GEX enrichment for scanner upgrade. Pulls gamma pin,
+// regime, expected range, nearest walls for each top-conviction row.
+var gex = null;
+try { gex = require('./gex'); } catch(e) { console.log('[SCANNER] gex module not loaded:', e.message); }
 var bullflow = null;
 try { bullflow = require('./bullflowStream'); } catch(e) {}
 var contractCard = null;
@@ -1203,6 +1207,92 @@ async function queueFromRow(opts) {
 var _running = {};      // keyed by tf
 var _lastScan = {};     // keyed by tf
 
+// ----------------------------------------------------------------------------
+// GEX ENRICHMENT (Apr 24 2026 — Phase 1 of scanner upgrade)
+// ----------------------------------------------------------------------------
+// Pulls gamma pin, regime, expected range, nearest walls for each row.
+// Performance: enriches only TOP 15 rows by rowScore (avoid 500ms × 60 = 30s delay).
+// Degrades gracefully if gex module unavailable or CBOE fetch fails.
+async function enrichTopRowsWithGex(groups, rowScoreFn) {
+  if (!gex || !gex.getGammaLevels) return;
+  // Collect top-scoring rows from each group, dedupe by ticker
+  var allRows = [];
+  Object.keys(groups).forEach(function(k) {
+    (groups[k] || []).forEach(function(r) { allRows.push(r); });
+  });
+  // Rank by rowScore, take top 15 across all groups
+  allRows.sort(function(a, b) { return rowScoreFn(b) - rowScoreFn(a); });
+  var topRows = allRows.slice(0, 15);
+  var seen = {};
+  var topTickers = [];
+  topRows.forEach(function(r) {
+    if (!seen[r.ticker]) { seen[r.ticker] = true; topTickers.push(r.ticker); }
+  });
+  if (!topTickers.length) return;
+  // Fetch GEX sequentially with throttle (CBOE rate limit friendly)
+  for (var i = 0; i < topTickers.length; i++) {
+    try {
+      var g = await gex.getGammaLevels(topTickers[i]);
+      if (!g) continue;
+      // Merge into all rows matching this ticker
+      topRows.forEach(function(r) {
+        if (r.ticker === topTickers[i]) {
+          var wallAbove = (g.walls || []).filter(function(w) { return w.strike > r.price && w.type === 'CALL_WALL'; })[0];
+          var wallBelow = (g.walls || []).filter(function(w) { return w.strike < r.price && w.type === 'PUT_WALL'; }).pop();
+          r.gex = {
+            pin: g.pin,
+            regime: g.regime,                 // "POSITIVE" | "NEGATIVE"
+            gammaFlip: g.gammaFlip,
+            expectedHigh: g.expectedHigh,
+            expectedLow: g.expectedLow,
+            expectedMove: g.expectedMove,
+            totalNetGex: g.totalNetGex,
+            wallAbove: wallAbove ? { strike: wallAbove.strike, gex: wallAbove.gex } : null,
+            wallBelow: wallBelow ? { strike: wallBelow.strike, gex: wallBelow.gex } : null,
+          };
+        }
+      });
+    } catch(e) { /* skip bad ticker, continue */ }
+    // 300ms throttle between GEX fetches
+    if (i < topTickers.length - 1) await new Promise(function(r){ setTimeout(r, 300); });
+  }
+}
+
+// ----------------------------------------------------------------------------
+// IN-FORCE STATUS (Apr 24 2026 — Phase 2 of scanner upgrade)
+// ----------------------------------------------------------------------------
+// Computes whether setup is still actionable given current price action.
+// Returns: "ACTIVE" | "TRIGGERED" | "INVALIDATED" | "EXPIRED"
+// - ACTIVE: price near trigger but hasn't broken yet (setup cocked)
+// - TRIGGERED: price broke through trigger (setup in motion)
+// - INVALIDATED: price moved far against trigger (setup dead, skip)
+// - EXPIRED: signal was from yesterday and no follow-through by mid-day
+function computeInForceForRow(r) {
+  if (!r || !r.trigger || !r.price) { r.inForce = null; return; }
+
+  var price = r.price;
+  var trigger = r.trigger;
+  var signal = r.signal || '';
+  var isBull = /up|2U|Hammer|Failed 2D|Continuation Up/i.test(signal);
+  var isBear = /down|2D|Shooter|Failed 2U|Continuation Down/i.test(signal);
+  var dir = isBull ? 'long' : (isBear ? 'short' : null);
+
+  if (!dir) { r.inForce = null; return; }
+
+  var tolerance = trigger * 0.03; // 3% wiggle room
+  if (dir === 'long') {
+    if (price < trigger - tolerance * 2)      r.inForce = 'INVALIDATED'; // 6%+ below
+    else if (price < trigger - tolerance)     r.inForce = 'EXPIRED';     // 3-6% below
+    else if (price < trigger)                 r.inForce = 'ACTIVE';      // within 3% below
+    else                                      r.inForce = 'TRIGGERED';   // above
+  } else {
+    if (price > trigger + tolerance * 2)      r.inForce = 'INVALIDATED';
+    else if (price > trigger + tolerance)     r.inForce = 'EXPIRED';
+    else if (price > trigger)                 r.inForce = 'ACTIVE';
+    else                                      r.inForce = 'TRIGGERED';
+  }
+}
+
 async function scan(opts) {
   opts = opts || {};
   var tf = opts.tf || 'Daily';
@@ -1302,6 +1392,14 @@ async function scan(opts) {
     });
     // Drop empty groups
     Object.keys(groups).forEach(function(k){ if (groups[k].length === 0) delete groups[k]; });
+
+    // Apr 24 2026 — Phase 1: GEX enrichment for top-conviction rows
+    // Pulls gamma pin/regime/expected-range for the top 15 rows across all groups.
+    // Keeps scan fast by only enriching actionable candidates (not all 60+).
+    await enrichTopRowsWithGex(groups, rowScore);
+
+    // Apr 24 2026 — Phase 2: Compute in-force status for ALL rows (fast, synchronous)
+    rows.forEach(computeInForceForRow);
 
     var result = {
       generatedAt: new Date().toISOString(),

@@ -99,6 +99,12 @@
   .col-chg { width: 70px; }
   .col-signal { width: 140px; }
   .col-combo { width: 130px; }
+  /* Apr 24 2026 — scanner upgrade new columns */
+  .col-trigger { width: 75px; }
+  .col-inforce { width: 110px; }
+  .col-gex-pin { width: 55px; text-align: center; }
+  .col-gex-regime { width: 40px; text-align: center; }
+  .col-exp-range { width: 95px; }
   .col-tf { width: 32px; text-align: center; }
   .col-vol { width: 90px; text-align: right; }
   .col-flow { width: 110px; }
@@ -577,6 +583,51 @@ function tickerCellHtml(r) {
          ' <a href="' + tvUrl + '" target="_blank" class="tv-chart-link" title="Open on TradingView">📈</a>';
 }
 
+// Apr 24 2026 — Phase 3 scanner upgrade helpers
+function gexPinHtml(gex, spotPrice) {
+  if (!gex || gex.pin == null) return '<span style="color:var(--muted)">—</span>';
+  var pct = spotPrice ? ((gex.pin - spotPrice) / spotPrice * 100) : null;
+  var pctText = pct != null ? (pct > 0 ? '+' + pct.toFixed(1) + '%' : pct.toFixed(1) + '%') : '';
+  var color = pct != null && pct > 0 ? 'var(--green)' : pct != null && pct < 0 ? 'var(--red)' : 'var(--blue)';
+  return '<div style="display:flex;flex-direction:column;line-height:1.1"><span style="color:' + color + ';font-weight:600">$' + gex.pin.toFixed(0) + '</span><span style="color:var(--muted);font-size:9px">' + pctText + '</span></div>';
+}
+
+function gexRegimeHtml(gex) {
+  if (!gex || !gex.regime) return '';
+  var isPos = gex.regime === 'POSITIVE';
+  var bg = isPos ? 'rgba(74,222,128,0.18)' : 'rgba(248,113,113,0.18)';
+  var color = isPos ? 'var(--green)' : 'var(--red)';
+  var label = isPos ? '+γ' : '−γ';
+  var tooltip = isPos ? 'Positive gamma: dealer selling dampens moves (mean-reverting)' : 'Negative gamma: dealer buying amplifies moves (trend-following)';
+  return '<span class="regime-badge" title="' + tooltip + '" style="display:inline-block;padding:2px 6px;border-radius:4px;background:' + bg + ';color:' + color + ';font-weight:700;font-size:11px">' + label + '</span>';
+}
+
+function inForceBadge(status) {
+  if (!status) return '<span style="color:var(--muted)">—</span>';
+  var config = {
+    'ACTIVE':      { icon: '🟢', color: 'var(--green)',  bg: 'rgba(74,222,128,0.12)',  tip: 'Setup cocked, near trigger — watch for entry candle' },
+    'TRIGGERED':   { icon: '🔥', color: 'var(--yellow)', bg: 'rgba(251,191,36,0.15)',  tip: 'Price broke trigger — setup in motion' },
+    'EXPIRED':     { icon: '⏰', color: 'var(--muted)',  bg: 'rgba(148,163,184,0.12)', tip: 'Too much time without follow-through — fading signal' },
+    'INVALIDATED': { icon: '🔴', color: 'var(--red)',    bg: 'rgba(248,113,113,0.12)', tip: 'Price moved against trigger — setup dead' },
+  };
+  var c = config[status] || { icon: '', color: 'var(--muted)', bg: '', tip: '' };
+  return '<span class="inforce-badge" title="' + c.tip + '" style="display:inline-block;padding:2px 6px;border-radius:4px;background:' + c.bg + ';color:' + c.color + ';font-size:10px;font-weight:600;white-space:nowrap">' + c.icon + ' ' + status + '</span>';
+}
+
+function triggerHtml(r) {
+  if (!r.trigger) return '<span style="color:var(--muted)">—</span>';
+  var distPct = r.price && r.trigger ? ((r.trigger - r.price) / r.price * 100) : null;
+  var distText = distPct != null ? (distPct > 0 ? '+' + distPct.toFixed(1) + '%' : distPct.toFixed(1) + '%') : '';
+  var distColor = distPct == null ? 'var(--muted)' : Math.abs(distPct) < 1 ? 'var(--yellow)' : distPct > 0 ? 'var(--blue)' : 'var(--muted)';
+  return '<div style="display:flex;flex-direction:column;line-height:1.1"><span style="font-family:var(--mono);font-weight:600">$' + r.trigger.toFixed(2) + '</span><span style="color:' + distColor + ';font-size:9px">' + distText + '</span></div>';
+}
+
+function expRangeHtml(gex) {
+  if (!gex || !gex.expectedLow || !gex.expectedHigh) return '<span style="color:var(--muted)">—</span>';
+  var range = gex.expectedHigh - gex.expectedLow;
+  return '<div style="display:flex;flex-direction:column;line-height:1.1;font-size:10px;font-family:var(--mono)"><span style="color:var(--text-dim)">$' + gex.expectedLow.toFixed(0) + '-$' + gex.expectedHigh.toFixed(0) + '</span><span style="color:var(--muted);font-size:9px">±$' + (range/2).toFixed(1) + '</span></div>';
+}
+
 function rowHtml(r) {
   var volRelClass = '';
   if (r.volRel != null) {
@@ -602,6 +653,11 @@ function rowHtml(r) {
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.M) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.Q) + '</td>' +
+    '<td class="col-trigger">' + triggerHtml(r) + '</td>' +
+    '<td class="col-inforce">' + inForceBadge(r.inForce) + '</td>' +
+    '<td class="col-gex-pin">' + gexPinHtml(r.gex, r.price) + '</td>' +
+    '<td class="col-gex-regime">' + gexRegimeHtml(r.gex) + '</td>' +
+    '<td class="col-exp-range">' + expRangeHtml(r.gex) + '</td>' +
     '<td class="col-flow">' + flowHtml(r.flow) + '</td>' +
     '<td class="col-analyst">' + analystHtml(r) + '</td>' +
     '<td class="col-tv">' + tvHtml(r.tvAlert) + '</td>' +
@@ -836,6 +892,11 @@ function groupHtml(name, rows) {
       '<th class="col-tf">W</th>' +
       '<th class="col-tf">M</th>' +
       '<th class="col-tf">Q</th>' +
+      '<th class="col-trigger" title="Entry trigger level from signal / prior bar high">Trigger</th>' +
+      '<th class="col-inforce" title="Setup status: ACTIVE (cocked), TRIGGERED (in motion), EXPIRED (late), INVALIDATED (dead)">Status</th>' +
+      '<th class="col-gex-pin" title="Gamma pin — magnetic price target from options dealers">Pin</th>' +
+      '<th class="col-gex-regime" title="Gamma regime. +γ = dealer selling dampens moves. -γ = dealer buying amplifies moves.">Reg</th>' +
+      '<th class="col-exp-range" title="Expected daily range from gamma (1 std dev)">Exp Range</th>' +
       '<th class="col-flow">Flow</th>' +
       '<th class="col-analyst">Analyst</th>' +
       '<th class="col-tv">TV</th>' +
