@@ -520,6 +520,38 @@ function contextBadgeHtml(ctx) {
   return ' <span style="display:inline-block;padding:1px 5px;margin-left:4px;font-size:9px;font-weight:600;color:' + cfg.color + ';background:' + cfg.bg + ';border-radius:3px" title="' + ctx + '">' + cfg.label + '</span>';
 }
 
+// Apr 25 2026 — 25sense eligibility tag. Reversal Strat setups (Failed 2D/2U,
+// Hammer, Shooter, Outside Bar) are the high-fit candidates for the 25sense
+// retrace entry methodology. Continuation setups don't fit (price doesn't
+// retrace on momentum runs). This badge tells AB at-a-glance whether the row
+// supports the 25sense workflow he's adopting as primary.
+function senseBadgeHtml(signal) {
+  if (!signal) return '';
+  var fitMap = {
+    'Failed 2D':         'STRONG',
+    'Failed 2U':         'STRONG',
+    'Hammer':            'STRONG',
+    'Shooter':           'STRONG',
+    'Outside Bar':       'STRONG',
+    '2-2 Reversal Up':   'STRONG',
+    '2-2 Reversal Down': 'STRONG',
+    '2-1-2 Up':          'MODERATE',
+    '2-1-2 Down':        'MODERATE',
+    '3-1-2 Up':          'MODERATE',
+    '3-1-2 Down':        'MODERATE',
+    'Continuation Up':   'WEAK',
+    'Continuation Down': 'WEAK',
+  };
+  var fit = fitMap[signal];
+  if (!fit) return '';
+  var cfg = {
+    'STRONG':   { emoji: '🎯', color: '#a78bfa', bg: 'rgba(167,139,250,0.18)', tip: '25sense STRONG fit — reversal setup, retrace entry primed' },
+    'MODERATE': { emoji: '🎯', color: '#a78bfa', bg: 'rgba(167,139,250,0.10)', tip: '25sense MODERATE fit — verify retrace level alignment' },
+    'WEAK':     { emoji: '⚡', color: '#94a3b8', bg: 'rgba(148,163,184,0.10)', tip: '25sense WEAK fit — momentum continuation, prefer STT/breakout entry' },
+  }[fit];
+  return ' <span style="display:inline-block;padding:1px 5px;margin-left:4px;font-size:9px;font-weight:600;color:' + cfg.color + ';background:' + cfg.bg + ';border-radius:3px" title="' + cfg.tip + '">' + cfg.emoji + '25S</span>';
+}
+
 function fmtPrem(n) {
   if (n == null) return '—';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(1) + 'M';
@@ -716,7 +748,7 @@ function rowHtml(r) {
     '<td class="col-price">' + fmtPrice(r.price) + '</td>' +
     '<td class="col-chg ' + (r.chgPct >= 0 ? 'chg-pos' : 'chg-neg') + '">' + fmtPct(r.chgPct) + '</td>' +
     '<td class="col-gap">' + gapHtml(r.gap) + '</td>' +
-    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span>' + contextBadgeHtml(r.signalContext) + freshnessBadgeHtml(r) + '</td>' +
+    '<td class="col-signal"><span class="' + signalClass(r.signal) + '">' + r.signal + '</span>' + contextBadgeHtml(r.signalContext) + freshnessBadgeHtml(r) + senseBadgeHtml(r.signal) + '</td>' +
     '<td class="col-combo">' + comboHtml(r.combo) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.D) + '</td>' +
     '<td class="col-tf">' + tfArrow(r.dwmq && r.dwmq.W) + '</td>' +
