@@ -238,6 +238,8 @@ var DEFAULT_WATCHLIST = [
   'ANET','DELL','SMCI','AMAT','LRCX','KLAC','MRVL','QCOM','TSM','ASML',
   // John VIP watchlist (Apr 20 adds): BABA, CRWV
   'BABA','CRWV',
+  // Apr 25 2026 — AB next-week watchlist via John reversal indicator: APP, RBLX, IREN (CRWD/AVGO already listed above)
+  'APP','RBLX','IREN',
   // Financials
   'JPM','BAC','GS','MS','WFC','C','BLK','SCHW','V','MA','PYPL','AXP','PNC','FITB','CB',
   // Healthcare
@@ -253,7 +255,8 @@ var DEFAULT_WATCHLIST = [
 
 // Blacklisted tickers never show up in scan -- mirrors orderExecutor blacklist.
 // TSLA = SESSION_START_RULES; BTC-correlated = AB personal preference.
-var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','IREN','CIFR','HIVE','SOFI'];
+// Apr 25 2026 — AB lifted IREN per next-week watchlist (BTC-miner, but actively traded)
+var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','CIFR','HIVE','SOFI'];
 
 function getWatchlist() {
   var raw;

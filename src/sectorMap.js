@@ -92,6 +92,7 @@ var SECTOR_MAP = {
   // Other common scanner targets
   'DHT': 'Energy', 'SOUN': 'Technology', 'IONQ': 'Technology',
   'ARKK': 'ETF', 'UPST': 'Financial Services', 'APP': 'Communication Services',
+  'RBLX': 'Communication Services', 'IREN': 'Technology',
   'SNAP': 'Communication Services', 'RDDT': 'Communication Services',
   'RKLB': 'Industrials', 'LUNR': 'Industrials', 'AFRM': 'Financial Services',
   'HIMS': 'Healthcare', 'TLT': 'ETF', 'UVXY': 'ETF',
