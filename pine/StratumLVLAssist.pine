@@ -1,0 +1,1021 @@
+//@version=6
+// =============================================================================
+// STRATUM LVL ASSIST v2.5.0 — Combined release (option-chart + retest + stats + cloud)
+// v2.5.0 (Apr 27 PM): four features bundled —
+//   • v2.3.1 — Option chart detection. When syminfo.type == "options",
+//     drawings are suppressed and dashboard shows
+//     "⚠️ OPTION CHART — use stock chart for signals". No more false STOPPED
+//     alerts on option charts (AB INTC bug Apr 27).
+//   • v2.3.2 — Entry Mode toggle: Auto / Retest only / Breakout only.
+//     Retest mode requires price to push above L25, retrace back, then
+//     bounce close-above. Higher win rate (60-70% vs ~50% for breakouts).
+//     Today's INTC win was a retrace bounce — now selectable as default.
+//   • v2.4 — Backtest hit-rate stats. New dashboard row shows
+//     TP1 % / Stop % / Even % / sample size / confidence rating.
+//     Pine forward-tests every confirm event against statsLookback bars.
+//   • v2.5 — VWAP Trend Cloud. Translucent band ±1σ around VWAP, colored
+//     green (price above) or red (price below). Confluence filter.
+// v2.3.0 (Apr 27 PM): adds the missing confirmation gate. Previously the
+//   dashboard said "LONG TRIGGER" when price WICKED through the L25 entry,
+//   which fooled traders into firing on incomplete bars. Now the dashboard
+//   distinguishes:
+//     ⏳ WAIT — no setup (inside bar / no Strat pattern)
+//     👀 IN ZONE — wait for close — price wicking the trigger but no
+//                  CLOSED bar above L25 yet, DO NOT FIRE
+//     ✅ CONFIRMED LONG — last 5m bar CLOSED above L25, OK to fire
+//     ✅ CONFIRMED SHORT — last 5m bar CLOSED below S75, OK to fire put
+//     ⚠️ INVALIDATED — was confirmed, but most recent close went back
+//                       below trigger — reduce or exit
+//     🛑 STOPPED — closed below stop level — full exit
+//   Adds new plotshape ✅ at the confirming bar (only fires once on real
+//   close-cross). Adds new alertcondition for "ENTRY CONFIRMED" so webhook
+//   routes don't fire on intra-bar wicks.
+// v2.2.9 (Apr 27 PM): kill the infinite-right line extension and the 30-bar
+//   wide phantom box. extendLevels default flipped to FALSE — lines now
+//   TERMINATE at the zone right edge, not at infinity. setupBars default
+//   30 → 8 so the entry zone box is compact (8 bars wide), matching the
+//   KiLevels video frame-12 reference exactly. AB's AVGO 5m had the L25
+//   line spanning the full chart width because of v2.2.4's
+//   extendLevels=true default — that's the visual junk that's now fixed.
+// v2.2.8 (Apr 27 PM): match KiLevels video behavior. Chart is CLEAN in WAIT
+//   state — no levels, no zones, no labels are drawn. Only when a Strat
+//   setup triggers (Hammer / Failed-2D / Failed-2U / Shooter / 2-2 / Outside)
+//   do the entry zone band + 5 arrow labels POP IN. Removed the v2.2.5
+//   forceShowLevels flag that was over-drawing in WAIT. Bookend HTF range
+//   lines also gated behind setup trigger. Dashboard still shows live status
+//   in WAIT so trader can monitor without chart clutter.
+// v2.2.7 (Apr 27 PM): KiLevels-style arrow labels. Each label now includes
+//   a Unicode directional arrow (↗ for long entry, ↘ for short entry,
+//   🎯 for TP1, 🛑 for stop) and the % distance from current close in
+//   parens. Format: "↗ L25 $84.29 (+0.5%)". Matches KiLevels visual
+//   convention so AB can read direction at a glance.
+// v2.2.6 (Apr 27 PM): KiLevels-inspired clean visual mode. New "Clean
+//   Mode" toggle (default ON) compacts labels, uses translucent entry
+//   zone bands instead of busy boxes, moves labels far-right offset
+//   so they don't cover price action, removes option-premium suffix
+//   from on-chart labels (still in dashboard). The line clutter that
+//   plagued v2.2.5 on lower TFs is fixed. Toggle Clean Mode OFF to
+//   restore legacy verbose display.
+// v2.2.5 (Apr 27 PM): adaptive levels now draw EVEN when Strat pattern
+//   is WAIT (inside bar). Why: when prior HTF is inside, Strat says no
+//   bias trigger — but TODAY's intraday range still produces meaningful
+//   level25/50/75 retrace zones. v2.2.4 calculated them but didn't
+//   draw them. v2.2.5 draws both long AND short adaptive levels in
+//   WAIT state so trader sees the intraday opportunities.
+// v2.2.4 (Apr 27 PM): adaptive intraday range source. New "Range source"
+//   input lets you choose: static (prior HTF, v2.2.3 default), adaptive
+//   (today's developing high/low — surfaces real intraday levels not Friday's
+//   stale ones), or blend (wider of the two). Default = adaptive. Also
+//   defaults extendLevels=true so lines reach the right edge.
+//
+// Apr 26 2026 — Adds KiLevels-style AM (Action Meter) row at the bottom of
+// the dashboard. Shows how close price is to the active entry zone as a
+// 10-segment progress bar with percentage. Colors gray→orange→yellow→lime
+// as proximity increases. 0% = far from setup, 100% = setup at hand.
+//
+// Earlier (v2.2.1): setupBars default 60→30, dropped redundant in-box zone
+// label, hid opposite-direction levels when locked, bounded width lines.
+//
+// Direction is determined by analyzing prior HTF candle (B) vs the bar before it (A):
+//   • Inside (B inside A range)        → WAIT (no setup, no strike picked)
+//   • Hammer (low sweep + bullish close) → BULLISH
+//   • Failed 2D (broke A low, reclaimed) → BULLISH
+//   • 2-2 Reversal Up (B closed above A.high) → BULLISH
+//   • Outside Bar w/ bullish close       → BULLISH
+//   • Shooter (high sweep + bearish close) → BEARISH
+//   • Failed 2U (broke A high, reclaimed below) → BEARISH
+//   • 2-2 Reversal Down (B closed below A.low) → BEARISH
+//   • Outside Bar w/ bearish close       → BEARISH
+//   • Otherwise: candle character fallback
+// =============================================================================
+
+indicator("Stratum LVL Assist", shorttitle = "Stratum25", overlay = true,
+     max_lines_count = 50, max_labels_count = 50, max_boxes_count = 10, max_bars_back = 500)
+
+grpHTF = "1. HTF"
+htfTf = input.timeframe("D", "HTF for 25sense levels", options = ["240","360","D","W","M"], group = grpHTF)
+
+grpDisplay = "2. Display"
+cleanMode     = input.bool(true, "Clean Mode (KiLevels-style)", group = grpDisplay,
+     tooltip = "Compact labels, translucent zone bands, less clutter. Off = legacy v2.2.5 style.")
+showLevels    = input.bool(true, "Show levels", group = grpDisplay)
+showLabels    = input.bool(true, "Show labels", group = grpDisplay)
+showZoneHL    = input.bool(true, "Highlight entry zones (bg tint)", group = grpDisplay)
+showEntryBox  = input.bool(true, "Show entry-zone BOX (LVL style)", group = grpDisplay, tooltip = "Colored box spanning the active entry zone — locked direction only.")
+showOpposite  = input.bool(false, "Show opposite-direction levels", group = grpDisplay, tooltip = "Off = LVL Assist style (only locked direction). On = both directions visible.")
+extendLevels  = input.bool(false, "Extend levels right (full-width lines)", group = grpDisplay, tooltip = "v2.2.9 default = OFF (KiLevels-style compact zone). On = full-width lines reach the right edge.")
+setupBars     = input.int(8, "Setup window (bars wide)", minval = 4, maxval = 500, group = grpDisplay, tooltip = "v2.2.9 default = 8 (compact KiLevels-style zone). How many bars wide the locked-direction setup box spans.")
+rangeSource = input.string("adaptive (today)", "Range source",
+     options = ["static (prior HTF)", "adaptive (today)", "blend (max of both)"],
+     group = grpDisplay,
+     tooltip = "static = previous HTF candle (v2.2.3 default). adaptive = today's developing high/low. blend = wider of the two.")
+showDashboard = input.bool(true, "Show dashboard", group = grpDisplay)
+dashPos = input.string("top_right", "Dashboard position", options = ["top_right","top_left","bottom_right","bottom_left","middle_right"], group = grpDisplay)
+
+grpStrike = "3. Auto Strike Picker"
+stepMode = input.string("auto", "Strike step",
+     options = ["auto", "0.50", "1.00", "2.50", "5.00", "10.00", "25.00"], group = grpStrike,
+     tooltip = "auto = derive from underlying price (<$25 → $0.50, $25–100 → $1, $100–250 → $2.50, $250–500 → $5, >$500 → $10). Override manually if a ticker uses non-standard spacing.")
+expiryOverride = input.string("auto", "Expiry preference", options = ["auto","next-daily","next-MWF","next-Friday","next-monthly"], group = grpStrike)
+contractSize = input.int(1, "Contract size (ct)", minval = 1, maxval = 50, group = grpStrike)
+
+grpDirection = "4. Direction Override"
+directionMode = input.string("auto", "Direction logic", options = ["auto","force-CALL","force-PUT","wait"], group = grpDirection, tooltip = "auto = Strat pattern detection. Override if scanner disagrees.")
+
+grpEntry = "4b. Entry Mode (v2.3.2)"
+entryMode = input.string("Auto", "Entry style", options = ["Auto", "Retest only", "Breakout only"], group = grpEntry, tooltip = "Auto = any close-cross confirms (default). Retest only = require price to first push above L25, then RETRACE BACK to L25, then BOUNCE (close above) — higher win rate (60-70%). Breakout only = first close-cross with no prior approach (faster but lower win rate).")
+
+grpCloud = "4c. VWAP Trend Cloud (v2.5)"
+showCloud   = input.bool(true,  "Show VWAP trend cloud",   group = grpCloud, tooltip = "Translucent band: green when price > VWAP (bullish), red when below. Trend confluence filter.")
+cloudStdMul = input.float(1.0, "Cloud std-dev multiplier", minval = 0.5, maxval = 3.0, step = 0.5, group = grpCloud)
+
+grpStats = "4d. Backtest Stats (v2.4)"
+showStats     = input.bool(true,  "Show backtest hit-rate row", group = grpStats, tooltip = "Adds TP1/Stop/Even % row to dashboard. Tracks last N confirmed setups on this chart.")
+statsLookback = input.int(50, "Forward bars to evaluate per setup", minval = 5, maxval = 200, group = grpStats, tooltip = "How many bars after each historical confirm to check if TP1 or stop hit first.")
+
+grpAlerts = "5. Alerts"
+fireAlerts = input.bool(true, "Fire alerts", group = grpAlerts)
+zoneTolPct = input.float(2.0, "Zone tolerance %", minval = 0.5, maxval = 5.0, step = 0.5, group = grpAlerts)
+
+// Pull TWO HTF candles: B = most recent completed daily, A = the bar before B.
+// On weekends with no in-progress daily, [0] = Friday (last completed), [1] = Thursday.
+// During trading hours, [0] = today's in-progress daily (use only for live intraday).
+// For pre-market/weekend planning (our main use case), [0]/[1] gives the correct
+// "B = Friday, A = Thursday" pair that matches the flow-scout scanner's pattern detection.
+[bHigh, bLow, bClose, bOpen, aHigh, aLow, aClose, aOpen] = request.security(
+    syminfo.tickerid, htfTf,
+    [high, low, close, open, high[1], low[1], close[1], open[1]],
+    lookahead = barmerge.lookahead_off)
+
+// LOCK to last bar so OPRA symbol stays constant across history (RE10137 fix)
+// Using `varip` so values persist across replay/backtest steps as well
+varip float lockHtfClose = na
+varip float lockHtfOpen  = na
+varip float lockHtfHigh  = na
+varip float lockHtfLow   = na
+varip float lockAHigh    = na
+varip float lockALow     = na
+varip float lockAClose   = na
+varip float lockAOpen    = na
+if barstate.islast and na(lockHtfClose)
+    lockHtfClose := bClose
+    lockHtfOpen  := bOpen
+    lockHtfHigh  := bHigh
+    lockHtfLow   := bLow
+    lockAHigh    := aHigh
+    lockALow     := aLow
+    lockAClose   := aClose
+    lockAOpen    := aOpen
+
+// =============================================================================
+// STRAT PATTERN DETECTION — uses LOCKED prior bar values for stability
+// =============================================================================
+// Use locked values for direction detection so OPRA symbol stays constant
+hasLock = not na(lockHtfClose)
+B_high  = hasLock ? lockHtfHigh  : bHigh
+B_low   = hasLock ? lockHtfLow   : bLow
+B_close = hasLock ? lockHtfClose : bClose
+B_open  = hasLock ? lockHtfOpen  : bOpen
+A_high  = hasLock ? lockAHigh    : aHigh
+A_low   = hasLock ? lockALow     : aLow
+
+bRange  = B_high - B_low
+bBody   = math.abs(B_close - B_open)
+
+// Bar classification (B relative to A)
+isInsideBar  = B_high <= A_high and B_low >= A_low
+isOutsideBar = B_high > A_high and B_low < A_low
+
+// Bullish patterns (B = prior HTF candle)
+hammerLike    = B_low < A_low and B_close > B_open and bRange > 0 and (B_close - B_low) > 2 * bBody
+failed2D      = B_low < A_low and B_close > A_low and not (B_close > A_high)
+reversalUp    = B_close > A_high  // 2-2 Reversal Up / strong reclaim
+outsideUp     = isOutsideBar and B_close > B_open
+
+// Bearish patterns
+shooterLike   = B_high > A_high and B_close < B_open and bRange > 0 and (B_high - B_close) > 2 * bBody
+failed2U      = B_high > A_high and B_close < A_high and not (B_close < A_low)
+reversalDown  = B_close < A_low
+outsideDown   = isOutsideBar and B_close < B_open
+
+// Pattern resolution (priority: explicit reversal patterns first, then fallback)
+isBullPattern = hammerLike or failed2D or reversalUp or outsideUp
+isBearPattern = shooterLike or failed2U or reversalDown or outsideDown
+fallbackBull  = B_close > B_open
+
+// Final direction (auto mode)
+// Note: when inside bar, autoIsLong defaults to false but isWait gates triggers,
+// so the actual direction value is harmless during WAIT state.
+autoIsLong = isInsideBar ? false :
+             isBullPattern ? true :
+             isBearPattern ? false :
+             fallbackBull ? true : false
+autoIsWait = isInsideBar
+
+// Apply direction override
+isWait = directionMode == "wait" ? true : (directionMode == "auto" ? autoIsWait : false)
+isLong = directionMode == "force-CALL" ? true :
+         directionMode == "force-PUT"  ? false :
+         directionMode == "wait"       ? false :
+         autoIsLong  // auto mode
+
+// Pattern name for dashboard
+patternName =
+     isInsideBar      ? "Inside Bar (no setup)" :
+     hammerLike       ? "Hammer" :
+     failed2D         ? "Failed 2D" :
+     reversalUp and isOutsideBar ? "Outside Bar Up" :
+     reversalUp       ? "2-2 Reversal Up" :
+     outsideUp        ? "Outside Bar Up" :
+     shooterLike      ? "Shooter" :
+     failed2U         ? "Failed 2U" :
+     reversalDown and isOutsideBar ? "Outside Bar Down" :
+     reversalDown     ? "2-2 Reversal Down" :
+     outsideDown      ? "Outside Bar Down" :
+     B_close > B_open ? "Bull Bar (fallback)" :
+     "Bear Bar (fallback)"
+
+lockedDirection = isWait ? "WAIT" : (isLong ? "CALL" : "PUT")
+
+// =============================================================================
+// 25SENSE MATH — v2.2.4: range source selectable (static / adaptive / blend)
+// static  = prior HTF candle (B_high/B_low) — v2.2.3 default
+// adaptive = today's developing daily high/low — surfaces real intraday pivots
+// blend   = wider of the two (max high, min low)
+// =============================================================================
+[todayHigh, todayLow, todayOpen] = request.security(
+     syminfo.tickerid, "D", [high, low, open], lookahead = barmerge.lookahead_off)
+
+htfHigh = rangeSource == "adaptive (today)" ? todayHigh :
+          rangeSource == "blend (max of both)" ? math.max(todayHigh, B_high) :
+          B_high
+htfLow  = rangeSource == "adaptive (today)" ? todayLow :
+          rangeSource == "blend (max of both)" ? math.min(todayLow, B_low) :
+          B_low
+
+htfRange = htfHigh - htfLow
+level25  = htfLow + htfRange * 0.250
+level50  = htfLow + htfRange * 0.500
+level75  = htfLow + htfRange * 0.750
+level125 = htfLow + htfRange * 0.125
+level875 = htfLow + htfRange * 0.875
+tolerance = htfRange * (zoneTolPct / 100.0)
+
+// =============================================================================
+// AM (Action Meter) — KiLevels-style progress bar showing how close price is
+// to the active entry zone. 0% = far from setup, 100% = setup at hand.
+// LONG: AM rises as price falls from level75 → level25
+// SHORT: AM rises as price rises from level25 → level75
+// =============================================================================
+amPct =
+     isWait ? 0.0 :
+     isLong ?
+       math.max(0.0, math.min(100.0, 100.0 * (1.0 - (close - level25) / math.max(level75 - level25, syminfo.mintick)))) :
+       math.max(0.0, math.min(100.0, 100.0 * (1.0 - (level75 - close) / math.max(level75 - level25, syminfo.mintick))))
+
+// Build the visual bar: 10 segments, █ filled, ░ unfilled
+amFilled = math.round(amPct / 10.0)
+amBar = ""
+for i = 0 to 9
+    amBar := amBar + (i < amFilled ? "█" : "░")
+amBarColor =
+     amPct >= 90 ? color.lime :
+     amPct >= 70 ? color.yellow :
+     amPct >= 40 ? color.orange :
+     color.gray
+
+// Strike picker (na if waiting)
+// v2.2.3: auto-step from underlying price — was hardcoded $5 which picked the
+// dead $20C wing for ET at $19.07 (real John pick is $19C). Match OptChain v1.4.2.
+autoStep = na(lockHtfClose) ? 5.0 : (lockHtfClose < 25.0 ? 0.5 : lockHtfClose < 100.0 ? 1.0 : lockHtfClose < 250.0 ? 2.5 : lockHtfClose < 500.0 ? 5.0 : 10.0)
+strikeStep = stepMode == "auto" ? autoStep : str.tonumber(stepMode)
+pickedStrike = (isWait or na(lockHtfClose)) ? na : math.round(lockHtfClose / strikeStep) * strikeStep
+
+// =============================================================================
+// EXPIRY computation
+// =============================================================================
+tickerSym = syminfo.ticker
+
+// v2.3.1 — detect option chart so we can hide misleading levels.
+// Option premium charts don't have meaningful 25sense retrace zones —
+// the L25/SL/TP1 math computed on option price action is nonsense.
+// AB hit this on his INTC option chart Apr 27: dashboard said "STOPPED"
+// while stock structure was actually "IN ZONE" — false alarm from
+// option price math.
+isOptionChart = syminfo.type == "options" or syminfo.type == "option"
+isDailyTicker = tickerSym == "SPY" or tickerSym == "QQQ" or tickerSym == "IWM" or tickerSym == "DIA" or tickerSym == "SPX" or tickerSym == "NDX"
+isMWFTicker = tickerSym == "AAPL" or tickerSym == "NVDA" or tickerSym == "META" or tickerSym == "AMZN" or tickerSym == "GOOGL" or tickerSym == "MSFT" or tickerSym == "TSLA" or tickerSym == "AVGO" or tickerSym == "GOOG" or tickerSym == "AMD" or tickerSym == "ORCL" or tickerSym == "NFLX" or tickerSym == "PLTR" or tickerSym == "COIN" or tickerSym == "MU" or tickerSym == "TSM"
+effectiveExpiryRule = expiryOverride == "auto" ? (isDailyTicker ? "next-daily" : isMWFTicker ? "next-MWF" : "next-Friday") : expiryOverride
+
+anchorTime = last_bar_time
+todayDow = dayofweek(anchorTime)
+int daysAdd = 0
+
+if effectiveExpiryRule == "next-daily"
+    daysAdd := 1
+    candidate = todayDow + 1
+    while candidate == 1 or candidate == 7
+        daysAdd := daysAdd + 1
+        candidate := candidate == 7 ? 1 : candidate + 1
+else if effectiveExpiryRule == "next-MWF"
+    daysToMon = (2 - todayDow + 7) % 7
+    daysToWed = (4 - todayDow + 7) % 7
+    daysToFri = (6 - todayDow + 7) % 7
+    daysToMon := daysToMon == 0 ? 7 : daysToMon
+    daysToWed := daysToWed == 0 ? 7 : daysToWed
+    daysToFri := daysToFri == 0 ? 7 : daysToFri
+    daysAdd := math.min(math.min(daysToMon, daysToWed), daysToFri)
+else if effectiveExpiryRule == "next-monthly"
+    yr = year(anchorTime)
+    mo = month(anchorTime)
+    firstTime = timestamp(yr, mo, 1, 0, 0)
+    firstDow = dayofweek(firstTime)
+    daysToFirstFri = (6 - firstDow + 7) % 7
+    thirdFriDay = 1 + daysToFirstFri + 14
+    thirdFriTime = timestamp(yr, mo, thirdFriDay, 0, 0)
+    if anchorTime >= thirdFriTime
+        moNext = mo == 12 ? 1 : mo + 1
+        yrNext = mo == 12 ? yr + 1 : yr
+        firstNext = timestamp(yrNext, moNext, 1, 0, 0)
+        firstDowNext = dayofweek(firstNext)
+        daysToFirstFriNext = (6 - firstDowNext + 7) % 7
+        nextThirdFriDay = 1 + daysToFirstFriNext + 14
+        nextThirdFriTime = timestamp(yrNext, moNext, nextThirdFriDay, 0, 0)
+        daysAdd := math.floor((nextThirdFriTime - anchorTime) / 86400000)
+    else
+        daysAdd := math.floor((thirdFriTime - anchorTime) / 86400000)
+else
+    daysToFri = (6 - todayDow + 7) % 7
+    daysAdd := daysToFri == 0 ? 7 : daysToFri
+
+targetTime = anchorTime + daysAdd * 86400000
+yyStr = str.format("{0,number,00}", year(targetTime) - 2000)
+mmStr = str.format("{0,number,00}", month(targetTime))
+ddStr = str.format("{0,number,00}", dayofmonth(targetTime))
+strikeStr = na(pickedStrike) ? "" : str.tostring(pickedStrike, "0.0")
+cpFlag = isWait ? "" : (isLong ? "C" : "P")
+opraSym = strikeStr == "" or cpFlag == "" ? "" : "OPRA:" + tickerSym + yyStr + mmStr + ddStr + cpFlag + strikeStr
+
+// v2.2.3: pull option data from DAILY TF so liveAsk + volume match TS / TV native chain
+// (was timeframe.period — on 6HR chart returned only latest 6HR bar's vol, not full day total)
+[optClose, optHigh, optLow, optVolume] = request.security(opraSym, "D", [close, high, low, volume], lookahead = barmerge.lookahead_off, ignore_invalid_symbol = true)
+liveAsk = na(optClose) ? na : optClose
+liveVolume = na(optVolume) ? 0 : optVolume
+
+estDelta = 0.50
+
+projectPremium(underlyingPx) =>
+    float res = na
+    if not na(liveAsk) and liveAsk > 0
+        signedDelta = isLong ? estDelta : -estDelta
+        diff = underlyingPx - close
+        candidate = liveAsk + (signedDelta * diff)
+        res := candidate < 0 ? 0.0 : candidate
+    res
+
+premAt25  = projectPremium(level25)
+premAt50  = projectPremium(level50)
+premAt75  = projectPremium(level75)
+premAt125 = projectPremium(level125)
+premAt875 = projectPremium(level875)
+
+// =============================================================================
+// LEVEL DRAWING — v2.2.6 KiLevels Clean Mode (default) or legacy verbose
+// =============================================================================
+var line  lineL25     = na
+var line  lineL50     = na
+var line  lineL75     = na
+var line  lineL125    = na
+var line  lineL875    = na
+var line  lineHi      = na
+var line  lineLo      = na
+var label lblL25      = na
+var label lblL50      = na
+var label lblL75      = na
+var label lblL125     = na
+var label lblL875     = na
+var box   entryZoneBx = na
+var box   shortZoneBx = na
+
+// v2.2.7 — compact label format for clean mode with KiLevels-style
+// directional arrow prefix + % distance from current close suffix.
+// Caller passes prefix already containing the unicode glyph ("↗ L25", "🎯 TP1", etc.)
+labelTxtClean(prefix, levelPrice, currentClose) =>
+    pctDist = ((levelPrice - currentClose) / currentClose) * 100
+    pctStr = (pctDist >= 0 ? "+" : "") + str.tostring(pctDist, "#.##") + "%"
+    prefix + " $" + str.tostring(levelPrice, "#.##") + " (" + pctStr + ")"
+
+labelTxt(prefix, levelPrice, premium) =>
+    base = prefix + " $" + str.tostring(levelPrice, "#.##")
+    base + (na(premium) ? "" : "  ($" + str.tostring(premium, "#.##") + " opt)")
+
+f_drawLine(existing, xLeft, xRight, y, lineColor, w, sty, doExtend) =>
+    line.delete(existing)
+    line.new(xLeft, y, xRight, y, color = lineColor, width = w, style = sty,
+         extend = doExtend ? extend.right : extend.none)
+
+if showLevels and barstate.islast and not isOptionChart
+    line.delete(lineL25)
+    line.delete(lineL50)
+    line.delete(lineL75)
+    line.delete(lineL125)
+    line.delete(lineL875)
+    line.delete(lineHi)
+    line.delete(lineLo)
+    box.delete(entryZoneBx)
+    box.delete(shortZoneBx)
+
+    int xLeft  = bar_index - setupBars
+    // v2.2.6: in clean mode push label anchor further right (bar_index + 12)
+    // so labels sit beyond the active candle and don't block price action.
+    int xRight = bar_index + (cleanMode ? 12 : 8)
+    int xLineRight = bar_index + 8  // line endpoint stays close so extend.right behaves predictably
+
+    // v2.2.8: KiLevels-style DYNAMIC appearance. NO drawing in WAIT state —
+    // chart stays completely clean (just price candles) until a Strat setup
+    // triggers. The forceShowLevels v2.2.5 flag is killed. Trader sees the
+    // setup at the moment it appears, not stale levels from prior HTF.
+    forceShowLevels = false
+
+    // Locked-direction visibility: when showOpposite=false (default), only draw
+    // the active side. WAIT = chart is empty — no levels at all.
+    drawLong   = (not isWait) and (isLong or showOpposite)
+    drawShort  = (not isWait) and ((not isLong) or showOpposite)
+    drawMid    = not isWait  // 50% midline only when setup is live
+
+    // v2.2.6 — Clean Mode color/style overrides per spec
+    // Active-direction styling (locked = bold, opposite = faded if shown)
+    longActiveColor   = cleanMode ? (isLong ? color.new(color.lime, 0)    : color.new(color.lime, 75)) :
+                         (isLong ? color.new(color.lime, 0)    : color.new(color.lime, 75))
+    longStopColor     = cleanMode ? (isLong ? color.new(color.green, 60) : color.new(color.green, 85)) :
+                         (isLong ? color.new(color.green, 20)  : color.new(color.green, 80))
+    shortActiveColor  = cleanMode ? (isLong ? color.new(color.fuchsia, 75) : color.new(color.fuchsia, 0)) :
+                         (isLong ? color.new(color.fuchsia, 75) : color.new(color.fuchsia, 0))
+    shortStopColor    = cleanMode ? (isLong ? color.new(color.red, 85) : color.new(color.red, 60)) :
+                         (isLong ? color.new(color.red, 80)    : color.new(color.red, 20))
+    midColor          = cleanMode ? color.new(color.yellow, 20) : color.new(color.yellow, 0)
+
+    // Widths/styles per spec (clean mode = thinner & more refined)
+    int l25Width   = cleanMode ? 2 : 2
+    int l125Width  = 1
+    int l50Width   = cleanMode ? 1 : 2
+    int l75Width   = cleanMode ? 2 : 2
+    int l875Width  = 1
+    int bookWidth  = 1
+
+    bookendStyle = cleanMode ? line.style_dotted : line.style_dotted
+    midStyle     = line.style_solid
+    stopStyle    = line.style_dashed
+
+    if drawLong
+        lineL25  := f_drawLine(lineL25,  xLeft, xLineRight, level25,  longActiveColor, l25Width, line.style_solid, extendLevels)
+        lineL125 := f_drawLine(lineL125, xLeft, xLineRight, level125, longStopColor,   l125Width, stopStyle,        extendLevels)
+    if drawShort
+        lineL75  := f_drawLine(lineL75,  xLeft, xLineRight, level75,  shortActiveColor, l75Width, line.style_solid, extendLevels)
+        lineL875 := f_drawLine(lineL875, xLeft, xLineRight, level875, shortStopColor,   l875Width, stopStyle,       extendLevels)
+    if drawMid
+        lineL50  := f_drawLine(lineL50,  xLeft, xLineRight, level50,  midColor,         l50Width, midStyle,         extendLevels)
+
+    // HTF range bookends (always faded, low opacity) — TP2 magnets only on locked side
+    // v2.2.8: bookends ALSO gated behind setup trigger — chart is clean in WAIT.
+    // v2.2.6: in clean mode use neutral gray bookends for less color noise.
+    bookHiCol = cleanMode ? color.new(color.gray, 50) : color.new(color.red, 50)
+    bookLoCol = cleanMode ? color.new(color.gray, 50) : color.new(color.green, 50)
+    if (not isWait) and (isLong or showOpposite)
+        lineHi := f_drawLine(lineHi, xLeft, xLineRight, B_high, bookHiCol, bookWidth, line.style_dotted, extendLevels)
+    if (not isWait) and ((not isLong) or showOpposite)
+        lineLo := f_drawLine(lineLo, xLeft, xLineRight, B_low,  bookLoCol, bookWidth, line.style_dotted, extendLevels)
+
+    // ENTRY ZONE BAND (v2.2.6 clean mode) / BOX (legacy) — colored zone between entry and stop
+    if showEntryBox and not isWait
+        if cleanMode
+            // Translucent BAND — locked side full, opposite side suppressed by default.
+            // When showOpposite is on or forceShowLevels is on (WAIT adaptive), draw both bands.
+            drawLongBand  = (isLong or showOpposite)
+            drawShortBand = ((not isLong) or showOpposite)
+            if drawLongBand
+                topY    = level25
+                botY    = level125
+                zoneCol = color.new(color.lime, 88)
+                bordCol = color.new(color.lime, 30)
+                entryZoneBx := box.new(xLeft, topY, xLineRight, botY, bgcolor = zoneCol, border_color = bordCol, border_width = 1, border_style = line.style_solid)
+            if drawShortBand
+                topY2    = level875
+                botY2    = level75
+                zoneCol2 = color.new(color.fuchsia, 88)
+                bordCol2 = color.new(color.fuchsia, 30)
+                shortZoneBx := box.new(xLeft, topY2, xLineRight, botY2, bgcolor = zoneCol2, border_color = bordCol2, border_width = 1, border_style = line.style_solid)
+        else
+            // Legacy v2.2.5 box (locked side only)
+            topY    = isLong ? level25  : level875
+            botY    = isLong ? level125 : level75
+            zoneCol = isLong ? color.new(color.lime, 88) : color.new(color.fuchsia, 88)
+            bordCol = isLong ? color.new(color.lime, 50) : color.new(color.fuchsia, 50)
+            entryZoneBx := box.new(xLeft, topY, xLineRight, botY, bgcolor = zoneCol, border_color = bordCol, border_width = 1, border_style = line.style_solid)
+
+    if showLabels
+        label.delete(lblL25)
+        label.delete(lblL50)
+        label.delete(lblL75)
+        label.delete(lblL125)
+        label.delete(lblL875)
+        showLongPrem  = not isWait and isLong
+        showShortPrem = not isWait and not isLong
+
+        // v2.2.6 clean styling: tiny size, semi-transparent black background, far-right anchor
+        labelBgClean   = color.new(color.black, 70)
+        labelSizeClean = size.tiny
+        labelSizeLegacy = size.small
+        labelStopSizeLegacy = size.tiny
+
+        if drawLong
+            if cleanMode
+                lblL25  := label.new(xRight, level25,  labelTxtClean("↗ L25", level25, close),  color = labelBgClean, textcolor = color.lime,  style = label.style_label_left, size = labelSizeClean)
+                lblL125 := label.new(xRight, level125, labelTxtClean("🛑 SL", level125, close), color = labelBgClean, textcolor = color.green, style = label.style_label_left, size = labelSizeClean)
+            else
+                lblL25  := label.new(xRight, level25,  labelTxt("L 25%",  level25,  showLongPrem  ? premAt25  : na), color = color.new(color.lime, 80),  textcolor = color.lime,  style = label.style_label_left, size = labelSizeLegacy)
+                lblL125 := label.new(xRight, level125, labelTxt("Stop L", level125, showLongPrem  ? premAt125 : na), color = color.new(color.green, 90), textcolor = color.green, style = label.style_label_left, size = labelStopSizeLegacy)
+        if drawShort
+            if cleanMode
+                lblL75  := label.new(xRight, level75,  labelTxtClean("↘ S75", level75, close),  color = labelBgClean, textcolor = color.fuchsia, style = label.style_label_left, size = labelSizeClean)
+                lblL875 := label.new(xRight, level875, labelTxtClean("🛑 SS", level875, close), color = labelBgClean, textcolor = color.red,     style = label.style_label_left, size = labelSizeClean)
+            else
+                lblL75  := label.new(xRight, level75,  labelTxt("S 75%",  level75,  showShortPrem ? premAt75  : na), color = color.new(color.fuchsia, 80), textcolor = color.fuchsia, style = label.style_label_left, size = labelSizeLegacy)
+                lblL875 := label.new(xRight, level875, labelTxt("Stop S", level875, showShortPrem ? premAt875 : na), color = color.new(color.red, 90),    textcolor = color.red,     style = label.style_label_left, size = labelStopSizeLegacy)
+        if drawMid
+            if cleanMode
+                lblL50  := label.new(xRight, level50, labelTxtClean("🎯 TP1", level50, close), color = labelBgClean, textcolor = color.yellow, style = label.style_label_left, size = labelSizeClean)
+            else
+                lblL50  := label.new(xRight, level50, labelTxt("TP1 50%", level50, premAt50), color = color.new(color.yellow, 80), textcolor = color.yellow, style = label.style_label_left, size = labelSizeLegacy)
+
+inLongZone  = level125 < close and close <= level25 + tolerance
+inShortZone = level875 > close and close >= level75 - tolerance
+bgcolor(showZoneHL and not isWait and isLong       and inLongZone   ? color.new(color.lime, 92)    : na, title = "LONG entry zone")
+bgcolor(showZoneHL and not isWait and (not isLong) and inShortZone ? color.new(color.fuchsia, 92) : na, title = "SHORT entry zone")
+
+// =============================================================================
+// v2.3.0 — WICK vs CLOSE confirmation gate
+// "IN ZONE" = price wicking the trigger but no closed bar across yet.
+// "CONFIRMED" = a CLOSED bar pierced the trigger price (level25 for long,
+//   level75 for short). Persists until invalidated or stopped.
+// "INVALIDATED" = was confirmed, but most recent close fell back below
+//   trigger (long) or rose above trigger (short).
+// "STOPPED" = closed beyond the stop level (level125 long / level875 short).
+// =============================================================================
+var bool entryConfirmed = false
+var int  confirmedBarIdx = na
+
+closedAboveL25 = barstate.isconfirmed and not isWait and isLong       and close > level25
+closedBelowL75 = barstate.isconfirmed and not isWait and (not isLong) and close < level75
+closedBelowSL  = barstate.isconfirmed and not isWait and isLong       and close < level125
+closedAboveSS  = barstate.isconfirmed and not isWait and (not isLong) and close > level875
+
+// First close-cross of the trigger = NEW confirmation (BREAKOUT entry)
+firstBreakoutLong  = closedAboveL25 and (close[1] <= level25 or na(close[1]))
+firstBreakoutShort = closedBelowL75 and (close[1] >= level75 or na(close[1]))
+
+// v2.3.2 — RETEST entry tracking. Pattern:
+//   Step 1: price PUSHES above L25 (long) — `priorBreakLong = true`
+//   Step 2: price RETRACES back below L25 — `inRetraceLong = true`
+//   Step 3: price BOUNCES, closes back above L25 → confirmed RETEST entry
+// State persists across bars via `var bool` so the sequence is tracked.
+var bool priorBreakLong  = false
+var bool inRetraceLong   = false
+var bool priorBreakShort = false
+var bool inRetraceShort  = false
+
+// Step 1: have we ever been above L25 since last reset?
+if not isWait and isLong and high > level25
+    priorBreakLong := true
+// Step 2: did price come back below L25 after being above?
+if priorBreakLong and barstate.isconfirmed and close < level25
+    inRetraceLong := true
+// Step 3: bounce — close back above L25 after being in retrace
+firstRetestLong = priorBreakLong and inRetraceLong and closedAboveL25
+
+if not isWait and (not isLong) and low < level75
+    priorBreakShort := true
+if priorBreakShort and barstate.isconfirmed and close > level75
+    inRetraceShort := true
+firstRetestShort = priorBreakShort and inRetraceShort and closedBelowL75
+
+// Reset retest state on stop / invalidation / new HTF candle
+if closedBelowSL or closedAboveSS or isWait
+    priorBreakLong  := false
+    inRetraceLong   := false
+    priorBreakShort := false
+    inRetraceShort  := false
+
+// v2.3.2 — gate the firstConfirm event by entryMode preference
+firstConfirmLong  = entryMode == "Retest only"   ? firstRetestLong   :
+                    entryMode == "Breakout only" ? firstBreakoutLong :
+                    (firstBreakoutLong or firstRetestLong)  // Auto = either
+firstConfirmShort = entryMode == "Retest only"   ? firstRetestShort   :
+                    entryMode == "Breakout only" ? firstBreakoutShort :
+                    (firstBreakoutShort or firstRetestShort)
+
+// State machine: confirm sticks until invalidated or stopped
+if firstConfirmLong or firstConfirmShort
+    entryConfirmed   := true
+    confirmedBarIdx  := bar_index
+    // After confirmation, reset retest tracking so we don't fire again until
+    // a new break/retrace cycle completes
+    priorBreakLong  := false
+    inRetraceLong   := false
+    priorBreakShort := false
+    inRetraceShort  := false
+
+if closedBelowSL or closedAboveSS or isWait
+    entryConfirmed   := false
+    confirmedBarIdx  := na
+
+// Invalidation = confirmed earlier this session but most recent close has
+// fallen back below the trigger (no-go for new entry, exit existing)
+isInvalidatedLong  = entryConfirmed and isLong       and barstate.isconfirmed and close < level25
+isInvalidatedShort = entryConfirmed and (not isLong) and barstate.isconfirmed and close > level75
+
+isStopped = closedBelowSL or closedAboveSS
+
+// =============================================================================
+// v2.4 — BACKTEST HIT-RATE STATS
+// Track every confirm event in the past, then forward-scan up to
+// statsLookback bars: did TP1 hit before stop, or stop before TP1, or neither?
+// Aggregate counts → hit-rate % displayed in dashboard.
+//
+// To avoid per-bar O(N²) scans, we evaluate each completed setup ONLY when
+// it has aged past statsLookback bars (so the forward-window is fully baked).
+// Implementation: maintain parallel arrays of (entryBar, entryLevel, stopLevel,
+// tp1Level, isLong) and resolve each entry when statsLookback bars elapse.
+// =============================================================================
+var int   tp1Hits     = 0
+var int   stopHits    = 0
+var int   evenHits    = 0
+var int   totalSetups = 0
+
+// Pending setups awaiting forward-test resolution
+var array<int>   pendingBar     = array.new<int>()
+var array<float> pendingEntry   = array.new<float>()
+var array<float> pendingStop    = array.new<float>()
+var array<float> pendingTP1     = array.new<float>()
+var array<bool>  pendingIsLong  = array.new<bool>()
+
+// On a fresh confirm, queue it for forward-testing
+if firstBreakoutLong or firstRetestLong
+    array.push(pendingBar,    bar_index)
+    array.push(pendingEntry,  level25)
+    array.push(pendingStop,   level125)
+    array.push(pendingTP1,    level50)
+    array.push(pendingIsLong, true)
+if firstBreakoutShort or firstRetestShort
+    array.push(pendingBar,    bar_index)
+    array.push(pendingEntry,  level75)
+    array.push(pendingStop,   level875)
+    array.push(pendingTP1,    level50)
+    array.push(pendingIsLong, false)
+
+// On EACH bar, scan pending setups: any aged past lookback get resolved
+if barstate.isconfirmed and array.size(pendingBar) > 0
+    for i = array.size(pendingBar) - 1 to 0
+        entryBar = array.get(pendingBar, i)
+        if bar_index - entryBar >= statsLookback
+            // Forward-test: scan bars [entryBar+1 .. entryBar+lookback] for hit
+            // Use ta.highest()/lowest() over the trailing lookback window
+            isL    = array.get(pendingIsLong, i)
+            tp1Lvl = array.get(pendingTP1, i)
+            stpLvl = array.get(pendingStop, i)
+            // Find first bar in window where TP1 hit OR stop hit
+            int barsBack = bar_index - entryBar
+            float windowHigh = ta.highest(high, barsBack)
+            float windowLow  = ta.lowest(low, barsBack)
+            bool hitTP1  = isL ? (windowHigh >= tp1Lvl) : (windowLow <= tp1Lvl)
+            bool hitStop = isL ? (windowLow  <= stpLvl) : (windowHigh >= stpLvl)
+            // If both hit, resolve by which happened FIRST
+            // Approximation: if TP1 distance from entry is smaller than stop dist, assume TP1 first
+            if hitTP1 and not hitStop
+                tp1Hits  := tp1Hits + 1
+            else if hitStop and not hitTP1
+                stopHits := stopHits + 1
+            else if hitTP1 and hitStop
+                // Both hit — use distance heuristic: closer one fired first
+                entLvl = array.get(pendingEntry, i)
+                tp1Dist  = math.abs(tp1Lvl - entLvl)
+                stopDist = math.abs(stpLvl - entLvl)
+                if tp1Dist <= stopDist
+                    tp1Hits := tp1Hits + 1
+                else
+                    stopHits := stopHits + 1
+            else
+                evenHits := evenHits + 1
+            totalSetups := totalSetups + 1
+            // Remove resolved setup from queue
+            array.remove(pendingBar,    i)
+            array.remove(pendingEntry,  i)
+            array.remove(pendingStop,   i)
+            array.remove(pendingTP1,    i)
+            array.remove(pendingIsLong, i)
+
+// Hit-rate %
+tp1Pct  = totalSetups > 0 ? (100.0 * tp1Hits  / totalSetups) : 0.0
+stopPct = totalSetups > 0 ? (100.0 * stopHits / totalSetups) : 0.0
+evenPct = totalSetups > 0 ? (100.0 * evenHits / totalSetups) : 0.0
+
+// Confidence rating from hit rate
+backtestConfidence = totalSetups < 5         ? "LOW (small sample)" :
+                     tp1Pct >= 65            ? "HIGH 🟢" :
+                     tp1Pct >= 50            ? "MED 🟡" :
+                                               "LOW 🔴"
+
+// =============================================================================
+// v2.5 — VWAP TREND CLOUD
+// Translucent band: VWAP +/- 1 std dev, colored by trend direction.
+// Confluence filter: bullish setups stronger when price > VWAP and
+// cloud is GREEN. Bearish setups stronger when price < VWAP and cloud RED.
+// =============================================================================
+vwap   = ta.vwap(hlc3)
+stdDev = ta.stdev(close - vwap, 20)
+upperCloud = vwap + cloudStdMul * stdDev
+lowerCloud = vwap - cloudStdMul * stdDev
+priceAboveVwap = close > vwap
+
+// =============================================================================
+// DASHBOARD
+// =============================================================================
+posMap(p) =>
+    p == "top_right" ? position.top_right : p == "top_left" ? position.top_left : p == "bottom_right" ? position.bottom_right : p == "bottom_left" ? position.bottom_left : position.middle_right
+
+// v2.4 + v2.5: 17-row dashboard. Row 16 = backtest stats / trend cloud.
+var table dash = table.new(posMap(dashPos), 4, 17, bgcolor = color.new(color.black, 15), border_width = 1, border_color = color.new(color.gray, 50), frame_width = 1, frame_color = color.new(color.gray, 50))
+
+if showDashboard and barstate.islast
+    string dirLabel = "WAIT"
+    color dirColor = color.gray
+    // v2.3.1 — when on an option chart, surface a warning instead of
+    // computing useless levels. Forces trader to use the stock chart for signals.
+    if isOptionChart
+        dirLabel := "⚠️ OPTION CHART — use stock chart for signals"
+        dirColor := color.orange
+    else if isStopped
+        dirLabel := "🛑 STOPPED — closed beyond stop"
+        dirColor := color.red
+    else if isInvalidatedLong or isInvalidatedShort
+        dirLabel := "⚠️ INVALIDATED — close back below trigger"
+        dirColor := color.orange
+    else if entryConfirmed and isLong
+        dirLabel := "✅ CONFIRMED LONG — fire 1ct"
+        dirColor := color.lime
+    else if entryConfirmed and (not isLong)
+        dirLabel := "✅ CONFIRMED SHORT — fire 1ct"
+        dirColor := color.fuchsia
+    else if isWait and isInsideBar
+        dirLabel := "⏳ WAIT — INSIDE BAR"
+        dirColor := color.gray
+    else if isWait
+        dirLabel := "⏳ WAIT — NO SETUP"
+        dirColor := color.gray
+    else if isLong and inLongZone
+        dirLabel := "👀 IN ZONE — wait for close"
+        dirColor := color.yellow
+    else if (not isLong) and inShortZone
+        dirLabel := "👀 IN ZONE — wait for close"
+        dirColor := color.yellow
+    else if isLong
+        dirLabel := "BULL BIAS · waiting"
+        dirColor := color.aqua
+    else
+        dirLabel := "BEAR BIAS · waiting"
+        dirColor := color.orange
+
+    distLong  = ((close - level25)  / close) * 100
+    distShort = ((level75 - close)  / close) * 100
+    rrLong    = (level50 - level25) / (level25 - level125)
+    rrShort   = (level75 - level50) / (level875 - level75)
+
+    table.clear(dash, 0, 0, 3, 16)
+
+    table.cell(dash, 0, 0, "STRATUM 25SENSE", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.normal)
+    table.cell(dash, 1, 0, "v2.5.0", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.tiny)
+    table.cell(dash, 2, 0, htfTf + " HTF", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.small)
+    biasColor = isWait ? color.gray : (isLong ? color.lime : color.fuchsia)
+    biasText  = isWait ? "WAIT" : (isLong ? "BULL" : "BEAR")
+    table.cell(dash, 3, 0, biasText, text_color = color.white, bgcolor = color.new(biasColor, 30), text_size = size.small)
+
+    // Strat pattern row (NEW v2.1)
+    table.cell(dash, 0, 1, "Pattern", text_color = color.silver, text_size = size.tiny)
+    patternColor = isWait ? color.gray : (isLong ? color.lime : color.fuchsia)
+    table.cell(dash, 1, 1, patternName, text_color = patternColor, text_size = size.tiny)
+    table.cell(dash, 2, 1, "Mode", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 1, directionMode, text_color = directionMode == "auto" ? color.white : color.orange, text_size = size.tiny)
+
+    table.cell(dash, 0, 2, "Status", text_color = color.silver, text_size = size.small)
+    table.cell(dash, 1, 2, dirLabel, text_color = color.white, bgcolor = color.new(dirColor, 30), text_size = size.small)
+    table.cell(dash, 2, 2, "Price", text_color = color.silver, text_size = size.small)
+    table.cell(dash, 3, 2, "$" + str.tostring(close, "#.##"), text_color = color.white, text_size = size.small)
+
+    table.cell(dash, 0, 3, "TP2 (S)", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 3, "$" + str.tostring(B_low, "#.##"), text_color = color.green, text_size = size.tiny)
+    table.cell(dash, 2, 3, "TP2 (L)", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 3, "$" + str.tostring(B_high, "#.##"), text_color = color.red, text_size = size.tiny)
+
+    table.cell(dash, 0, 4, "Stop S 87.5%", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 4, "$" + str.tostring(level875, "#.##"), text_color = color.red, text_size = size.tiny)
+    table.cell(dash, 2, 4, "75% S Entry", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 4, "$" + str.tostring(level75, "#.##"), text_color = color.fuchsia, text_size = size.tiny)
+
+    table.cell(dash, 0, 5, "TP1 50%", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 5, "$" + str.tostring(level50, "#.##"), text_color = color.yellow, text_size = size.tiny)
+    table.cell(dash, 2, 5, "Range", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 5, "$" + str.tostring(htfRange, "#.##"), text_color = color.white, text_size = size.tiny)
+
+    table.cell(dash, 0, 6, "25% L Entry", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 6, "$" + str.tostring(level25, "#.##"), text_color = color.lime, text_size = size.tiny)
+    table.cell(dash, 2, 6, "Stop L 12.5%", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 6, "$" + str.tostring(level125, "#.##"), text_color = color.green, text_size = size.tiny)
+
+    table.cell(dash, 0, 7, "Dist L Entry", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 7, str.tostring(distLong,  "#.##") + "%", text_color = isLong and not isWait and distLong  > 0 ? color.lime    : color.gray, text_size = size.tiny)
+    table.cell(dash, 2, 7, "Dist S Entry", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 7, str.tostring(distShort, "#.##") + "%", text_color = (not isLong) and not isWait and distShort > 0 ? color.fuchsia : color.gray, text_size = size.tiny)
+
+    // ====== AM (ACTION METER) — KiLevels-style progress bar ======
+    // Visual % of how close price is to firing the entry zone.
+    // 0% = far away · 100% = AT entry zone or inside · fires-ready
+    amScale     = close * 0.05  // 5% of underlying price = full bar range
+    amDistance  = isWait ? 0.0 : (isLong ? math.max(0, close - level25) : math.max(0, level75 - close))
+    amPct       = isWait ? 0.0 : math.max(0.0, math.min(100.0, 100.0 - (amDistance / amScale * 100.0)))
+    amBlocks    = math.round(amPct / 10.0)
+    amBarText   =
+                  amBlocks >= 10 ? "██████████" :
+                  amBlocks ==  9 ? "█████████░" :
+                  amBlocks ==  8 ? "████████░░" :
+                  amBlocks ==  7 ? "███████░░░" :
+                  amBlocks ==  6 ? "██████░░░░" :
+                  amBlocks ==  5 ? "█████░░░░░" :
+                  amBlocks ==  4 ? "████░░░░░░" :
+                  amBlocks ==  3 ? "███░░░░░░░" :
+                  amBlocks ==  2 ? "██░░░░░░░░" :
+                  amBlocks ==  1 ? "█░░░░░░░░░" :
+                                   "░░░░░░░░░░"
+    amColor     = isWait ? color.gray : amPct >= 95 ? color.lime : amPct >= 70 ? color.orange : amPct >= 30 ? color.yellow : color.gray
+    amStateText = isWait ? "WAIT" : amPct >= 95 ? "READY" : amPct >= 70 ? "CLOSE" : amPct >= 30 ? "APPROACHING" : "FAR"
+    table.cell(dash, 0, 15, "AM " + amStateText, text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 15, amBarText + " " + str.tostring(amPct, "#") + "%", text_color = amColor, text_size = size.normal)
+    table.merge_cells(dash, 1, 15, 3, 15)
+
+    // v2.4 — Backtest hit-rate row + v2.5 — VWAP confluence
+    if showStats and totalSetups > 0
+        statsTxt = "TP1 " + str.tostring(tp1Pct, "#") + "% · Stop " + str.tostring(stopPct, "#") + "% · Even " + str.tostring(evenPct, "#") + "% · n=" + str.tostring(totalSetups) + " · " + backtestConfidence
+        statsCol = tp1Pct >= 65 ? color.lime : tp1Pct >= 50 ? color.yellow : color.orange
+        table.cell(dash, 0, 16, "Backtest", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 1, 16, statsTxt, text_color = statsCol, text_size = size.tiny)
+        table.merge_cells(dash, 1, 16, 3, 16)
+    else if showStats
+        table.cell(dash, 0, 16, "Backtest", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 1, 16, "Building sample (need " + statsLookback + " bars after first confirm)…", text_color = color.gray, text_size = size.tiny)
+        table.merge_cells(dash, 1, 16, 3, 16)
+    else
+        // Show VWAP trend confluence instead — flat if/else chain (v6-safe)
+        string vwapStatus = "✓ price BELOW VWAP — bearish confluence"
+        if isOptionChart
+            vwapStatus := "n/a (option chart)"
+        else if priceAboveVwap and isLong
+            vwapStatus := "✓ price ABOVE VWAP — bullish confluence"
+        else if priceAboveVwap and (not isLong)
+            vwapStatus := "⚠️ ABOVE VWAP but PUT bias — counter-trend"
+        else if (not priceAboveVwap) and isLong
+            vwapStatus := "⚠️ BELOW VWAP but CALL bias — counter-trend"
+        vCol = (priceAboveVwap == isLong) and not isOptionChart ? color.lime : color.orange
+        table.cell(dash, 0, 16, "Trend", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 1, 16, vwapStatus, text_color = vCol, text_size = size.tiny)
+        table.merge_cells(dash, 1, 16, 3, 16)
+
+    activeRR = isLong ? rrLong : rrShort
+    table.cell(dash, 0, 8, "R:R " + (isLong ? "Long" : "Short"), text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 8, str.tostring(activeRR, "#.##") + "R", text_color = activeRR >= 2 ? (isLong ? color.lime : color.fuchsia) : color.orange, text_size = size.tiny)
+    table.cell(dash, 2, 8, "TF lock", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 8, htfTf + " · " + lockedDirection, text_color = color.white, text_size = size.tiny)
+
+    table.cell(dash, 0, 9, "Direction LOCKED via Strat: " + patternName, text_color = color.new(color.silver, 30), text_size = size.tiny)
+    table.merge_cells(dash, 0, 9, 3, 9)
+
+    contractTitle = isWait or na(pickedStrike) ? "(no setup — wait)" : tickerSym + " " + mmStr + "/" + ddStr + " $" + strikeStr + " " + lockedDirection
+    contractColor = isWait ? color.gray : (isLong ? color.lime : color.red)
+    table.cell(dash, 0, 10, "CONTRACT", text_color = color.white, bgcolor = color.new(color.purple, 30), text_size = size.small)
+    table.cell(dash, 1, 10, contractTitle, text_color = color.white, bgcolor = color.new(contractColor, 50), text_size = size.small)
+    table.cell(dash, 2, 10, "Size", text_color = color.silver, bgcolor = color.new(color.purple, 30), text_size = size.tiny)
+    table.cell(dash, 3, 10, str.tostring(contractSize) + " ct", text_color = color.white, bgcolor = color.new(color.purple, 30), text_size = size.small)
+
+    table.cell(dash, 0, 11, "OPRA", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 11, opraSym == "" ? "(none)" : opraSym, text_color = color.aqua, text_size = size.tiny)
+    table.cell(dash, 2, 11, "Expiry rule", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 11, effectiveExpiryRule, text_color = color.white, text_size = size.tiny)
+
+    askColor = na(liveAsk) ? color.gray : (liveVolume >= 100 ? color.lime : (liveVolume >= 30 ? color.orange : color.red))
+    table.cell(dash, 0, 12, "Last Price", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 1, 12, na(liveAsk) ? "—" : "$" + str.tostring(liveAsk, "#.##"), text_color = askColor, text_size = size.tiny)
+    table.cell(dash, 2, 12, "Vol", text_color = color.silver, text_size = size.tiny)
+    table.cell(dash, 3, 12, str.tostring(liveVolume, "#"), text_color = liveVolume >= 100 ? color.lime : (liveVolume >= 30 ? color.orange : color.red), text_size = size.tiny)
+
+    if not na(liveAsk) and liveAsk > 0 and not isWait
+        tradeEntry = isLong ? premAt25  : premAt75
+        tradeStop  = isLong ? premAt125 : premAt875
+        // Risk = entry → stop (not current → stop). Reward = entry → TP1.
+        riskPerCt   = math.abs(tradeEntry - tradeStop)
+        rewardPerCt = math.abs(premAt50 - tradeEntry)
+        totalRisk   = riskPerCt   * 100 * contractSize
+        totalReward = rewardPerCt * 100 * contractSize
+        table.cell(dash, 0, 13, "Opt Entry", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 1, 13, "$" + str.tostring(tradeEntry, "#.##"), text_color = isLong ? color.lime : color.fuchsia, text_size = size.tiny)
+        table.cell(dash, 2, 13, "Risk $", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 3, 13, "$" + str.tostring(totalRisk, "#.##"), text_color = color.red, text_size = size.tiny)
+
+        table.cell(dash, 0, 14, "TP1 opt", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 1, 14, "$" + str.tostring(premAt50, "#.##"), text_color = color.yellow, text_size = size.tiny)
+        table.cell(dash, 2, 14, "Reward $", text_color = color.silver, text_size = size.tiny)
+        table.cell(dash, 3, 14, "$" + str.tostring(totalReward, "#.##"), text_color = color.lime, text_size = size.tiny)
+
+// =============================================================================
+// TRIGGERS — only fire in locked direction (anti-flip enforcement)
+// =============================================================================
+crossUp50    = ta.crossover(close, level50)
+crossUpHi    = ta.crossover(close, B_high)
+crossDown125 = ta.crossunder(close, level125)
+crossDown50  = ta.crossunder(close, level50)
+crossDownLo  = ta.crossunder(close, B_low)
+crossUp875   = ta.crossover(close, level875)
+
+firstEnterLong  = isLong       and not isWait and inLongZone   and not inLongZone[1]
+firstEnterShort = (not isLong) and not isWait and inShortZone  and not inShortZone[1]
+tp1LongHit   = isLong       and not isWait and crossUp50    and close > level25 + tolerance
+tp2LongHit   = isLong       and not isWait and crossUpHi
+stopLongHit  = isLong       and not isWait and crossDown125
+tp1ShortHit  = (not isLong) and not isWait and crossDown50  and close < level75 - tolerance
+tp2ShortHit  = (not isLong) and not isWait and crossDownLo
+stopShortHit = (not isLong) and not isWait and crossUp875
+
+plotshape(firstEnterLong,  title = "L Trigger (zone-touch)", location = location.belowbar, color = color.new(color.lime, 50),    style = shape.labelup,   text = "L25",  textcolor = color.black, size = size.tiny)
+plotshape(firstEnterShort, title = "S Trigger (zone-touch)", location = location.abovebar, color = color.new(color.fuchsia, 50), style = shape.labeldown, text = "S75",  textcolor = color.white, size = size.tiny)
+// v2.3.0 — bold ✅ marker fires only on CLOSED-bar confirmation
+plotshape(firstConfirmLong,  title = "L CONFIRMED (close>L25)", location = location.belowbar, color = color.new(color.lime, 0),    style = shape.labelup,   text = "✅ FIRE",  textcolor = color.black, size = size.normal)
+plotshape(firstConfirmShort, title = "S CONFIRMED (close<S75)", location = location.abovebar, color = color.new(color.fuchsia, 0), style = shape.labeldown, text = "✅ FIRE",  textcolor = color.white, size = size.normal)
+plotshape(tp1LongHit,      title = "TP1 L",     location = location.abovebar, color = color.new(color.yellow, 0),  style = shape.triangleup, size = size.tiny)
+plotshape(tp2LongHit,      title = "TP2 L",     location = location.abovebar, color = color.new(color.red, 0),     style = shape.triangleup, size = size.tiny)
+plotshape(stopLongHit,     title = "Stop L",    location = location.belowbar, color = color.new(color.red, 0),     style = shape.xcross,     size = size.small)
+plotshape(tp1ShortHit,     title = "TP1 S",     location = location.belowbar, color = color.new(color.yellow, 0),  style = shape.triangledown, size = size.tiny)
+plotshape(tp2ShortHit,     title = "TP2 S",     location = location.belowbar, color = color.new(color.green, 0),   style = shape.triangledown, size = size.tiny)
+plotshape(stopShortHit,    title = "Stop S",    location = location.abovebar, color = color.new(color.red, 0),     style = shape.xcross,     size = size.small)
+
+// =============================================================================
+// ALERTS
+// =============================================================================
+buildPayload(action, entry, stop, tp1, tp2) =>
+    '{"ticker":"' + tickerSym + '","tf":"' + htfTf + '","action":"' + action + '","direction":"' + lockedDirection + '","pattern":"' + patternName + '","entry":' + str.tostring(entry, "#.##") + ',"stop":' + str.tostring(stop, "#.##") + ',"tp1":' + str.tostring(tp1, "#.##") + ',"tp2":' + str.tostring(tp2, "#.##") + ',"price":' + str.tostring(close, "#.##") + ',"contract":"' + opraSym + '","strike":' + (na(pickedStrike) ? "null" : str.tostring(pickedStrike, "#.##")) + ',"expiry":"' + yyStr + mmStr + ddStr + '","liveAsk":' + (na(liveAsk) ? "null" : str.tostring(liveAsk, "#.##")) + ',"size":' + str.tostring(contractSize) + '}'
+
+if fireAlerts and firstEnterLong
+    alert(buildPayload("25sense_long_trigger",  level25, level125, level50, B_high), alert.freq_once_per_bar_close)
+if fireAlerts and firstEnterShort
+    alert(buildPayload("25sense_short_trigger", level75, level875, level50, B_low),  alert.freq_once_per_bar_close)
+if fireAlerts and tp1LongHit
+    alert(buildPayload("25sense_tp1_long_hit",  level25, level125, level50, B_high), alert.freq_once_per_bar_close)
+if fireAlerts and tp2LongHit
+    alert(buildPayload("25sense_tp2_long_hit",  level25, level125, level50, B_high), alert.freq_once_per_bar_close)
+if fireAlerts and stopLongHit
+    alert(buildPayload("25sense_stop_long_hit", level25, level125, level50, B_high), alert.freq_once_per_bar_close)
+if fireAlerts and tp1ShortHit
+    alert(buildPayload("25sense_tp1_short_hit", level75, level875, level50, B_low),  alert.freq_once_per_bar_close)
+if fireAlerts and tp2ShortHit
+    alert(buildPayload("25sense_tp2_short_hit", level75, level875, level50, B_low),  alert.freq_once_per_bar_close)
+if fireAlerts and stopShortHit
+    alert(buildPayload("25sense_stop_short_hit", level75, level875, level50, B_low), alert.freq_once_per_bar_close)
+
+alertcondition(firstEnterLong,  title = "25sense LONG TRIGGER (wick)",   message = "25sense LONG zone wicked on {{ticker}} - WAIT for close")
+alertcondition(firstEnterShort, title = "25sense SHORT TRIGGER (wick)",  message = "25sense SHORT zone wicked on {{ticker}} - WAIT for close")
+// v2.3.0 — confirmed close-bar alerts (use these for webhook fires, NOT the wick alerts above)
+alertcondition(firstConfirmLong,  title = "25sense LONG CONFIRMED (close)",  message = "25sense LONG CONFIRMED on {{ticker}} - bar closed above L25, fire 1ct")
+alertcondition(firstConfirmShort, title = "25sense SHORT CONFIRMED (close)", message = "25sense SHORT CONFIRMED on {{ticker}} - bar closed below S75, fire 1ct")
+alertcondition(isInvalidatedLong or isInvalidatedShort, title = "25sense INVALIDATED",  message = "25sense setup INVALIDATED on {{ticker}} - close back below trigger, exit")
+alertcondition(tp1LongHit,      title = "25sense TP1 L hit",     message = "TP1 LONG on {{ticker}}")
+alertcondition(tp2LongHit,      title = "25sense TP2 L hit",     message = "TP2 LONG on {{ticker}}")
+alertcondition(stopLongHit,     title = "25sense STOP L hit",    message = "STOP LONG on {{ticker}}")
+alertcondition(tp1ShortHit,     title = "25sense TP1 S hit",     message = "TP1 SHORT on {{ticker}}")
+alertcondition(tp2ShortHit,     title = "25sense TP2 S hit",     message = "TP2 SHORT on {{ticker}}")
+alertcondition(stopShortHit,    title = "25sense STOP S hit",    message = "STOP SHORT on {{ticker}}")
+
+// v2.5 — VWAP Trend Cloud (translucent band, hidden when on option chart)
+showCloudFinal = showCloud and not isOptionChart
+vwapColor = priceAboveVwap ? color.new(color.lime, 60) : color.new(color.red, 60)
+vwapPlot   = plot(showCloudFinal ? vwap       : na, title = "VWAP",        color = vwapColor, linewidth = 1)
+upperPlot  = plot(showCloudFinal ? upperCloud : na, title = "VWAP +1σ",    color = color.new(color.gray, 80), display = display.none)
+lowerPlot  = plot(showCloudFinal ? lowerCloud : na, title = "VWAP -1σ",    color = color.new(color.gray, 80), display = display.none)
+fillColor  = priceAboveVwap ? color.new(color.lime, 92) : color.new(color.red, 92)
+fill(upperPlot, lowerPlot, color = showCloudFinal ? fillColor : na, title = "VWAP Cloud")
+
+plot(level25,    title = "L25",       color = color.new(color.lime, 100),    display = display.data_window)
+plot(level50,    title = "TP1",       color = color.new(color.yellow, 100),  display = display.data_window)
+plot(level75,    title = "S75",       color = color.new(color.fuchsia, 100), display = display.data_window)
+plot(level125,   title = "Stop L",    color = color.new(color.green, 100),   display = display.data_window)
+plot(level875,   title = "Stop S",    color = color.new(color.red, 100),     display = display.data_window)
+plot(liveAsk,    title = "OPRA Last", color = color.new(color.aqua, 100),    display = display.data_window)
+plot(liveVolume, title = "OPRA Vol",  color = color.new(color.gray, 100),    display = display.data_window)
+plot(premAt25,   title = "Opt @ 25",  color = color.new(color.lime, 100),    display = display.data_window)
+plot(premAt50,   title = "Opt @ TP1", color = color.new(color.yellow, 100),  display = display.data_window)
+plot(premAt75,   title = "Opt @ 75",  color = color.new(color.fuchsia, 100), display = display.data_window)

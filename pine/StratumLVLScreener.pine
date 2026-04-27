@@ -1,0 +1,310 @@
+//@version=6
+// =============================================================================
+// STRATUM LVL SCREENER v1.0 — Multi-ticker 25sense state monitor
+// =============================================================================
+// Companion to Stratum LVL Assist v2.5.0. While v2.5.0 is the deep-dive
+// single-ticker dashboard, this screener runs ON ANY CHART and monitors
+// up to 12 tickers simultaneously, showing their 25sense trigger states
+// in a single table.
+//
+// Same math, same triggers as v2.5.0:
+//   • L25 (25%) = bullish entry retrace
+//   • L125 (12.5%) = bullish stop
+//   • TP1 (50%) = midpoint target
+//   • L75 (75%) = bearish entry
+//   • L875 (87.5%) = bearish stop
+//
+// Each row in the table shows:
+//   ticker | last | direction | state | AM% | distance to entry
+//
+// State enum:
+//   ⏳ WAIT     — no setup (inside bar / no Strat pattern)
+//   👀 ZONE    — price in entry zone, not yet closed past trigger
+//   ✅ FIRE    — closed bar past trigger, OK to fire 1ct
+//   🛑 STOP    — closed beyond stop level
+//   ⚠️ INVAL   — was confirmed, now closed back below trigger
+//
+// Alerts: each ticker has its own alertcondition for state changes.
+// Set TV alerts on each ticker individually for push notifications.
+//
+// LIMITATIONS:
+//   • Pine v6 caps request.security at ~40 unique calls per script.
+//   • This script uses ~3 calls per ticker (HTF OHLC + today OHLC + close).
+//   • So we cap tickers at 12 to stay safely under the limit.
+//   • If you need 20+ tickers, run TWO instances of this indicator with
+//     different ticker sets.
+// =============================================================================
+
+indicator("Stratum LVL Screener", shorttitle = "Stratum25 Screener", overlay = true)
+
+// ----------------------------------------------------------------------
+// INPUTS — 12 ticker slots with enable toggles
+// ----------------------------------------------------------------------
+grpHTF = "1. Settings"
+htfTf = input.timeframe("D", "HTF for 25sense levels", options = ["240","360","D","W","M"], group = grpHTF)
+showTable = input.bool(true, "Show screener table", group = grpHTF)
+tablePos  = input.string("top_right", "Table position", options = ["top_right","top_left","bottom_right","bottom_left","middle_right"], group = grpHTF)
+zoneTolPct = input.float(2.0, "Zone tolerance %", minval = 0.5, maxval = 5.0, step = 0.5, group = grpHTF)
+fireAlerts = input.bool(true, "Fire alerts on state changes", group = grpHTF)
+
+grpTickers = "2. Tickers (12 slots)"
+t1En  = input.bool(true,  "T1 enable",  inline = "1", group = grpTickers)
+t1Sym = input.symbol("NASDAQ:AAPL",     "T1",         inline = "1", group = grpTickers)
+t2En  = input.bool(true,  "T2 enable",  inline = "2", group = grpTickers)
+t2Sym = input.symbol("NASDAQ:NVDA",     "T2",         inline = "2", group = grpTickers)
+t3En  = input.bool(true,  "T3 enable",  inline = "3", group = grpTickers)
+t3Sym = input.symbol("NASDAQ:META",     "T3",         inline = "3", group = grpTickers)
+t4En  = input.bool(true,  "T4 enable",  inline = "4", group = grpTickers)
+t4Sym = input.symbol("NASDAQ:AMZN",     "T4",         inline = "4", group = grpTickers)
+t5En  = input.bool(true,  "T5 enable",  inline = "5", group = grpTickers)
+t5Sym = input.symbol("NASDAQ:GOOGL",    "T5",         inline = "5", group = grpTickers)
+t6En  = input.bool(true,  "T6 enable",  inline = "6", group = grpTickers)
+t6Sym = input.symbol("NASDAQ:MSFT",     "T6",         inline = "6", group = grpTickers)
+t7En  = input.bool(true,  "T7 enable",  inline = "7", group = grpTickers)
+t7Sym = input.symbol("NASDAQ:TSLA",     "T7",         inline = "7", group = grpTickers)
+t8En  = input.bool(true,  "T8 enable",  inline = "8", group = grpTickers)
+t8Sym = input.symbol("NASDAQ:INTC",     "T8",         inline = "8", group = grpTickers)
+t9En  = input.bool(true,  "T9 enable",  inline = "9", group = grpTickers)
+t9Sym = input.symbol("NASDAQ:AMD",      "T9",         inline = "9", group = grpTickers)
+t10En  = input.bool(true, "T10 enable", inline = "10", group = grpTickers)
+t10Sym = input.symbol("NASDAQ:HOOD",    "T10",        inline = "10", group = grpTickers)
+t11En  = input.bool(true, "T11 enable", inline = "11", group = grpTickers)
+t11Sym = input.symbol("AMEX:SPY",       "T11",        inline = "11", group = grpTickers)
+t12En  = input.bool(true, "T12 enable", inline = "12", group = grpTickers)
+t12Sym = input.symbol("NASDAQ:QQQ",     "T12",        inline = "12", group = grpTickers)
+
+// ----------------------------------------------------------------------
+// PER-TICKER STATE COMPUTATION
+// Returns: [last, level25, level50, level75, level125, level875,
+//          state code, am%, dist% to entry, isLong, biasName]
+// state codes: 0=WAIT, 1=ZONE, 2=FIRE, 3=STOP, 4=INVAL
+// ----------------------------------------------------------------------
+f_state(symId) =>
+    // Pull HTF prior-bar OHLC + today OHLC
+    [bH, bL, bC, bO, aH, aL, aC, aO] = request.security(symId, htfTf,
+         [high, low, close, open, high[1], low[1], close[1], open[1]],
+         lookahead = barmerge.lookahead_off)
+    [tH, tL]  = request.security(symId, "D", [high, low], lookahead = barmerge.lookahead_off)
+    [lastPx]  = request.security(symId, "1", [close], lookahead = barmerge.lookahead_off)
+
+    // Strat pattern detection (same as v2.5.0)
+    bRng     = bH - bL
+    bBd      = math.abs(bC - bO)
+    insBar   = bH <= aH and bL >= aL
+    outBar   = bH > aH and bL < aL
+    hammer   = bL < aL and bC > bO and bRng > 0 and (bC - bL) > 2 * bBd
+    f2D      = bL < aL and bC > aL and not (bC > aH)
+    revUp    = bC > aH
+    outUp    = outBar and bC > bO
+    shooter  = bH > aH and bC < bO and bRng > 0 and (bH - bC) > 2 * bBd
+    f2U      = bH > aH and bC < aH and not (bC < aL)
+    revDn    = bC < aL
+    outDn    = outBar and bC < bO
+
+    bullPat  = hammer or f2D or revUp or outUp
+    bearPat  = shooter or f2U or revDn or outDn
+    fbBull   = bC > bO
+
+    isLong   = insBar ? false : bullPat ? true : bearPat ? false : fbBull ? true : false
+    isWait   = insBar
+    biasName = isWait ? "WAIT" : (isLong ? "BULL" : "BEAR")
+
+    // 25sense levels (using today's developing range, same as v2.5.0 default)
+    htfH = math.max(tH, bH)  // blend max of today + prior
+    htfL = math.min(tL, bL)
+    rng  = htfH - htfL
+    L25  = htfL + rng * 0.250
+    L50  = htfL + rng * 0.500
+    L75  = htfL + rng * 0.750
+    L125 = htfL + rng * 0.125
+    L875 = htfL + rng * 0.875
+    tol  = rng * (zoneTolPct / 100.0)
+
+    // State determination
+    inLZone = L125 < lastPx and lastPx <= L25 + tol
+    inSZone = L875 > lastPx and lastPx >= L75 - tol
+    closedBeyondLStop = isLong and lastPx < L125
+    closedBeyondSStop = (not isLong) and lastPx > L875
+    closedAboveL25 = isLong and lastPx > L25
+    closedBelowL75 = (not isLong) and lastPx < L75
+
+    int stateCode = 0
+    if isWait
+        stateCode := 0  // WAIT
+    else if closedBeyondLStop or closedBeyondSStop
+        stateCode := 3  // STOP
+    else if isLong and closedAboveL25
+        stateCode := 2  // FIRE (long confirmed)
+    else if (not isLong) and closedBelowL75
+        stateCode := 2  // FIRE (short confirmed)
+    else if isLong and inLZone
+        stateCode := 1  // ZONE
+    else if (not isLong) and inSZone
+        stateCode := 1  // ZONE
+
+    // AM (Action Meter) — % progress to entry zone
+    rngVal = math.max(L75 - L25, syminfo.mintick)
+    amVal  = isWait ? 0.0 : isLong ?
+              math.max(0.0, math.min(100.0, 100.0 * (1.0 - (lastPx - L25) / rngVal))) :
+              math.max(0.0, math.min(100.0, 100.0 * (1.0 - (L75 - lastPx) / rngVal)))
+
+    // Distance to entry %
+    dist = isLong ? ((lastPx - L25) / lastPx) * 100 : ((L75 - lastPx) / lastPx) * 100
+
+    [lastPx, L25, L50, L75, L125, L875, stateCode, amVal, dist, isLong, biasName]
+
+// ----------------------------------------------------------------------
+// COMPUTE ALL ENABLED TICKERS
+// ----------------------------------------------------------------------
+[r1Last, r1L25, r1L50, r1L75, r1L125, r1L875, r1State, r1AM, r1Dist, r1Long, r1Bias] = f_state(t1En  ? t1Sym  : syminfo.tickerid)
+[r2Last, r2L25, r2L50, r2L75, r2L125, r2L875, r2State, r2AM, r2Dist, r2Long, r2Bias] = f_state(t2En  ? t2Sym  : syminfo.tickerid)
+[r3Last, r3L25, r3L50, r3L75, r3L125, r3L875, r3State, r3AM, r3Dist, r3Long, r3Bias] = f_state(t3En  ? t3Sym  : syminfo.tickerid)
+[r4Last, r4L25, r4L50, r4L75, r4L125, r4L875, r4State, r4AM, r4Dist, r4Long, r4Bias] = f_state(t4En  ? t4Sym  : syminfo.tickerid)
+[r5Last, r5L25, r5L50, r5L75, r5L125, r5L875, r5State, r5AM, r5Dist, r5Long, r5Bias] = f_state(t5En  ? t5Sym  : syminfo.tickerid)
+[r6Last, r6L25, r6L50, r6L75, r6L125, r6L875, r6State, r6AM, r6Dist, r6Long, r6Bias] = f_state(t6En  ? t6Sym  : syminfo.tickerid)
+[r7Last, r7L25, r7L50, r7L75, r7L125, r7L875, r7State, r7AM, r7Dist, r7Long, r7Bias] = f_state(t7En  ? t7Sym  : syminfo.tickerid)
+[r8Last, r8L25, r8L50, r8L75, r8L125, r8L875, r8State, r8AM, r8Dist, r8Long, r8Bias] = f_state(t8En  ? t8Sym  : syminfo.tickerid)
+[r9Last, r9L25, r9L50, r9L75, r9L125, r9L875, r9State, r9AM, r9Dist, r9Long, r9Bias] = f_state(t9En  ? t9Sym  : syminfo.tickerid)
+[r10Last, r10L25, r10L50, r10L75, r10L125, r10L875, r10State, r10AM, r10Dist, r10Long, r10Bias] = f_state(t10En ? t10Sym : syminfo.tickerid)
+[r11Last, r11L25, r11L50, r11L75, r11L125, r11L875, r11State, r11AM, r11Dist, r11Long, r11Bias] = f_state(t11En ? t11Sym : syminfo.tickerid)
+[r12Last, r12L25, r12L50, r12L75, r12L125, r12L875, r12State, r12AM, r12Dist, r12Long, r12Bias] = f_state(t12En ? t12Sym : syminfo.tickerid)
+
+// ----------------------------------------------------------------------
+// HELPER: state code -> emoji + color
+// ----------------------------------------------------------------------
+stateText(code) =>
+    code == 0 ? "⏳ WAIT" :
+    code == 1 ? "👀 ZONE" :
+    code == 2 ? "✅ FIRE" :
+    code == 3 ? "🛑 STOP" :
+    code == 4 ? "⚠️ INVAL" :
+                "?"
+
+stateColor(code) =>
+    code == 0 ? color.gray :
+    code == 1 ? color.yellow :
+    code == 2 ? color.lime :
+    code == 3 ? color.red :
+    code == 4 ? color.orange :
+                color.silver
+
+// Symbol display name (strip exchange prefix)
+stripEx(s) =>
+    pos = str.contains(s, ":") ? str.length(str.replace_all(s, str.substring(s, str.pos(s, ":") + 1), "")) : 0
+    str.contains(s, ":") ? str.substring(s, pos) : s
+
+// Simpler: just use last segment
+shortSym(s) =>
+    pos = str.pos(s, ":")
+    pos >= 0 ? str.substring(s, pos + 1) : s
+
+// ----------------------------------------------------------------------
+// TABLE POSITION MAP
+// ----------------------------------------------------------------------
+posMap(p) =>
+    p == "top_right" ? position.top_right :
+    p == "top_left" ? position.top_left :
+    p == "bottom_right" ? position.bottom_right :
+    p == "bottom_left" ? position.bottom_left :
+                         position.middle_right
+
+// ----------------------------------------------------------------------
+// RENDER TABLE (last bar only)
+// ----------------------------------------------------------------------
+var table tbl = table.new(posMap(tablePos), 6, 14,
+     bgcolor = color.new(color.black, 15),
+     border_width = 1, border_color = color.new(color.gray, 50))
+
+f_renderRow(rowIdx, sym, en, last, L25v, state, am, dist, isL, bias) =>
+    if en
+        table.cell(tbl, 0, rowIdx, shortSym(sym),                     text_color = color.white,        text_size = size.tiny)
+        table.cell(tbl, 1, rowIdx, "$" + str.tostring(last, "#.##"),  text_color = color.silver,       text_size = size.tiny)
+        table.cell(tbl, 2, rowIdx, bias,                              text_color = isL ? color.lime : color.fuchsia, text_size = size.tiny)
+        table.cell(tbl, 3, rowIdx, stateText(state), bgcolor = color.new(stateColor(state), 60), text_color = color.white, text_size = size.tiny)
+        table.cell(tbl, 4, rowIdx, str.tostring(am, "#") + "%",       text_color = am >= 95 ? color.lime : am >= 70 ? color.orange : color.gray, text_size = size.tiny)
+        table.cell(tbl, 5, rowIdx, str.tostring(dist, "#.##") + "%",  text_color = math.abs(dist) < 1 ? color.lime : color.silver, text_size = size.tiny)
+    else
+        table.cell(tbl, 0, rowIdx, "—", text_color = color.gray, text_size = size.tiny)
+        table.cell(tbl, 1, rowIdx, "",  text_color = color.gray, text_size = size.tiny)
+        table.cell(tbl, 2, rowIdx, "",  text_color = color.gray, text_size = size.tiny)
+        table.cell(tbl, 3, rowIdx, "off", text_color = color.gray, text_size = size.tiny)
+        table.cell(tbl, 4, rowIdx, "",  text_color = color.gray, text_size = size.tiny)
+        table.cell(tbl, 5, rowIdx, "",  text_color = color.gray, text_size = size.tiny)
+
+if showTable and barstate.islast
+    table.clear(tbl, 0, 0, 5, 13)
+
+    // Header row
+    table.cell(tbl, 0, 0, "STRATUM SCREENER", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.normal)
+    table.merge_cells(tbl, 0, 0, 5, 0)
+
+    table.cell(tbl, 0, 1, "Ticker",  text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+    table.cell(tbl, 1, 1, "Last",    text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+    table.cell(tbl, 2, 1, "Bias",    text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+    table.cell(tbl, 3, 1, "State",   text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+    table.cell(tbl, 4, 1, "AM%",     text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+    table.cell(tbl, 5, 1, "Dist",    text_color = color.white, bgcolor = color.new(color.gray, 60), text_size = size.tiny)
+
+    f_renderRow(2,  t1Sym,  t1En,  r1Last,  r1L25,  r1State,  r1AM,  r1Dist,  r1Long,  r1Bias)
+    f_renderRow(3,  t2Sym,  t2En,  r2Last,  r2L25,  r2State,  r2AM,  r2Dist,  r2Long,  r2Bias)
+    f_renderRow(4,  t3Sym,  t3En,  r3Last,  r3L25,  r3State,  r3AM,  r3Dist,  r3Long,  r3Bias)
+    f_renderRow(5,  t4Sym,  t4En,  r4Last,  r4L25,  r4State,  r4AM,  r4Dist,  r4Long,  r4Bias)
+    f_renderRow(6,  t5Sym,  t5En,  r5Last,  r5L25,  r5State,  r5AM,  r5Dist,  r5Long,  r5Bias)
+    f_renderRow(7,  t6Sym,  t6En,  r6Last,  r6L25,  r6State,  r6AM,  r6Dist,  r6Long,  r6Bias)
+    f_renderRow(8,  t7Sym,  t7En,  r7Last,  r7L25,  r7State,  r7AM,  r7Dist,  r7Long,  r7Bias)
+    f_renderRow(9,  t8Sym,  t8En,  r8Last,  r8L25,  r8State,  r8AM,  r8Dist,  r8Long,  r8Bias)
+    f_renderRow(10, t9Sym,  t9En,  r9Last,  r9L25,  r9State,  r9AM,  r9Dist,  r9Long,  r9Bias)
+    f_renderRow(11, t10Sym, t10En, r10Last, r10L25, r10State, r10AM, r10Dist, r10Long, r10Bias)
+    f_renderRow(12, t11Sym, t11En, r11Last, r11L25, r11State, r11AM, r11Dist, r11Long, r11Bias)
+    f_renderRow(13, t12Sym, t12En, r12Last, r12L25, r12State, r12AM, r12Dist, r12Long, r12Bias)
+
+// ----------------------------------------------------------------------
+// ALERTS — fire when any ticker transitions to FIRE state
+// ----------------------------------------------------------------------
+var int prevState1 = 0
+var int prevState2 = 0
+var int prevState3 = 0
+var int prevState4 = 0
+var int prevState5 = 0
+var int prevState6 = 0
+var int prevState7 = 0
+var int prevState8 = 0
+var int prevState9 = 0
+var int prevState10 = 0
+var int prevState11 = 0
+var int prevState12 = 0
+
+f_checkFire(name, current, previous) =>
+    if fireAlerts and barstate.isconfirmed and current == 2 and previous != 2
+        alert(name + " FIRE state — confirmed close past trigger", alert.freq_once_per_bar_close)
+
+if barstate.isconfirmed
+    f_checkFire(t1En  ? shortSym(t1Sym)  : "T1",  r1State,  prevState1)
+    f_checkFire(t2En  ? shortSym(t2Sym)  : "T2",  r2State,  prevState2)
+    f_checkFire(t3En  ? shortSym(t3Sym)  : "T3",  r3State,  prevState3)
+    f_checkFire(t4En  ? shortSym(t4Sym)  : "T4",  r4State,  prevState4)
+    f_checkFire(t5En  ? shortSym(t5Sym)  : "T5",  r5State,  prevState5)
+    f_checkFire(t6En  ? shortSym(t6Sym)  : "T6",  r6State,  prevState6)
+    f_checkFire(t7En  ? shortSym(t7Sym)  : "T7",  r7State,  prevState7)
+    f_checkFire(t8En  ? shortSym(t8Sym)  : "T8",  r8State,  prevState8)
+    f_checkFire(t9En  ? shortSym(t9Sym)  : "T9",  r9State,  prevState9)
+    f_checkFire(t10En ? shortSym(t10Sym) : "T10", r10State, prevState10)
+    f_checkFire(t11En ? shortSym(t11Sym) : "T11", r11State, prevState11)
+    f_checkFire(t12En ? shortSym(t12Sym) : "T12", r12State, prevState12)
+
+    prevState1  := r1State
+    prevState2  := r2State
+    prevState3  := r3State
+    prevState4  := r4State
+    prevState5  := r5State
+    prevState6  := r6State
+    prevState7  := r7State
+    prevState8  := r8State
+    prevState9  := r9State
+    prevState10 := r10State
+    prevState11 := r11State
+    prevState12 := r12State
+
+// Single-condition alert for the chart's primary symbol equivalent to FIRE state
+anyFire = r1State == 2 or r2State == 2 or r3State == 2 or r4State == 2 or r5State == 2 or r6State == 2 or r7State == 2 or r8State == 2 or r9State == 2 or r10State == 2 or r11State == 2 or r12State == 2
+alertcondition(anyFire, title = "Stratum Screener — ANY ticker FIRE", message = "Any monitored ticker just confirmed a FIRE state — check the screener table")

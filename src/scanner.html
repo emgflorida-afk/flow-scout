@@ -2000,11 +2000,30 @@ var TOMORROW_SETUPS = [
   },
 ];
 
+// v4.1 (Apr 27 PM) — auto-fade stale setups. AB observation: don't keep
+// stagnant old picks in Tomorrow when Live Movers is dynamic. Setups
+// older than 24h get hidden from the UI (still in code for reference).
+// Each setup needs a `createdAt` ISO timestamp; missing timestamps default
+// to today (treated as fresh).
+function isSetupFresh(setup) {
+  if (!setup.createdAt) return true; // no stamp = treat as fresh
+  var created = new Date(setup.createdAt).getTime();
+  if (!isFinite(created)) return true;
+  var ageHours = (Date.now() - created) / (1000 * 60 * 60);
+  return ageHours < 24;
+}
+
 function renderTomorrowSetups() {
   var armed = window._takeArmed === true;
   document.getElementById('arm-state-tomorrow').textContent = armed ? '⚡ ARMED — clicks WILL fire to broker' : '🔒 DISARMED — preview only';
   var root = document.getElementById('tomorrow-root');
-  root.innerHTML = TOMORROW_SETUPS.map(function(s) {
+  // v4.1: filter out stale (>24h) setups
+  var freshSetups = TOMORROW_SETUPS.filter(isSetupFresh);
+  if (freshSetups.length === 0 && TOMORROW_SETUPS.length > 0) {
+    root.innerHTML = '<div style="background:#1a2030;border:1px dashed #555;border-radius:6px;padding:20px;text-align:center;color:#aaa">All TOMORROW_SETUPS are stale (>24h old). Update src/scanner.html with fresh picks, or rely on Live Movers tab for intraday opportunities.</div>';
+    return;
+  }
+  root.innerHTML = freshSetups.map(function(s) {
     var dirColor = s.direction === 'CALL' ? '#3fb950' : '#f85149';
     var dirEmoji = s.direction === 'CALL' ? '🟢' : '🔴';
     var blacklistBanner = s.blacklisted
