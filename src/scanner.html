@@ -363,16 +363,26 @@
       <button class="tf-btn" data-tf="30m" onclick="setTF('30m')">30m</button>
       <button class="tf-btn" data-tf="60m" onclick="setTF('60m')">60m</button>
       <button class="tf-btn" data-tf="4HR" onclick="setTF('4HR')">4HR</button>
+      <button class="tf-btn" data-tf="6HR" onclick="setTF('6HR')" title="6 hour — Apr 27 added per AB. Catches reversals 3-6h before daily.">6HR</button>
       <button class="tf-btn active" data-tf="Daily" onclick="setTF('Daily')">D</button>
       <button class="tf-btn" data-tf="Weekly" onclick="setTF('Weekly')">W</button>
       <button class="tf-btn" data-tf="Monthly" onclick="setTF('Monthly')">M</button>
     </div>
     <button id="refresh-btn" onclick="loadScan(true)">⟳ Refresh</button>
+    <!-- Session-level account routing. Defaults SIM every session. -->
+    <button id="acct-btn" onclick="toggleAccount()" title="Session-level routing for ALL fires. Defaults SIM. Click to switch to LIVE for the session." style="background:#1a3a1a;color:#3fb950;border:1px solid #3fb950;padding:6px 12px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;letter-spacing:1px">🟢 SIM</button>
+    <!-- ARM toggle for 1-click Take Trade. Defaults OFF every session. -->
+    <button id="arm-btn" onclick="toggleArm()" title="Arm 1-click Take Trade. OFF every session." style="background:#1a2332;color:var(--muted);border:1px solid var(--border);padding:6px 14px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;letter-spacing:1px">🔒 DISARMED</button>
+    <span id="arm-state-meta" style="font-size:10px;color:var(--muted);min-width:50px"></span>
   </div>
 </header>
 <div class="container">
   <div class="tabs">
     <button class="tab active" data-tab="scan" onclick="switchTab('scan')">SCAN</button>
+    <button class="tab" data-tab="movers" onclick="switchTab('movers')">🔴 LIVE MOVERS</button>
+    <button class="tab" data-tab="tomorrow" onclick="switchTab('tomorrow')">🎯 TOMORROW</button>
+    <button class="tab" data-tab="options" onclick="switchTab('options')">📊 OPTIONS</button>
+    <button class="tab" data-tab="flow" onclick="switchTab('flow')">🔥 FLOW CARDS <span id="flow-card-badge" style="display:none;background:#ff4757;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px"></span></button>
     <button class="tab" data-tab="history" onclick="switchTab('history')">HISTORY</button>
     <button class="tab" data-tab="starred" onclick="switchTab('starred')">★ STARRED</button>
   </div>
@@ -397,6 +407,48 @@
                      padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 11px;">Clear</button>
     </div>
     <div id="root"><div class="loading">Scanning the universe…</div></div>
+  </div>
+  <div id="tab-movers" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span style="color:var(--muted);font-size:12px">Auto-scans ~60 liquid mega-caps every 30s. Top 20 by composite mover score (50% pct move + 30% vol ratio + 20% range expansion). No handpicking — pure data.</span>
+      <button type="button" id="movers-refresh-btn" onclick="loadLiveMovers()" title="Force-refresh now (server still caches 60s)" style="background:var(--blue);color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto">↻ REFRESH</button>
+      <span id="movers-stamp" style="color:var(--muted);font-size:10px;font-family:monospace">not yet loaded</span>
+      <span id="arm-state-movers" style="color:var(--muted);font-size:11px;width:100%;text-align:right"></span>
+    </div>
+    <div id="movers-root"><div class="loading">Scanning… no significant movers detected yet</div></div>
+  </div>
+  <div id="tab-options" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <label style="font-size:12px;color:var(--muted)">Ticker:</label>
+      <input type="text" id="opt-ticker" value="AVGO" placeholder="AVGO" style="background:#0e1420;color:var(--text);border:1px solid var(--border);padding:5px 10px;border-radius:4px;font-size:12px;width:90px;text-transform:uppercase">
+      <label style="font-size:12px;color:var(--muted)">Expiry:</label>
+      <input type="date" id="opt-expiry" style="background:#0e1420;color:var(--text);border:1px solid var(--border);padding:4px 8px;border-radius:4px;font-size:12px">
+      <button onclick="loadOptionsChain()" style="background:var(--blue);color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">↻ Fetch Chain</button>
+      <span style="margin-left:auto;display:flex;gap:6px">
+        <button onclick="document.getElementById('opt-ticker').value='AVGO';document.getElementById('opt-expiry').value='2026-05-02';loadOptionsChain()" style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">AVGO 5/2</button>
+        <button onclick="document.getElementById('opt-ticker').value='CRWD';document.getElementById('opt-expiry').value='2026-05-01';loadOptionsChain()" style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">CRWD 5/1</button>
+        <button onclick="document.getElementById('opt-ticker').value='RBLX';document.getElementById('opt-expiry').value='2026-05-01';loadOptionsChain()" style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">RBLX 5/1</button>
+        <button onclick="document.getElementById('opt-ticker').value='IREN';document.getElementById('opt-expiry').value='2026-05-01';loadOptionsChain()" style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">IREN 5/1</button>
+      </span>
+    </div>
+    <div id="options-chain-root"><div class="loading">Pick a ticker + expiry above and click Fetch Chain.</div></div>
+  </div>
+  <div id="tab-tomorrow" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span style="color:var(--muted);font-size:12px">Pre-configured brackets for tomorrow's watchlist. Each click queues a CONDITIONAL bracket at TradeStation — fires automatically when underlying crosses trigger.</span>
+      <button type="button" id="refresh-mids-btn" onclick="refreshTomorrowMids()" title="Pull live option mids from TradeStation API and recompute John's -25/+25/+50/+100 ladder for every card." style="background:var(--blue);color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto">🔄 REFRESH MIDS</button>
+      <span id="mids-stamp" style="color:var(--muted);font-size:10px;font-family:monospace">mids: not yet refreshed</span>
+      <span id="arm-state-tomorrow" style="color:var(--muted);font-size:11px;width:100%;text-align:right"></span>
+    </div>
+    <div id="tomorrow-root"></div>
+  </div>
+  <div id="tab-flow" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+      <span style="color:var(--muted);font-size:12px">One-sided flow clusters fired in the last 24h. Display only — never auto-queues. Click "Take Trade" to fire (when ARMED).</span>
+      <button type="button" onclick="loadFlowCards()" style="background:var(--panel);color:var(--text);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;margin-left:auto">↻ Refresh</button>
+      <button type="button" onclick="if(confirm('Clear all flow cards from buffer?')){fetch('/api/flow-cards/clear',{method:'POST'}).then(loadFlowCards)}" style="background:#1a2332;color:var(--muted);border:1px solid var(--border);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer">Clear</button>
+    </div>
+    <div id="flow-cards-root"><div class="loading">No flow cards yet — clusters appear here when one-sided premium piles up during market hours.</div></div>
   </div>
   <div id="tab-history" style="display:none">
     <div id="history-root"><div class="loading">Loading history…</div></div>
@@ -1313,12 +1365,1205 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(function(b) {
     b.classList.toggle('active', b.dataset.tab === name);
   });
-  ['scan','history','starred'].forEach(function(n) {
+  ['scan','movers','tomorrow','options','flow','history','starred'].forEach(function(n) {
     document.getElementById('tab-' + n).style.display = (n === name ? '' : 'none');
   });
-  if (name === 'history') loadHistory();
-  if (name === 'starred') renderStarred();
+  if (name === 'history')  loadHistory();
+  if (name === 'starred')  renderStarred();
+  if (name === 'flow')     loadFlowCards();
+  if (name === 'tomorrow') renderTomorrowSetups();
+  if (name === 'options')  initOptionsTab();
+  if (name === 'movers')   { loadLiveMovers(); startLiveMoversPolling(); }
+  else                     stopLiveMoversPolling();
 }
+
+// =====================================================================
+// 🔴 LIVE MOVERS TAB — auto-scanned top movers, no handpicking
+// Polls /api/live-movers every 30s while tab is active.
+// Server caches 60s — 30s client poll just guarantees fresh display.
+// =====================================================================
+var _liveMoversTimer = null;
+
+function startLiveMoversPolling() {
+  if (_liveMoversTimer) return;
+  _liveMoversTimer = setInterval(loadLiveMovers, 30000);
+}
+
+function stopLiveMoversPolling() {
+  if (_liveMoversTimer) { clearInterval(_liveMoversTimer); _liveMoversTimer = null; }
+}
+
+function loadLiveMovers() {
+  var stamp = document.getElementById('movers-stamp');
+  var btn   = document.getElementById('movers-refresh-btn');
+  if (btn) btn.disabled = true;
+  if (stamp) stamp.textContent = 'fetching…';
+  fetch('/api/live-movers')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d || !d.ok) {
+        renderLiveMoversError((d && d.error) || 'unknown error');
+        if (stamp) stamp.textContent = 'error';
+        return;
+      }
+      renderLiveMovers(d.movers || []);
+      if (stamp) {
+        var t = new Date(d.ts || Date.now());
+        stamp.textContent = 'updated ' + t.toLocaleTimeString() + (d.cached ? ' (cached)' : '') + ' · ' + (d.movers || []).length + '/' + (d.universe || 0);
+      }
+    })
+    .catch(function(e){
+      renderLiveMoversError('network: ' + e.message);
+      if (stamp) stamp.textContent = 'error';
+    })
+    .finally(function(){
+      if (btn) btn.disabled = false;
+    });
+}
+
+function renderLiveMoversError(msg) {
+  var root = document.getElementById('movers-root');
+  if (!root) return;
+  root.innerHTML = '<div style="color:var(--red);padding:14px;background:#3a1414;border:1px solid #5a2020;border-radius:4px">⚠ Live movers fetch failed: ' + msg + '. Auto-retry in 30s.</div>';
+}
+
+function renderLiveMovers(movers) {
+  var root = document.getElementById('movers-root');
+  if (!root) return;
+  // Stash so onMoverFire / showMoverModal can look up by ticker without
+  // a re-fetch. Recomputed every render, so option mids stay fresh.
+  window._liveMoversData = {};
+  (movers || []).forEach(function(m){ window._liveMoversData[m.ticker] = m; });
+
+  // Refresh ARM badge in this tab's header (mirror the TOMORROW pattern).
+  var armEl = document.getElementById('arm-state-movers');
+  if (armEl) {
+    armEl.textContent = window._takeArmed === true
+      ? '⚡ ARMED — clicks WILL fire to broker'
+      : '🔒 DISARMED — preview only';
+  }
+
+  if (!movers || !movers.length) {
+    root.innerHTML = '<div class="loading">Scanning… no significant movers detected yet</div>';
+    return;
+  }
+  var armed = window._takeArmed === true;
+  var liveTag = window._liveAccount ? ' → LIVE' : ' → SIM';
+  var fireLabel  = armed ? '⚡ FIRE NOW' + liveTag : '👁 PREVIEW';
+  var queueLabel = armed ? '🎯 QUEUE w/ TRIGGER' + liveTag : '👁 PREVIEW QUEUE';
+
+  root.innerHTML = movers.map(function(m, idx){
+    var isCall = m.suggestedDirection === 'CALL';
+    var dirColor = isCall ? '#3fb950' : '#f85149';
+    var dirEmoji = isCall ? '🟢' : '🔴';
+    var bg       = isCall ? 'rgba(63,185,80,0.06)' : 'rgba(248,81,73,0.06)';
+    var pctStr   = (m.pctChange >= 0 ? '+' : '') + m.pctChange.toFixed(2) + '%';
+    var volRatStr = (m.volRatio == null) ? '—' : (m.volRatio.toFixed(2) + 'x');
+    var rangeStr  = (m.rangePct == null) ? '—' : (m.rangePct.toFixed(2) + '%');
+    var volStr    = m.volume >= 1e6 ? (m.volume/1e6).toFixed(1) + 'M' : (m.volume >= 1e3 ? (m.volume/1e3).toFixed(0) + 'K' : String(m.volume));
+    var maStr     = m.volMA30 == null ? '—' : (m.volMA30 >= 1e6 ? (m.volMA30/1e6).toFixed(1) + 'M' : (m.volMA30/1e3).toFixed(0) + 'K');
+    var rank      = (idx + 1);
+    var tvUrl     = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(m.ticker);
+
+    // Bracket math row — Trigger / Stop / TP1 / TP2 (4 cells), all on the
+    // STOCK price. Fall back to em-dash when math wasn't computable.
+    var trigStr  = (m.triggerPrice == null)         ? '—' : ('$' + m.triggerPrice.toFixed(2) + ' ' + (m.triggerPredicate || ''));
+    var stopStr  = (!m.structuralStop || m.structuralStop.price == null) ? '—' : ('$' + m.structuralStop.price.toFixed(2) + ' ' + m.structuralStop.predicate);
+    var tp1Str   = (m.stockTp1 == null)             ? '—' : ('$' + m.stockTp1.toFixed(2));
+    var tp2Str   = (m.stockTp2 == null)             ? '—' : ('$' + m.stockTp2.toFixed(2));
+    var bracketRow =
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;font-size:11px;background:#0e1420;padding:6px 8px;border-radius:4px">' +
+        '<div><span style="color:var(--muted)">Trigger</span><br><b>' + trigStr + '</b></div>' +
+        '<div><span style="color:var(--muted)">Struct Stop</span><br><b style="color:var(--red)">' + stopStr + '</b></div>' +
+        '<div><span style="color:var(--muted)">TP1 (stk)</span><br><b style="color:var(--yellow)">' + tp1Str + '</b></div>' +
+        '<div><span style="color:var(--muted)">TP2 (stk)</span><br><b style="color:var(--green)">' + tp2Str + '</b></div>' +
+      '</div>';
+
+    // Option contract row — OSI symbol + live mid + computed entry/stop/TPs.
+    var optMid = (m.optionMid == null)   ? '—' : ('$' + m.optionMid.toFixed(2));
+    var optEnt = (m.optionEntry == null) ? '—' : ('$' + m.optionEntry.toFixed(2));
+    var optStp = (m.optionStop == null)  ? '—' : ('$' + m.optionStop.toFixed(2));
+    var optT1  = (m.optionTp1 == null)   ? '—' : ('$' + m.optionTp1.toFixed(2));
+    var optT2  = (m.optionTp2 == null)   ? '—' : ('$' + m.optionTp2.toFixed(2));
+    var optT3  = (m.optionTp3 == null)   ? '—' : ('$' + m.optionTp3.toFixed(2));
+    var optionRow = (
+      '<div style="background:#0e1420;border:1px solid var(--border);border-radius:4px;padding:6px 8px;margin-bottom:8px;font-size:11px">' +
+        '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px">' +
+          '<span style="font-family:monospace;color:var(--text)"><b>' + (m.optionSymbol || '— no contract resolved —') + '</b></span>' +
+          '<span style="color:var(--muted)">mid <b style="color:var(--text)">' + optMid + '</b></span>' +
+          (m.optionBid != null && m.optionAsk != null
+            ? '<span style="color:var(--muted);font-size:10px">bid $' + m.optionBid.toFixed(2) + ' / ask $' + m.optionAsk.toFixed(2) + '</span>'
+            : '') +
+        '</div>' +
+        '<div style="color:var(--muted);font-size:10px">Entry ' + optEnt + ' · Stop ' + optStp + ' (-25%) · TP ' + optT1 + ' (+25%) / ' + optT2 + ' (+50%) / ' + optT3 + ' (+100%)</div>' +
+      '</div>'
+    );
+
+    // Discipline guards — show as warnings (not blocks). AB can still fire
+    // through them via the existing bias / cap mechanisms.
+    var warns = [];
+    var nowET = new Date().toLocaleTimeString('en-US', {
+      hour12: false, hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York',
+    });
+    var hh = parseInt(nowET.split(':')[0], 10);
+    var mm = parseInt(nowET.split(':')[1], 10);
+    var minutesET = hh * 60 + mm;
+    if (minutesET < (9 * 60 + 45) && minutesET > (9 * 60 + 25)) {
+      warns.push('⚠ Pre-9:45 AM — sweep zone risk. Wait or scale-in 1ct only.');
+    }
+    if (window._biasState && window._biasState.direction &&
+        ((isCall && window._biasState.direction === 'BEARISH') ||
+         (!isCall && window._biasState.direction === 'BULLISH'))) {
+      warns.push('⚠ Bias gate may block this fire (bias=' + window._biasState.direction + ', this=' + m.suggestedDirection + ')');
+    }
+    if (Math.abs(m.pctChange || 0) > 5) {
+      warns.push('⚠ Late entry — ' + pctStr + ' move already done. Most of the run gone.');
+    }
+    var warnHtml = warns.length
+      ? '<div style="background:#3a2a14;border-left:3px solid var(--yellow);color:#ffb86c;padding:6px 8px;margin-bottom:8px;font-size:10px;border-radius:3px">' + warns.join('<br>') + '</div>'
+      : '';
+
+    var canFire = !!(m.optionSymbol && m.optionEntry && (m.structuralStop && m.structuralStop.price) && m.optionTp1);
+    var fireBtn = canFire
+      ? '<button onclick="onMoverFire(\'' + m.ticker + '\', false)" title="Fire immediately at limit. Use after 5m close confirms." style="background:' + (armed ? dirColor : 'var(--blue)') + ';color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">' + fireLabel + '</button>'
+      : '<button disabled title="Bracket math incomplete (no option mid or no range yet — try after market open)" style="background:#333;color:#aaa;border:none;padding:6px 14px;border-radius:4px;font-size:12px;cursor:not-allowed">FIRE (no contract)</button>';
+    var queueBtn = canFire
+      ? '<button onclick="onMoverFire(\'' + m.ticker + '\', true)" title="Queue at TS with trigger condition. Auto-fires when underlying crosses." style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;font-size:11px;cursor:pointer">' + queueLabel + '</button>'
+      : '';
+
+    return (
+      '<div style="background:var(--panel);border:1px solid var(--border);border-left:4px solid ' + dirColor + ';border-radius:6px;padding:12px;margin-bottom:10px;background-image:linear-gradient(to right,' + bg + ',transparent)">' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">' +
+          '<span style="color:var(--muted);font-size:11px;font-family:monospace;min-width:24px">#' + rank + '</span>' +
+          '<span style="font-size:18px;font-weight:700;letter-spacing:0.5px">' + dirEmoji + ' ' + m.ticker + '</span>' +
+          '<span style="background:' + dirColor + ';color:#000;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:700">' + m.suggestedDirection + '</span>' +
+          '<span style="font-size:14px;font-weight:600;color:' + dirColor + '">' + pctStr + '</span>' +
+          '<span style="color:var(--muted);font-size:11px">$' + (m.last == null ? '—' : m.last.toFixed(2)) + ' (prev $' + (m.prevClose == null ? '—' : m.prevClose.toFixed(2)) + ')</span>' +
+          '<span style="margin-left:auto;background:#0e1420;border:1px solid var(--border);padding:3px 8px;border-radius:3px;font-size:11px;font-family:monospace">score ' + m.score.toFixed(1) + '</span>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:8px;font-size:11px">' +
+          '<div><span style="color:var(--muted)">Vol</span><br><b>' + volStr + '</b></div>' +
+          '<div><span style="color:var(--muted)">30D Avg</span><br><b>' + maStr + '</b></div>' +
+          '<div><span style="color:var(--muted)">Vol Ratio</span><br><b style="color:' + (m.volRatio && m.volRatio >= 1.5 ? 'var(--green)' : 'var(--text)') + '">' + volRatStr + '</b></div>' +
+          '<div><span style="color:var(--muted)">Range</span><br><b>' + rangeStr + '</b></div>' +
+        '</div>' +
+        bracketRow +
+        optionRow +
+        warnHtml +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+          '<label style="font-size:11px;color:var(--muted)">qty</label>' +
+          '<input type="number" id="qty-mov-' + m.ticker + '" min="1" max="5" value="1" style="width:50px;background:#0e1420;color:var(--text);border:1px solid var(--border);padding:3px 6px;border-radius:3px;font-size:12px">' +
+          fireBtn +
+          queueBtn +
+          '<button onclick="onMoverAnalyze(\'' + m.ticker + '\')" title="Open ' + m.ticker + ' on TradingView in new tab" style="background:var(--blue);color:#fff;border:none;padding:6px 12px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">📊 Analyze</button>' +
+          '<a href="' + tvUrl + '" target="_blank" style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:6px 10px;border-radius:4px;font-size:11px;text-decoration:none">📈 TV</a>' +
+          '<span style="margin-left:auto;color:var(--muted);font-size:10px">H $' + (m.high == null ? '—' : m.high.toFixed(2)) + ' · L $' + (m.low == null ? '—' : m.low.toFixed(2)) + ' · O $' + (m.open == null ? '—' : m.open.toFixed(2)) + '</span>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function onMoverAnalyze(ticker) {
+  // Open TradingView chart in a new tab. AB can highlight levels manually.
+  // (chart_set_symbol via MCP would require server-side bridge — out of scope here.)
+  var url = 'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(ticker);
+  window.open(url, '_blank');
+}
+
+// =====================================================================
+// LIVE MOVERS FIRE FLOW — same UX as TOMORROW cards (modal → take-trade).
+// FIRE NOW = immediate market entry. QUEUE w/ TRIGGER = bracket queues at
+// TS with activation rule on the UNDERLYING (auto-fires on crossing
+// trigger price). Both run through /api/take-trade so the existing
+// validation chain (cap / blacklist / 0DTE / bias) still applies.
+// =====================================================================
+function onMoverFire(ticker, useTrigger) {
+  var m = window._liveMoversData && window._liveMoversData[ticker];
+  if (!m) return alert('Mover data not found for ' + ticker + '. Refresh and try again.');
+  var qtyEl = document.getElementById('qty-mov-' + ticker);
+  var qty = qtyEl ? Math.max(1, Math.min(5, parseInt(qtyEl.value) || 1)) : 1;
+  showMoverModal(m, qty, useTrigger === true);
+}
+
+function showMoverModal(m, qty, useTrigger) {
+  var armed = window._takeArmed === true;
+  var isCall = m.suggestedDirection === 'CALL';
+  var tpLadder = [m.optionTp1, m.optionTp2, m.optionTp3 || m.optionTp2];
+  var perCtRisk = Math.abs((m.optionEntry || 0) - (m.optionStop || 0));
+  var dollarRisk = Math.round(perCtRisk * 100 * qty);
+  var modeLabel = useTrigger ? '🎯 QUEUE w/ TRIGGER' : '⚡ FIRE NOW';
+  var modeNote  = useTrigger
+    ? 'Bracket queues at TS with activation rule. Auto-fires when ' + m.ticker + ' crosses ' + m.triggerPredicate + ' $' + (m.triggerPrice == null ? '—' : m.triggerPrice.toFixed(2)) + '.'
+    : 'Fires <b>immediately</b> at limit price. Use AFTER 5m close confirms the setup. Bypasses dead-zone / first-15-min gates because human is in loop.';
+  var rows = '';
+  for (var i = 0; i < qty; i++) {
+    var tp = tpLadder[i % tpLadder.length];
+    rows +=
+      '<tr>' +
+        '<td style="padding:4px 8px">Bracket ' + (i+1) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--green)">1ct</td>' +
+        '<td style="padding:4px 8px">$' + (m.optionEntry == null ? '—' : m.optionEntry.toFixed(2)) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--yellow)">$' + (tp == null ? '—' : tp.toFixed(2)) + '</td>' +
+      '</tr>';
+  }
+  var overWarning = dollarRisk > 1500
+    ? '<div style="color:var(--red);background:#3a1a1a;padding:8px;border-radius:4px;margin-top:10px;font-size:11px">⚠ Risk $' + dollarRisk + ' > $1500 cap. Type <b>OVER</b> below to override.</div>'
+    : '';
+  var modal = document.createElement('div');
+  modal.id = 'mover-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML =
+    '<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:580px;width:90%">' +
+      '<h3 style="margin:0 0 8px;color:var(--text)">' + (armed ? modeLabel + ' — ' : '👁 PREVIEW — ') + m.ticker + ' ' + m.suggestedDirection + '</h3>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:12px"><code>' + (m.optionSymbol || '—') + '</code> · ' + qty + ' separate brackets · TP ladder per bracket · spot $' + (m.last == null ? '—' : m.last.toFixed(2)) + ' (' + ((m.pctChange||0) >= 0 ? '+' : '') + (m.pctChange||0).toFixed(2) + '%)</div>' +
+      '<div style="background:' + (useTrigger ? '#1a2a3f' : '#1a3f1f') + ';border-left:3px solid ' + (useTrigger ? 'var(--blue)' : 'var(--green)') + ';padding:10px;margin-bottom:12px;font-size:12px">' +
+        modeNote +
+      '</div>' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse;background:#0e1420;border-radius:4px">' +
+        '<thead><tr style="color:var(--muted);text-align:left">' +
+          '<th style="padding:6px 8px">Slot</th><th style="padding:6px 8px">Qty</th><th style="padding:6px 8px">Entry (opt)</th><th style="padding:6px 8px">TP (opt)</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
+      '<div style="background:#3a1a1a;border-left:3px solid var(--red);padding:10px;margin-top:10px;margin-bottom:10px;font-size:12px">' +
+        '🛡 <b style="color:var(--red)">STRUCTURAL STOP:</b> sell at market when ' + m.structuralStop.symbol + ' ' + m.structuralStop.predicate + ' $<b>' + m.structuralStop.price.toFixed(2) + '</b>' +
+        '<br><span style="color:var(--muted);font-size:11px">Computed from today\'s ' + (isCall ? '12.5%' : '87.5%') + ' adaptive level. Fires only on UNDERLYING break — not option-mid wicks.</span>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--muted)">Estimated dollar risk: <b style="color:' + (dollarRisk > 500 ? 'var(--red)' : 'var(--text)') + '">~$' + dollarRisk + '</b> · per-ct ~$' + Math.round(perCtRisk * 100) + '</div>' +
+      overWarning +
+      '<div style="margin-top:8px"><label style="font-size:11px;color:' + (window._liveAccount ? '#ff4757' : 'var(--muted)') + ';font-weight:' + (window._liveAccount ? '700' : '400') + '"><input type="checkbox" id="tmov-live" ' + (window._liveAccount ? 'checked' : '') + ' style="margin-right:4px"> Send to ' + (window._liveAccount ? 'LIVE account 11975462' : 'LIVE account (otherwise SIM)') + '</label></div>' +
+      (dollarRisk > 1500 ? '<input type="text" id="tmov-over" placeholder="type OVER to override" style="margin-top:8px;width:100%;background:#0e1420;color:var(--text);border:1px solid var(--red);padding:6px;border-radius:4px;font-size:12px">' : '') +
+      '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">' +
+        '<button onclick="closeMoverModal()" style="background:transparent;color:var(--muted);border:1px solid var(--border);padding:8px 14px;border-radius:4px;cursor:pointer">Cancel</button>' +
+        (armed
+          ? '<button onclick="submitMoverFire(\'' + m.ticker + '\',' + qty + ',' + (useTrigger ? 'true' : 'false') + ')" style="background:' + (useTrigger ? '#ff4757' : (isCall ? 'var(--green)' : 'var(--red)')) + ';color:#fff;border:none;padding:8px 18px;border-radius:4px;font-weight:600;cursor:pointer">' + (useTrigger ? 'CONFIRM QUEUE' : 'CONFIRM FIRE NOW') + '</button>'
+          : '<button disabled style="background:#333;color:#aaa;border:none;padding:8px 18px;border-radius:4px;cursor:not-allowed">DISARMED — preview only</button>'
+        ) +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function closeMoverModal() {
+  var m = document.getElementById('mover-modal');
+  if (m) m.remove();
+}
+
+// 9:45 AM ET HARD GATE — Apr 27 lesson: HOOD AM fire on a bias-blocked
+// signal cost -$600. From now on, ALL fire buttons are physically disabled
+// 9:30-9:45 AM ET. This is enforced regardless of override checkboxes.
+function isPreOpenChopWindow() {
+  var nowET = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  var dow = nowET.getDay();
+  if (dow === 0 || dow === 6) return false; // weekend, no gate needed
+  var hr = nowET.getHours();
+  var mn = nowET.getMinutes();
+  var totalMin = hr * 60 + mn;
+  // 9:30 AM ET = 570 min, 9:45 AM ET = 585 min
+  return totalMin >= 570 && totalMin < 585;
+}
+
+function submitMoverFire(ticker, qty, useTrigger) {
+  // Double-click guard — same pattern as submitTomorrowQueue.
+  if (window._takeTradeInFlight) {
+    console.warn('[TAKE-TRADE] Submit suppressed — request already in flight');
+    return;
+  }
+  // 9:45 AM ET hard gate — Apr 27 mandate
+  if (isPreOpenChopWindow()) {
+    alert('🚨 9:45 AM HARD GATE\n\nNo trades allowed before 9:45 AM ET.\nThis is a system rule per Apr 27 mandate.\n\nWait for the 9:45 fire window to open.');
+    return;
+  }
+  window._takeTradeInFlight = true;
+  var modalEl = document.getElementById('mover-modal');
+  if (modalEl) {
+    modalEl.querySelectorAll('button').forEach(function(b){
+      if (b.textContent && (b.textContent.indexOf('CONFIRM') !== -1)) {
+        b.disabled = true;
+        b.style.opacity = '0.5';
+        b.style.cursor = 'wait';
+        b.textContent = '⏳ SUBMITTING...';
+      }
+    });
+  }
+  var m = window._liveMoversData && window._liveMoversData[ticker];
+  if (!m) { window._takeTradeInFlight = false; return; }
+  var live = document.getElementById('tmov-live') && document.getElementById('tmov-live').checked === true;
+  var overEl = document.getElementById('tmov-over');
+  var confirmOver = overEl && overEl.value.trim().toUpperCase() === 'OVER';
+  var sec = localStorage.getItem('stratum_secret');
+  if (!sec) { window._takeTradeInFlight = false; alert('STRATUM_SECRET missing in localStorage. DISARM and re-ARM to set it.'); return; }
+  var body = {
+    ticker:    m.ticker,
+    symbol:    m.optionSymbol,
+    direction: m.suggestedDirection === 'CALL' ? 'BULLISH' : 'BEARISH',
+    qty:       qty,
+    entry:     m.optionEntry,
+    tp1:       m.optionTp1,
+    tp2:       m.optionTp2,
+    tp3:       m.optionTp3,
+    structuralStop: m.structuralStop,
+    live:      live,
+    confirmOver: confirmOver,
+    cardId:    'live-mover-' + m.ticker,   // tag for audit; server resolves bracket from body fields
+    source:    'live-mover-' + m.ticker + (useTrigger ? '-queued' : '-firenow'),
+  };
+  if (useTrigger === true) {
+    body.trigger = { symbol: m.ticker, predicate: m.triggerPredicate, price: m.triggerPrice };
+  }
+  fetch('/api/take-trade', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+    body:    JSON.stringify(body),
+  })
+    .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+    .then(function(rr){
+      window._takeTradeInFlight = false;
+      var st = rr.status; var b = rr.body;
+      closeMoverModal();
+      if (st === 200) {
+        var ok = b.brackets.filter(function(x){ return x.ok; }).length;
+        var fail = b.brackets.length - ok;
+        var verb = useTrigger ? 'QUEUED' : 'FIRED';
+        var trigStr = useTrigger ? '\nTrigger: ' + m.ticker + ' ' + m.triggerPredicate + ' $' + m.triggerPrice : '\n(Immediate fire — no trigger condition)';
+        alert('✓ ' + ok + '/' + b.brackets.length + ' bracket(s) ' + verb + ' at ' + (b.live ? 'LIVE' : 'SIM') + trigStr + '\nDollar risk: $' + b.dollarRisk + '\nFires today: ' + b.dailyFire + '/' + b.dailyCap + (fail > 0 ? '\n\n⚠ ' + fail + ' bracket(s) FAILED — check Discord audit / Railway logs' : ''));
+        refreshArmState();
+      } else if (st === 412 && b.error === 'dollar_risk_over_cap') {
+        alert('Risk $' + b.dollarRisk + ' over $' + b.cap + ' cap. Re-open and type OVER.');
+      } else if (st === 429 && b.error === 'daily_cap_reached') {
+        alert('Daily fire cap reached (' + b.fires + '/' + b.cap + '). Use Titan for additional queues.');
+      } else if (st === 401) {
+        localStorage.removeItem('stratum_secret');
+        alert('Auth failed. Re-ARM to enter STRATUM_SECRET again.');
+      } else {
+        alert((useTrigger ? 'Queue' : 'Fire') + ' failed: ' + (b && b.error ? b.error : ('HTTP ' + st)));
+      }
+    })
+    .catch(function(e){
+      window._takeTradeInFlight = false;
+      alert('Network error: ' + e.message);
+    });
+}
+
+// =====================================================================
+// 📊 OPTIONS CHAIN TAB — strike-by-strike call/put with Greeks + decision picker
+// =====================================================================
+function initOptionsTab() {
+  // Default expiry = next Friday if blank
+  var d = new Date();
+  var dow = d.getUTCDay();
+  var daysToFri = (5 - dow + 7) % 7;
+  if (daysToFri === 0) daysToFri = 7;
+  d.setUTCDate(d.getUTCDate() + daysToFri);
+  var iso = d.toISOString().slice(0, 10);
+  var expEl = document.getElementById('opt-expiry');
+  if (expEl && !expEl.value) expEl.value = iso;
+}
+
+function loadOptionsChain() {
+  var ticker = (document.getElementById('opt-ticker').value || '').trim().toUpperCase();
+  var expiry = document.getElementById('opt-expiry').value || '';
+  if (!ticker)  return alert('Enter a ticker.');
+  if (!expiry) return alert('Pick an expiry date.');
+  var root = document.getElementById('options-chain-root');
+  root.innerHTML = '<div class="loading">Fetching ' + ticker + ' ' + expiry + ' chain…</div>';
+  fetch('/api/options-chain/' + encodeURIComponent(ticker) + '?expiry=' + encodeURIComponent(expiry))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      if (!d.ok) { root.innerHTML = '<div style="color:var(--red);padding:14px">Error: ' + (d.error || 'unknown') + '</div>'; return; }
+      root.innerHTML = renderOptionsChain(d.chain);
+    })
+    .catch(function(e){ root.innerHTML = '<div style="color:var(--red);padding:14px">Network error: ' + e.message + '</div>'; });
+}
+
+function renderOptionsChain(c) {
+  if (!c.rows || !c.rows.length) return '<div class="loading">No chain data returned. Either the expiry has no strikes, market closed and TS API throttled, or the ticker has no options.</div>';
+
+  // Find ATM row — closest strike to spot
+  var spot = c.priceCenter;
+  var atmStrike = spot;
+  if (spot) {
+    var minDelta = Infinity;
+    c.rows.forEach(function(r){ var d = Math.abs(r.strike - spot); if (d < minDelta) { minDelta = d; atmStrike = r.strike; } });
+  }
+
+  // Max single-strike volume for color intensity
+  var maxVol = 1;
+  c.rows.forEach(function(r){
+    var v = (r.call && r.call.volume || 0) + (r.put && r.put.volume || 0);
+    if (v > maxVol) maxVol = v;
+  });
+
+  function fmt(v) { return (v === null || v === undefined || v === 0 || isNaN(v)) ? '—' : v.toFixed(2); }
+  function fmtVol(v) { return !v ? '—' : (v >= 1000 ? (v/1000).toFixed(1) + 'K' : String(v)); }
+
+  function rowBg(call, put) {
+    var cv = (call && call.volume) || 0;
+    var pv = (put && put.volume) || 0;
+    var bias = cv - pv;
+    var intensity = Math.min(0.4, Math.abs(bias) / maxVol * 0.6 + 0.05);
+    if (bias > 0) return 'rgba(63, 185, 80, ' + intensity.toFixed(2) + ')';
+    if (bias < 0) return 'rgba(248, 81, 73, ' + intensity.toFixed(2) + ')';
+    return 'transparent';
+  }
+
+  var rows = c.rows.map(function(r) {
+    var bg = rowBg(r.call, r.put);
+    var atm = r.strike === atmStrike;
+    var strikeStyle = atm ? 'background:rgba(88,166,255,0.18);font-weight:700;color:var(--blue)' : 'font-weight:600';
+    return (
+      '<tr style="background:' + bg + '">' +
+        '<td style="padding:5px 8px;color:var(--green);text-align:right">' + fmtVol(r.call && r.call.volume) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--green);text-align:right">' + fmt(r.call && r.call.oi) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--green);text-align:right">' + fmt(r.call && r.call.bid) + ' / ' + fmt(r.call && r.call.ask) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--green);text-align:right">' + fmt(r.call && r.call.last) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--muted);text-align:right;font-size:10px">' + (r.call && r.call.delta ? r.call.delta.toFixed(2) : '—') + '</td>' +
+        '<td style="padding:6px 10px;text-align:center;' + strikeStyle + '">$' + r.strike + (atm ? ' ⓘ' : '') + '</td>' +
+        '<td style="padding:5px 8px;color:var(--muted);text-align:right;font-size:10px">' + (r.put && r.put.delta ? r.put.delta.toFixed(2) : '—') + '</td>' +
+        '<td style="padding:5px 8px;color:var(--red);text-align:right">' + fmt(r.put && r.put.last) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--red);text-align:right">' + fmt(r.put && r.put.bid) + ' / ' + fmt(r.put && r.put.ask) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--red);text-align:right">' + fmt(r.put && r.put.oi) + '</td>' +
+        '<td style="padding:5px 8px;color:var(--red);text-align:right">' + fmtVol(r.put && r.put.volume) + '</td>' +
+      '</tr>'
+    );
+  }).join('');
+
+  // Decision row — best call + best put picks
+  var decision = '';
+  if (c.bestCall || c.bestPut) {
+    decision +=
+      '<div style="background:#0e1420;border:1px solid var(--border);border-radius:6px;padding:12px;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:14px">';
+    if (c.bestCall) {
+      decision +=
+        '<div style="border-left:3px solid var(--green);padding-left:10px">' +
+          '<div style="color:var(--green);font-weight:600;font-size:13px">🎯 BEST CALL: $' + c.bestCall.strike + '</div>' +
+          '<div style="color:var(--muted);font-size:11px;margin-top:3px">delta ' + c.bestCall.delta.toFixed(2) + ' · vol ' + (c.bestCall.volume || 0) + ' · OI ' + (c.bestCall.oi || 0) + ' · spread ' + ((c.bestCall.spreadPct || 0) * 100).toFixed(1) + '% · score ' + c.bestCall.score + '/100</div>' +
+          '<div style="font-size:12px;margin-top:4px">mid <b>$' + (c.bestCall.mid || c.bestCall.last || 0).toFixed(2) + '</b> &nbsp; ' + (c.bestCall.symbol || '') + '</div>' +
+        '</div>';
+    }
+    if (c.bestPut) {
+      decision +=
+        '<div style="border-left:3px solid var(--red);padding-left:10px">' +
+          '<div style="color:var(--red);font-weight:600;font-size:13px">🎯 BEST PUT: $' + c.bestPut.strike + '</div>' +
+          '<div style="color:var(--muted);font-size:11px;margin-top:3px">delta ' + c.bestPut.delta.toFixed(2) + ' · vol ' + (c.bestPut.volume || 0) + ' · OI ' + (c.bestPut.oi || 0) + ' · spread ' + ((c.bestPut.spreadPct || 0) * 100).toFixed(1) + '% · score ' + c.bestPut.score + '/100</div>' +
+          '<div style="font-size:12px;margin-top:4px">mid <b>$' + (c.bestPut.mid || c.bestPut.last || 0).toFixed(2) + '</b> &nbsp; ' + (c.bestPut.symbol || '') + '</div>' +
+        '</div>';
+    }
+    decision += '</div>';
+  }
+
+  var summary =
+    '<div style="display:flex;gap:14px;align-items:center;margin-bottom:10px;font-size:12px;color:var(--muted)">' +
+      '<span><b style="color:var(--text)">' + c.ticker + '</b> · expiry ' + c.expiry + (c.priceCenter ? ' · spot $' + c.priceCenter.toFixed(2) : '') + '</span>' +
+      '<span>· call vol total: <b style="color:var(--green)">' + (c.totalCallVol || 0) + '</b></span>' +
+      '<span>· put vol total: <b style="color:var(--red)">' + (c.totalPutVol || 0) + '</b></span>' +
+      (c.callPutRatio !== null ? '<span>· C/P ratio: <b style="color:var(--text)">' + c.callPutRatio + '</b></span>' : '') +
+      '<span style="margin-left:auto">fetched ' + new Date(c.fetchedAt).toLocaleTimeString() + '</span>' +
+    '</div>';
+
+  return summary + decision +
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;background:var(--panel);border:1px solid var(--border);border-radius:6px;overflow:hidden">' +
+      '<thead><tr style="background:var(--bg);color:var(--muted);font-size:11px">' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--green)">Call Vol</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--green)">OI</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--green)">Bid/Ask</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--green)">Last</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--green)">Δ</th>' +
+        '<th style="padding:6px 10px;text-align:center;color:var(--text)">STRIKE</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--red)">Δ</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--red)">Last</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--red)">Bid/Ask</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--red)">OI</th>' +
+        '<th style="padding:6px 8px;text-align:right;color:var(--red)">Put Vol</th>' +
+      '</tr></thead>' +
+      '<tbody>' + rows + '</tbody>' +
+    '</table>';
+}
+
+// =====================================================================
+// 🎯 TOMORROW TAB — pre-built setup cards with conditional bracket queueing
+// =====================================================================
+// Each setup is the trade-plan bracket pre-filled. Click CALL or PUT →
+// confirmation modal → POST /api/take-trade with conditional trigger.
+// Trigger fires when underlying crosses the alert level (with buffer).
+// Brackets queue at TradeStation overnight, auto-fire when condition met.
+// Each setup includes a structuralStop = the UNDERLYING price level that
+// invalidates the thesis. Stop is wired to TS as a MarketActivationRule on
+// the underlying — fires only on real structural break, not option wicks.
+// PUT setups use predicate 'above' (exit if underlying rallies through stop).
+var TOMORROW_SETUPS = [
+  {
+    id: 'crwd-retrace', ticker: 'CRWD', label: 'CRWD RETRACE',
+    direction: 'CALL', expiry: '260501', strike: 450, premiumMid: 11.21,
+    triggerSymbol: 'CRWD', triggerPrice: 438.93, triggerPredicate: 'below',
+    alertNote: 'alert at $439.43, trigger $438.93 (below = retrace fill)',
+    entry: 6.86, tp1: 8.80, tp2: 13.00,
+    structuralStop: { symbol: 'CRWD', predicate: 'below', price: 437.50 },
+    structuralStopNote: '12.5% level — thesis dies if retrace zone breaks',
+    setupNote: 'Hammer Daily, sector tailwind, retrace inside +γ pin',
+  },
+  {
+    id: 'crwd-breakout', ticker: 'CRWD', label: 'CRWD BREAKOUT',
+    direction: 'CALL', expiry: '260501', strike: 450, premiumMid: 11.21,
+    triggerSymbol: 'CRWD', triggerPrice: 450.50, triggerPredicate: 'above',
+    alertNote: 'alert at $450.00, trigger $450.50 (above = gamma flip break)',
+    entry: 12.00, tp1: 14.50, tp2: 18.00,
+    structuralStop: { symbol: 'CRWD', predicate: 'below', price: 448.00 },
+    structuralStopNote: 'back below recent close = breakout failing',
+    setupNote: 'Gamma flip break — magnet to $470 wall on +γ activation',
+  },
+  {
+    id: 'avgo-breakout', ticker: 'AVGO', label: 'AVGO BREAKOUT ⭐ JSMITH CONFIRMED',
+    direction: 'CALL', expiry: '260501', strike: 425, premiumMid: 10.43,
+    triggerSymbol: 'AVGO', triggerPrice: 425.50, triggerPredicate: 'above',
+    alertNote: 'alert at $425.00, trigger $425.50 (above = call wall break)',
+    entry: 10.43, tp1: 13.04, tp2: 15.65,
+    structuralStop: { symbol: 'AVGO', predicate: 'below', price: 422.50 },
+    structuralStopNote: 'back below pin $422.50 = breakout failed; option stop ~$7.82 (-25%)',
+    setupNote: 'Failed 2D + Hammer + JSmith VIP confirmation. Live TS mid $10.43 (bid $9.55 / ask $11.30 — WIDE 17% spread, use LIMIT). Stop $7.82 (-25%) / TP $13.04 (+25%) / $15.65 (+50%) / $20.86 (+100%)',
+  },
+  {
+    id: 'rblx-retrace', ticker: 'RBLX', label: 'RBLX RETRACE',
+    direction: 'CALL', expiry: '260501', strike: 55, premiumMid: 4.85,
+    triggerSymbol: 'RBLX', triggerPrice: 53.21, triggerPredicate: 'below',
+    alertNote: 'alert at $53.51, trigger $53.21 (below = retrace fill)',
+    entry: 3.56, tp1: 4.01, tp2: 4.85,
+    structuralStop: { symbol: 'RBLX', predicate: 'below', price: 53.07 },
+    structuralStopNote: '12.5% level — Hammer base broke',
+    setupNote: 'Hammer base retest, −γ amplifies trend if it holds $50 wall',
+  },
+  {
+    id: 'iren-bullval', ticker: 'IREN', label: 'IREN BULL VALIDATION',
+    direction: 'CALL', expiry: '260509', strike: 55, premiumMid: 2.50,
+    triggerSymbol: 'IREN', triggerPrice: 54.50, triggerPredicate: 'above',
+    alertNote: 'alert at $54.14, trigger $54.50 (above = FTFC aligns up)',
+    entry: 3.00, tp1: 4.50, tp2: 6.00,
+    structuralStop: { symbol: 'IREN', predicate: 'below', price: 50.13 },
+    structuralStopNote: 'back below Friday low = bull validation failed',
+    setupNote: 'Failed 2U fails → bull triangle resolution, target $58→$63→$77',
+  },
+  {
+    id: 'iren-bearbreak', ticker: 'IREN', label: 'IREN BEAR BREAKDOWN',
+    direction: 'PUT', expiry: '260501', strike: 50, premiumMid: 2.69,
+    triggerSymbol: 'IREN', triggerPrice: 49.83, triggerPredicate: 'below',
+    alertNote: 'alert at $50.13, trigger $49.83 (below = continuation short)',
+    entry: 3.00, tp1: 4.00, tp2: 5.50,
+    structuralStop: { symbol: 'IREN', predicate: 'above', price: 53.64 },
+    structuralStopNote: 'reclaim $53.64 = bear thesis dies (Failed 2U fakes out)',
+    setupNote: 'Counter-trend daily Failed 2U follow-through, target $48→$44',
+  },
+  // ==================================================================
+  // JSMITH VIP DAY TRADE WATCHLIST — 4/27/26 (pulled from Discord poller)
+  // John's standard pattern: trigger at entry, stop -25%, TP 25/50/100%.
+  // We translate -25% premium stop → underlying structural stop on entry break.
+  // ==================================================================
+  {
+    id: 'jsmith-ko', ticker: 'KO', label: 'KO BREAKOUT — JSMITH VIP',
+    direction: 'CALL', expiry: '260501', strike: 77, premiumMid: 0.99,
+    triggerSymbol: 'KO', triggerPrice: 76.74, triggerPredicate: 'above',
+    alertNote: 'alert at $76.74, trigger above = enter 77C 5/1 (John VIP entry)',
+    entry: 0.99, tp1: 1.24, tp2: 1.49,
+    structuralStop: { symbol: 'KO', predicate: 'below', price: 76.40 },
+    structuralStopNote: 'back below entry = breakout failed; option stop ~$0.74 (-25%)',
+    setupNote: '[john-confirmed] JSmith Day Trade 4/27 — KO 77C 5/1 entry 76.74. Live TS mid $0.99 (bid $0.93 / ask $1.04, OI 8414). Stop $0.74 (-25%) / TP $1.24 (+25%) / $1.49 (+50%) / $1.98 (+100%)',
+  },
+  {
+    id: 'jsmith-et', ticker: 'ET', label: 'ET BREAKOUT — JSMITH VIP',
+    direction: 'CALL', expiry: '260501', strike: 19, premiumMid: 0.23,
+    triggerSymbol: 'ET', triggerPrice: 19.07, triggerPredicate: 'above',
+    alertNote: 'alert at $19.07, trigger above = enter 19C 5/1 (John VIP entry)',
+    entry: 0.23, tp1: 0.29, tp2: 0.35,
+    structuralStop: { symbol: 'ET', predicate: 'below', price: 18.93 },
+    structuralStopNote: 'back below entry = breakout failed; option stop ~$0.17 (-25%)',
+    setupNote: '[john-confirmed] JSmith Day Trade 4/27 — ET 19C 5/1 entry 19.07. Live TS mid $0.23 (bid $0.21 / ask $0.25, OI 2446). Stop $0.17 (-25%) / TP $0.29 (+25%) / $0.35 (+50%) / $0.46 (+100%)',
+  },
+  {
+    id: 'jsmith-bp', ticker: 'BP', label: 'BP BREAKOUT — JSMITH VIP',
+    direction: 'CALL', expiry: '260501', strike: 46, premiumMid: 1.15,
+    triggerSymbol: 'BP', triggerPrice: 46.44, triggerPredicate: 'above',
+    alertNote: 'alert at $46.44, trigger above = enter 46C 5/1 (John VIP entry)',
+    entry: 1.15, tp1: 1.44, tp2: 1.73,
+    structuralStop: { symbol: 'BP', predicate: 'below', price: 46.10 },
+    structuralStopNote: 'back below entry = breakout failed; option stop ~$0.86 (-25%)',
+    setupNote: '[john-confirmed] JSmith Day Trade 4/27 — BP 46C 5/1 entry 46.44. Live TS mid $1.15 (bid $1.10 / ask $1.20, OI 733). Stop $0.86 (-25%) / TP $1.44 (+25%) / $1.73 (+50%) / $2.30 (+100%)',
+  },
+  {
+    id: 'jsmith-hood', ticker: 'HOOD', label: 'HOOD BREAKOUT — JSMITH VIP',
+    direction: 'CALL', expiry: '260501', strike: 86, premiumMid: 3.65,
+    triggerSymbol: 'HOOD', triggerPrice: 85.05, triggerPredicate: 'above',
+    alertNote: 'alert at $85.05, trigger above = enter 86C 5/1 (John VIP entry)',
+    entry: 3.65, tp1: 4.56, tp2: 5.48,
+    structuralStop: { symbol: 'HOOD', predicate: 'below', price: 84.65 },
+    structuralStopNote: 'back below entry = breakout failed; option stop ~$2.74 (-25%)',
+    setupNote: '[john-confirmed] JSmith Day Trade 4/27 — HOOD 86C 5/1 entry 85.05. Live TS mid $3.65 (bid $3.60 / ask $3.70, OI 1725). Stop $2.74 (-25%) / TP $4.56 (+25%) / $5.48 (+50%) / $7.30 (+100%). (Apr 27: removed from blacklist per AB)',
+  },
+];
+
+function renderTomorrowSetups() {
+  var armed = window._takeArmed === true;
+  document.getElementById('arm-state-tomorrow').textContent = armed ? '⚡ ARMED — clicks WILL fire to broker' : '🔒 DISARMED — preview only';
+  var root = document.getElementById('tomorrow-root');
+  root.innerHTML = TOMORROW_SETUPS.map(function(s) {
+    var dirColor = s.direction === 'CALL' ? '#3fb950' : '#f85149';
+    var dirEmoji = s.direction === 'CALL' ? '🟢' : '🔴';
+    var blacklistBanner = s.blacklisted
+      ? '<div style="background:#3a1a1a;color:#ff8c42;padding:6px 10px;border-radius:4px;font-size:11px;margin-bottom:8px">⚠ BLACKLISTED in orderExecutor — fire button will be REJECTED. Trade manually in Titan instead.</div>'
+      : '';
+    var contractStr = 'OPRA:' + s.ticker + s.expiry + (s.direction === 'CALL' ? 'C' : 'P') + s.strike + '.0';
+    var liveTag    = window._liveAccount ? ' → LIVE' : ' → SIM';
+    var fireLabel  = armed ? '⚡ FIRE NOW' + liveTag : '👁 PREVIEW';
+    var queueLabel = armed ? '🎯 QUEUE w/ TRIGGER' + liveTag : '👁 PREVIEW QUEUE';
+    return (
+      '<div style="background:var(--panel);border:1px solid var(--border);border-left:4px solid ' + dirColor + ';border-radius:6px;padding:14px;margin-bottom:12px">' +
+        blacklistBanner +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">' +
+          '<span style="font-size:18px;font-weight:600">' + dirEmoji + ' ' + s.label + '</span>' +
+          '<span style="background:' + dirColor + ';color:#000;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600">' + s.direction + '</span>' +
+          '<span style="margin-left:auto;color:var(--muted);font-size:11px;font-family:monospace">' + contractStr + '</span>' +
+        '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">' + s.setupNote + '</div>' +
+        '<div style="background:#0e1420;border-radius:4px;padding:8px 10px;margin-bottom:10px;font-size:11px">' +
+          '<div>Trigger reference: ' + s.triggerSymbol + ' ' + s.triggerPredicate + ' $<b style="color:#fff">' + s.triggerPrice.toFixed(2) + '</b> <span style="color:var(--muted)">(used only if you click QUEUE w/ TRIGGER)</span></div>' +
+          '<div style="color:var(--muted);font-size:10px;margin-top:2px">' + s.alertNote + '</div>' +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:8px;font-size:11px">' +
+          '<div><span style="color:var(--muted)">Entry (opt)</span><br><b>$' + s.entry.toFixed(2) + '</b></div>' +
+          '<div><span style="color:var(--muted)">TP1 (opt)</span><br><b style="color:var(--yellow)">$' + s.tp1.toFixed(2) + '</b></div>' +
+          '<div><span style="color:var(--muted)">TP2 (opt)</span><br><b style="color:var(--green)">$' + s.tp2.toFixed(2) + '</b></div>' +
+        '</div>' +
+        '<div style="background:#3a1a1a;border-left:3px solid var(--red);padding:8px 10px;margin-bottom:10px;font-size:11px">' +
+          '🛡 <b style="color:var(--red)">STRUCTURAL STOP:</b> ' + s.structuralStop.symbol + ' ' + s.structuralStop.predicate + ' $<b style="color:#fff">' + s.structuralStop.price.toFixed(2) + '</b>' +
+          '<div style="color:var(--muted);font-size:10px;margin-top:2px">' + s.structuralStopNote + ' — fires only on UNDERLYING break, not option wicks</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
+          '<label style="font-size:11px;color:var(--muted)">qty</label>' +
+          '<input type="number" id="qty-tom-' + s.id + '" min="1" max="5" value="1" style="width:50px;background:#0e1420;color:var(--text);border:1px solid var(--border);padding:3px 6px;border-radius:3px;font-size:12px">' +
+          '<button onclick="onTomorrowFire(\'' + s.id + '\', false)" title="Fire immediately at limit. Use after 5m close confirms." style="background:' + (armed ? dirColor : 'var(--blue)') + ';color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">' + fireLabel + '</button>' +
+          '<button onclick="onTomorrowFire(\'' + s.id + '\', true)" title="Queue at TS with trigger condition. Auto-fires when underlying crosses (no 5m close discipline)." style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;font-size:11px;cursor:pointer">' + queueLabel + '</button>' +
+          '<span style="color:var(--muted);font-size:10px;margin-left:auto">premium mid ≈ $' + s.premiumMid.toFixed(2) + ' · expiry ' + s.expiry.slice(2,4) + '/' + s.expiry.slice(4,6) + '</span>' +
+        '</div>' +
+      '</div>'
+    );
+  }).join('');
+}
+
+function onTomorrowFire(setupId, useTrigger) {
+  var s = TOMORROW_SETUPS.find(function(x){ return x.id === setupId; });
+  if (!s) return;
+  var qtyEl = document.getElementById('qty-tom-' + setupId);
+  var qty = qtyEl ? Math.max(1, Math.min(5, parseInt(qtyEl.value) || 1)) : 1;
+  showTomorrowModal(s, qty, useTrigger === true);
+}
+
+// Pull live mids from TradeStation API for every card and recompute John's
+// ladder (-25% stop, +25/+50/+100 TPs). Called on demand via the REFRESH MIDS
+// button. Mutates TOMORROW_SETUPS in place and re-renders. Wide spreads
+// (>15%) get flagged in the setupNote so AB knows to use LIMIT.
+function refreshTomorrowMids() {
+  var btn = document.getElementById('refresh-mids-btn');
+  var stamp = document.getElementById('mids-stamp');
+  if (!btn) return;
+  var origLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ pulling…';
+  stamp.textContent = 'fetching live mids from TS…';
+  // Build OSI symbols from setups: "TICKER YYMMDDC|Pstrike"
+  var syms = TOMORROW_SETUPS.map(function(s){
+    var typeC = s.direction === 'CALL' ? 'C' : 'P';
+    return s.ticker + ' ' + s.expiry + typeC + s.strike;
+  });
+  var url = '/api/option-mids?symbols=' + syms.map(encodeURIComponent).join(',');
+  fetch(url).then(function(r){ return r.json(); }).then(function(data){
+    if (!data || !data.quotes) {
+      stamp.textContent = 'refresh failed: ' + (data && data.error || 'unknown');
+      btn.disabled = false; btn.textContent = origLabel;
+      return;
+    }
+    var byKey = {};
+    data.quotes.forEach(function(q){ byKey[q.symbol] = q; });
+    var updated = 0, skipped = [];
+    TOMORROW_SETUPS.forEach(function(s, i){
+      var typeC = s.direction === 'CALL' ? 'C' : 'P';
+      var key = s.ticker + ' ' + s.expiry + typeC + s.strike;
+      var q = byKey[key];
+      if (!q || q.mid == null || q.mid <= 0) { skipped.push(s.ticker + ' ' + s.strike + typeC); return; }
+      var mid = q.mid;
+      s.premiumMid = mid;
+      s.entry = +mid.toFixed(2);
+      s.tp1   = +(mid * 1.25).toFixed(2);
+      s.tp2   = +(mid * 1.50).toFixed(2);
+      var stopPrem = +(mid * 0.75).toFixed(2);
+      var tp3 = +(mid * 2.00).toFixed(2);
+      // Wide-spread flag: spread > 15% of mid
+      var spreadPct = (q.bid && q.ask) ? ((q.ask - q.bid) / mid * 100) : 0;
+      var spreadWarn = spreadPct > 15
+        ? ' ⚠ WIDE SPREAD ' + spreadPct.toFixed(0) + '% (bid $' + q.bid + ' / ask $' + q.ask + ') — use LIMIT'
+        : '';
+      // Replace the live-mid line in setupNote, or append it if missing
+      var freshLine = ' Live TS mid $' + mid.toFixed(2) + ' (bid $' + (q.bid||'?') + ' / ask $' + (q.ask||'?') + (q.openInterest ? ', OI ' + q.openInterest : '') + ')' + spreadWarn + '. Stop $' + stopPrem.toFixed(2) + ' (-25%) / TP $' + s.tp1.toFixed(2) + ' (+25%) / $' + s.tp2.toFixed(2) + ' (+50%) / $' + tp3.toFixed(2) + ' (+100%)';
+      // Strip any prior "Live TS mid ..." segment so we don't pile on
+      s.setupNote = s.setupNote.replace(/\.\s*Live TS mid[^.]*\.\s*Stop[^.]*\.\s*TP[^.]*\$\d+\.\d+\s*\(\+100%\)/g, '.').replace(/\s+\.$/, '.');
+      s.setupNote = s.setupNote.replace(/\.+\s*$/, '') + '.' + freshLine;
+      updated++;
+    });
+    var now = new Date();
+    var t = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+    stamp.textContent = '✅ mids refreshed ' + t + ' · updated ' + updated + (skipped.length ? ' · skipped ' + skipped.join(', ') : '');
+    stamp.style.color = '#3fb950';
+    btn.disabled = false; btn.textContent = origLabel;
+    renderTomorrowSetups();
+  }).catch(function(e){
+    stamp.textContent = 'refresh error: ' + (e && e.message);
+    stamp.style.color = '#f85149';
+    btn.disabled = false; btn.textContent = origLabel;
+  });
+}
+
+function showTomorrowModal(s, qty, useTrigger) {
+  var armed = window._takeArmed === true;
+  var tpLadder = [s.tp1, s.tp2, s.tp2];
+  // Dollar risk now estimated from underlying-stop translated via delta ~0.5
+  var underlyingDelta = Math.abs(s.entry - (s.entry * 0.7));  // rough heuristic
+  var dollarRisk = Math.round(underlyingDelta * 100 * qty);
+  var contractStr = 'OPRA:' + s.ticker + s.expiry + (s.direction === 'CALL' ? 'C' : 'P') + s.strike + '.0';
+  var modeLabel = useTrigger ? '🎯 QUEUE w/ TRIGGER' : '⚡ FIRE NOW';
+  var modeNote  = useTrigger
+    ? 'Bracket queues at TS with activation rule. Auto-fires when ' + s.triggerSymbol + ' crosses ' + s.triggerPredicate + ' $' + s.triggerPrice.toFixed(2) + '. Survives Sunday → Monday open.'
+    : 'Fires <b>immediately</b> at limit price. Use AFTER 5m close confirms the setup. Bypasses dead-zone / first-15-min gates because human is in loop.';
+  var rows = '';
+  for (var i = 0; i < qty; i++) {
+    var tp = tpLadder[i % tpLadder.length];
+    rows +=
+      '<tr>' +
+        '<td style="padding:4px 8px">Bracket ' + (i+1) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--green)">1ct</td>' +
+        '<td style="padding:4px 8px">$' + s.entry.toFixed(2) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--yellow)">$' + tp.toFixed(2) + '</td>' +
+      '</tr>';
+  }
+  var overWarning = dollarRisk > 1500
+    ? '<div style="color:var(--red);background:#3a1a1a;padding:8px;border-radius:4px;margin-top:10px;font-size:11px">⚠ Risk $' + dollarRisk + ' > $1500 cap. Type <b>OVER</b> below to override.</div>'
+    : '';
+  var modal = document.createElement('div');
+  modal.id = 'tomorrow-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML =
+    '<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:580px;width:90%">' +
+      '<h3 style="margin:0 0 8px;color:var(--text)">' + (armed ? modeLabel + ' — ' : '👁 PREVIEW — ') + s.label + '</h3>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:12px"><code>' + contractStr + '</code> · ' + qty + ' separate brackets · TP ladder per bracket</div>' +
+      '<div style="background:' + (useTrigger ? '#1a2a3f' : '#1a3f1f') + ';border-left:3px solid ' + (useTrigger ? 'var(--blue)' : 'var(--green)') + ';padding:10px;margin-bottom:12px;font-size:12px">' +
+        modeNote +
+      '</div>' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse;background:#0e1420;border-radius:4px">' +
+        '<thead><tr style="color:var(--muted);text-align:left">' +
+          '<th style="padding:6px 8px">Slot</th><th style="padding:6px 8px">Qty</th><th style="padding:6px 8px">Entry (opt)</th><th style="padding:6px 8px">TP (opt)</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
+      '<div style="background:#3a1a1a;border-left:3px solid var(--red);padding:10px;margin-top:10px;margin-bottom:10px;font-size:12px">' +
+        '🛡 <b style="color:var(--red)">STRUCTURAL STOP:</b> sell at market when ' + s.structuralStop.symbol + ' ' + s.structuralStop.predicate + ' $<b>' + s.structuralStop.price.toFixed(2) + '</b><br>' +
+        '<span style="color:var(--muted);font-size:11px">' + s.structuralStopNote + '. Cannot be wick-hunted on option mid — only fires on real underlying break.</span>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--muted)">Estimated dollar risk: <b style="color:' + (dollarRisk > 500 ? 'var(--red)' : 'var(--text)') + '">~$' + dollarRisk + '</b></div>' +
+      overWarning +
+      '<div style="margin-top:8px"><label style="font-size:11px;color:' + (window._liveAccount ? '#ff4757' : 'var(--muted)') + ';font-weight:' + (window._liveAccount ? '700' : '400') + '"><input type="checkbox" id="ttom-live" ' + (window._liveAccount ? 'checked' : '') + ' style="margin-right:4px"> Send to ' + (window._liveAccount ? 'LIVE account 11975462' : 'LIVE account (otherwise SIM)') + '</label></div>' +
+      (dollarRisk > 1500 ? '<input type="text" id="ttom-over" placeholder="type OVER to override" style="margin-top:8px;width:100%;background:#0e1420;color:var(--text);border:1px solid var(--red);padding:6px;border-radius:4px;font-size:12px">' : '') +
+      '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">' +
+        '<button onclick="closeTomorrowModal()" style="background:transparent;color:var(--muted);border:1px solid var(--border);padding:8px 14px;border-radius:4px;cursor:pointer">Cancel</button>' +
+        (armed
+          ? '<button onclick="submitTomorrowQueue(\'' + s.id + '\',' + qty + ',' + (useTrigger ? 'true' : 'false') + ')" style="background:' + (useTrigger ? '#ff4757' : (s.direction === 'CALL' ? 'var(--green)' : 'var(--red)')) + ';color:#fff;border:none;padding:8px 18px;border-radius:4px;font-weight:600;cursor:pointer">' + (useTrigger ? 'CONFIRM QUEUE' : 'CONFIRM FIRE NOW') + '</button>'
+          : '<button disabled style="background:#333;color:#aaa;border:none;padding:8px 18px;border-radius:4px;cursor:not-allowed">DISARMED — preview only</button>'
+        ) +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function closeTomorrowModal() {
+  var m = document.getElementById('tomorrow-modal');
+  if (m) m.remove();
+}
+
+function submitTomorrowQueue(setupId, qty, useTrigger) {
+  // Apr 26 PM bug fix — double-click guard. Disable the modal while the
+  // request is in flight so a fast double-tap doesn't fire twice.
+  if (window._takeTradeInFlight) {
+    console.warn('[TAKE-TRADE] Submit suppressed — request already in flight');
+    return;
+  }
+  // 9:45 AM ET hard gate — Apr 27 mandate
+  if (isPreOpenChopWindow()) {
+    alert('🚨 9:45 AM HARD GATE\n\nNo trades allowed before 9:45 AM ET.\nThis is a system rule per Apr 27 mandate.\n\nWait for the 9:45 fire window to open.');
+    return;
+  }
+  window._takeTradeInFlight = true;
+  // Disable all confirm buttons in the modal as visual feedback
+  var modalEl = document.getElementById('tomorrow-modal');
+  if (modalEl) {
+    modalEl.querySelectorAll('button').forEach(function(b){
+      if (b.textContent && (b.textContent.indexOf('CONFIRM') !== -1)) {
+        b.disabled = true;
+        b.style.opacity = '0.5';
+        b.style.cursor = 'wait';
+        b.textContent = '⏳ SUBMITTING...';
+      }
+    });
+  }
+  var s = TOMORROW_SETUPS.find(function(x){ return x.id === setupId; });
+  if (!s) { window._takeTradeInFlight = false; return; }
+  var live = document.getElementById('ttom-live') && document.getElementById('ttom-live').checked === true;
+  var overEl = document.getElementById('ttom-over');
+  var confirmOver = overEl && overEl.value.trim().toUpperCase() === 'OVER';
+  var sec = localStorage.getItem('stratum_secret');
+  if (!sec) { alert('STRATUM_SECRET missing in localStorage. DISARM and re-ARM to set it.'); return; }
+  var contractStr = s.ticker + ' ' + s.expiry + (s.direction === 'CALL' ? 'C' : 'P') + s.strike;
+  var body = {
+    ticker: s.ticker,
+    symbol: contractStr,
+    direction: s.direction === 'CALL' ? 'BULLISH' : 'BEARISH',
+    qty: qty,
+    entry: s.entry,
+    tp1: s.tp1,
+    tp2: s.tp2,
+    structuralStop: s.structuralStop,  // underlying-price activation, not option-price wick
+    live: live,
+    confirmOver: confirmOver,
+    source: 'tomorrow-' + s.id + (useTrigger ? '-queued' : '-firenow'),
+  };
+  // Only attach trigger when QUEUE w/ TRIGGER mode is selected.
+  // FIRE NOW = immediate market entry, no activation rule.
+  if (useTrigger === true) {
+    body.trigger = { symbol: s.triggerSymbol, predicate: s.triggerPredicate, price: s.triggerPrice };
+  }
+  fetch('/api/take-trade', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+    body:    JSON.stringify(body),
+  })
+    .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+    .then(function(rr){
+      window._takeTradeInFlight = false;  // release guard on response
+      var st = rr.status; var b = rr.body;
+      closeTomorrowModal();
+      if (st === 200) {
+        var ok = b.brackets.filter(function(x){ return x.ok; }).length;
+        var fail = b.brackets.length - ok;
+        var verb = useTrigger ? 'QUEUED' : 'FIRED';
+        var trigStr = useTrigger ? '\nTrigger: ' + s.triggerSymbol + ' ' + s.triggerPredicate + ' $' + s.triggerPrice : '\n(Immediate fire — no trigger condition)';
+        alert('✓ ' + ok + '/' + b.brackets.length + ' bracket(s) ' + verb + ' at ' + (b.live ? 'LIVE' : 'SIM') + trigStr + '\nDollar risk: $' + b.dollarRisk + '\nFires today: ' + b.dailyFire + '/' + b.dailyCap + (fail > 0 ? '\n\n⚠ ' + fail + ' bracket(s) FAILED — check Discord audit / Railway logs' : ''));
+        refreshArmState();
+      } else if (st === 412 && b.error === 'dollar_risk_over_cap') {
+        alert('Risk $' + b.dollarRisk + ' over $' + b.cap + ' cap. Re-open and type OVER.');
+      } else if (st === 429 && b.error === 'daily_cap_reached') {
+        alert('Daily fire cap reached (' + b.fires + '/' + b.cap + '). Use Titan for additional queues.');
+      } else if (st === 401) {
+        localStorage.removeItem('stratum_secret');
+        alert('Auth failed. Re-ARM to enter STRATUM_SECRET again.');
+      } else {
+        alert('Queue failed: ' + (b && b.error ? b.error : ('HTTP ' + st)));
+      }
+    })
+    .catch(function(e){
+      window._takeTradeInFlight = false;  // release guard on network error
+      alert('Network error: ' + e.message);
+    });
+}
+
+// FLOW CARDS — display fired clusters; never auto-queue.
+function loadFlowCards() {
+  fetch('/api/flow-cards/active')
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      var root = document.getElementById('flow-cards-root');
+      var badge = document.getElementById('flow-card-badge');
+      var cards = (d && d.cards) || [];
+      if (badge) {
+        if (cards.length > 0) { badge.textContent = cards.length; badge.style.display = 'inline-block'; }
+        else { badge.style.display = 'none'; }
+      }
+      if (!cards.length) {
+        root.innerHTML = '<div class="loading">No flow cards yet — clusters appear here when one-sided premium piles up during market hours.</div>';
+        return;
+      }
+      root.innerHTML = cards.map(function(c){ return renderFlowCard(c); }).join('');
+    })
+    .catch(function(e){ console.error('[flow-cards]', e); });
+}
+
+function renderFlowCard(c) {
+  var dirColor    = c.direction === 'BULLISH' ? 'var(--green)' : 'var(--red)';
+  var dirEmoji    = c.direction === 'BULLISH' ? '🟢' : '🔴';
+  var confColor   = c.confluence.state === 'aligned' ? 'var(--green)' : (c.confluence.state === 'opposing' ? 'var(--red)' : 'var(--muted)');
+  var premiumStr  = c.totalPremium >= 1000000 ? '$' + (c.totalPremium/1000000).toFixed(1) + 'M' : '$' + (c.totalPremium/1000).toFixed(0) + 'K';
+  var firedAgo    = Math.round((Date.now() - new Date(c.firedAt).getTime()) / 60000);
+  var bracketHtml = '';
+  if (c.bracket) {
+    bracketHtml =
+      '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px;font-size:11px">' +
+      '<div><span style="color:var(--muted)">Entry</span><br><b>$' + c.bracket.entry.toFixed(2) + '</b></div>' +
+      '<div><span style="color:var(--muted)">Stop</span><br><b style="color:var(--red)">$' + c.bracket.stop.toFixed(2) + '</b></div>' +
+      '<div><span style="color:var(--muted)">TP1</span><br><b style="color:var(--yellow)">$' + c.bracket.tp1.toFixed(2) + '</b></div>' +
+      '<div><span style="color:var(--muted)">TP2</span><br><b style="color:var(--green)">$' + c.bracket.tp2.toFixed(2) + '</b></div>' +
+      '</div>';
+  }
+  var contractHtml = c.contract
+    ? '<span style="color:var(--blue);font-family:monospace;font-size:11px">' + c.contract.symbol + '</span>'
+    : '<span style="color:var(--muted)">contract resolving…</span>';
+  var takeBtnDisabled = !c.bracket;
+  var armed = window._takeArmed === true;
+  var btnLabel = armed ? '⚡ TAKE TRADE' : '👁 PREVIEW';
+  var btnColor = armed ? '#ff4757' : 'var(--blue)';
+
+  return (
+    '<div style="background:var(--panel);border:1px solid var(--border);border-left:4px solid ' + dirColor + ';border-radius:6px;padding:12px;margin-bottom:10px">' +
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">' +
+        '<span style="font-size:18px;font-weight:600">' + dirEmoji + ' ' + c.ticker + '</span>' +
+        '<span style="background:' + dirColor + ';color:#000;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600">' + c.direction + '</span>' +
+        '<span style="color:var(--muted);font-size:11px">' + premiumStr + ' · ' + c.orderCount + ' orders (' + c.sweepPct + '% sweeps) · ' + c.windowMin + 'min window</span>' +
+        '<span style="margin-left:auto;color:var(--muted);font-size:10px">' + firedAgo + 'm ago</span>' +
+      '</div>' +
+      '<div style="font-size:11px;color:' + confColor + ';margin-bottom:6px">' + c.confluence.text + '</div>' +
+      '<div>' + contractHtml + (c.underlyingPrice ? ' <span style="color:var(--muted);font-size:11px;margin-left:8px">stock $' + c.underlyingPrice.toFixed(2) + '</span>' : '') + '</div>' +
+      bracketHtml +
+      '<div style="display:flex;gap:6px;margin-top:10px;align-items:center">' +
+        '<label style="font-size:11px;color:var(--muted)">qty</label>' +
+        '<input type="number" id="qty-' + c.id + '" min="1" max="10" value="1" style="width:50px;background:#0e1420;color:var(--text);border:1px solid var(--border);padding:3px 6px;border-radius:3px;font-size:12px">' +
+        '<button onclick="onTakeTradeClick(\'' + c.id + '\')" ' + (takeBtnDisabled ? 'disabled' : '') + ' style="background:' + (takeBtnDisabled ? '#333' : btnColor) + ';color:#fff;border:none;padding:5px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:' + (takeBtnDisabled ? 'not-allowed' : 'pointer') + '">' + btnLabel + '</button>' +
+        '<span style="color:var(--muted);font-size:10px;margin-left:auto">smart-money: ' + c.ticker + ' $' + c.smartStrike + ' ' + (c.direction === 'BULLISH' ? 'C' : 'P') + ' exp ' + (c.smartExpiry ? c.smartExpiry.slice(5) : '?') + '</span>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+// ============================================================
+// ARM TOGGLE + TAKE TRADE — 1-click bracket fire (manual fire, not auto)
+// State: window._takeArmed (resets every page load — ARM each morning)
+// Auth:  STRATUM_SECRET stored in localStorage on first ARM
+// Cap:   5 fires/day, $1500/click dollar-risk (server enforces; UI warns)
+// ============================================================
+window._takeArmed = false;
+window._liveAccount = false;  // session-level account routing. Resets every page load.
+
+function toggleAccount() {
+  var btn = document.getElementById('acct-btn');
+  if (!window._liveAccount) {
+    if (!confirm('Switch to LIVE account?\n\nALL fires this session will route to your LIVE account 11975462 by default.\n\n(You can still uncheck LIVE in any individual fire modal to send that one to SIM.)\n\nClick OK to switch to LIVE.')) return;
+    window._liveAccount = true;
+    btn.textContent = '🔴 LIVE';
+    btn.style.background = '#3a1a1a';
+    btn.style.color = '#ff4757';
+    btn.style.borderColor = '#ff4757';
+  } else {
+    window._liveAccount = false;
+    btn.textContent = '🟢 SIM';
+    btn.style.background = '#1a3a1a';
+    btn.style.color = '#3fb950';
+    btn.style.borderColor = '#3fb950';
+  }
+  // Re-render so button labels show the routing suffix
+  if (document.getElementById('tab-tomorrow').style.display !== 'none') renderTomorrowSetups();
+  if (document.getElementById('tab-flow').style.display !== 'none') loadFlowCards();
+  if (document.getElementById('tab-movers').style.display !== 'none' && window._liveMoversData) {
+    var ms = Object.keys(window._liveMoversData).map(function(k){ return window._liveMoversData[k]; });
+    renderLiveMovers(ms);
+  }
+}
+
+function toggleArm() {
+  var btn = document.getElementById('arm-btn');
+  var meta = document.getElementById('arm-state-meta');
+  if (!window._takeArmed) {
+    // Need the secret to call /api/take-trade. Prompt once, persist locally.
+    var sec = localStorage.getItem('stratum_secret');
+    if (!sec) {
+      sec = prompt('Enter STRATUM_SECRET (one-time, stored locally on this browser):');
+      if (!sec) return;
+      localStorage.setItem('stratum_secret', sec.trim());
+    }
+    if (!confirm('ARM 1-click Take Trade?\n\n• Each click on a card fires N brackets to TradeStation\n• Default account is SIM unless you flip a card to LIVE\n• Daily cap: 5 fires\n• Dollar-risk cap: $1500/click (type OVER to override)\n\nClick OK to ARM.')) return;
+    window._takeArmed = true;
+    btn.textContent = '⚡ ARMED';
+    btn.style.background = '#ff4757';
+    btn.style.color = '#fff';
+    refreshArmState();
+    if (document.getElementById('tab-flow').style.display !== 'none') loadFlowCards();
+    if (document.getElementById('tab-tomorrow').style.display !== 'none') renderTomorrowSetups();
+    if (document.getElementById('tab-movers').style.display !== 'none' && window._liveMoversData) {
+      var msa = Object.keys(window._liveMoversData).map(function(k){ return window._liveMoversData[k]; });
+      renderLiveMovers(msa);
+    }
+  } else {
+    window._takeArmed = false;
+    btn.textContent = '🔒 DISARMED';
+    btn.style.background = '#1a2332';
+    btn.style.color = 'var(--muted)';
+    refreshArmState();
+    if (document.getElementById('tab-flow').style.display !== 'none') loadFlowCards();
+    if (document.getElementById('tab-tomorrow').style.display !== 'none') renderTomorrowSetups();
+    if (document.getElementById('tab-movers').style.display !== 'none' && window._liveMoversData) {
+      var msd = Object.keys(window._liveMoversData).map(function(k){ return window._liveMoversData[k]; });
+      renderLiveMovers(msd);
+    }
+  }
+}
+
+function refreshArmState() {
+  fetch('/api/take-trade/state').then(function(r){return r.json()}).then(function(s){
+    var m = document.getElementById('arm-state-meta');
+    if (m) m.textContent = (s.fires || 0) + '/' + (s.cap || 5);
+  }).catch(function(){});
+}
+setInterval(refreshArmState, 30000);
+refreshArmState();
+
+function onTakeTradeClick(cardId) {
+  // Find the card in the active buffer
+  fetch('/api/flow-cards/active').then(function(r){return r.json()}).then(function(d){
+    var cards = (d && d.cards) || [];
+    var card = cards.find(function(c){ return c.id === cardId; });
+    if (!card) return alert('Card not found in buffer (may have been cleared). Refresh and try again.');
+    var qtyEl = document.getElementById('qty-' + cardId);
+    var qty = qtyEl ? Math.max(1, Math.min(10, parseInt(qtyEl.value) || 1)) : 1;
+    showTakeTradeModal(card, qty);
+  });
+}
+
+function showTakeTradeModal(card, qty) {
+  var armed = window._takeArmed === true;
+  var entry = card.bracket.entry;
+  var stop  = card.bracket.stop;
+  var tp1   = card.bracket.tp1;
+  var tp2   = card.bracket.tp2;
+  var tpLadder = [tp1, tp2 || tp1, tp2 || tp1];
+  var perCtRisk = Math.abs(entry - stop);
+  var dollarRisk = Math.round(perCtRisk * 100 * qty);
+
+  // Build the bracket preview rows
+  var rows = '';
+  for (var i = 0; i < qty; i++) {
+    var tp = tpLadder[i % tpLadder.length];
+    rows +=
+      '<tr>' +
+        '<td style="padding:4px 8px">Bracket ' + (i+1) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--green)">1ct</td>' +
+        '<td style="padding:4px 8px">$' + entry.toFixed(2) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--red)">$' + stop.toFixed(2) + '</td>' +
+        '<td style="padding:4px 8px;color:var(--yellow)">$' + tp.toFixed(2) + '</td>' +
+      '</tr>';
+  }
+
+  var overWarning = dollarRisk > 500
+    ? '<div style="color:var(--red);background:#3a1a1a;padding:8px;border-radius:4px;margin-top:10px;font-size:11px">⚠ Dollar risk $' + dollarRisk + ' exceeds the $1500 cap. Type <b>OVER</b> in the box below and confirm to override.</div>'
+    : '';
+
+  var modal = document.createElement('div');
+  modal.id = 'take-trade-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+  modal.innerHTML =
+    '<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:20px;max-width:540px;width:90%">' +
+      '<h3 style="margin:0 0 8px;color:var(--text)">' + (armed ? '⚡ TAKE TRADE — ' : '👁 PREVIEW — ') + card.ticker + ' ' + card.direction + '</h3>' +
+      '<div style="font-size:11px;color:var(--muted);margin-bottom:12px"><code>' + (card.contract && card.contract.symbol) + '</code> · ' + qty + ' separate brackets · stop common · TP ladder per bracket</div>' +
+      '<table style="width:100%;font-size:12px;border-collapse:collapse;background:#0e1420;border-radius:4px">' +
+        '<thead><tr style="color:var(--muted);text-align:left">' +
+          '<th style="padding:6px 8px">Slot</th><th style="padding:6px 8px">Qty</th><th style="padding:6px 8px">Entry</th><th style="padding:6px 8px">Stop</th><th style="padding:6px 8px">TP</th>' +
+        '</tr></thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>' +
+      '<div style="margin-top:12px;font-size:11px;color:var(--muted)">Total dollar risk: <b style="color:' + (dollarRisk > 500 ? 'var(--red)' : 'var(--text)') + '">$' + dollarRisk + '</b></div>' +
+      overWarning +
+      '<div style="margin-top:8px"><label style="font-size:11px;color:' + (window._liveAccount ? '#ff4757' : 'var(--muted)') + ';font-weight:' + (window._liveAccount ? '700' : '400') + '"><input type="checkbox" id="ttm-live" ' + (window._liveAccount ? 'checked' : '') + ' style="margin-right:4px"> Send to ' + (window._liveAccount ? 'LIVE account 11975462' : 'LIVE account (otherwise SIM)') + '</label></div>' +
+      (dollarRisk > 1500 ? '<input type="text" id="ttm-over" placeholder="type OVER to override" style="margin-top:8px;width:100%;background:#0e1420;color:var(--text);border:1px solid var(--red);padding:6px;border-radius:4px;font-size:12px">' : '') +
+      '<div style="display:flex;gap:8px;margin-top:14px;justify-content:flex-end">' +
+        '<button onclick="closeTTModal()" style="background:transparent;color:var(--muted);border:1px solid var(--border);padding:8px 14px;border-radius:4px;cursor:pointer">Cancel</button>' +
+        (armed
+          ? '<button onclick="submitTakeTrade(\'' + card.id + '\',' + qty + ')" style="background:#ff4757;color:#fff;border:none;padding:8px 18px;border-radius:4px;font-weight:600;cursor:pointer">CONFIRM SEND</button>'
+          : '<button disabled style="background:#333;color:#aaa;border:none;padding:8px 18px;border-radius:4px;cursor:not-allowed">DISARMED — preview only</button>'
+        ) +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(modal);
+}
+
+function closeTTModal() {
+  var m = document.getElementById('take-trade-modal');
+  if (m) m.remove();
+}
+
+function submitTakeTrade(cardId, qty) {
+  // Apr 26 PM bug fix — same double-click guard as tomorrow path
+  if (window._takeTradeInFlight) {
+    console.warn('[TAKE-TRADE] Submit suppressed — request already in flight');
+    return;
+  }
+  // 9:45 AM ET hard gate — Apr 27 mandate
+  if (isPreOpenChopWindow()) {
+    alert('🚨 9:45 AM HARD GATE\n\nNo trades allowed before 9:45 AM ET.\nThis is a system rule per Apr 27 mandate.\n\nWait for the 9:45 fire window to open.');
+    return;
+  }
+  window._takeTradeInFlight = true;
+  var modalEl = document.getElementById('take-trade-modal');
+  if (modalEl) {
+    modalEl.querySelectorAll('button').forEach(function(b){
+      if (b.textContent && (b.textContent.indexOf('CONFIRM') !== -1)) {
+        b.disabled = true;
+        b.style.opacity = '0.5';
+        b.style.cursor = 'wait';
+        b.textContent = '⏳ SUBMITTING...';
+      }
+    });
+  }
+  var live = document.getElementById('ttm-live') && document.getElementById('ttm-live').checked === true;
+  var overEl = document.getElementById('ttm-over');
+  var confirmOver = overEl && overEl.value.trim().toUpperCase() === 'OVER';
+  var sec = localStorage.getItem('stratum_secret');
+  if (!sec) { window._takeTradeInFlight = false; alert('STRATUM_SECRET missing in localStorage. DISARM and re-ARM to set it.'); return; }
+
+  fetch('/api/take-trade', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+    body:    JSON.stringify({ cardId: cardId, qty: qty, live: live, confirmOver: confirmOver, source: 'flow-card' }),
+  })
+    .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+    .then(function(rr){
+      var s = rr.status;
+      var b = rr.body;
+      closeTTModal();
+      if (s === 200) {
+        var ok = b.brackets.filter(function(x){ return x.ok; }).length;
+        var fail = b.brackets.length - ok;
+        alert('✓ ' + ok + '/' + b.brackets.length + ' bracket(s) submitted (' + (b.live ? 'LIVE' : 'SIM') + ')\n\nDollar risk: $' + b.dollarRisk + '\nFires today: ' + b.dailyFire + '/' + b.dailyCap + (fail > 0 ? '\n\n⚠ ' + fail + ' bracket(s) FAILED — check logs' : ''));
+        refreshArmState();
+        loadFlowCards();
+      } else if (s === 412 && b.error === 'dollar_risk_over_cap') {
+        alert('Risk $' + b.dollarRisk + ' over $' + b.cap + ' cap. Re-open the card and type OVER in the override box.');
+      } else if (s === 429 && b.error === 'daily_cap_reached') {
+        alert('Daily fire cap reached (' + b.fires + '/' + b.cap + '). Use Titan directly for additional trades.');
+      } else if (s === 401) {
+        localStorage.removeItem('stratum_secret');
+        alert('Auth failed. STRATUM_SECRET cleared — re-ARM to enter again.');
+      } else {
+        alert('Take-Trade failed: ' + (b && b.error ? b.error : ('HTTP ' + s)));
+      }
+    })
+    .catch(function(e){ alert('Network error: ' + e.message); });
+}
+
+// Auto-refresh flow cards every 30s while the tab is visible
+setInterval(function(){
+  var t = document.getElementById('tab-flow');
+  if (t && t.style.display !== 'none') loadFlowCards();
+}, 30000);
+// Also refresh badge count silently every 60s regardless of active tab
+setInterval(function(){
+  fetch('/api/flow-cards/active').then(function(r){return r.json()}).then(function(d){
+    var badge = document.getElementById('flow-card-badge');
+    if (!badge) return;
+    var n = ((d && d.cards) || []).length;
+    if (n > 0) { badge.textContent = n; badge.style.display = 'inline-block'; }
+    else { badge.style.display = 'none'; }
+  }).catch(function(){});
+}, 60000);
 
 function toggleStar(ticker, btn) {
   var on = btn.classList.contains('on');

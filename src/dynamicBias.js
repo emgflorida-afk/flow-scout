@@ -162,7 +162,13 @@ async function postFlipAlert(from, to, strength, price, vwap, barType) {
 function getBias() { return state; }
 
 // Check if direction is allowed given current bias
+// Apr 27 2026 PM — env var BIAS_BLOCK_DISABLED=1 bypasses the gate.
+// Why: regime-flag is SPY-only and ignores per-ticker GEX confluence. AB
+// blocked from firing HOOD bull setup (GEX-confirmed +6.10M @ $90 magnet)
+// because SPY tape was BEARISH STRONG. Trader override needed when local
+// Strat × Flow × GEX agree against the broader regime.
 function isAllowed(direction) {
+  if (process.env.BIAS_BLOCK_DISABLED === '1' || process.env.BIAS_BLOCK_DISABLED === 'true') return true;
   if (!state.bias || state.bias === 'NEUTRAL') return true;
   if (direction === 'call' && state.bias === 'BEARISH' && state.strength === 'STRONG') return false;
   if (direction === 'put'  && state.bias === 'BULLISH' && state.strength === 'STRONG') return false;

@@ -533,9 +533,12 @@ async function scanTicker(ticker, token, earningsMap, tf) {
   tf = tf || 'Daily';
   var barUnit, barInterval, barCount;
   // Apr 24 2026 — added 30m, 60m, Monthly timeframe support
+  // Apr 27 PM — added 6HR (360min) per AB observation that 6H catches reversals
+  // 3-6 hours before daily and is the cleanest intraday HTF for retrace detection.
   if (tf === '30m')       { barUnit = 'Minute'; barInterval = 30; barCount = 60; }
   else if (tf === '60m' || tf === '1HR')  { barUnit = 'Minute'; barInterval = 60; barCount = 60; }
   else if (tf === '4HR' || tf === '4h')   { barUnit = 'Minute'; barInterval = 240; barCount = 60; tf = '4HR'; }
+  else if (tf === '6HR' || tf === '6h' || tf === '360')  { barUnit = 'Minute'; barInterval = 360; barCount = 40; tf = '6HR'; }
   else if (tf === 'Weekly' || tf === 'W') { barUnit = 'Weekly'; barInterval = 1; barCount = 20; tf = 'Weekly'; }
   else if (tf === 'Monthly' || tf === 'M') { barUnit = 'Monthly'; barInterval = 1; barCount = 20; tf = 'Monthly'; }
   else                     { barUnit = 'Daily';  barInterval = 1; barCount = 30; tf = 'Daily'; }

@@ -215,6 +215,25 @@ async function processAlert(alert) {
 
   console.log('[FLOW] ' + ticker + ' (' + rawSymbol + ') score:' + score + ' watchlist:' + onList + ' prem:$' + Math.round(prem));
 
+  // v6.2 (Apr 27 PM): WIRE INTO CLUSTER ENGINE.
+  // Apr 27 root-cause: flowCluster.addFlow had zero callers in codebase.
+  // Live alerts hit liveAggregator + Discord but NEVER reached the cluster
+  // engine, so cards never fired even with obvious institutional flow
+  // (AMD puts, NVDA calls today). Now every processAlert feeds clusters too.
+  try {
+    var flowCluster = require('./flowCluster');
+    flowCluster.addFlow({
+      id:           alert.id || alert.alertId || null,
+      opra:         rawSymbol,
+      symbol:       rawSymbol,
+      totalPremium: prem,
+      ticker:       ticker,
+      score:        score,
+    });
+  } catch(e) {
+    console.error('[FLOW->CLUSTER] feed error:', e.message);
+  }
+
   // Apr 20 2026: Discord flow posts OFF by default (AB decision). Flow routes to
   // scanner only. liveAggregator still receives all alerts (scanner populates).
   // Re-enable by setting FLOW_DISCORD_ENABLED=true.

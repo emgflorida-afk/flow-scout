@@ -1,22 +1,65 @@
-// flowCluster.js — Stratum Flow Scout v6.1
+// flowCluster.js — Stratum Flow Scout v6.2
 // Aggregates real-time flow alerts by ticker
 // Fires ONE cluster alert when combined premium crosses threshold
 // Reduces 31 individual alerts to 1 high-signal cluster card
+//
+// v6.2 (Apr 27 PM): persist _cardBuffer + processedAlertIds to /data so
+//   they survive Railway redeploys. Apr 27 bug: AB saw no flow cards
+//   despite obvious institutional flow (AMD puts, NVDA calls) — root cause
+//   was that _cardBuffer was in-memory only, wiped on every redeploy.
+//   Same bug caused "Card ID not found" errors when AB hit FIRE on a card
+//   whose buffer entry got wiped between scanner load and click.
+//   Also adds 12-hour age filter — cards older than 12h drop off the
+//   active list automatically (still in history file).
 // -----------------------------------------------------------------
 
 const fetch    = require('node-fetch');
+const fs       = require('fs');
+const path     = require('path');
 const resolver = require('./contractResolver');
+
+// Persist flow cards to Railway /data volume so they survive redeploys.
+const STATE_DIR = process.env.STATE_DIR || '/data';
+const CARDS_FILE = path.join(STATE_DIR, 'flow_cards.json');
+const CARD_AGE_LIMIT_MS = 12 * 60 * 60 * 1000;  // 12 hours
+
+function _safeReadCards() {
+  try {
+    if (!fs.existsSync(CARDS_FILE)) return [];
+    var raw = fs.readFileSync(CARDS_FILE, 'utf8');
+    var arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
+  } catch(e) {
+    console.error('[CLUSTER] cards-load error:', e.message);
+    return [];
+  }
+}
+function _safeWriteCards(cards) {
+  try {
+    if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.writeFileSync(CARDS_FILE, JSON.stringify(cards), 'utf8');
+  } catch(e) {
+    console.error('[CLUSTER] cards-save error:', e.message);
+  }
+}
 
 const CONVICTION_WEBHOOK = process.env.DISCORD_CONVICTION_WEBHOOK_URL;
 const FLOW_WEBHOOK       = process.env.DISCORD_FLOW_WEBHOOK_URL;
 
 // -- CLUSTER CONFIG -----------------------------------------------
+// Apr 26 2026 — lowered thresholds to catch IREN-class clusters (~$96K/8min)
+// that the old config missed. Override via env vars.
 const CONFIG = {
-  windowMs:       10 * 60 * 1000,  // 10 minute rolling window
-  minPremium:     500000,           // $500K combined to fire
-  minOrders:      3,                // minimum 3 orders same ticker
-  cooldownMs:     15 * 60 * 1000,  // 15 min cooldown after cluster fires
+  windowMs:       parseInt(process.env.FLOW_CLUSTER_WINDOW_MS  || '300000'),   // 5 min rolling window (was 10)
+  minPremium:     parseInt(process.env.FLOW_CLUSTER_MIN_PREM   || '150000'),   // $150K combined (was 500K)
+  minOrders:      parseInt(process.env.FLOW_CLUSTER_MIN_ORDERS || '3'),
+  cooldownMs:     parseInt(process.env.FLOW_CLUSTER_COOLDOWN_MS || '900000'), // 15 min
 };
+// CARD BUFFER — most-recent N fired clusters, served via /api/flow-cards/active
+// v6.2: now persisted to /data/flow_cards.json so it survives redeploys.
+const CARD_BUFFER_MAX = 100;  // bumped from 50, matches 12h capacity
+var _cardBuffer = _safeReadCards();
+console.log('[CLUSTER] Loaded ' + _cardBuffer.length + ' persisted flow cards from ' + CARDS_FILE);
 
 // -- CLUSTER STATE ------------------------------------------------
 const clusterState   = new Map();
@@ -200,45 +243,117 @@ function buildClusterCard(cluster, resolved) {
   return lines.join('\n');
 }
 
-// -- SEND CLUSTER ALERT -------------------------------------------
-async function sendClusterAlert(cluster) {
-  console.log('[CLUSTER] ' + cluster.ticker + ' ' + cluster.type.toUpperCase() + ' -- $' + (cluster.totalPremium/1000).toFixed(0) + 'K in ' + cluster.orderCount + ' orders FIRING');
+// -- BUILD STRUCTURED CARD OBJECT (for scanner UI) ----------------
+// Apr 26 2026 — display card (vs Discord text card). Returns a serializable
+// object the scanner.html flow panel renders, plus a confluence read against
+// the current scanner state (set externally via setScannerSetupLookup).
+var _scannerSetupLookup = null;  // function(ticker) -> {direction, pattern} | null
+function setScannerSetupLookup(fn) { _scannerSetupLookup = fn; }
 
-  // Resolve YOUR Stratum swing contract -- not the smart money's contract
-  let resolved = null;
-  try {
-    resolved = await resolver.resolveContract(cluster.ticker, cluster.type, 'SWING');
-  } catch (err) {
-    console.error('[CLUSTER] Contract resolve error:', err.message);
+function buildCardObject(cluster, resolved) {
+  const direction = cluster.type === 'put' ? 'BEARISH' : 'BULLISH';
+  const sweepPct  = cluster.orderCount > 0 ? Math.round(100 * cluster.sweepCount / cluster.orderCount) : 0;
+  const mid       = resolved && resolved.mid ? resolved.mid : null;
+  const stop      = mid ? +(mid * 0.60).toFixed(2) : null;
+  const tp1       = mid ? +(mid * 1.60).toFixed(2) : null;
+  const tp2       = mid ? +(mid * 2.20).toFixed(2) : null;
+
+  // Confluence — does this match a current scanner setup on the same ticker?
+  var confluence = { state: 'discovery', text: '⚠ discovery — no technical setup, watchlist tomorrow' };
+  if (_scannerSetupLookup) {
+    try {
+      const setup = _scannerSetupLookup(cluster.ticker);
+      if (setup && setup.direction) {
+        const flowSide  = direction === 'BULLISH' ? 'LONG' : 'SHORT';
+        const setupSide = setup.direction.toUpperCase().includes('LONG') || setup.direction.toUpperCase().includes('CALL') ? 'LONG' : 'SHORT';
+        if (flowSide === setupSide) {
+          confluence = { state: 'aligned', text: '✓ aligns with ' + setup.pattern + ' on ' + cluster.ticker };
+        } else {
+          confluence = { state: 'opposing', text: '⚠ OPPOSES current ' + setup.pattern + ' on ' + cluster.ticker + ' — pause/reassess' };
+        }
+      }
+    } catch(e) { /* ignore lookup errors */ }
   }
 
-  const card = buildClusterCard(cluster, resolved);
-
-  try {
-    const res = await fetch(CONVICTION_WEBHOOK, {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({
-        content:  '```\n' + card + '\n```',
-        username: 'Stratum Cluster',
-      }),
-    });
-    if (res.ok) console.log('[CLUSTER] Alert sent to #conviction-trades OK');
-    else console.error('[CLUSTER] Webhook error:', res.status);
-  } catch (err) {
-    console.error('[CLUSTER] Send error:', err.message);
-  }
-
-  return card;
+  return {
+    id:           cluster.ticker + '-' + cluster.type + '-' + Date.now(),
+    firedAt:      new Date().toISOString(),
+    ticker:       cluster.ticker,
+    direction:    direction,
+    flowSide:     direction === 'BULLISH' ? 'LONG' : 'SHORT',
+    totalPremium: cluster.totalPremium,
+    orderCount:   cluster.orderCount,
+    sweepCount:   cluster.sweepCount,
+    blockCount:   cluster.blockCount,
+    sweepPct:     sweepPct,
+    windowMin:    cluster.windowMinutes,
+    smartStrike:  cluster.dominantStrike,
+    smartExpiry:  cluster.nearestExpiry,
+    contract:     resolved ? {
+      symbol: resolved.symbol,
+      strike: resolved.strike,
+      expiry: resolved.expiry,
+      mid:    mid,
+      ask:    resolved.ask  || null,
+      bid:    resolved.bid  || null,
+      delta:  resolved.delta || null,
+    } : null,
+    bracket: mid ? { entry: mid, stop: stop, tp1: tp1, tp2: tp2, defaultQty: 1 } : null,
+    confluence: confluence,
+    underlyingPrice: resolved && resolved.price ? resolved.price : null,
+  };
 }
 
 // -- PROCESS INCOMING FLOW ----------------------------------------
 async function processFlow(flowData) {
   const cluster = addFlow(flowData);
   if (cluster) {
-    await sendClusterAlert(cluster);
+    // Resolve contract once, reused for both card paths.
+    let resolved = null;
+    try {
+      resolved = await resolver.resolveContract(cluster.ticker, cluster.type, 'SWING');
+    } catch (err) {
+      console.error('[CLUSTER] Contract resolve error:', err.message);
+    }
+
+    // 1) Discord text card (existing path, unchanged behavior)
+    try {
+      const card = buildClusterCard(cluster, resolved);
+      const res = await fetch(CONVICTION_WEBHOOK, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ content: '```\n' + card + '\n```', username: 'Stratum Cluster' }),
+      });
+      if (res.ok) console.log('[CLUSTER] Discord alert sent OK');
+      else console.error('[CLUSTER] Webhook error:', res.status);
+    } catch (err) {
+      console.error('[CLUSTER] Discord send error:', err.message);
+    }
+
+    // 2) Scanner-UI card object (new — display only, no auto-fire)
+    try {
+      const cardObj = buildCardObject(cluster, resolved);
+      cardObj.firedAt = cardObj.firedAt || Date.now();  // v6.2: timestamp for age filter
+      _cardBuffer.unshift(cardObj);
+      if (_cardBuffer.length > CARD_BUFFER_MAX) _cardBuffer.length = CARD_BUFFER_MAX;
+      _safeWriteCards(_cardBuffer);  // v6.2: persist
+      console.log('[CLUSTER] Card buffered + persisted: ' + cardObj.ticker + ' ' + cardObj.direction + ' ' + cardObj.confluence.state);
+    } catch(err) {
+      console.error('[CLUSTER] Card buffer error:', err.message);
+    }
   }
 }
+
+// v6.2: filter out stale (>12h) cards on read, but keep them in the
+// persisted file for history/research. UI only shows active.
+function getActiveCards() {
+  var cutoff = Date.now() - CARD_AGE_LIMIT_MS;
+  return _cardBuffer.filter(function(c) {
+    var t = c.firedAt || c.timestamp || 0;
+    return t >= cutoff;
+  });
+}
+function clearCards() { _cardBuffer = []; _safeWriteCards(_cardBuffer); }
 
 // -- GET CURRENT CLUSTER STATE ------------------------------------
 function getClusterSummary() {
@@ -256,4 +371,10 @@ function getClusterSummary() {
   return summary;
 }
 
-module.exports = { processFlow, getClusterSummary };
+module.exports = {
+  processFlow,
+  getClusterSummary,
+  getActiveCards,
+  clearCards,
+  setScannerSetupLookup,
+};

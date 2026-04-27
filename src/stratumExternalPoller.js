@@ -17,10 +17,15 @@ var fs = require('fs');
 var parser = require('./jsmithParser');
 
 // Channel IDs -- hardcoded but env-overridable
+// Apr 27 2026 PM — added SWINGS_LEAPS channel per AB. John posts multi-day
+// swing + LEAP picks here. Different timeframe than VIP_FLOW (day trades) —
+// these get parsed and surfaced to scanner as "swing watchlist" picks for
+// the next morning, not as same-day fires.
 var CHAN = {
   VIP_FLOW_OPTIONS:   process.env.CHAN_VIP_FLOW_OPTIONS   || '1417547885754712134',
   OPTION_TRADE_IDEAS: process.env.CHAN_OPTION_TRADE_IDEAS || '1401666517292023940',
   CAPITAL_FLOW:       process.env.CHAN_CAPITAL_FLOW       || '1411518843964096684',
+  SWINGS_LEAPS:       process.env.CHAN_SWINGS_LEAPS       || '1437546513160212610',
 };
 
 // Discord API base
@@ -279,13 +284,15 @@ async function runPollCycle(opts) {
     var webhookUrl = process.env.DISCORD_STRATUMEXTERNAL_WEBHOOK || process.env.DISCORD_JSMITH_WEBHOOK || process.env.DISCORD_EXECUTE_NOW_WEBHOOK;
 
     // Poll flow channel first so enrichment has fresh events before John ideas come in
-    var flowResult = await pollChannel(CHAN.CAPITAL_FLOW, token);
-    var vipResult  = await pollChannel(CHAN.VIP_FLOW_OPTIONS, token);
-    var otiResult  = await pollChannel(CHAN.OPTION_TRADE_IDEAS, token);
+    var flowResult  = await pollChannel(CHAN.CAPITAL_FLOW,       token);
+    var vipResult   = await pollChannel(CHAN.VIP_FLOW_OPTIONS,   token);
+    var otiResult   = await pollChannel(CHAN.OPTION_TRADE_IDEAS, token);
+    var swingResult = await pollChannel(CHAN.SWINGS_LEAPS,       token);
 
     var allNew = []
-      .concat(vipResult.newIdeas || [])
-      .concat(otiResult.newIdeas || []);
+      .concat(vipResult.newIdeas   || [])
+      .concat(otiResult.newIdeas   || [])
+      .concat(swingResult.newIdeas || []);
 
     if (allNew.length === 0) {
       return { flow: flowResult.parsed, john: 0 };

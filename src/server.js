@@ -117,6 +117,16 @@ app.get('/', function(req, res) {
 app.get('/flow/summary',  function(req, res) { res.json(bullflow.liveAggregator.getSummary()); });
 app.get('/flow/clusters', function(req, res) { res.json(flowCluster.getClusterSummary()); });
 
+// Flow cards — fired one-sided clusters with resolved contract + confluence read.
+// Display only; never auto-queues.
+app.get('/api/flow-cards/active', function(req, res) {
+  res.json({ ok: true, cards: flowCluster.getActiveCards() });
+});
+app.post('/api/flow-cards/clear', function(req, res) {
+  flowCluster.clearCards();
+  res.json({ ok: true });
+});
+
 app.get('/dashboard', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'dashboard.html'));
 });
@@ -129,6 +139,24 @@ app.get('/scanner', function(req, res) {
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }
+
+// Wire scanner setup lookup into flowCluster so card.confluence is computed
+// when a flow cluster fires. Looks up latest Daily scan, finds matching ticker,
+// returns {direction, pattern} for the cluster builder.
+if (stratumScanner) {
+  flowCluster.setScannerSetupLookup(function(ticker) {
+    try {
+      var last = stratumScanner.getLastScan('Daily');
+      if (!last || !last.rows) return null;
+      var row = last.rows.find(function(r) { return r.ticker === ticker; });
+      if (!row) return null;
+      var dir = row.direction || row.signalDirection || row.bias || null;
+      var pattern = row.signal || row.pattern || row.context || 'setup';
+      return dir ? { direction: dir, pattern: pattern } : null;
+    } catch(e) { return null; }
+  });
+  console.log('[SERVER] flowCluster scanner-setup lookup wired OK');
+}
 app.get('/api/stratum-scanner', async function(req, res) {
   if (!stratumScanner) return res.status(500).json({ error: 'stratumScanner not loaded' });
   try {
@@ -1082,6 +1110,273 @@ app.get('/win-rate', async function(req, res) {
   }
 });
 
+// -- TAKE-TRADE ENDPOINT (Apr 26 2026) ---------------------------
+// POST /api/take-trade — manual 1-click fire from scanner UI
+//
+// Body: {
+//   cardId: '<from flow-card buffer>'   OR provide bracket directly:
+//   ticker, action ('BUYTOOPEN' for both calls/puts since it's an option),
+//   symbol (OPRA), qty (1-10), entry, stop, tp1, tp2, tp3?,
+//   live (bool, default false → SIM), confirmOver (bool, required if dollarRisk>$500),
+//   source ('flow-card' | 'setup-card' | 'manual')
+// }
+//
+// Behavior: fires N=qty SEPARATE 1-ct brackets, each with its own (stop, TP)
+// bracket. TP ladder cycles: [TP1, TP2, TP3, TP1, TP2, ...].
+// AB workflow: 1 click → N brackets → if TP1 hits, bracket1 closes, others
+// keep running on stop. Avoids Titan's manual "modify TP, change qty" flow.
+//
+// Safety:
+//   - Requires STRATUM_SECRET header
+//   - Daily fire-count cap (5 by default, configurable via TAKE_TRADE_DAILY_CAP)
+//   - Per-trade dollar-risk cap ($500 default; override with confirmOver=true)
+//   - Logs every attempt to /data/take-trade-log.json + Discord audit webhook
+var _takeTradeDailyState = { date: null, fires: 0 };
+function _getTakeTradeETDate() {
+  return new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
+}
+function _resetTakeTradeIfNewDay() {
+  var d = _getTakeTradeETDate();
+  if (_takeTradeDailyState.date !== d) {
+    _takeTradeDailyState = { date: d, fires: 0 };
+  }
+}
+async function _logTakeTrade(entry) {
+  try {
+    var logPath = (process.env.STATE_DIR || '/data') + '/take-trade-log.json';
+    var prior = [];
+    try { prior = JSON.parse(require('fs').readFileSync(logPath, 'utf8')); } catch(_) {}
+    prior.unshift(entry);
+    if (prior.length > 200) prior.length = 200;
+    require('fs').writeFileSync(logPath, JSON.stringify(prior, null, 2));
+  } catch(e) { console.error('[TAKE-TRADE] log error:', e.message); }
+}
+async function _postTakeTradeAudit(entry) {
+  try {
+    var url = process.env.DISCORD_STRATUMEXTERNAL_WEBHOOK || process.env.DISCORD_FLOW_WEBHOOK_URL;
+    if (!url) return;
+    var lines = [
+      (entry.trigger ? '🎯 **CONDITIONAL BRACKET QUEUED**' : '⚡ **TAKE TRADE FIRED**') + ' — ' + entry.ticker + ' ' + entry.direction,
+      '`' + entry.symbol + '`',
+      'qty ' + entry.qty + ' · entry $' + entry.entry + ' · stop $' + entry.stop + ' · TPs ' + entry.tps.join('/'),
+      (entry.trigger ? 'trigger: ' + entry.trigger.symbol + ' ' + entry.trigger.predicate + ' $' + entry.trigger.price : 'fires immediately'),
+      'risk $' + entry.dollarRisk + ' · source ' + entry.source + ' · ' + (entry.live ? 'LIVE' : 'SIM'),
+      'fires today: ' + entry.dailyFire + '/' + entry.dailyCap,
+      entry.results.length + ' bracket(s) submitted: ' + entry.results.map(function(r){ return r.ok ? '✓' + (r.orderId || 'OK') : '✗' + (r.error || 'FAIL'); }).join(' '),
+    ];
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: lines.join('\n'), username: 'Take-Trade' }),
+    });
+  } catch(e) { console.error('[TAKE-TRADE] audit post error:', e.message); }
+}
+app.post('/api/take-trade', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!orderExecutor) return res.status(500).json({ error: 'orderExecutor not loaded' });
+
+    var b = req.body || {};
+    var qty = Math.max(1, Math.min(10, parseInt(b.qty) || 1));
+    var live = b.live === true;
+
+    // Resolve bracket: from cardId (look up flow-card buffer) or from explicit body.
+    var card = null;
+    if (b.cardId) {
+      var cards = flowCluster.getActiveCards();
+      card = cards.find(function(c){ return c.id === b.cardId; });
+      if (!card) return res.status(404).json({ error: 'cardId not found in active flow-card buffer' });
+      if (!card.contract || !card.bracket) return res.status(400).json({ error: 'card has no resolved contract or bracket — cannot fire' });
+    }
+
+    var ticker  = (card ? card.ticker  : b.ticker)  || null;
+    var symbol  = (card ? (card.contract && card.contract.symbol) : b.symbol) || null;
+    var entry   = parseFloat(card ? card.bracket.entry : b.entry);
+    var stop    = parseFloat(card ? card.bracket.stop  : b.stop);
+    var tp1     = parseFloat(card ? card.bracket.tp1   : b.tp1);
+    var tp2     = parseFloat(card ? card.bracket.tp2   : b.tp2);
+    var tp3     = b.tp3 ? parseFloat(b.tp3) : null;  // optional runner
+    var direction = card ? card.direction : (b.direction || 'BULLISH');
+
+    if (!symbol) return res.status(400).json({ error: 'symbol required (or cardId pointing to resolved contract)' });
+    if (!entry || !tp1) return res.status(400).json({ error: 'entry and tp1 required' });
+    // Either stop (option-premium StopLimit) or structuralStop (underlying activation) required
+    if (!stop && !(b.structuralStop && b.structuralStop.symbol && b.structuralStop.price)) {
+      return res.status(400).json({ error: 'either stop (option price) or structuralStop {symbol,predicate,price} required' });
+    }
+    // If only structuralStop given, use a sentinel option-price stop for risk estimation
+    if (!stop) stop = entry * 0.7;
+
+    // Build TP ladder for N brackets (cycle through tp1/tp2/tp3 as available)
+    var tpLadder = [tp1, tp2 || tp1, tp3 || tp2 || tp1];
+    var brackets = [];
+    for (var i = 0; i < qty; i++) {
+      brackets.push({ slot: i + 1, qty: 1, entry: entry, stop: stop, tp: tpLadder[i % tpLadder.length] });
+    }
+
+    // Dollar-risk cap (per-CLICK total = qty × per-contract risk × 100)
+    var perCtRisk = Math.abs(entry - stop);
+    var dollarRisk = Math.round(perCtRisk * 100 * qty);
+    // Apr 27 2026 PM — cap raised $500 → $1500 to allow AVGO/CRWD 2-3ct sizing
+    // (per-ct risk $260-280 means even 1ct on those names would have hit the
+    // old cap with extra commission). Higher names like NVDA/META still need
+    // the OVER override at extreme size.
+    var DOLLAR_CAP = parseInt(process.env.TAKE_TRADE_DOLLAR_CAP || '1500');
+    if (dollarRisk > DOLLAR_CAP && b.confirmOver !== true) {
+      return res.status(412).json({ error: 'dollar_risk_over_cap', dollarRisk: dollarRisk, cap: DOLLAR_CAP, hint: 'resubmit with confirmOver:true to override' });
+    }
+
+    // Daily fire-count cap
+    _resetTakeTradeIfNewDay();
+    var DAILY_CAP = parseInt(process.env.TAKE_TRADE_DAILY_CAP || '5');
+    if (_takeTradeDailyState.fires >= DAILY_CAP) {
+      return res.status(429).json({ error: 'daily_cap_reached', fires: _takeTradeDailyState.fires, cap: DAILY_CAP, hint: 'use Titan directly for additional trades today' });
+    }
+
+    var account = live ? '11975462' : 'SIM3142118M';
+
+    // Optional conditional trigger: queue the bracket at TS until underlying
+    // crosses a price level. Apr 26 2026 — for setup-card click-through where
+    // AB pre-queues brackets Sunday for Monday-open auto-fire.
+    var trigger = null;
+    if (b.trigger && b.trigger.symbol && b.trigger.price) {
+      trigger = {
+        symbol:    String(b.trigger.symbol).toUpperCase(),
+        predicate: (b.trigger.predicate || 'above').toLowerCase(),
+        price:     parseFloat(b.trigger.price),
+      };
+    }
+
+    // Apr 26 PM — manualFire bypasses time-of-day gates in orderExecutor.
+    // ALL fires through /api/take-trade are human-clicked, so by definition
+    // manual. The dead-zone / first-15-min gates exist to stop AUTO-fire,
+    // not to gate trader-driven entries the human has eyeballed.
+    var manualFire = true;
+
+    // Apr 26 PM — structuralStop attaches a MarketActivationRule on the
+    // UNDERLYING ticker to the bracket's stop child. Stop fires on the
+    // structural level breaking, NOT on option-price wicks. Tail-risk-event
+    // proof. When present, takes precedence over the option-price stop.
+    var structuralStop = null;
+    if (b.structuralStop && b.structuralStop.symbol && b.structuralStop.price) {
+      structuralStop = {
+        symbol:    String(b.structuralStop.symbol).toUpperCase(),
+        predicate: (b.structuralStop.predicate || 'below').toLowerCase(),
+        price:     parseFloat(b.structuralStop.price),
+      };
+    }
+
+    // Fire the N brackets sequentially. Each is a separate POST so they're
+    // independent — AB's "1 click → N brackets, each with own TP" workflow.
+    var results = [];
+    for (var k = 0; k < brackets.length; k++) {
+      var br = brackets[k];
+      try {
+        var r = await orderExecutor.placeOrder({
+          account:  account,
+          symbol:   symbol,
+          action:   'BUYTOOPEN',
+          qty:      br.qty,
+          limit:    br.entry,
+          stop:     br.stop,
+          t1:       br.tp,
+          duration: 'GTC',
+          note:     'take-trade slot ' + br.slot + '/' + qty + ' (TP=' + br.tp + ') src=' + (b.source || 'manual') + (trigger ? ' trig=' + trigger.symbol + trigger.predicate + trigger.price : '') + (structuralStop ? ' structStop=' + structuralStop.symbol + structuralStop.predicate + structuralStop.price : ''),
+          trigger:  trigger,                // null if no conditional entry, else fires on underlying cross
+          manualFire: manualFire,           // human-click bypass for time-of-day gates
+          structuralStop: structuralStop,   // null = use option-premium stop; else underlying activation
+        });
+        results.push(r && r.error
+          ? { slot: br.slot, ok: false, error: r.error }
+          : { slot: br.slot, ok: true, orderId: r && r.orderId, tp: br.tp });
+      } catch(e) {
+        results.push({ slot: br.slot, ok: false, error: e.message });
+      }
+    }
+
+    // Apr 26 PM bug fix — only count SUCCESSFUL bracket placements against
+    // the daily cap. Failed attempts (blacklist, TS reject, risk-cap, etc.)
+    // should not burn a daily slot.
+    var anySuccess = results.some(function(r){ return r.ok === true; });
+    if (anySuccess) {
+      _takeTradeDailyState.fires++;
+    } else {
+      console.log('[TAKE-TRADE] All ' + results.length + ' bracket(s) failed — daily counter NOT incremented (was ' + _takeTradeDailyState.fires + '/5)');
+    }
+
+    // Audit + log
+    var auditEntry = {
+      ts:         new Date().toISOString(),
+      ticker:     ticker,
+      symbol:     symbol,
+      direction:  direction,
+      qty:        qty,
+      entry:      entry,
+      stop:       stop,
+      tps:        tpLadder.slice(0, qty),
+      trigger:    trigger,
+      structuralStop: structuralStop,
+      dollarRisk: dollarRisk,
+      live:       live,
+      source:     b.source || 'manual',
+      cardId:     b.cardId || null,
+      dailyFire:  _takeTradeDailyState.fires,
+      dailyCap:   DAILY_CAP,
+      results:    results,
+    };
+    await _logTakeTrade(auditEntry);
+    await _postTakeTradeAudit(auditEntry);
+
+    res.json({
+      status: 'OK',
+      qty: qty,
+      brackets: results,
+      dollarRisk: dollarRisk,
+      dailyFire: _takeTradeDailyState.fires,
+      dailyCap: DAILY_CAP,
+      live: live,
+    });
+  } catch(e) {
+    console.error('[TAKE-TRADE] handler error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Read the full take-trade audit log (last 200 entries persisted on /data)
+app.get('/api/take-trade/log', function(req, res) {
+  try {
+    var logPath = (process.env.STATE_DIR || '/data') + '/take-trade-log.json';
+    var data = require('fs').readFileSync(logPath, 'utf8');
+    var entries = JSON.parse(data);
+    var limit = parseInt((req.query && req.query.limit) || '20', 10);
+    res.json({ ok: true, count: entries.length, entries: entries.slice(0, limit) });
+  } catch(e) { res.status(404).json({ ok: false, error: 'no log file yet — first take-trade fire will create it' }); }
+});
+
+// Manual reset of daily counter — guarded by STRATUM_SECRET. For testing
+// when you've burned the SIM slots and need to validate the LIVE path before
+// waiting for midnight ET. Logs a warning so the reset is visible in audit.
+app.post('/api/take-trade/reset', function(req, res) {
+  var secret = req.headers['x-stratum-secret'];
+  if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+  var prior = Object.assign({}, _takeTradeDailyState);
+  _takeTradeDailyState = { date: _getTakeTradeETDate(), fires: 0 };
+  console.log('[TAKE-TRADE] DAILY COUNTER RESET via /api/take-trade/reset — was ' + (prior.fires || 0) + '/5, now 0/5');
+  res.json({ ok: true, prior: prior, current: _takeTradeDailyState });
+});
+
+// Read-only daily counter so the UI can warn before clicking
+app.get('/api/take-trade/state', function(req, res) {
+  _resetTakeTradeIfNewDay();
+  res.json({
+    date: _takeTradeDailyState.date,
+    fires: _takeTradeDailyState.fires,
+    cap: parseInt(process.env.TAKE_TRADE_DAILY_CAP || '5'),
+    dollarCap: parseInt(process.env.TAKE_TRADE_DOLLAR_CAP || '1500'),
+  });
+});
+
 // -- ORDER EXECUTION ENDPOINT -----------------------------------
 // POST /webhook/execute -- place order directly via TS API
 // Supports SIM and LIVE accounts
@@ -1111,6 +1406,135 @@ app.post('/webhook/execute', async function(req, res) {
 });
 
 // POST /webhook/close -- close a position
+
+// ---------------------------------------------------------------
+// POST /api/protect-position -- attach stop + TP brackets to an EXISTING
+// position (e.g. when AB had to open manually and needs sells wired up).
+// Body: {
+//   account: "11975462" | "SIM3142118M",
+//   symbol: "HOOD 260501C86",
+//   underlyingSymbol: "HOOD",
+//   stopUnderlyingPrice: 82.50,         // structural stop on UNDERLYING
+//   tps: [                              // partial-close limit legs
+//     { qty: 2, limitPrice: 5.06 },
+//     { qty: 2, limitPrice: 6.08 },
+//     { qty: 1, limitPrice: 8.10 }
+//   ],
+//   totalQty: 5,                        // total contracts (used for stop size)
+//   stopPredicate: "below"              // "below" for calls, "above" for puts
+// }
+// Fires N orders to TS API: 1 stop-on-underlying + N TP limits. Returns
+// per-order results so AB can see which legs filled.
+// ---------------------------------------------------------------
+app.post('/api/protect-position', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+
+    var b = req.body || {};
+    var account     = String(b.account || '').trim();
+    var symbol      = String(b.symbol || '').trim();
+    var underlying  = String(b.underlyingSymbol || '').toUpperCase().trim();
+    var stopPrice   = parseFloat(b.stopUnderlyingPrice);
+    var stopPred    = (String(b.stopPredicate || 'below').toLowerCase() === 'above') ? 'Gt' : 'Lt';
+    var totalQty    = parseInt(b.totalQty);
+    var tps         = Array.isArray(b.tps) ? b.tps : [];
+    var skipStop    = b.skipStop === true;
+    var cancelOrderId = b.cancelOrderId ? String(b.cancelOrderId) : null;
+
+    if (!account || !symbol || !underlying || !isFinite(totalQty) || totalQty <= 0) {
+      return res.status(400).json({ error: 'missing or invalid: account, symbol, underlyingSymbol, totalQty' });
+    }
+    if (!skipStop && !isFinite(stopPrice)) {
+      return res.status(400).json({ error: 'missing stopUnderlyingPrice (or set skipStop:true to fire only TPs)' });
+    }
+
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ error: 'no TS token' });
+
+    var fetch  = require('node-fetch');
+    var isSim  = /^SIM/.test(account);
+    var apiBase = isSim ? 'https://sim-api.tradestation.com/v3' : 'https://api.tradestation.com/v3';
+
+    var ordersFired = [];
+
+    // ORDER 0: Cancel existing order if cancelOrderId specified (for stop swaps)
+    if (cancelOrderId) {
+      try {
+        var cancelRes = await fetch(apiBase + '/orderexecution/orders/' + cancelOrderId, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + token }
+        });
+        var cancelData;
+        try { cancelData = await cancelRes.json(); } catch(e) { cancelData = { status: cancelRes.status }; }
+        ordersFired.push({ type: 'CANCEL', orderId: cancelOrderId, status: cancelRes.status, result: cancelData });
+      } catch(e) { ordersFired.push({ type: 'CANCEL', orderId: cancelOrderId, error: e.message }); }
+    }
+
+    // ORDER 1: STOP on underlying — sells full position when UL crosses stop
+    if (!skipStop) {
+      var stopOrder = {
+        AccountID: account,
+        Symbol: symbol,
+        Quantity: String(totalQty),
+        OrderType: 'Market',
+        TradeAction: 'SELLTOCLOSE',
+        TimeInForce: { Duration: 'GTC' },
+        AdvancedOptions: {
+          MarketActivationRules: [{
+            RuleType: 'Price',
+            Symbol: underlying,
+            Predicate: stopPred,
+            TriggerKey: 'STT',
+            Price: stopPrice.toFixed(2)
+          }]
+        }
+      };
+      try {
+        var stopRes = await fetch(apiBase + '/orderexecution/orders', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(stopOrder)
+        });
+        var stopData = await stopRes.json();
+        ordersFired.push({ type: 'STOP', symbol: symbol, qty: totalQty, trigger: underlying + ' ' + stopPred + ' ' + stopPrice.toFixed(2), status: stopRes.status, result: stopData });
+      } catch(e) { ordersFired.push({ type: 'STOP', error: e.message }); }
+    }
+
+    // ORDERS 2..N: TP LIMIT legs
+    for (var i = 0; i < tps.length; i++) {
+      var leg = tps[i] || {};
+      var legQty   = parseInt(leg.qty);
+      var legPrice = parseFloat(leg.limitPrice);
+      if (!isFinite(legQty) || legQty <= 0 || !isFinite(legPrice) || legPrice <= 0) {
+        ordersFired.push({ type: 'TP', error: 'bad leg ' + JSON.stringify(leg) });
+        continue;
+      }
+      var tpOrder = {
+        AccountID: account,
+        Symbol: symbol,
+        Quantity: String(legQty),
+        OrderType: 'Limit',
+        TradeAction: 'SELLTOCLOSE',
+        TimeInForce: { Duration: 'GTC' },
+        LimitPrice: legPrice.toFixed(2)
+      };
+      try {
+        var tpRes = await fetch(apiBase + '/orderexecution/orders', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(tpOrder)
+        });
+        var tpData = await tpRes.json();
+        ordersFired.push({ type: 'TP' + (i + 1), symbol: symbol, qty: legQty, limit: legPrice.toFixed(2), status: tpRes.status, result: tpData });
+      } catch(e) { ordersFired.push({ type: 'TP' + (i + 1), error: e.message }); }
+    }
+
+    var anyOK = ordersFired.some(function(o){ return o.status >= 200 && o.status < 300; });
+    res.json({ ok: anyOK, account: account, symbol: symbol, totalQty: totalQty, ordersFired: ordersFired });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 // ---------------------------------------------------------------
 // GEXR WEBHOOK -- receives ATR Long/Short from TradingView
@@ -1973,28 +2397,108 @@ app.get('/api/brain/flow-concentration', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// Daily cron: 4:05 PM ET weekdays → pull today's concentration, auto-queue
-// top 5 liquid setups for tomorrow. This is the "list builds itself" loop.
+// =================================================================
+// NEXT-DAY WATCHLIST CRON (Apr 26 2026 PM build) — replaces auto-queue
+// Daily 4:30 PM ET weekdays:
+//  1. Run flowConcentration on today's tape
+//  2. Filter out blacklisted tickers (orderExecutor blacklist)
+//  3. Save top 15 to /data/next-day-watchlist.json (read by scanner UI tomorrow)
+//  4. Post a formatted Discord card to flow webhook for night-time review
+// AUTO-QUEUE IS OFF per Apr 21 operating model — display only, AB decides.
+// =================================================================
+var WATCHLIST_BLACKLIST = new Set([
+  'TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','IREN','CIFR','HIVE','SOFI',
+  'UPST','RKLB','LUNR','HOOD','AFRM','HIMS','APP','SNAP','RDDT','MRVL'
+]);
+
+async function _runNextDayWatchlist(opts) {
+  var dateOverride = opts && opts.date;
+  var postWebhook  = !(opts && opts.skipWebhook);
+  if (!flowConc) return { error: 'flowConcentration not loaded' };
+  var today = dateOverride || new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  console.log('[WATCHLIST-CRON] Running concentration for ' + today);
+
+  // Pull top 30 unfiltered (we'll filter after — limit larger so blacklist doesn't starve it)
+  var result = await flowConc.runConcentration({ date: today, autoQueue: false, limit: 30 });
+  if (!result || !result.ranked) {
+    console.log('[WATCHLIST-CRON] No ranked output:', result && result.error);
+    return { error: result && result.error || 'no ranked output' };
+  }
+
+  // Filter blacklist + cap to top 15 visible
+  var ranked = result.ranked.filter(function(r) { return !WATCHLIST_BLACKLIST.has(r.ticker); }).slice(0, 15);
+
+  // Persist to /data so the scanner UI can read it tomorrow morning
+  var watchlistFile = (process.env.STATE_DIR || '/data') + '/next-day-watchlist.json';
+  var payload = {
+    sourceDate:    today,
+    forTradingDate: null,  // populated by tomorrow's open
+    generatedAt:   new Date().toISOString(),
+    eventsDrained: result.eventsDrained,
+    alertsCounted: (result.customAlertsCounted || 0) + (result.algoAlertsCounted || 0),
+    blacklisted:   result.ranked.length - ranked.length,
+    ranked:        ranked,
+  };
+  try { require('fs').writeFileSync(watchlistFile, JSON.stringify(payload, null, 2)); }
+  catch(e) { console.error('[WATCHLIST-CRON] write error:', e.message); }
+
+  // Discord post — formatted as a readable night-time card
+  if (postWebhook && process.env.DISCORD_FLOW_WEBHOOK_URL && ranked.length > 0) {
+    var lines = [
+      '📊 **NEXT-DAY WATCHLIST — built from ' + today + ' tape**',
+      '_' + payload.alertsCounted + ' alerts ingested · top ' + ranked.length + ' (blacklist filtered ' + payload.blacklisted + ' names)_',
+      '```',
+      'TICKER   DIR   ALERTS  LEAN     PREMIUM      SCORE',
+    ];
+    ranked.forEach(function(r) {
+      var t = (r.ticker + '       ').slice(0, 8);
+      var d = (r.direction + '     ').slice(0, 6);
+      var a = ('     ' + r.total).slice(-5);
+      var lp = (r.leanPct.toFixed(1) + '%        ').slice(0, 7);
+      var p = ('$' + (r.totalPremium/1e6).toFixed(1) + 'M           ').slice(0, 11);
+      lines.push(t + d + a + '  ' + lp + p + r.score);
+    });
+    lines.push('```');
+    lines.push('Open scanner & cross-reference against Daily Strat patterns tomorrow morning.');
+    try {
+      await fetch(process.env.DISCORD_FLOW_WEBHOOK_URL, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: lines.join('\n'), username: 'Next-Day Watchlist' }),
+      });
+      console.log('[WATCHLIST-CRON] Discord post sent OK');
+    } catch(e) { console.error('[WATCHLIST-CRON] Discord error:', e.message); }
+  }
+
+  console.log('[WATCHLIST-CRON] Done. Top 5: ' + ranked.slice(0,5).map(function(r){ return r.ticker + ' ' + r.direction; }).join(', '));
+  return payload;
+}
+
 try {
   var cron = require('node-cron');
-  cron.schedule('5 16 * * 1-5', async function() {
-    try {
-      if (!flowConc) return;
-      var today = new Date().toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
-      console.log('[FLOW-CONC CRON] Running concentration for ' + today);
-      var result = await flowConc.runConcentration({ date: today, autoQueue: true, limit: 5 });
-      if (result && result.ranked) {
-        console.log('[FLOW-CONC CRON] Queued ' + (result.queued || []).length + ' of ' + result.ranked.length + ' ranked setups');
-        (result.ranked || []).forEach(function(r) {
-          console.log('  → ' + r.ticker + ' ' + r.direction + ' | ' + r.total + ' alerts ' + r.leanPct + '% | $' + Math.round(r.totalPremium / 1e6) + 'M | score ' + r.score);
-        });
-      } else if (result && result.error) {
-        console.log('[FLOW-CONC CRON] Error: ' + result.error);
-      }
-    } catch(e) { console.error('[FLOW-CONC CRON] Exception:', e.message); }
+  // 4:30 PM ET weekdays — 25 min after close, gives Bullflow archive time to settle
+  cron.schedule('30 16 * * 1-5', function() {
+    _runNextDayWatchlist({}).catch(function(e){ console.error('[WATCHLIST-CRON] Exception:', e.message); });
   }, { timezone: 'America/New_York' });
-  console.log('[FLOW-CONC CRON] Scheduled: 4:05 PM ET weekdays');
-} catch(e) { console.log('[FLOW-CONC CRON] node-cron missing — manual trigger only'); }
+  console.log('[WATCHLIST-CRON] Scheduled: 4:30 PM ET weekdays');
+} catch(e) { console.log('[WATCHLIST-CRON] node-cron missing — manual trigger only'); }
+
+// GET /api/watchlist/next-day — read the latest saved watchlist (display only)
+app.get('/api/watchlist/next-day', function(req, res) {
+  try {
+    var watchlistFile = (process.env.STATE_DIR || '/data') + '/next-day-watchlist.json';
+    var data = require('fs').readFileSync(watchlistFile, 'utf8');
+    res.json(JSON.parse(data));
+  } catch(e) { res.status(404).json({ error: 'no watchlist saved yet — wait for next 4:30 PM ET cron, or POST /api/watchlist/run' }); }
+});
+
+// POST /api/watchlist/run?date=YYYY-MM-DD — manual trigger (for testing or filling gaps)
+app.post('/api/watchlist/run', async function(req, res) {
+  try {
+    var date = (req.body && req.body.date) || (req.query && req.query.date);
+    var result = await _runNextDayWatchlist({ date: date, skipWebhook: req.query.silent === '1' });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 // POST /api/brain/backtest { date: "2026-04-11" }
 // Replays a historical day from Bullflow /backtesting, runs every algo alert
@@ -2666,6 +3170,339 @@ app.get('/api/jsmith/peek', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
+// Quick option-mid lookup for a list of OSI option symbols.
+// Example: /api/option-mids?symbols=KO%20260501C77,ET%20260501C19,BP%20260501C46,HOOD%20260501C86
+app.get('/api/option-mids', async function(req, res) {
+  try {
+    var raw = (req.query.symbols || '').toString();
+    if (!raw) return res.status(400).json({ error: 'symbols query param required (comma-separated OSI)' });
+    var syms = raw.split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ error: 'no TS token' });
+    var fetch = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + syms.map(encodeURIComponent).join(',');
+    var r = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    var data = await r.json();
+    var out = [];
+    if (data && data.Quotes) {
+      data.Quotes.forEach(function(q){
+        var bid = parseFloat(q.Bid);
+        var ask = parseFloat(q.Ask);
+        var last = parseFloat(q.Last);
+        var mid = (isFinite(bid) && isFinite(ask) && bid > 0 && ask > 0) ? +((bid + ask) / 2).toFixed(2) : null;
+        out.push({ symbol: q.Symbol, last: isFinite(last) ? last : null, bid: isFinite(bid) ? bid : null, ask: isFinite(ask) ? ask : null, mid: mid, volume: q.Volume, openInterest: q.DailyOpenInterest });
+      });
+    }
+    res.json({ count: out.length, quotes: out, errors: data && data.Errors });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
+// LIVE MOVERS AUTO-SCANNER — replaces handpicked TOMORROW watchlist
+// Added 2026-04-27 after HOOD -$600 loss + GOOGL/AAPL/MSFT mega-cap
+// rotation was missed because the handpicked board didn't cover them.
+//
+// Scans ~60 liquid optionable mega-caps + high-vol names every call,
+// computes composite mover score, returns top 20 ranked.
+// Cached 60s to avoid hammering TS API.
+//
+// Score = 50% pctMove + 30% volRatio + 20% rangeExpansion
+// Direction: CALL if positive move, PUT if negative
+// -----------------------------------------------------------------
+var LIVE_MOVERS_UNIVERSE = [
+  'SPY','QQQ','IWM',
+  'AAPL','MSFT','GOOGL','GOOG','AMZN','META','NVDA','TSLA','AVGO','AMD','NFLX',
+  'CRWD','PLTR','COIN','MSTR','MU','ORCL','ADBE','CRM','INTC','BABA',
+  'JPM','BAC','WFC','GS','V','MA',
+  'KO','PEP','JNJ','PFE','MRK','UNH',
+  'XOM','CVX','OXY','BP','COP',
+  'SHOP','NIO','RIVN','F','GM',
+  'HOOD','RBLX','U','ROKU','SNAP','UBER','LYFT','ABNB',
+  'DIS','NKE','BA','CAT','DE','MMM'
+];
+
+var _liveMoversCache = { time: 0, payload: null };
+var _volMA30Cache = {}; // { ticker: { value, time } }  — 30-day vol avg cached 6h
+
+async function getVolMA30(symbol, token) {
+  var now = Date.now();
+  var cached = _volMA30Cache[symbol];
+  if (cached && (now - cached.time) < 6 * 60 * 60 * 1000) return cached.value;
+  try {
+    var fetchLib = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(symbol)
+      + '?interval=1&unit=Daily&barsback=31';
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 8000 });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var bars = (data && data.Bars) ? data.Bars : [];
+    if (bars.length < 5) return null;
+    // Use last 30 fully-closed daily bars (drop today's in-progress bar at end)
+    var closed = bars.slice(0, Math.min(bars.length - 1, 30));
+    if (closed.length < 5) closed = bars.slice(-30);
+    var sum = 0, n = 0;
+    closed.forEach(function(b){
+      var v = parseFloat(b.TotalVolume || b.Volume || 0);
+      if (isFinite(v) && v > 0) { sum += v; n++; }
+    });
+    var avg = n > 0 ? sum / n : null;
+    _volMA30Cache[symbol] = { value: avg, time: now };
+    return avg;
+  } catch(e) {
+    return null;
+  }
+}
+
+function moverScore(d) {
+  var pctMove = Math.abs(d.pctChange || 0);
+  var volRatio = (d.volume || 0) / (d.volMA30 || 1);
+  var rangePct = 0;
+  if (d.high && d.low && d.prevClose) {
+    rangePct = ((d.high - d.low) / d.prevClose) * 100;
+  }
+  // Cap volRatio at 5 to prevent thin-volume names from skewing
+  var vr = Math.min(volRatio, 5);
+  var score = (pctMove * 0.5) + (vr * 6) + (rangePct * 0.5);
+  return { score: score, volRatio: volRatio, rangePct: rangePct };
+}
+
+// Pine autoStep — match the StratumLevels indicator strike-step convention.
+// <$25 → 0.5, $25-100 → 1, $100-250 → 2.5, $250-500 → 5, >$500 → 10
+function liveMoverAutoStep(spot) {
+  if (!spot || !isFinite(spot)) return 1;
+  if (spot >= 500) return 10;
+  if (spot >= 250) return 5;
+  if (spot >= 100) return 2.5;
+  if (spot >= 25)  return 1;
+  return 0.5;
+}
+
+function liveMoverAtmStrike(spot) {
+  if (!spot || !isFinite(spot)) return null;
+  var step = liveMoverAutoStep(spot);
+  return Math.round(spot / step) * step;
+}
+
+// Returns YYMMDD for the next Friday at or after today (ET).
+// Mirrors dailyPlanV4.nextFridayYYMMDD without importing it (server-side
+// duplicate kept tiny + dependency-free for /api/live-movers hot path).
+function liveMoverNextFridayYYMMDD() {
+  var now = new Date();
+  for (var i = 0; i <= 7; i++) {
+    var trial = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
+    // ET weekday — use toLocaleString to coerce
+    var wd = trial.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'America/New_York' });
+    if (wd === 'Fri') {
+      var parts = trial.toLocaleDateString('en-US', {
+        year: 'numeric', month: '2-digit', day: '2-digit', timeZone: 'America/New_York',
+      }).split('/');  // mm/dd/yyyy
+      var mm = parts[0], dd = parts[1], yyyy = parts[2];
+      return String(yyyy).slice(2) + mm + dd;
+    }
+  }
+  return null;
+}
+
+// Build OSI: "TICKER YYMMDDC|Pstrike" (strip trailing .0/.00)
+function liveMoverBuildOSI(ticker, expiryYYMMDD, side, strike) {
+  var s = String(strike);
+  if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+  return ticker + ' ' + expiryYYMMDD + side + s;
+}
+
+// John's ladder applied to option mid: stop=0.75x, tp1=1.25x, tp2=1.5x, tp3=2.0x.
+// Used on Live Movers cards so AB can fire directly without recomputing.
+function liveMoverOptionLadder(mid) {
+  if (!mid || !isFinite(mid) || mid <= 0) return null;
+  return {
+    entry: +mid.toFixed(2),
+    stop:  +(mid * 0.75).toFixed(2),
+    tp1:   +(mid * 1.25).toFixed(2),
+    tp2:   +(mid * 1.50).toFixed(2),
+    tp3:   +(mid * 2.00).toFixed(2),
+  };
+}
+
+// Compute adaptive stock levels (12.5/25/50/75/87.5%) from today's high/low.
+// Used to derive trigger + structural-stop + TP1/TP2 price-of-stock for the
+// Live Movers card, matching the Pine StratumLevels framework.
+function liveMoverStockLevels(low, high) {
+  if (!isFinite(low) || !isFinite(high) || high <= low) return null;
+  var range = high - low;
+  return {
+    level125: +(low + range * 0.125).toFixed(2),
+    level25:  +(low + range * 0.25).toFixed(2),
+    level50:  +(low + range * 0.50).toFixed(2),
+    level75:  +(low + range * 0.75).toFixed(2),
+    level875: +(low + range * 0.875).toFixed(2),
+  };
+}
+
+app.get('/api/live-movers', async function(req, res) {
+  try {
+    var now = Date.now();
+    if (_liveMoversCache.payload && (now - _liveMoversCache.time) < 60 * 1000) {
+      return res.json(Object.assign({ cached: true }, _liveMoversCache.payload));
+    }
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ error: 'no TS token — visit /ts-auth' });
+    var fetchLib = require('node-fetch');
+    var symbols = LIVE_MOVERS_UNIVERSE.slice();
+    // Bulk quote pull — TS supports comma-separated list
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + symbols.map(encodeURIComponent).join(',');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 12000 });
+    if (!r.ok) return res.status(500).json({ error: 'TS quotes failed: ' + r.status });
+    var data = await r.json();
+    var quotes = (data && data.Quotes) ? data.Quotes : [];
+
+    // Fan out vol-MA pulls in parallel (capped at 8 concurrent) to keep
+    // total call time bounded. Cache hits are instant; cold-fetches happen
+    // once per ticker every 6h.
+    var tasks = quotes.map(function(q){
+      return (async function(){
+        var sym = q.Symbol;
+        var last       = parseFloat(q.Last || q.Close || 0);
+        var prevClose  = parseFloat(q.PreviousClose || q.Close || 0);
+        var volume     = parseFloat(q.Volume || 0);
+        var high       = parseFloat(q.High || 0);
+        var low        = parseFloat(q.Low || 0);
+        var open       = parseFloat(q.Open || 0);
+        var pctChange  = (prevClose > 0 && isFinite(last)) ? ((last - prevClose) / prevClose) * 100 : 0;
+        var volMA30    = await getVolMA30(sym, token);
+        var d = {
+          ticker:     sym,
+          last:       isFinite(last) ? +last.toFixed(2) : null,
+          prevClose:  isFinite(prevClose) ? +prevClose.toFixed(2) : null,
+          open:       isFinite(open) ? +open.toFixed(2) : null,
+          high:       isFinite(high) ? +high.toFixed(2) : null,
+          low:        isFinite(low)  ? +low.toFixed(2)  : null,
+          pctChange:  +pctChange.toFixed(2),
+          volume:     isFinite(volume) ? volume : 0,
+          volMA30:    volMA30 ? Math.round(volMA30) : null,
+        };
+        var ms = moverScore(d);
+        d.volRatio = volMA30 ? +(volume / volMA30).toFixed(2) : null;
+        d.rangePct = +ms.rangePct.toFixed(2);
+        d.score    = +ms.score.toFixed(2);
+        d.suggestedDirection = pctChange >= 0 ? 'CALL' : 'PUT';
+        return d;
+      })();
+    });
+
+    // Concurrency-limited execution
+    var CONCURRENCY = 8;
+    var results = [];
+    for (var i = 0; i < tasks.length; i += CONCURRENCY) {
+      var slice = tasks.slice(i, i + CONCURRENCY);
+      var batch = await Promise.all(slice);
+      results = results.concat(batch);
+    }
+
+    // Filter out broken rows (no last or no prevClose) then rank by abs score
+    var clean = results.filter(function(d){ return d.last && d.prevClose; });
+    clean.sort(function(a, b){ return b.score - a.score; });
+    var top = clean.slice(0, 20);
+
+    // -----------------------------------------------------------------
+    // Per-mover bracket enrichment for FIRE NOW + QUEUE w/ TRIGGER UI.
+    // For each top mover compute:
+    //   - adaptive stock levels (12.5 / 25 / 50 / 75 / 87.5 % of today's range)
+    //   - trigger price (last ± 0.10 buffer, side-dependent)
+    //   - structural stop on the UNDERLYING (level125 long, level875 short)
+    //   - TP1 / TP2 stock targets (level50 / level75 long, level50 / level25 short)
+    //   - ATM strike via Pine autoStep, next-Friday OSI
+    //   - John's ladder on the live option mid (entry/stop/tp1/tp2/tp3)
+    // Option mids are fetched in one batch off the same TS endpoint
+    // /api/option-mids uses, so we don't pay another HTTP hop.
+    // -----------------------------------------------------------------
+    var expiry = liveMoverNextFridayYYMMDD();
+    top.forEach(function(d) {
+      var lvls = liveMoverStockLevels(d.low, d.high);
+      d.level25 = lvls ? lvls.level25 : null;
+      d.level50 = lvls ? lvls.level50 : null;
+      d.level75 = lvls ? lvls.level75 : null;
+      var isCall = d.suggestedDirection === 'CALL';
+      var BUF = 0.10;  // trigger buffer above/below current
+      d.triggerPrice = isFinite(d.last) ? +(isCall ? d.last + BUF : d.last - BUF).toFixed(2) : null;
+      d.triggerPredicate = isCall ? 'above' : 'below';
+      if (lvls) {
+        d.structuralStop = {
+          symbol:    d.ticker,
+          predicate: isCall ? 'below' : 'above',
+          price:     isCall ? lvls.level125 : lvls.level875,
+        };
+        d.stockTp1 = isCall ? lvls.level50 : lvls.level50;
+        d.stockTp2 = isCall ? lvls.level75 : lvls.level25;
+      } else {
+        d.structuralStop = null;
+        d.stockTp1 = null;
+        d.stockTp2 = null;
+      }
+      d.atmStrike = liveMoverAtmStrike(d.last);
+      d.expiry    = expiry;
+      d.optionSymbol = (d.atmStrike && expiry)
+        ? liveMoverBuildOSI(d.ticker, expiry, isCall ? 'C' : 'P', d.atmStrike)
+        : null;
+    });
+
+    // Single bulk option-mid pull for all top movers.
+    var optionSymbols = top.map(function(d){ return d.optionSymbol; }).filter(Boolean);
+    var midsByOSI = {};
+    if (optionSymbols.length) {
+      try {
+        var midUrl = 'https://api.tradestation.com/v3/marketdata/quotes/' +
+                     optionSymbols.map(encodeURIComponent).join(',');
+        var mr = await fetchLib(midUrl, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 12000 });
+        if (mr.ok) {
+          var mdata = await mr.json();
+          (mdata && mdata.Quotes ? mdata.Quotes : []).forEach(function(q){
+            var bid = parseFloat(q.Bid);
+            var ask = parseFloat(q.Ask);
+            var mid = (isFinite(bid) && isFinite(ask) && bid > 0 && ask > 0)
+                      ? +((bid + ask) / 2).toFixed(2) : null;
+            midsByOSI[q.Symbol] = { mid: mid, bid: isFinite(bid) ? bid : null, ask: isFinite(ask) ? ask : null };
+          });
+        }
+      } catch(e) {
+        console.log('[LIVE-MOVERS] option-mid bulk fetch failed:', e.message);
+      }
+    }
+
+    top.forEach(function(d){
+      var q = d.optionSymbol ? midsByOSI[d.optionSymbol] : null;
+      if (!q && d.optionSymbol) {
+        // Fallback: TS sometimes echoes the symbol with trailing .0 stripped/added
+        q = midsByOSI[d.optionSymbol.replace(/(\d)\.0$/, '$1')] ||
+            midsByOSI[d.optionSymbol + '.0'];
+      }
+      d.optionMid  = q ? q.mid : null;
+      d.optionBid  = q ? q.bid : null;
+      d.optionAsk  = q ? q.ask : null;
+      var ladder = liveMoverOptionLadder(d.optionMid);
+      d.optionEntry = ladder ? ladder.entry : null;
+      d.optionStop  = ladder ? ladder.stop  : null;
+      d.optionTp1   = ladder ? ladder.tp1   : null;
+      d.optionTp2   = ladder ? ladder.tp2   : null;
+      d.optionTp3   = ladder ? ladder.tp3   : null;
+    });
+
+    var payload = {
+      ok:       true,
+      count:    top.length,
+      universe: LIVE_MOVERS_UNIVERSE.length,
+      ts:       new Date().toISOString(),
+      movers:   top,
+    };
+    _liveMoversCache = { time: now, payload: payload };
+    res.json(payload);
+  } catch(e) {
+    console.error('[LIVE-MOVERS]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/jsmith/diag', function(req, res) {
   res.json({
     hasToken: !!process.env.DISCORD_USER_TOKEN,
@@ -2674,6 +3511,65 @@ app.get('/api/jsmith/diag', function(req, res) {
     jsmithTest: process.env.JSMITH_TEST || null,
     envKeysWithDiscord: Object.keys(process.env).filter(function(k){return k.indexOf('DISCORD')>=0 || k.indexOf('JSMITH')>=0;}),
   });
+});
+
+// -----------------------------------------------------------------
+// DAILY TRADE PLAN V4 — auto-discovered tomorrow board
+// Built Apr 27 2026 after handpicked watchlist missed GOOGL/SNAP/MU
+// rotation + AB lost $600 on HOOD. Replaces human curation with:
+//   /api/live-movers + JSmith peek (4 channels) + composite scoring
+// Cron: 4:30 PM ET Mon-Fri. Manual trigger: POST /api/tradeplan/build-v4
+// -----------------------------------------------------------------
+var dailyPlanV4 = null;
+try { dailyPlanV4 = require('./dailyPlanV4'); console.log('[SERVER] dailyPlanV4 loaded OK'); }
+catch(e) { console.log('[SERVER] dailyPlanV4 not loaded:', e.message); }
+
+cron.schedule('30 16 * * 1-5', function() {
+  if (!dailyPlanV4) return;
+  dailyPlanV4.runDailyPlanCron().catch(function(e){ console.error('[V4-PLAN cron]', e.message); });
+}, { timezone: 'America/New_York' });
+
+app.post('/api/tradeplan/build-v4', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) return res.status(401).json({ error: 'Unauthorized' });
+    if (!dailyPlanV4) return res.status(500).json({ error: 'dailyPlanV4 not loaded' });
+    var target = (req.body && req.body.targetDate) ? req.body.targetDate : null;
+    var post = req.body && req.body.postDiscord !== false;
+    var out = await dailyPlanV4.generateV4Plan(target);
+    var disc = null;
+    if (post) {
+      // Reuse the cron path so behavior matches scheduled runs.
+      disc = await (async function() {
+        var fetchLib = require('node-fetch');
+        var hook = process.env.DISCORD_STRATUMSWING_WEBHOOK;
+        if (!hook) return { skipped: 'no DISCORD_STRATUMSWING_WEBHOOK' };
+        try {
+          var r = await fetchLib(hook, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: out.discordContent, username: 'Stratum Trade Plan v4' }),
+            timeout: 8000,
+          });
+          return { status: r.status, ok: r.ok };
+        } catch (e) { return { error: e.message }; }
+      })();
+    }
+    res.json({
+      ok:        true,
+      targetISO: out.targetISO,
+      expiry:    out.expiry,
+      mdPath:    out.mdPath,
+      pdfPath:   out.pdfPath,
+      builtAtET: out.builtAtET,
+      picks:     out.picks,
+      discord:   disc,
+      md:        out.md,
+    });
+  } catch(e) {
+    console.error('[V4-PLAN endpoint]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // -----------------------------------------------------------------
@@ -2889,6 +3785,55 @@ app.get('/api/gex/:ticker', async function(req, res) {
     if (!levels) return res.status(404).json({ error: 'No GEX data for ' + ticker });
     res.json({ ok: true, levels: levels, discord: gex.formatGEXForDiscord(levels) });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// OPTIONS CHAIN API (Apr 26 2026 PM) — strike-by-strike call/put with Greeks.
+// GET /api/options-chain/:ticker?expiry=YYYY-MM-DD&priceCenter=425
+//   - expiry default: next Friday
+//   - priceCenter default: current quote
+// Returns merged-by-strike chain + best-strike picks for the OPTIONS tab.
+var optionsChain = null;
+try { optionsChain = require('./optionsChain'); console.log('[SERVER] optionsChain loaded OK'); }
+catch(e) { console.log('[SERVER] optionsChain not loaded:', e.message); }
+
+function _nextFridayISO() {
+  var d = new Date();
+  var dow = d.getUTCDay();  // 0 = Sun, 5 = Fri
+  var daysToFri = (5 - dow + 7) % 7;
+  if (daysToFri === 0) daysToFri = 7;  // if today is Friday, return next Friday
+  d.setUTCDate(d.getUTCDate() + daysToFri);
+  return d.toISOString().slice(0, 10);
+}
+
+app.get('/api/options-chain/:ticker', async function(req, res) {
+  if (!optionsChain) return res.status(500).json({ error: 'optionsChain module not loaded' });
+  try {
+    var ticker = String(req.params.ticker).toUpperCase();
+    var expiry = req.query.expiry || _nextFridayISO();
+    var priceCenter = req.query.priceCenter ? parseFloat(req.query.priceCenter) : null;
+
+    // If no priceCenter passed, fetch live quote so the chain centers on ATM
+    if (!priceCenter) {
+      try {
+        var ts = require('./tradestation');
+        var token = await ts.getAccessToken();
+        if (token) {
+          var qr = await require('node-fetch')('https://api.tradestation.com/v3/marketdata/quotes/' + ticker, {
+            headers: { 'Authorization': 'Bearer ' + token }
+          });
+          var qd = await qr.json();
+          var q = (qd.Quotes && qd.Quotes[0]) || {};
+          priceCenter = parseFloat(q.Last || q.Close || 0) || null;
+        }
+      } catch(_) { /* soft fail — chain will still work without priceCenter */ }
+    }
+
+    var data = await optionsChain.fetchChain(ticker, expiry, priceCenter);
+    res.json({ ok: true, chain: data });
+  } catch(e) {
+    console.error('[OPTIONS-CHAIN]', e.message);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // SIGNAL PERFORMANCE TRACKER API

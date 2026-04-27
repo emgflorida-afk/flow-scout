@@ -107,11 +107,22 @@ async function placeOrder(params) {
     t2,          // take profit 2 (optional runner)
     duration,    // GTC or DAY
     note,        // for logging
+    trigger,     // Apr 26 2026: { symbol, predicate ('above'|'below'), price }
+                 // attaches TS MarketActivationRules so order queues until
+                 // underlying crosses trigger. Bypasses RTH gate (GTC-queued).
   } = params;
 
+  // Apr 26 PM — manualFire flag bypasses time-based gates. Set by
+  // /api/take-trade for human-click-through fires (FLOW CARDS button,
+  // TOMORROW tab FIRE NOW). The human is the gate; the time-of-day
+  // restrictions exist to prevent AUTO-fire in chop hours, not to gate
+  // intentional manual entries the trader has already eyeballed.
+  var manualFire = params.manualFire === true;
+
   // ================================================================
-  // MARKET HOURS GATE -- block orders outside RTH (9:30AM-4PM ET)
-  // Only applies to BUYTOOPEN (new entries). Close orders always allowed.
+  // GATES — split into time-based (skipped for conditional/manual) and
+  // contract-based (always enforced). Conditional orders queue at TS;
+  // manual orders are deliberate clicks. Time gates don't apply to either.
   // ================================================================
   if (action === 'BUYTOOPEN') {
     var etStr = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
@@ -121,18 +132,21 @@ async function placeOrder(params) {
     var etM = parseInt(tParts[1], 10);
     var etTotal = etH * 60 + etM;
     var dayOfWeek = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', weekday: 'short' });
-    if (dayOfWeek === 'Sat' || dayOfWeek === 'Sun') {
-      console.log('[EXECUTOR] BLOCKED -- weekend order attempted on', dayOfWeek);
-      return { error: 'Market closed -- weekend. No orders allowed.' };
-    }
-    if (etTotal < (9 * 60 + 30) || etTotal >= (16 * 60)) {
-      console.log('[EXECUTOR] BLOCKED -- outside RTH:', etH + ':' + (etM < 10 ? '0' : '') + etM, 'ET');
-      return { error: 'Market closed -- outside 9:30AM-4PM ET. Current time: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+
+    // TIME-BASED GATES — skipped if conditional order (trigger present)
+    if (!trigger && !manualFire) {
+      if (dayOfWeek === 'Sat' || dayOfWeek === 'Sun') {
+        console.log('[EXECUTOR] BLOCKED -- weekend order attempted on', dayOfWeek);
+        return { error: 'Market closed -- weekend. No orders allowed.' };
+      }
+      if (etTotal < (9 * 60 + 30) || etTotal >= (16 * 60)) {
+        console.log('[EXECUTOR] BLOCKED -- outside RTH:', etH + ':' + (etM < 10 ? '0' : '') + etM, 'ET');
+        return { error: 'Market closed -- outside 9:30AM-4PM ET. Current time: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+      }
     }
 
     // ============================================================
-    // HARD GATES -- committed Apr 17 2026 after loss-pattern audit
-    // (SPY dead-zone / 0DTE / re-entry chop cost -$52 Apr 15-17)
+    // CONTRACT-BASED GATES — always enforced (blacklist, 0DTE, etc.)
     // ============================================================
     var baseTicker = (symbol || '').split(' ')[0].toUpperCase();
 
@@ -142,9 +156,15 @@ async function placeOrder(params) {
     // Apr 20 2026 AM: added high-IV small-cap names that keep stopping out on
     // gamma chop — UPST/RKLB/LUNR/HOOD/AFRM/HIMS/APP/SNAP/RDDT. AB's rule.
     // Apr 20 2026 PM: added MRVL (-$110 on Apr 17, Casey false-positive pattern).
+    // Apr 26 PM — IREN removed. AB's symmetric-triangle / bull-flag setup
+    // with FTFC alignment is structurally documented; he needs the option to
+    // act on it this week. Remaining BTC-correlated names (TSLA/MSTR/COIN/etc.)
+    // and high-IV chop names (UPST/APP/etc.) stay blacklisted.
+    // Apr 27 — HOOD removed at AB's request. JSmith VIP 4/27 pick (86C 5/1
+    // entry $85.05) gets the option to fire when triggered.
     var BLACKLIST = [
-      'TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'IREN', 'CIFR', 'HIVE', 'SOFI',
-      'UPST', 'RKLB', 'LUNR', 'HOOD', 'AFRM', 'HIMS', 'APP', 'SNAP', 'RDDT',
+      'TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'CIFR', 'HIVE', 'SOFI',
+      'UPST', 'RKLB', 'LUNR', 'AFRM', 'HIMS', 'APP', 'SNAP', 'RDDT',
       'MRVL'
     ];
     if (BLACKLIST.indexOf(baseTicker) !== -1) {
@@ -178,28 +198,28 @@ async function placeOrder(params) {
       }
     } catch(e) { /* soft fail — don't block on parse error */ }
 
-    // GATE: First 15 min of open (9:30-9:45 AM ET) -- block all entries.
-    // Opening auction chaos produces false breakouts. Let the 15-min bar
-    // close and establish direction before entering.
-    // Committed Apr 18 2026 — reinforces AB's "no trades before 9:45" rule.
-    if (etTotal >= (9 * 60 + 30) && etTotal < (9 * 60 + 45)) {
-      console.log('[EXECUTOR] BLOCKED -- first 15 min ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (wait for 9:45 candle close)');
-      return { error: 'First-15-min block. No new entries 9:30-9:45 AM ET. Wait for opening bar to close. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
-    }
+    // TIME-BASED GATES (skipped for conditional/queued orders)
+    if (!trigger && !manualFire) {
+      // GATE: First 15 min of open (9:30-9:45 AM ET) -- block all entries.
+      if (etTotal >= (9 * 60 + 30) && etTotal < (9 * 60 + 45)) {
+        console.log('[EXECUTOR] BLOCKED -- first 15 min ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (wait for 9:45 candle close)');
+        return { error: 'First-15-min block. No new entries 9:30-9:45 AM ET. Wait for opening bar to close. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+      }
 
-    // GATE: Dead zone (11:30 AM - 2:00 PM ET) -- no new entries, period
-    if (etTotal >= (11 * 60 + 30) && etTotal < (14 * 60)) {
-      console.log('[EXECUTOR] BLOCKED -- dead zone ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (11:30 AM - 2 PM no-trade window)');
-      return { error: 'Dead zone block. No new entries 11:30 AM - 2:00 PM ET. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
-    }
+      // GATE: Dead zone (11:30 AM - 2:00 PM ET) -- no new entries, period
+      if (etTotal >= (11 * 60 + 30) && etTotal < (14 * 60)) {
+        console.log('[EXECUTOR] BLOCKED -- dead zone ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET (11:30 AM - 2 PM no-trade window)');
+        return { error: 'Dead zone block. No new entries 11:30 AM - 2:00 PM ET. Current: ' + etH + ':' + (etM < 10 ? '0' : '') + etM + ' ET' };
+      }
 
-    // GATE: Re-entry cooldown -- 15 min after a sell of the SAME contract symbol
-    var lastSellAt = _lastSellBySymbol[symbol];
-    if (lastSellAt) {
-      var minsSince = (Date.now() - lastSellAt) / 60000;
-      if (minsSince < 15) {
-        console.log('[EXECUTOR] BLOCKED -- re-entry cooldown ' + symbol + ' (' + minsSince.toFixed(1) + ' min since sell, need 15)');
-        return { error: 'Re-entry cooldown: sold ' + symbol + ' ' + minsSince.toFixed(0) + ' min ago. Wait 15 min before buying back same contract.' };
+      // GATE: Re-entry cooldown -- 15 min after a sell of the SAME contract symbol
+      var lastSellAt = _lastSellBySymbol[symbol];
+      if (lastSellAt) {
+        var minsSince = (Date.now() - lastSellAt) / 60000;
+        if (minsSince < 15) {
+          console.log('[EXECUTOR] BLOCKED -- re-entry cooldown ' + symbol + ' (' + minsSince.toFixed(1) + ' min since sell, need 15)');
+          return { error: 'Re-entry cooldown: sold ' + symbol + ' ' + minsSince.toFixed(0) + ' min ago. Wait 15 min before buying back same contract.' };
+        }
       }
     }
 
@@ -395,19 +415,43 @@ async function placeOrder(params) {
     // BUILD OSO BRACKET ORDERS
     var osos = [];
 
-    if (stop || t1) {
+    // Apr 26 PM — structuralStop is the underlying-price activation for the
+    // stop child. When present, the stop fires on UNDERLYING crossing the
+    // structural level (not on option-price wicks). Tail-risk-event proof
+    // because option mid wobbles can't trip it.
+    //   structuralStop: { symbol, predicate ('above'|'below'), price }
+    var structuralStop = params.structuralStop;
+
+    if (stop || t1 || structuralStop) {
       var bracketOrders = [];
 
-      if (stop) {
+      if (structuralStop && structuralStop.symbol && structuralStop.price) {
+        // Structural stop: SellToClose Market activated by underlying price
+        // crossing the structural level. Cannot be wick-hunted on option mid.
+        var ssPred = (structuralStop.predicate || 'below').toLowerCase();
+        var ssTsPred = (ssPred === 'above' || ssPred === 'gt' || ssPred === 'gte') ? 'Gt' : 'Lt';
+        bracketOrders.push({
+          AccountID:   account,
+          Symbol:      symbol,
+          Quantity:    String(qty),
+          OrderType:   'Market',
+          TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+          TimeInForce: { Duration: duration || 'GTC' },
+          Route:       'Intelligent',
+          AdvancedOptions: {
+            MarketActivationRules: [{
+              RuleType:   'Price',
+              Symbol:     String(structuralStop.symbol).toUpperCase(),
+              Predicate:  ssTsPred,
+              TriggerKey: 'STT',
+              Price:      String(parseFloat(structuralStop.price).toFixed(2)),
+            }],
+          },
+        });
+        console.log('[EXECUTOR] StructuralStop=Market ' + symbol + ' on ' + structuralStop.symbol + ' ' + ssTsPred + ' $' + structuralStop.price);
+      } else if (stop) {
+        // Legacy option-premium StopLimit (used when no structuralStop given).
         // Apr 16 2026: StopLimit on ALL names, not just liquid list.
-        // FAST got StopMarket → garbage fill at $0.27 on a $0.30 trigger.
-        // StopLimit protects against spread slippage on every name.
-        // Worst case: StopLimit doesn't fill on a thin name and you hold
-        // through a dip — better than getting stopped at a garbage price.
-        //
-        // LimitPrice = stop * 0.90 (10% worse than trigger). Wider offset
-        // than before (was 6%) to give thin names room to fill while still
-        // preventing garbage fills way below the stop.
         var stopOffsetPct = parseFloat(process.env.STOP_LIMIT_OFFSET_PCT || '0.10');
         var stopLimitPrice = Math.max(0.01, parseFloat(stop) * (1 - stopOffsetPct));
         stopLimitPrice = Math.round(stopLimitPrice * 100) / 100;
@@ -457,6 +501,25 @@ async function placeOrder(params) {
       TimeInForce: { Duration: duration || 'GTC' },
       Route:       'Intelligent',
     };
+
+    // CONDITIONAL TRIGGER (Apr 26 2026) — TS MarketActivationRules
+    // The bracket queues at TS until underlying price crosses trigger.
+    // Activation fires the entry Limit order, which then attaches the OSO
+    // bracket children (stop + TP).
+    if (trigger && trigger.symbol && trigger.price && trigger.predicate) {
+      var pred = trigger.predicate.toLowerCase();
+      var tsPredicate = (pred === 'above' || pred === 'gt' || pred === 'gte') ? 'Gt' : 'Lt';
+      orderBody.AdvancedOptions = {
+        MarketActivationRules: [{
+          RuleType:   'Price',
+          Symbol:     String(trigger.symbol).toUpperCase(),
+          Predicate:  tsPredicate,
+          TriggerKey: 'STT',  // Single-Trade-Tick — fires on first tick crossing
+          Price:      String(parseFloat(trigger.price).toFixed(2)),
+        }],
+      };
+      console.log('[EXECUTOR] Conditional trigger attached:', trigger.symbol, tsPredicate, '$' + trigger.price);
+    }
 
     if (osos.length > 0) {
       orderBody.OSOs = osos;
