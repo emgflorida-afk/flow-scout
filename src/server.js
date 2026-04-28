@@ -1193,11 +1193,14 @@ app.post('/api/take-trade', async function(req, res) {
     var live = b.live === true;
 
     // Resolve bracket: from cardId (look up flow-card buffer) or from explicit body.
+    // v2 (Apr 28): Live Movers + Tomorrow setups carry an audit cardId but supply
+    // their own bracket fields directly. Only do buffer lookup for actual flow cards.
     var card = null;
-    if (b.cardId) {
+    var isFlowBufferCard = b.cardId && !b.cardId.startsWith('live-mover-') && !b.cardId.startsWith('tomorrow-') && b.entry === undefined;
+    if (isFlowBufferCard) {
       var cards = flowCluster.getActiveCards();
       card = cards.find(function(c){ return c.id === b.cardId; });
-      if (!card) return res.status(404).json({ error: 'cardId not found in active flow-card buffer' });
+      if (!card) return res.status(404).json({ error: 'cardId not found in active flow-card buffer (Bullflow disabled?). Pass entry/stop/tp1/tp2 directly in body.' });
       if (!card.contract || !card.bracket) return res.status(400).json({ error: 'card has no resolved contract or bracket — cannot fire' });
     }
 
