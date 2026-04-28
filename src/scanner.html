@@ -1455,7 +1455,8 @@ function renderWpScan(data) {
     var dirIcon = c.direction === 'CALL' ? '▲' : '▼';
     var emaTag = c.emaStackBull === null ? '—' : (c.emaStackBull ? '🟢 BULL' : '🔴 BEAR');
     var emaNear = c.emaNear21 ? ' · NEAR 21EMA (' + c.emaDistPct.toFixed(1) + '%)' : ' · ' + (c.emaDistPct ? c.emaDistPct.toFixed(1) + '% from 21EMA' : '');
-    var sectorChip = c.sector ? '<span style="background:#161b22;border:1px solid #30363d;border-radius:3px;padding:1px 5px;font-size:9px;font-family:monospace;color:' + (c.sectorMom >= 0 ? '#00E676' : '#FF5252') + '">' + c.sector + ' ' + (c.sectorMom >= 0 ? '+' : '') + c.sectorMom.toFixed(2) + '%</span>' : '';
+    var tierTag = c.sectorTier === 'preferred' ? '<span style="background:#0d4f1c;color:#00E676;font-size:8px;padding:1px 3px;border-radius:2px;margin-right:3px">A+</span>' : c.sectorTier === 'avoid' ? '<span style="background:#4f0d0d;color:#FF5252;font-size:8px;padding:1px 3px;border-radius:2px;margin-right:3px">SKIP</span>' : c.sectorTier === 'neutral' ? '<span style="background:#3a3a0d;color:#FFD600;font-size:8px;padding:1px 3px;border-radius:2px;margin-right:3px">B</span>' : '';
+    var sectorChip = c.sector ? tierTag + '<span style="background:#161b22;border:1px solid #30363d;border-radius:3px;padding:1px 5px;font-size:9px;font-family:monospace;color:' + (c.sectorMom >= 0 ? '#00E676' : '#FF5252') + '">' + c.sector + ' ' + (c.sectorMom >= 0 ? '+' : '') + c.sectorMom.toFixed(2) + '%</span>' : '';
     var scoreCol = c.score >= 9 ? '#00E676' : c.score >= 7 ? '#FFD600' : '#FFA726';
     return '<tr style="border-bottom:1px solid #1a2030">' +
       '<td style="padding:8px 6px;font-weight:700;color:' + scoreCol + ';width:36px">#' + (i+1) + '</td>' +

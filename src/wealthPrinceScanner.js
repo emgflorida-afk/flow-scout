@@ -138,6 +138,87 @@ function detectFailed2U(B, A) {
   return null;
 }
 
+// HAMMER — long lower wick + green close (100% win rate in 30-day data, n=10)
+// Stronger than Failed-2D — requires explicit hammer geometry
+function detectHammer(B, A) {
+  if (!B || !A) return null;
+  var range = B.h - B.l;
+  var body = Math.abs(B.c - B.o);
+  if (range <= 0) return null;
+  var brokeBelow = B.l < A.l;
+  var greenClose = B.c > B.o;
+  var lowerWickRatio = (B.c - B.l) / range; // higher = more hammer
+  var bodyToRange = body / range; // smaller body = more hammer
+  // Hammer: closed in upper 60%, lower wick > 2x body, green close, broke prior low
+  if (brokeBelow && greenClose && lowerWickRatio > 0.6 && body > 0 && (B.c - B.l) > 2 * body) {
+    return {
+      pattern: 'Hammer',
+      lowWick: A.l - B.l,
+      bodyToRange: bodyToRange,
+      lowerWickRatio: lowerWickRatio,
+    };
+  }
+  return null;
+}
+
+// SHOOTER — long upper wick + red close (bear pattern, less reliable per data)
+function detectShooter(B, A) {
+  if (!B || !A) return null;
+  var range = B.h - B.l;
+  var body = Math.abs(B.c - B.o);
+  if (range <= 0) return null;
+  var brokeAbove = B.h > A.h;
+  var redClose = B.c < B.o;
+  var upperWickRatio = (B.h - B.c) / range;
+  if (brokeAbove && redClose && upperWickRatio > 0.6 && body > 0 && (B.h - B.c) > 2 * body) {
+    return {
+      pattern: 'Shooter',
+      highWick: B.h - A.h,
+      upperWickRatio: upperWickRatio,
+    };
+  }
+  return null;
+}
+
+// 2-1-2 UP — 3-bar continuation (100% win rate in data, n=6)
+// Bar Z = directional up (close > open)
+// Bar A = inside Z (high <= Z.h, low >= Z.l)
+// Bar B = breakout up (high > A.h, closed bullish)
+function detect212Up(Z, A, B) {
+  if (!Z || !A || !B) return null;
+  var zUp = Z.c > Z.o;
+  var aInsideZ = A.h <= Z.h && A.l >= Z.l;
+  var bBrokeAHigh = B.h > A.h;
+  var bGreenClose = B.c > B.o;
+  if (zUp && aInsideZ && bBrokeAHigh && bGreenClose) {
+    return {
+      pattern: '2-1-2 Up',
+      zRange: Z.h - Z.l,
+      aRange: A.h - A.l,
+      breakoutPct: (B.c - A.h) / A.h * 100,
+    };
+  }
+  return null;
+}
+
+// 2-1-2 DOWN — 3-bar continuation (100% win rate, n=5)
+function detect212Down(Z, A, B) {
+  if (!Z || !A || !B) return null;
+  var zDown = Z.c < Z.o;
+  var aInsideZ = A.h <= Z.h && A.l >= Z.l;
+  var bBrokeALow = B.l < A.l;
+  var bRedClose = B.c < B.o;
+  if (zDown && aInsideZ && bBrokeALow && bRedClose) {
+    return {
+      pattern: '2-1-2 Down',
+      zRange: Z.h - Z.l,
+      aRange: A.h - A.l,
+      breakdownPct: (A.l - B.c) / A.l * 100,
+    };
+  }
+  return null;
+}
+
 // -----------------------------------------------------------------
 // 4HR EMA helpers
 function emaArr(values, length) {
@@ -184,10 +265,37 @@ function calc5dMomentum(dailyBars) {
   return (current - fiveBack) / fiveBack * 100;
 }
 
-function scoreSetup(failed, ema, momentum5d, isLong, sectorMomentum) {
+// Pattern bonus from 30-day historical win rate data:
+//   Hammer        100% (n=10)  → +3
+//   2-1-2 Up      100% (n=6)   → +3
+//   2-1-2 Down    100% (n=5)   → +3
+//   Failed 2D     89%  (n=24)  → +2
+//   Failed 2U     69%  (n=45)  → +1
+//   Shooter       60%  (n=10)  → 0 (skip in scoring)
+function patternBonus(patternName) {
+  if (patternName === 'Hammer') return 3;
+  if (patternName === '2-1-2 Up' || patternName === '2-1-2 Down') return 3;
+  if (patternName === 'Failed 2D') return 2;
+  if (patternName === 'Failed 2U') return 1;
+  return 0;
+}
+
+// Sector tier from 30-day data (sector ETF mapped → win rate observed):
+//   Tech/Fin/Energy/Industrial/Healthcare = preferred (75-100% wr)
+//   Consumer Cyclical/Communication = neutral (66-67% wr)
+//   Defensive (XLP)/Utilities (XLU) = AVOID (0% wr in 30 days, n=11 combined)
+function sectorTier(etf) {
+  if (etf === 'XLK' || etf === 'XLF' || etf === 'XLE' || etf === 'XLI' || etf === 'XLV') return 'preferred';
+  if (etf === 'XLY' || etf === 'XLC' || etf === 'XLB') return 'neutral';
+  if (etf === 'XLP' || etf === 'XLU') return 'avoid';
+  return 'unknown';
+}
+
+function scoreSetup(failed, ema, momentum5d, isLong, sectorMomentum, sectorETF) {
   var score = 0;
   if (failed) {
-    score += 5;
+    // Base + pattern-specific bonus from historical win rates
+    score += 5 + patternBonus(failed.pattern);
     if (isLong && failed.lowWick > 0) score += 1;
     if (!isLong && failed.highWick > 0) score += 1;
     if (failed.closedInUpperHalf || failed.closedInLowerHalf) score += 1;
@@ -203,15 +311,18 @@ function scoreSetup(failed, ema, momentum5d, isLong, sectorMomentum) {
   else if (m >= 1 && m < 3) score += 0.5;
   else if (m > 15) score -= 1;
   else if (m < -3) score -= 1;
-  // SECTOR FILTER (added after AVGO false-signal Apr 28):
-  // If sector ETF is moving WITH our direction = boost. Against us = penalty.
+  // Sector momentum (1d sector ETF direction):
   if (sectorMomentum !== null && sectorMomentum !== undefined) {
     var sm = isLong ? sectorMomentum : -sectorMomentum;
-    if (sm > 1) score += 2;       // sector tailwind
+    if (sm > 1) score += 2;
     else if (sm > 0) score += 1;
-    else if (sm < -1) score -= 2; // sector headwind (AVGO killer)
+    else if (sm < -1) score -= 2;
     else if (sm < 0) score -= 1;
   }
+  // Sector TIER bonus/penalty (from historical data — defensive/utilities = 0% wr)
+  var tier = sectorTier(sectorETF);
+  if (tier === 'preferred') score += 1.5;
+  else if (tier === 'avoid') score -= 5; // hard penalty — defensive/utilities killed every setup
   return Math.round(score * 10) / 10;
 }
 
@@ -251,13 +362,15 @@ async function scan(opts) {
   for (var i = 0; i < unique.length; i++) {
     var t = unique[i];
     try {
-      var dailyRaw = await fetchBars(t, 'Daily', 1, 7, token);
+      // Pull 8 daily bars so we have Z, A, B for 2-1-2 detection
+      var dailyRaw = await fetchBars(t, 'Daily', 1, 8, token);
       var dailyBars = dailyRaw.map(normBar).filter(Boolean);
       if (dailyBars.length < 6) continue;
 
       var n = dailyBars.length;
-      var B = dailyBars[n - 1];
-      var A = dailyBars[n - 2];
+      var B = dailyBars[n - 1];        // most recent completed daily
+      var A = dailyBars[n - 2];        // bar before B
+      var Z = dailyBars[n - 3];        // bar before A (for 2-1-2)
 
       var hr4Raw = await fetchBars(t, 'Minute', 240, 30, token);
       var hr4Bars = hr4Raw.map(normBar).filter(Boolean);
@@ -266,46 +379,63 @@ async function scan(opts) {
       var sector = SECTOR_MAP[t] || null;
       var sectorMom = sector ? (sectorMomentum[sector] || 0) : null;
 
+      // Helper to push a result if score qualifies
+      function tryPush(setup, isLong, dirCode, noteText) {
+        var sc = scoreSetup(setup, ema, momentum5d, isLong, sectorMom, sector);
+        if (sc >= minScore) {
+          results.push({
+            ticker: t, direction: dirCode, pattern: setup.pattern, spot: B.c,
+            ema9: ema ? +ema.ema9.toFixed(2) : null,
+            ema21: ema ? +ema.ema21.toFixed(2) : null,
+            emaStackBull: ema ? ema.bullStack : null,
+            emaNear21: ema ? ema.near21 : null,
+            emaDistPct: ema ? +ema.distPct.toFixed(2) : null,
+            momentum5d: +momentum5d.toFixed(2),
+            priorLow: A.l, priorHigh: A.h, todayLow: B.l, todayHigh: B.h, todayClose: B.c,
+            sector: sector, sectorMom: sectorMom !== null ? +sectorMom.toFixed(2) : null,
+            sectorTier: sectorTier(sector),
+            score: sc,
+            note: noteText,
+          });
+        }
+      }
+
       if (direction === 'long' || direction === 'both') {
+        // Hammer (100% wr) — score first, highest priority
+        var hammer = detectHammer(B, A);
+        if (hammer) {
+          tryPush(hammer, true, 'CALL', 'Hammer — long lower wick, green close, broke ' + A.l.toFixed(2));
+          continue; // don't double-count if both hammer + failed2D
+        }
+        // 2-1-2 Up (100% wr)
+        var p212Up = detect212Up(Z, A, B);
+        if (p212Up) {
+          tryPush(p212Up, true, 'CALL', '2-1-2 Up — directional Z, inside A, broke A high to ' + B.c.toFixed(2));
+          continue;
+        }
+        // Failed-2D (89% wr)
         var failed2D = detectFailed2D(B, A);
         if (failed2D) {
-          var scoreL = scoreSetup(failed2D, ema, momentum5d, true, sectorMom);
-          if (scoreL >= minScore) {
-            results.push({
-              ticker: t, direction: 'CALL', pattern: failed2D.pattern, spot: B.c,
-              ema9: ema ? +ema.ema9.toFixed(2) : null,
-              ema21: ema ? +ema.ema21.toFixed(2) : null,
-              emaStackBull: ema ? ema.bullStack : null,
-              emaNear21: ema ? ema.near21 : null,
-              emaDistPct: ema ? +ema.distPct.toFixed(2) : null,
-              momentum5d: +momentum5d.toFixed(2),
-              priorLow: A.l, priorHigh: A.h, todayLow: B.l, todayHigh: B.h, todayClose: B.c,
-              sector: sector, sectorMom: sectorMom !== null ? +sectorMom.toFixed(2) : null,
-              score: scoreL,
-              note: 'Failed-2D — broke ' + A.l.toFixed(2) + ', reclaimed to ' + B.c.toFixed(2),
-            });
-          }
+          tryPush(failed2D, true, 'CALL', 'Failed-2D — broke ' + A.l.toFixed(2) + ', reclaimed to ' + B.c.toFixed(2));
         }
       }
       if (direction === 'short' || direction === 'both') {
+        // 2-1-2 Down (100% wr)
+        var p212Down = detect212Down(Z, A, B);
+        if (p212Down) {
+          tryPush(p212Down, false, 'PUT', '2-1-2 Down — directional Z, inside A, broke A low to ' + B.c.toFixed(2));
+          continue;
+        }
+        // Failed-2U (69% wr) — kept but lower bonus
         var failed2U = detectFailed2U(B, A);
         if (failed2U) {
-          var scoreS = scoreSetup(failed2U, ema, momentum5d, false, sectorMom);
-          if (scoreS >= minScore) {
-            results.push({
-              ticker: t, direction: 'PUT', pattern: failed2U.pattern, spot: B.c,
-              ema9: ema ? +ema.ema9.toFixed(2) : null,
-              ema21: ema ? +ema.ema21.toFixed(2) : null,
-              emaStackBull: ema ? ema.bullStack : null,
-              emaNear21: ema ? ema.near21 : null,
-              emaDistPct: ema ? +ema.distPct.toFixed(2) : null,
-              momentum5d: +momentum5d.toFixed(2),
-              priorLow: A.l, priorHigh: A.h, todayLow: B.l, todayHigh: B.h, todayClose: B.c,
-              sector: sector, sectorMom: sectorMom !== null ? +sectorMom.toFixed(2) : null,
-              score: scoreS,
-              note: 'Failed-2U — broke ' + A.h.toFixed(2) + ', reclaimed to ' + B.c.toFixed(2),
-            });
-          }
+          tryPush(failed2U, false, 'PUT', 'Failed-2U — broke ' + A.h.toFixed(2) + ', reclaimed to ' + B.c.toFixed(2));
+          continue;
+        }
+        // Shooter (60% wr) — ONLY include if very high score, since pattern weak
+        var shooter = detectShooter(B, A);
+        if (shooter) {
+          tryPush(shooter, false, 'PUT', 'Shooter — long upper wick, red close, broke ' + A.h.toFixed(2));
         }
       }
     } catch(e) { /* skip on error */ }
