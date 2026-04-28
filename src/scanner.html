@@ -111,8 +111,9 @@
   .col-sector { width: 110px; }
   .col-trigger { width: 75px; }
   .col-inforce { width: 110px; }
-  .col-gex-pin { width: 55px; text-align: center; }
-  .col-gex-regime { width: 40px; text-align: center; }
+  .col-gex-pin { display: none; }    /* Bullflow disabled — hide GEX cols */
+  .col-gex-regime { display: none; }
+  .col-exp-range { display: none; }
   .col-exp-range { width: 95px; }
   /* Apr 24 2026 — timeframe tabs */
   .tf-tabs { display: flex; gap: 4px; margin: 8px 0; padding: 0 12px; }
@@ -383,7 +384,7 @@
     <button class="tab" data-tab="tomorrow" onclick="switchTab('tomorrow')">🎯 TOMORROW</button>
     <button class="tab" data-tab="wp" onclick="switchTab('wp')">⚡ WP SETUPS</button>
     <button class="tab" data-tab="options" onclick="switchTab('options')">📊 OPTIONS</button>
-    <button class="tab" data-tab="flow" onclick="switchTab('flow')">🔥 FLOW CARDS <span id="flow-card-badge" style="display:none;background:#ff4757;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px"></span></button>
+    <button class="tab" data-tab="flow" onclick="switchTab('flow')" style="display:none">🔥 FLOW CARDS <span id="flow-card-badge" style="display:none;background:#ff4757;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px"></span></button>
     <button class="tab" data-tab="history" onclick="switchTab('history')">HISTORY</button>
     <button class="tab" data-tab="starred" onclick="switchTab('starred')">★ STARRED</button>
   </div>

@@ -7,6 +7,8 @@ var path     = require('path');
 var cron     = require('node-cron');
 var alerter  = require('./alerter');
 var resolver = require('./contractResolver');
+// Bullflow: AB cancelled $129/mo subscription Apr 28 2026. Module loads OK
+// without API key (no-op stream), just don't render Bullflow UI in scanner.
 var bullflow = require('./bullflowStream');
 var dashboard     = require('./dashboard');
 var ideaValidator = require('./ideaValidator');
