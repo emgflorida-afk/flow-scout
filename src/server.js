@@ -140,6 +140,15 @@ var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }
 
+// WealthPrince Reversal Scanner (Failed-2D/2U + 4HR EMA + sector filter)
+var wpScanner = null;
+try { wpScanner = require('./wealthPrinceScanner'); console.log('[SERVER] wealthPrinceScanner loaded OK (' + wpScanner.UNIVERSE.length + ' tickers)'); }
+catch(e) { console.log('[SERVER] wealthPrinceScanner not loaded:', e.message); }
+
+// In-memory cache so we don't blast TS API on every UI refresh
+var wpScanCache = null;
+var wpScanCacheTime = 0;
+
 // Wire scanner setup lookup into flowCluster so card.confluence is computed
 // when a flow cluster fires. Looks up latest Daily scan, finds matching ticker,
 // returns {direction, pattern} for the cluster builder.
@@ -3196,6 +3205,33 @@ app.get('/api/option-mids', async function(req, res) {
     }
     res.json({ count: out.length, quotes: out, errors: data && data.Errors });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// -----------------------------------------------------------------
+// WP REVERSAL SCANNER — Failed-2D/2U + 4HR EMA + sector filter
+// Built Apr 28 2026 after AB missed UNH overnight 200% swing.
+// Scans ~110 mega-caps + healthcare + finance + volatile names.
+// Returns top 15 candidates ranked by setup score (0-12 scale).
+// Cached 5 min to avoid TS rate limit on UI refresh.
+// -----------------------------------------------------------------
+app.get('/api/wealthprince-scan', async function(req, res) {
+  if (!wpScanner) return res.status(500).json({ error: 'wpScanner not loaded' });
+  try {
+    var now = Date.now();
+    var force = req.query.force === '1' || req.query.force === 'true';
+    var direction = (req.query.direction || 'both').toLowerCase();
+    var minScore = parseFloat(req.query.minScore) || 5;
+    // Cache 5 min unless force
+    if (!force && wpScanCache && (now - wpScanCacheTime < 5 * 60 * 1000) && wpScanCache.direction === direction) {
+      return res.json(Object.assign({}, wpScanCache.data, { cached: true, cachedAtAge: Math.round((now - wpScanCacheTime) / 1000) + 's' }));
+    }
+    var data = await wpScanner.scan({ direction: direction, minScore: minScore });
+    wpScanCache = { direction: direction, data: data };
+    wpScanCacheTime = now;
+    res.json(Object.assign({}, data, { cached: false }));
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // -----------------------------------------------------------------

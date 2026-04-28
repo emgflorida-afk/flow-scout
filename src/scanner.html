@@ -381,6 +381,7 @@
     <button class="tab active" data-tab="scan" onclick="switchTab('scan')">SCAN</button>
     <button class="tab" data-tab="movers" onclick="switchTab('movers')">🔴 LIVE MOVERS</button>
     <button class="tab" data-tab="tomorrow" onclick="switchTab('tomorrow')">🎯 TOMORROW</button>
+    <button class="tab" data-tab="wp" onclick="switchTab('wp')">⚡ WP SETUPS</button>
     <button class="tab" data-tab="options" onclick="switchTab('options')">📊 OPTIONS</button>
     <button class="tab" data-tab="flow" onclick="switchTab('flow')">🔥 FLOW CARDS <span id="flow-card-badge" style="display:none;background:#ff4757;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;margin-left:4px"></span></button>
     <button class="tab" data-tab="history" onclick="switchTab('history')">HISTORY</button>
@@ -441,6 +442,21 @@
       <span id="arm-state-tomorrow" style="color:var(--muted);font-size:11px;width:100%;text-align:right"></span>
     </div>
     <div id="tomorrow-root"></div>
+  </div>
+  <div id="tab-wp" style="display:none">
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
+      <span style="color:var(--muted);font-size:12px">⚡ <b>WealthPrince Reversal Scan</b> — scans ~110 tickers for Failed-2D / Failed-2U setups + 4HR EMA pullback + sector confluence. Use EOD (post-close) to surface next-day swing candidates like UNH 4/27 → 200% overnight. Cached 5 min.</span>
+      <button type="button" id="wp-refresh-btn" onclick="loadWpScan(true)" style="background:var(--blue);color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer;margin-left:auto">🔄 SCAN NOW</button>
+      <span id="wp-stamp" style="color:var(--muted);font-size:10px;font-family:monospace"></span>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center">
+      <span style="color:var(--muted);font-size:11px">Direction:</span>
+      <button type="button" id="wp-dir-both" onclick="setWpDir('both')" style="background:var(--blue);color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:11px;cursor:pointer">BOTH</button>
+      <button type="button" id="wp-dir-long" onclick="setWpDir('long')" style="background:var(--panel);color:var(--text);border:1px solid var(--border);padding:4px 12px;border-radius:4px;font-size:11px;cursor:pointer">CALLS only</button>
+      <button type="button" id="wp-dir-short" onclick="setWpDir('short')" style="background:var(--panel);color:var(--text);border:1px solid var(--border);padding:4px 12px;border-radius:4px;font-size:11px;cursor:pointer">PUTS only</button>
+    </div>
+    <div id="wp-sectors" style="margin-bottom:10px"></div>
+    <div id="wp-root"><div class="loading">Click SCAN NOW to run the WealthPrince reversal scan…</div></div>
   </div>
   <div id="tab-flow" style="display:none">
     <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
@@ -1365,16 +1381,107 @@ function switchTab(name) {
   document.querySelectorAll('.tab').forEach(function(b) {
     b.classList.toggle('active', b.dataset.tab === name);
   });
-  ['scan','movers','tomorrow','options','flow','history','starred'].forEach(function(n) {
+  ['scan','movers','tomorrow','wp','options','flow','history','starred'].forEach(function(n) {
     document.getElementById('tab-' + n).style.display = (n === name ? '' : 'none');
   });
   if (name === 'history')  loadHistory();
   if (name === 'starred')  renderStarred();
   if (name === 'flow')     loadFlowCards();
   if (name === 'tomorrow') renderTomorrowSetups();
+  if (name === 'wp')       loadWpScan(false);
   if (name === 'options')  initOptionsTab();
   if (name === 'movers')   { loadLiveMovers(); startLiveMoversPolling(); }
   else                     stopLiveMoversPolling();
+}
+
+// =====================================================================
+// ⚡ WP SETUPS TAB — WealthPrince Reversal Scanner
+// Scans ~110 tickers for Failed-2D/2U + 4HR EMA pullback + sector context
+// =====================================================================
+var _wpDirection = 'both';
+function setWpDir(d) {
+  _wpDirection = d;
+  ['both','long','short'].forEach(function(x) {
+    var btn = document.getElementById('wp-dir-' + x);
+    if (btn) {
+      btn.style.background = (x === d) ? 'var(--blue)' : 'var(--panel)';
+      btn.style.color = (x === d) ? '#fff' : 'var(--text)';
+      btn.style.border = (x === d) ? 'none' : '1px solid var(--border)';
+    }
+  });
+  loadWpScan(true);
+}
+function loadWpScan(force) {
+  var root = document.getElementById('wp-root');
+  if (!root) return;
+  root.innerHTML = '<div class="loading">⚡ Scanning ~110 tickers… (~30-60s on first run, cached after)</div>';
+  var url = '/api/wealthprince-scan?direction=' + _wpDirection + (force ? '&force=1' : '');
+  fetch(url).then(function(r){ return r.json(); }).then(function(data) {
+    renderWpScan(data);
+  }).catch(function(err) {
+    root.innerHTML = '<div style="color:#ff5252;padding:14px">Scan failed: ' + err.message + '</div>';
+  });
+}
+function renderWpScan(data) {
+  var root = document.getElementById('wp-root');
+  var stamp = document.getElementById('wp-stamp');
+  if (data.error) {
+    root.innerHTML = '<div style="color:#ff5252;padding:14px">Error: ' + data.error + '</div>';
+    return;
+  }
+  var ts = data.timestamp ? new Date(data.timestamp).toLocaleTimeString('en-US', {hour12: false}) : '—';
+  if (stamp) stamp.textContent = 'last scan: ' + ts + (data.cached ? ' (cached ' + data.cachedAtAge + ')' : ' (fresh)') + ' · ' + data.candidatesFound + ' candidates';
+  // Sector momentum row
+  var sectorRoot = document.getElementById('wp-sectors');
+  if (sectorRoot && data.sectorMomentum) {
+    var sm = data.sectorMomentum;
+    var sectorChips = Object.keys(sm).sort(function(a,b){return sm[b]-sm[a]}).map(function(etf){
+      var v = sm[etf];
+      var col = v > 0.5 ? '#00E676' : v < -0.5 ? '#FF5252' : '#888';
+      var sign = v >= 0 ? '+' : '';
+      return '<span style="display:inline-block;background:#1a2030;border:1px solid #30363d;border-radius:4px;padding:3px 8px;margin:2px;font-size:10px;font-family:monospace;color:' + col + '">' + etf + ' ' + sign + v.toFixed(2) + '%</span>';
+    }).join('');
+    sectorRoot.innerHTML = '<div style="font-size:11px;color:var(--muted);margin-bottom:4px">📊 Sector momentum (1d %, sorted desc):</div>' + sectorChips;
+  }
+  // Candidates table
+  var cands = data.candidates || [];
+  if (cands.length === 0) {
+    root.innerHTML = '<div style="background:#1a2030;border:1px dashed #555;border-radius:6px;padding:20px;text-align:center;color:#aaa">No reversal setups found right now. Best run is EOD (after 4 PM ET) when daily bars complete.</div>';
+    return;
+  }
+  var rows = cands.map(function(c, i) {
+    var dirCol = c.direction === 'CALL' ? '#00E676' : '#FF1744';
+    var dirIcon = c.direction === 'CALL' ? '▲' : '▼';
+    var emaTag = c.emaStackBull === null ? '—' : (c.emaStackBull ? '🟢 BULL' : '🔴 BEAR');
+    var emaNear = c.emaNear21 ? ' · NEAR 21EMA (' + c.emaDistPct.toFixed(1) + '%)' : ' · ' + (c.emaDistPct ? c.emaDistPct.toFixed(1) + '% from 21EMA' : '');
+    var sectorChip = c.sector ? '<span style="background:#161b22;border:1px solid #30363d;border-radius:3px;padding:1px 5px;font-size:9px;font-family:monospace;color:' + (c.sectorMom >= 0 ? '#00E676' : '#FF5252') + '">' + c.sector + ' ' + (c.sectorMom >= 0 ? '+' : '') + c.sectorMom.toFixed(2) + '%</span>' : '';
+    var scoreCol = c.score >= 9 ? '#00E676' : c.score >= 7 ? '#FFD600' : '#FFA726';
+    return '<tr style="border-bottom:1px solid #1a2030">' +
+      '<td style="padding:8px 6px;font-weight:700;color:' + scoreCol + ';width:36px">#' + (i+1) + '</td>' +
+      '<td style="padding:8px 6px;font-weight:700;font-size:14px;color:' + dirCol + ';width:80px">' + dirIcon + ' ' + c.ticker + '</td>' +
+      '<td style="padding:8px 6px;color:' + dirCol + ';font-size:11px;width:90px">' + c.direction + '</td>' +
+      '<td style="padding:8px 6px;color:#ddd;font-family:monospace;font-size:11px">$' + c.spot.toFixed(2) + '</td>' +
+      '<td style="padding:8px 6px;color:#aaa;font-size:11px">' + c.pattern + '</td>' +
+      '<td style="padding:8px 6px;color:#ddd;font-size:10px">' + emaTag + emaNear + '</td>' +
+      '<td style="padding:8px 6px;color:#ddd;font-size:10px">' + (c.momentum5d >= 0 ? '+' : '') + c.momentum5d.toFixed(2) + '%</td>' +
+      '<td style="padding:8px 6px">' + sectorChip + '</td>' +
+      '<td style="padding:8px 6px;font-weight:700;color:' + scoreCol + ';font-size:14px">' + c.score.toFixed(1) + '</td>' +
+      '<td style="padding:8px 6px;color:#aaa;font-size:10px">' + c.note + '</td>' +
+      '</tr>';
+  }).join('');
+  root.innerHTML = '<table style="width:100%;border-collapse:collapse;background:#0d1117;border:1px solid #30363d;border-radius:6px">' +
+    '<thead><tr style="background:#161b22;color:#aaa;font-size:10px;text-transform:uppercase;letter-spacing:0.5px">' +
+    '<th style="padding:8px 6px;text-align:left">#</th>' +
+    '<th style="padding:8px 6px;text-align:left">Ticker</th>' +
+    '<th style="padding:8px 6px;text-align:left">Dir</th>' +
+    '<th style="padding:8px 6px;text-align:left">Spot</th>' +
+    '<th style="padding:8px 6px;text-align:left">Pattern</th>' +
+    '<th style="padding:8px 6px;text-align:left">4HR EMA</th>' +
+    '<th style="padding:8px 6px;text-align:left">5d %</th>' +
+    '<th style="padding:8px 6px;text-align:left">Sector</th>' +
+    '<th style="padding:8px 6px;text-align:left">Score</th>' +
+    '<th style="padding:8px 6px;text-align:left">Note</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
 // =====================================================================
