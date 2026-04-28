@@ -1,5 +1,15 @@
 //@version=6
 // =============================================================================
+// STRATUM LVL ASSIST v2.5.5 — Dynamic LVL fix (lock refresh + intraday repolarize)
+// v2.5.5 (Apr 28 AM): the lock-once-forever bug is dead.
+//   • Lock now REFRESHES on each new HTF bar (was: locked once on first islast,
+//     never updated, froze bias forever — what AB caught on KO 4/28 9:30-9:45)
+//   • Intraday REPOLARIZE: when today's live price invalidates locked bias
+//     (e.g. bear B locked but today breaks above lockHtfHigh), wave shifts:
+//     A := old B, B := today's live forming bar. Pattern re-detects → new
+//     setup pops in live. This is what AB's video stills described — the
+//     dashboard SHOWS the new direction the moment bias flips, not at 4 PM EOD.
+//   • Added 60m to htfTf input options for hourly-refresh use case.
 // STRATUM LVL ASSIST v2.5.0 — Combined release (option-chart + retest + stats + cloud)
 // v2.5.0 (Apr 27 PM): four features bundled —
 //   • v2.3.1 — Option chart detection. When syminfo.type == "options",
@@ -93,7 +103,7 @@ indicator("Stratum LVL Assist", shorttitle = "Stratum25", overlay = true,
      max_lines_count = 50, max_labels_count = 50, max_boxes_count = 10, max_bars_back = 500)
 
 grpHTF = "1. HTF"
-htfTf = input.timeframe("D", "HTF for 25sense levels", options = ["240","360","D","W","M"], group = grpHTF)
+htfTf = input.timeframe("D", "HTF for 25sense levels", options = ["60","240","360","D","W","M"], group = grpHTF, tooltip = "v2.5.5: added 60m option. Use 60m for live intraday bias flips that update each hour. Daily bias only flips at 4 PM EOD when daily bar closes.")
 
 grpDisplay = "2. Display"
 cleanMode     = input.bool(true, "Clean Mode (KiLevels-style)", group = grpDisplay,
@@ -149,6 +159,17 @@ zoneTolPct = input.float(2.0, "Zone tolerance %", minval = 0.5, maxval = 5.0, st
 
 // LOCK to last bar so OPRA symbol stays constant across history (RE10137 fix)
 // Using `varip` so values persist across replay/backtest steps as well
+//
+// v2.5.5 FIX: lock now REFRESHES on each new HTF bar boundary. v2.5.4 locked
+// once and never updated, freezing bias forever. Now: each new HTF candle
+// (e.g. each new daily bar at 9:30 ET, each new 60m bar at top of hour)
+// regenerates the wave + re-detects pattern.
+//
+// Plus: intraday REPOLARIZE — if today's LIVE price action invalidates the
+// locked HTF bar's bias (e.g. bear setup but today breaks above lockHtfHigh),
+// the wave shifts forward: A := old B, B := today's live forming bar. Pattern
+// is then re-detected and the dashboard shows the NEW setup live (this is
+// what AB's video stills described — dynamic LVL, not static).
 varip float lockHtfClose = na
 varip float lockHtfOpen  = na
 varip float lockHtfHigh  = na
@@ -157,7 +178,13 @@ varip float lockAHigh    = na
 varip float lockALow     = na
 varip float lockAClose   = na
 varip float lockAOpen    = na
-if barstate.islast and na(lockHtfClose)
+varip int   lockHtfBarTime = 0   // tracks which HTF bar we last locked
+
+// Detect new HTF bar boundary
+htfBarTime = time(htfTf)
+isNewHtfBar = barstate.islast and not na(htfBarTime) and htfBarTime != lockHtfBarTime
+
+if barstate.islast and (na(lockHtfClose) or isNewHtfBar)
     lockHtfClose := bClose
     lockHtfOpen  := bOpen
     lockHtfHigh  := bHigh
@@ -166,6 +193,30 @@ if barstate.islast and na(lockHtfClose)
     lockALow     := aLow
     lockAClose   := aClose
     lockAOpen    := aOpen
+    lockHtfBarTime := nz(htfBarTime, 0)
+
+// =============================================================================
+// v2.5.5 INTRADAY REPOLARIZE — shifts wave forward when today's live price
+// invalidates the locked HTF bar's bias. Without this, a bear setup from
+// Mon stays locked even when today gaps up and reverses (KO 4/28 case).
+// =============================================================================
+if barstate.islast and not na(lockHtfClose)
+    // Bias of locked B vs A
+    lockBearLocked = lockHtfClose < lockALow   // 2-2 Reversal Down
+    lockBullLocked = lockHtfClose > lockAHigh  // 2-2 Reversal Up
+    // Today's live forming bar invalidates the locked bias?
+    todayUpBreach   = lockBearLocked and todayHigh > lockHtfHigh
+    todayDownBreach = lockBullLocked and todayLow  < lockHtfLow
+    if todayUpBreach or todayDownBreach
+        // Shift wave: A := old B, B := today's live forming bar
+        lockAHigh  := lockHtfHigh
+        lockALow   := lockHtfLow
+        lockAClose := lockHtfClose
+        lockAOpen  := lockHtfOpen
+        lockHtfHigh  := todayHigh
+        lockHtfLow   := todayLow
+        lockHtfClose := close      // live current price as today's working close
+        lockHtfOpen  := todayOpen
 
 // =============================================================================
 // STRAT PATTERN DETECTION — uses LOCKED prior bar values for stability
@@ -793,7 +844,7 @@ if showDashboard and barstate.islast
     table.clear(dash, 0, 0, 3, 16)
 
     table.cell(dash, 0, 0, "STRATUM 25SENSE", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.normal)
-    table.cell(dash, 1, 0, "v2.5.0", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.tiny)
+    table.cell(dash, 1, 0, "v2.5.5", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.tiny)
     table.cell(dash, 2, 0, htfTf + " HTF", text_color = color.white, bgcolor = color.new(color.blue, 30), text_size = size.small)
     biasColor = isWait ? color.gray : (isLong ? color.lime : color.fuchsia)
     biasText  = isWait ? "WAIT" : (isLong ? "BULL" : "BEAR")
@@ -1001,12 +1052,13 @@ alertcondition(tp2ShortHit,     title = "25sense TP2 S hit",     message = "TP2 
 alertcondition(stopShortHit,    title = "25sense STOP S hit",    message = "STOP SHORT on {{ticker}}")
 
 // v2.5 — VWAP Trend Cloud (translucent band, hidden when on option chart)
+// Pine v6 fill() requires visible plots — use FULLY TRANSPARENT lines, not display.none
 showCloudFinal = showCloud and not isOptionChart
-vwapColor = priceAboveVwap ? color.new(color.lime, 60) : color.new(color.red, 60)
-vwapPlot   = plot(showCloudFinal ? vwap       : na, title = "VWAP",        color = vwapColor, linewidth = 1)
-upperPlot  = plot(showCloudFinal ? upperCloud : na, title = "VWAP +1σ",    color = color.new(color.gray, 80), display = display.none)
-lowerPlot  = plot(showCloudFinal ? lowerCloud : na, title = "VWAP -1σ",    color = color.new(color.gray, 80), display = display.none)
-fillColor  = priceAboveVwap ? color.new(color.lime, 92) : color.new(color.red, 92)
+vwapColor = priceAboveVwap ? color.new(color.lime, 0) : color.new(color.red, 0)
+vwapPlot   = plot(showCloudFinal ? vwap       : na, title = "VWAP",        color = vwapColor, linewidth = 2)
+upperPlot  = plot(showCloudFinal ? upperCloud : na, title = "VWAP +1sd",    color = color.new(color.gray, 100))
+lowerPlot  = plot(showCloudFinal ? lowerCloud : na, title = "VWAP -1sd",    color = color.new(color.gray, 100))
+fillColor  = priceAboveVwap ? color.new(color.lime, 75) : color.new(color.red, 75)
 fill(upperPlot, lowerPlot, color = showCloudFinal ? fillColor : na, title = "VWAP Cloud")
 
 plot(level25,    title = "L25",       color = color.new(color.lime, 100),    display = display.data_window)
