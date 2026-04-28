@@ -1809,13 +1809,14 @@ function submitMoverFire(ticker, qty, useTrigger) {
     direction: m.suggestedDirection === 'CALL' ? 'BULLISH' : 'BEARISH',
     qty:       qty,
     entry:     m.optionEntry,
+    stop:      m.optionStop,            // Apr 28: option premium StopLimit (preferred, wick-resistant)
     tp1:       m.optionTp1,
     tp2:       m.optionTp2,
     tp3:       m.optionTp3,
-    structuralStop: m.structuralStop,
+    structuralStop: m.structuralStop,    // backup if optionStop missing
     live:      live,
     confirmOver: confirmOver,
-    cardId:    'live-mover-' + m.ticker,   // tag for audit; server resolves bracket from body fields
+    cardId:    'live-mover-' + m.ticker,
     source:    'live-mover-' + m.ticker + (useTrigger ? '-queued' : '-firenow'),
   };
   if (useTrigger === true) {

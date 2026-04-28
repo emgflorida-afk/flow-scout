@@ -425,9 +425,31 @@ async function placeOrder(params) {
     if (stop || t1 || structuralStop) {
       var bracketOrders = [];
 
-      if (structuralStop && structuralStop.symbol && structuralStop.price) {
-        // Structural stop: SellToClose Market activated by underlying price
-        // crossing the structural level. Cannot be wick-hunted on option mid.
+      // Apr 28 2026: PREFER option-premium StopLimit over structural Market.
+      // AB feedback: structural Market got wicked out on KO Live Mover SIM —
+      // underlying KO briefly crossed structural level → Market sell on option
+      // dumped at terrible bid. StopLimit on option premium is wick-resistant
+      // because the option itself has to trade at the stop price.
+      if (stop) {
+        // Option-premium StopLimit (wick-resistant, AB-preferred).
+        var stopOffsetPct = parseFloat(process.env.STOP_LIMIT_OFFSET_PCT || '0.10');
+        var stopLimitPrice = Math.max(0.01, parseFloat(stop) * (1 - stopOffsetPct));
+        stopLimitPrice = Math.round(stopLimitPrice * 100) / 100;
+        bracketOrders.push({
+          AccountID:   account,
+          Symbol:      symbol,
+          Quantity:    String(qty),
+          OrderType:   'StopLimit',
+          StopPrice:   String(stop),
+          LimitPrice:  String(stopLimitPrice),
+          TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+          TimeInForce: { Duration: duration || 'GTC' },
+          Route:       'Intelligent',
+        });
+        console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stop + ' limit $' + stopLimitPrice + ' (preferred over structural)');
+      } else if (structuralStop && structuralStop.symbol && structuralStop.price) {
+        // Fallback: structural Market activation when no option premium stop given.
+        // Use only if you explicitly want stock-pivot stops vs option-price stops.
         var ssPred = (structuralStop.predicate || 'below').toLowerCase();
         var ssTsPred = (ssPred === 'above' || ssPred === 'gt' || ssPred === 'gte') ? 'Gt' : 'Lt';
         bracketOrders.push({
@@ -448,25 +470,7 @@ async function placeOrder(params) {
             }],
           },
         });
-        console.log('[EXECUTOR] StructuralStop=Market ' + symbol + ' on ' + structuralStop.symbol + ' ' + ssTsPred + ' $' + structuralStop.price);
-      } else if (stop) {
-        // Legacy option-premium StopLimit (used when no structuralStop given).
-        // Apr 16 2026: StopLimit on ALL names, not just liquid list.
-        var stopOffsetPct = parseFloat(process.env.STOP_LIMIT_OFFSET_PCT || '0.10');
-        var stopLimitPrice = Math.max(0.01, parseFloat(stop) * (1 - stopOffsetPct));
-        stopLimitPrice = Math.round(stopLimitPrice * 100) / 100;
-        bracketOrders.push({
-          AccountID:   account,
-          Symbol:      symbol,
-          Quantity:    String(qty),
-          OrderType:   'StopLimit',
-          StopPrice:   String(stop),
-          LimitPrice:  String(stopLimitPrice),
-          TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
-          TimeInForce: { Duration: duration || 'GTC' },
-          Route:       'Intelligent',
-        });
-        console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stop + ' limit $' + stopLimitPrice);
+        console.log('[EXECUTOR] StructuralStop=Market (fallback) ' + symbol + ' on ' + structuralStop.symbol + ' ' + ssTsPred + ' $' + structuralStop.price);
       }
 
       if (t1) {
