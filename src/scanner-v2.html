@@ -252,6 +252,134 @@
     padding-top: 10px;
   }
 
+  /* TIMING BADGE — the "should I fire now?" answer */
+  .timing {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.25);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.04) inset;
+  }
+  .timing.green {
+    background: linear-gradient(135deg, rgba(20,232,122,0.20), rgba(20,232,122,0.06));
+    box-shadow: 0 0 0 1px rgba(20,232,122,0.32) inset, 0 0 16px rgba(20,232,122,.10);
+  }
+  .timing.amber {
+    background: linear-gradient(135deg, rgba(255,184,77,0.20), rgba(255,184,77,0.06));
+    box-shadow: 0 0 0 1px rgba(255,184,77,0.32) inset;
+  }
+  .timing.red {
+    background: linear-gradient(135deg, rgba(255,77,109,0.20), rgba(255,77,109,0.06));
+    box-shadow: 0 0 0 1px rgba(255,77,109,0.32) inset;
+  }
+  .timing.gray {
+    background: rgba(140,150,170,0.08);
+    box-shadow: 0 0 0 1px rgba(140,150,170,0.18) inset;
+    opacity: 0.7;
+  }
+  .timing-icon {
+    font-size: 24px;
+    line-height: 1;
+  }
+  .timing-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+  .timing-verdict {
+    font-size: 14px;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+  .timing.green .timing-verdict { color: var(--green); }
+  .timing.amber .timing-verdict { color: var(--amber); }
+  .timing.red   .timing-verdict { color: var(--red); }
+  .timing.gray  .timing-verdict { color: var(--txt-2); }
+  .timing-msg {
+    font-size: 11px;
+    color: var(--txt-1);
+    font-weight: 600;
+  }
+  .timing-sub {
+    font-size: 10px;
+    color: var(--txt-3);
+  }
+  .timing-countdown {
+    text-align: right;
+    display: flex; flex-direction: column; gap: 2px;
+    min-width: 70px;
+  }
+  .timing-countdown-val {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--txt-1);
+  }
+  .timing-countdown-lbl {
+    font-size: 9px;
+    color: var(--txt-3);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+
+  /* Spot-vs-trigger proximity bar */
+  .prox {
+    margin-top: 4px;
+    height: 6px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    position: relative;
+    overflow: visible;
+  }
+  .prox-trigger {
+    position: absolute;
+    top: -3px; bottom: -3px;
+    width: 2px;
+    background: var(--aqua);
+    box-shadow: 0 0 6px rgba(77,214,255,0.6);
+  }
+  .prox-stop {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: rgba(255,77,109,0.25);
+    border-radius: 3px;
+  }
+  .prox-tp {
+    position: absolute;
+    top: 0; bottom: 0;
+    background: rgba(20,232,122,0.18);
+    border-radius: 3px;
+  }
+  .prox-spot {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 0 8px #fff, 0 0 0 2px var(--bg-2);
+  }
+  .prox-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+    color: var(--txt-3);
+    margin-top: 4px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+
+  /* Mobile responsive */
+  @media (max-width: 600px) {
+    .app { padding: 14px 12px 40px; gap: 14px; }
+    .grid { grid-template-columns: 1fr; gap: 12px; }
+    .ticker { font-size: 24px; }
+    .timing-icon { font-size: 20px; }
+    .timing-verdict { font-size: 13px; }
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .stat { padding: 10px 12px; }
+    .stat-val { font-size: 16px; }
+    .stat-key { font-size: 9px; }
+  }
+
   .tags {
     display: flex; gap: 6px; flex-wrap: wrap;
   }
@@ -447,6 +575,120 @@ function scoreClass(s) {
   return "low";
 }
 
+// =============================================================================
+// ENTRY TIMING ENGINE
+// Computes, per candidate: trigger / stop / TP / where spot is in the move.
+// Returns a verdict that drives the card's prominent timing badge.
+// =============================================================================
+function getEntryTiming(c) {
+  const isCall = c.direction === "CALL";
+  const trigger = isCall ? c.priorHigh : c.priorLow;
+  const stop    = isCall ? c.todayLow  : c.todayHigh;
+  const r       = Math.abs(trigger - stop);
+  const tp1     = isCall ? trigger + r   : trigger - r;
+  const spot    = c.spot;
+
+  // How far past trigger? in R units (1R = trigger->stop distance)
+  // Positive = in the direction of the trade (good)
+  // Negative = below trigger for CALL, above for PUT (still waiting)
+  const directional = isCall ? (spot - trigger) : (trigger - spot);
+  const rMultiple = r > 0 ? directional / r : 0;
+
+  // Distance to trigger as % of spot
+  const distPct = spot > 0 ? Math.abs(spot - trigger) / spot * 100 : 0;
+
+  // Stopped out?  (spot past stop in wrong direction)
+  const stoppedOut = isCall ? (spot < stop) : (spot > stop);
+
+  let verdict, color, msg, sub;
+  if (stoppedOut) {
+    verdict = "INVALID"; color = "gray";
+    msg = "Setup invalidated"; sub = `Past ${isCall ? "stop low" : "stop high"} ${fmtNum(stop)}`;
+  } else if (rMultiple < -0.15) {
+    // More than 15% of R below trigger -> still waiting for break
+    verdict = "WAIT"; color = "amber";
+    msg = "Wait for trigger"; sub = `${fmtPct(distPct)} below ${fmtNum(trigger)}`;
+  } else if (rMultiple < 0.15) {
+    // Within ±15% of R from trigger -> sweet spot, fire now
+    verdict = "ENTER NOW"; color = "green";
+    msg = "Trigger zone live"; sub = `Spot ${fmtNum(spot)} vs trigger ${fmtNum(trigger)}`;
+  } else if (rMultiple < 0.5) {
+    // 15-50% into the move -> still good RR
+    verdict = "STILL GOOD"; color = "green";
+    msg = `${rMultiple.toFixed(2)}R into move`; sub = `Entry OK, RR ${(2 - rMultiple).toFixed(1)} to TP2`;
+  } else if (rMultiple < 1.0) {
+    // 50%-100% into the move -> chase risk
+    verdict = "CHASE RISK"; color = "amber";
+    msg = `${rMultiple.toFixed(2)}R extended`; sub = `RR shrunk - tight stop required`;
+  } else {
+    // Past TP1 -> missed
+    verdict = "MISSED"; color = "red";
+    msg = "Past TP1"; sub = `${rMultiple.toFixed(2)}R extended - chase = bad RR`;
+  }
+
+  return { verdict, color, msg, sub, trigger, stop, tp1, rMultiple, distPct, isCall };
+}
+
+// =============================================================================
+// CANDLE COUNTDOWN
+// Time remaining in current candle. Defaults to Daily (4 PM ET close on RTH).
+// =============================================================================
+function getCandleCountdown(tf) {
+  // Get current time in ET
+  const now = new Date();
+  const etStr = now.toLocaleString("en-US", { timeZone: "America/New_York" });
+  const et = new Date(etStr);
+  const dow = et.getDay(); // Sun=0
+  const h = et.getHours();
+  const m = et.getMinutes();
+  const s = et.getSeconds();
+
+  // Weekend? Next candle is Monday 9:30 AM
+  if (dow === 0 || dow === 6) {
+    return { label: "Weekend", remaining: "—" };
+  }
+
+  // For Daily: close at 4:00 PM ET
+  // For 4HR (RTH): closes at 1:30 PM and 4:00 PM
+  if (tf === "4HR" || tf === "4H") {
+    let target;
+    if (h < 13 || (h === 13 && m < 30)) {
+      target = new Date(et); target.setHours(13, 30, 0, 0);
+    } else if (h < 16) {
+      target = new Date(et); target.setHours(16, 0, 0, 0);
+    } else {
+      // After hours -> next day 1:30 PM
+      target = new Date(et); target.setDate(target.getDate() + (dow === 5 ? 3 : 1));
+      target.setHours(13, 30, 0, 0);
+    }
+    return formatCountdown(target - et);
+  }
+
+  // Default Daily: 4:00 PM ET close
+  let target = new Date(et);
+  if (h >= 16) {
+    // After close -> tomorrow 4 PM (Friday -> Monday)
+    target.setDate(target.getDate() + (dow === 5 ? 3 : 1));
+  }
+  target.setHours(16, 0, 0, 0);
+  const ms = target - et;
+  return formatCountdown(ms);
+}
+
+function formatCountdown(ms) {
+  if (ms <= 0) return { label: "—", remaining: "—" };
+  const totalMin = Math.floor(ms / 60000);
+  const hours = Math.floor(totalMin / 60);
+  const mins  = totalMin % 60;
+  const secs  = Math.floor((ms % 60000) / 1000);
+  let remaining;
+  if (hours > 0) remaining = `${hours}h ${String(mins).padStart(2,"0")}m`;
+  else if (mins >= 10) remaining = `${mins}m ${String(secs).padStart(2,"0")}s`;
+  else remaining = `${mins}:${String(secs).padStart(2,"0")}`;
+  // Label shows "next close in"
+  return { label: "Daily close", remaining };
+}
+
 function renderStats() {
   const cands = scan.candidates || [];
   const longs  = cands.filter(c => c.direction === "CALL").length;
@@ -494,6 +736,28 @@ function renderGrid() {
     const isEarnings = EARNINGS_BLOCK.has(c.ticker);
     const sectorTier = c.sectorTier || "neutral";
     const sectorMomDisplay = c.sectorMom != null ? fmtPct(c.sectorMom) : "";
+    const t = getEntryTiming(c);
+    const cd = getCandleCountdown("Daily");
+    const icon = t.color === "green" ? "🟢" : t.color === "amber" ? "🟡" : t.color === "red" ? "🔴" : "⚪";
+
+    // Proximity bar layout: map stop -> trigger -> tp1 to a 0-100% scale
+    // stop at left, trigger in middle (50%), tp1 at right (100%)
+    // spot position: clamp into 0-100%
+    const lo = Math.min(t.stop, t.tp1, t.trigger, c.spot);
+    const hi = Math.max(t.stop, t.tp1, t.trigger, c.spot);
+    const span = Math.max(0.01, hi - lo);
+    const pct = (val) => Math.max(0, Math.min(100, ((val - lo) / span) * 100));
+    const triggerPct = pct(t.trigger);
+    const stopPct = pct(t.stop);
+    const tp1Pct = pct(t.tp1);
+    const spotPct = pct(c.spot);
+    const stopBar = isCall
+      ? `left:${pct(t.stop)}%; right:${100 - triggerPct}%`
+      : `left:${triggerPct}%; right:${100 - pct(t.stop)}%`;
+    const tpBar = isCall
+      ? `left:${triggerPct}%; right:${100 - tp1Pct}%`
+      : `left:${tp1Pct}%; right:${100 - triggerPct}%`;
+
     return `
       <div class="card ${isCall ? "long" : "short"} ${isEarnings ? "earnings-block" : ""}" data-idx="${cands.indexOf(c)}">
         <div class="card-head">
@@ -506,6 +770,34 @@ function renderGrid() {
             <div class="score-badge"><span class="score-num ${scoreClass(c.score)} mono">${c.score}</span><span class="score-lbl">Score</span></div>
           </div>
         </div>
+
+        <div class="timing ${t.color}">
+          <span class="timing-icon">${icon}</span>
+          <div class="timing-text">
+            <span class="timing-verdict">${t.verdict}</span>
+            <span class="timing-msg">${t.msg}</span>
+            <span class="timing-sub">${t.sub}</span>
+          </div>
+          <div class="timing-countdown">
+            <span class="timing-countdown-val mono" data-countdown="Daily">${cd.remaining}</span>
+            <span class="timing-countdown-lbl">${cd.label}</span>
+          </div>
+        </div>
+
+        <div>
+          <div class="prox">
+            <div class="prox-stop"  style="${stopBar}"></div>
+            <div class="prox-tp"    style="${tpBar}"></div>
+            <div class="prox-trigger" style="left:${triggerPct}%"></div>
+            <div class="prox-spot" style="left:${spotPct}%"></div>
+          </div>
+          <div class="prox-labels">
+            <span>${isCall ? "Stop " + fmtNum(t.stop) : "Stop " + fmtNum(t.stop)}</span>
+            <span style="color: var(--aqua);">Trig ${fmtNum(t.trigger)}</span>
+            <span>TP1 ${fmtNum(t.tp1)}</span>
+          </div>
+        </div>
+
         <div>
           <span class="pattern">${c.pattern}</span>
         </div>
@@ -514,8 +806,6 @@ function renderGrid() {
           <div class="metric"><span class="metric-key">Prior Lo</span><span class="metric-val mono">${fmtNum(c.priorLow)}</span></div>
           <div class="metric"><span class="metric-key">Today Hi</span><span class="metric-val mono">${fmtNum(c.todayHigh)}</span></div>
           <div class="metric"><span class="metric-key">Today Lo</span><span class="metric-val mono">${fmtNum(c.todayLow)}</span></div>
-          <div class="metric"><span class="metric-key">EMA 9</span><span class="metric-val mono">${fmtNum(c.ema9)}</span></div>
-          <div class="metric"><span class="metric-key">EMA 21</span><span class="metric-val mono">${fmtNum(c.ema21)}</span></div>
         </div>
         <div class="tags">
           <span class="tag sector">${c.sector || "-"} ${sectorMomDisplay}</span>
@@ -699,6 +989,14 @@ async function loadScan() {
 
 loadScan();
 setInterval(loadScan, 30000); // re-poll every 30s
+
+// Live-tick the countdown labels so "5h 23m → 5h 22m" updates without a full re-render
+setInterval(() => {
+  document.querySelectorAll("[data-countdown]").forEach(el => {
+    const cd = getCandleCountdown(el.dataset.countdown || "Daily");
+    el.textContent = cd.remaining;
+  });
+}, 1000);
 </script>
 </body>
 </html>
