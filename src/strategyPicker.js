@@ -202,6 +202,26 @@ function _longSingleLeg(setup, allowed, level, rationale) {
 }
 
 function accept(type, params) {
+  // Apr 29 2026: Always include trim/runner plan per AB - "I have to hold runners"
+  // Min size 2 contracts so the trim+runner pattern is structurally possible.
+  // Pattern: trim 50% at TP1 to lock bill money, ride remainder to TP2/TP3.
+  if (!params.tradePlan && (type === 'LONG_OPTION' || type === 'DEBIT_VERTICAL')) {
+    params.tradePlan = {
+      minContracts:  2,
+      tp1Trim:       '50% (1 of 2 contracts) at TP1 - lock bill money',
+      tp2Trim:       '0% at TP2 - let runner work',
+      tp3OrTrail:    'TRIM final at TP3 OR trail stop to last swing low/high',
+      principle:     'Trimming all at TP1 caps your edge. The runner is where the asymmetry lives. Min 2 ct or skip - 1 ct setups force a binary trim-or-hold decision.',
+    };
+  } else if (!params.tradePlan && (type === 'IRON_CONDOR' || type === 'IRON_BUTTERFLY' || type === 'CREDIT_VERTICAL')) {
+    // Short-premium plays: different runner concept (close at 50% credit = runner)
+    params.tradePlan = {
+      minContracts:  1,
+      managementRule: 'Close at 50% of max credit (runner = letting it ride past 50% only if no event left)',
+      stopRule:      'Close if loss hits 2x credit received',
+      principle:     'Short-premium plays are theta-decay trades, not directional runners. Take the 50% win.',
+    };
+  }
   return { ok: true, type: type, params: params, rationale: params.rationale };
 }
 function reject(reason, ctx) {
