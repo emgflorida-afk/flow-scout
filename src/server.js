@@ -283,6 +283,145 @@ app.get('/api/strategy-pick/info', function(req, res) {
     matrix:           strategyPicker.STRATEGIES_BY_LEVEL,
   });
 });
+
+// SCANNER FIRE (Apr 29 2026) - dispatched orders go LIVE in TS account so AB
+// sees them as working orders ready to confirm/cancel. Defaults to SIM account
+// for safety; LIVE flag must be explicit.
+//
+// Body: { ticker, entry, stop, tp1, tp2, qty, live, structuralStop }
+// Required: x-stratum-secret header (prompted in scanner-v2 UI on first use)
+app.post('/api/scanner-fire', async function(req, res) {
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) {
+      return res.status(401).json({ error: 'Unauthorized - check stratumSecret' });
+    }
+    if (!orderExecutor) return res.status(500).json({ error: 'orderExecutor not loaded' });
+
+    var b = req.body || {};
+    var ticker = (b.ticker || '').toUpperCase();
+    var qty    = Math.max(1, Math.min(10, parseInt(b.qty) || 2));  // default 2 for trim/runner
+    var live   = b.live === true;
+    var direction = b.direction || (parseFloat(b.entry) < parseFloat(b.tp1) ? 'BULLISH' : 'BEARISH');
+    var orderType = b.orderType || 'STOCK';  // 'STOCK' or 'OPTION'
+
+    if (!ticker) return res.status(400).json({ error: 'ticker required' });
+    if (!b.entry || !b.tp1) return res.status(400).json({ error: 'entry + tp1 required' });
+    if (!b.stop && !(b.structuralStop && b.structuralStop.symbol)) {
+      return res.status(400).json({ error: 'stop or structuralStop required' });
+    }
+
+    var account = live ? '11975462' : 'SIM3142118M';
+    var symbol = orderType === 'STOCK' ? ticker : (b.symbol || ticker);  // option needs OPRA symbol
+
+    // Build the order params for orderExecutor.placeOrder
+    var orderParams = {
+      account:        account,
+      symbol:         symbol,
+      action:         direction === 'BULLISH' ? 'BUYTOOPEN' : 'SELLTOOPEN',
+      qty:            qty,
+      entry:          parseFloat(b.entry),
+      stop:           b.stop ? parseFloat(b.stop) : null,
+      tp1:            parseFloat(b.tp1),
+      tp2:            b.tp2 ? parseFloat(b.tp2) : null,
+      structuralStop: b.structuralStop || null,
+      duration:       b.duration || 'GTC',
+      orderType:      orderType,  // STOCK or OPTION (orderExecutor branches)
+    };
+
+    console.log('[SCANNER-FIRE]', JSON.stringify({
+      ticker: ticker, qty: qty, live: live, account: account,
+      entry: orderParams.entry, stop: orderParams.stop, tp1: orderParams.tp1,
+    }));
+
+    var result = await orderExecutor.placeOrder(orderParams);
+
+    if (result.error) {
+      return res.status(400).json({ ok: false, error: result.error, params: orderParams });
+    }
+
+    res.json({
+      ok:       true,
+      account:  live ? 'LIVE' : 'SIM',
+      ticker:   ticker,
+      qty:      qty,
+      orderID:  result.orderID || result.OrderID || null,
+      result:   result,
+      message:  live
+        ? 'Order placed in LIVE account ' + account + ' as working LIMIT. Check Titan to confirm.'
+        : 'Order placed in SIM account ' + account + '. Test fill behavior, no real $$ risk.',
+    });
+  } catch(e) {
+    console.error('[SCANNER-FIRE] error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// IRON CONDOR BUILDER (Apr 29 2026) - cash-settled XSP/SPX preferred.
+// GET /api/iron-condor/:ticker?expiry=2026-05-02&shortDelta=0.25&wingDelta=0.15
+// Auto-converts SPY -> XSP, QQQ -> NDX, IWM -> RUT for cash-settled execution.
+var ironCondorBuilder = null;
+try { ironCondorBuilder = require('./ironCondorBuilder'); console.log('[SERVER] ironCondorBuilder loaded OK'); }
+catch(e) { console.log('[SERVER] ironCondorBuilder not loaded:', e.message); }
+
+app.get('/api/iron-condor/:ticker', async function(req, res) {
+  if (!ironCondorBuilder) return res.status(500).json({ ok: false, error: 'ironCondorBuilder not loaded' });
+  if (!optionsChain)      return res.status(500).json({ ok: false, error: 'optionsChain not loaded' });
+  try {
+    var inputTicker  = String(req.params.ticker).toUpperCase();
+    var preferOriginal = req.query.preferOriginal === '1' || req.query.preferOriginal === 'true';
+    var ticker = preferOriginal ? inputTicker : ironCondorBuilder.preferredUnderlying(inputTicker);
+    var expiry = req.query.expiry || _nextFridayISO();
+    var shortDelta = parseFloat(req.query.shortDelta) || 0.25;
+    var wingDelta  = parseFloat(req.query.wingDelta)  || 0.15;
+    var minWingWidth = parseFloat(req.query.minWingWidth) || 5;
+
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'TS token unavailable' });
+
+    // Fetch live quote to center the chain
+    var fetchLib = require('node-fetch');
+    var qr = await fetchLib('https://api.tradestation.com/v3/marketdata/quotes/' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    var qd = await qr.json();
+    var q = (qd && qd.Quotes && qd.Quotes[0]) || {};
+    var spot = parseFloat(q.Last || q.Close || 0);
+    if (!spot) return res.status(500).json({ ok: false, error: 'no live quote for ' + ticker });
+
+    // Pull the chain
+    var chainRes = await optionsChain.fetchChain(ticker, expiry, spot, token);
+    if (!chainRes || !chainRes.rows) {
+      return res.status(500).json({ ok: false, error: 'chain fetch returned no rows', ticker: ticker, expiry: expiry });
+    }
+
+    // Build the condor
+    var plan = ironCondorBuilder.buildIronCondor(chainRes.rows, {
+      underlying:   ticker,
+      expiry:       expiry,
+      spot:         spot,
+      shortDelta:   shortDelta,
+      wingDelta:    wingDelta,
+      minWingWidth: minWingWidth,
+    });
+
+    res.json({
+      ok:          plan.ok,
+      requestedTicker: inputTicker,
+      builtTicker: ticker,
+      converted:   inputTicker !== ticker,
+      conversionNote: inputTicker !== ticker
+        ? ('Auto-switched ' + inputTicker + ' -> ' + ticker + ' for cash-settled European-style execution. Pass ?preferOriginal=1 to use ' + inputTicker + ' instead.')
+        : null,
+      expiry:      expiry,
+      spot:        spot,
+      plan:        plan,
+    });
+  } catch(e) {
+    console.error('[IC-BUILDER]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }

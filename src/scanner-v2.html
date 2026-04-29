@@ -1140,6 +1140,16 @@ function renderStrategyPick(pick) {
   `;
 }
 
+// Get the STRATUM_SECRET (prompt once, cache in localStorage like the classic scanner)
+function getStratumSecret() {
+  let s = localStorage.getItem("stratumSecret");
+  if (!s) {
+    s = prompt("Enter STRATUM_SECRET (one-time, stored in this browser only):");
+    if (s) localStorage.setItem("stratumSecret", s);
+  }
+  return s;
+}
+
 async function dispatchToTitan(idx, btn) {
   const c = scan.candidates[idx];
   const isCall = c.direction === "CALL";
@@ -1147,43 +1157,71 @@ async function dispatchToTitan(idx, btn) {
   const stop    = isCall ? c.todayLow  : c.todayHigh;
   const r       = Math.abs(trigger - stop);
   const tp1     = isCall ? trigger + r : trigger - r;
+  const tp2     = isCall ? trigger + 2*r : trigger - 2*r;
   const conviction = c.score >= 12 ? "high" : c.score >= 9 ? "medium" : "low";
-  const titanCard = `${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${trigger.toFixed(2)} | stop ${stop.toFixed(2)} | tp ${tp1.toFixed(2)} | ${c.pattern} | conv:${conviction} | acct:${account}`;
+  const live = account === "LIVE";
 
-  if (!confirm(`Dispatch to Titan queue?\n\nAccount: ${account}\n${titanCard}\n\nMode: REVIEW (manual approval at Titan)\nConviction: ${conviction.toUpperCase()}`)) return;
+  // Bigger, scarier confirm for LIVE; cleaner for SIM
+  const banner = live
+    ? `🚨 LIVE ORDER — REAL MONEY 🚨\n\nThis will place a working order in your LIVE account.\n`
+    : `🧪 SIM ORDER (paper)\n`;
+  if (!confirm(`${banner}\n${isCall ? "BUY" : "SHORT"} ${c.ticker} 2 ct @ ${trigger.toFixed(2)} LMT\nStop: ${stop.toFixed(2)} | TP1: ${tp1.toFixed(2)} | TP2: ${tp2.toFixed(2)}\nConviction: ${conviction.toUpperCase()}\nPattern: ${c.pattern}\n\n${live ? "Confirm LIVE order placement?" : "Place SIM test order?"}`)) return;
+
+  const secret = getStratumSecret();
+  if (!secret) {
+    btn.textContent = "❌ Secret required";
+    setTimeout(() => { btn.textContent = "🎟️ Send to Titan"; }, 2000);
+    return;
+  }
 
   const orig = btn.textContent;
-  btn.textContent = "Dispatching...";
+  btn.textContent = "Placing...";
   btn.disabled = true;
 
   try {
-    const resp = await fetch('/api/card-dispatch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const resp = await fetch("/api/scanner-fire", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-stratum-secret": secret,
+      },
       body: JSON.stringify({
-        ticker: c.ticker,
-        mode: 'review',
-        conviction: conviction,
-        card: c,
-        titanCard: titanCard,
-        source: 'scanner-v2',
-        account: account
-      })
+        ticker:    c.ticker,
+        direction: isCall ? "BULLISH" : "BEARISH",
+        entry:     trigger,
+        stop:      stop,
+        tp1:       tp1,
+        tp2:       tp2,
+        qty:       2,
+        live:      live,
+        orderType: "STOCK",  // future: switch to OPTION when contract resolved
+      }),
     });
     const data = await resp.json();
     if (data.ok) {
-      btn.textContent = data.deduped ? "Already queued ✓" : "Sent to Titan ✓";
+      btn.textContent = `✓ ${live ? "LIVE" : "SIM"} order placed`;
       btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
       btn.style.color = "#07090f";
-      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 2000);
+      // Show the order ID + go-to-Titan hint
+      const detail = document.getElementById("strategy-pick-body");
+      if (detail) {
+        const note = document.createElement("div");
+        note.style.cssText = "margin-top:14px; padding:12px; border-radius:10px; background: rgba(20,232,122,0.12); border: 1px solid rgba(20,232,122,0.32);";
+        note.innerHTML = `<div style="font-size:12px; color: var(--green); font-weight:700; margin-bottom:4px;">✓ Order Placed in ${live ? "LIVE" : "SIM"} Account</div><div style="font-size:11px; color: var(--txt-1);">${data.message || ""}</div>${data.orderID ? `<div style="font-size:10px; color: var(--txt-3); margin-top:4px;">Order ID: <span class="mono">${data.orderID}</span></div>` : ""}`;
+        detail.appendChild(note);
+      }
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
     } else {
-      btn.textContent = "❌ " + (data.reason || "failed");
+      const errMsg = (data.error || "failed").slice(0, 60);
+      btn.textContent = "❌ " + errMsg;
       btn.style.background = "var(--red-soft)";
       btn.style.color = "var(--red)";
-      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 3000);
+      // If unauthorized, clear stored secret so next click prompts again
+      if (resp.status === 401) localStorage.removeItem("stratumSecret");
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
     }
   } catch (e) {
-    btn.textContent = "❌ " + e.message;
+    btn.textContent = "❌ " + e.message.slice(0, 40);
     setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
   }
 }
