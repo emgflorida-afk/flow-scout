@@ -1110,12 +1110,33 @@ function renderStrategyPick(pick) {
   if (p.dte)           params.push(`<span><span class="mk">DTE</span><span class="mv">${p.dte}</span></span>`);
   if (p.creditTarget)  params.push(`<span><span class="mk">CREDIT TGT</span><span class="mv">${p.creditTarget}</span></span>`);
   if (p.debitTarget)   params.push(`<span><span class="mk">DEBIT TGT</span><span class="mv">${p.debitTarget}</span></span>`);
+  // Trim/runner plan rendering
+  const tp = p.tradePlan || {};
+  let tradePlanHtml = "";
+  if (tp.minContracts) {
+    const lines = [
+      `<span><span class="mk">MIN SIZE</span><span class="mv">${tp.minContracts} ct</span></span>`,
+      tp.tp1Trim       ? `<span><span class="mk">@ TP1</span><span class="mv">${tp.tp1Trim}</span></span>` : "",
+      tp.tp2Trim       ? `<span><span class="mk">@ TP2</span><span class="mv">${tp.tp2Trim}</span></span>` : "",
+      tp.tp3OrTrail    ? `<span><span class="mk">@ TP3</span><span class="mv">${tp.tp3OrTrail}</span></span>` : "",
+      tp.managementRule? `<span><span class="mk">CLOSE</span><span class="mv">${tp.managementRule}</span></span>` : "",
+      tp.stopRule      ? `<span><span class="mk">STOP RULE</span><span class="mv">${tp.stopRule}</span></span>` : "",
+    ].filter(Boolean).join("");
+    tradePlanHtml = `
+      <div style="margin-top:14px; padding-top:14px; border-top: 1px solid rgba(255,255,255,0.06);">
+        <div style="font-size:11px; color: var(--green); font-weight:700; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:8px;">📋 Trim / Runner Plan</div>
+        <div class="ticket-meta mono" style="display:flex; flex-direction:column; gap:6px; align-items:flex-start;">${lines}</div>
+        ${tp.principle ? `<div style="font-size:10px; color: var(--txt-2); margin-top:10px; line-height:1.4; font-style:italic;">${tp.principle}</div>` : ""}
+      </div>`;
+  }
+
   body.innerHTML = `
     <div class="ticket-line">${typeLabel}</div>
     <div class="ticket-meta mono" style="margin-top:6px;">${params.join("")}</div>
     <div style="font-size:11px; color: var(--txt-1); margin-top:10px; padding-top:10px; border-top: 1px solid rgba(255,255,255,0.06); line-height: 1.5;">
       <strong style="color: var(--aqua);">Why:</strong> ${pick.rationale || ""}
     </div>
+    ${tradePlanHtml}
   `;
 }
 
