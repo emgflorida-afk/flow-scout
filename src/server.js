@@ -251,6 +251,38 @@ app.get('/api/lvl-scan/:ticker', async function(req, res) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// Strategy picker (Apr 29 2026) - recommends the right options structure
+// for a setup based on AB's Level 3 approval + market conditions.
+var strategyPicker = null;
+try { strategyPicker = require('./strategyPicker'); console.log('[SERVER] strategyPicker loaded OK'); }
+catch(e) { console.log('[SERVER] strategyPicker not loaded:', e.message); }
+
+app.post('/api/strategy-pick', function(req, res) {
+  if (!strategyPicker) return res.status(500).json({ ok: false, error: 'strategyPicker not loaded' });
+  try {
+    var setup         = req.body || {};
+    var accountConfig = {
+      optionsLevel: parseInt(req.body.optionsLevel) || parseInt(process.env.STRATEGY_LEVEL || '3'),
+    };
+    var pick = strategyPicker.pickStrategy(setup, accountConfig);
+    res.json(pick);
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/strategy-pick/info', function(req, res) {
+  if (!strategyPicker) return res.status(500).json({ ok: false, error: 'strategyPicker not loaded' });
+  var level = parseInt(req.query.level) || parseInt(process.env.STRATEGY_LEVEL || '3');
+  res.json({
+    ok:               true,
+    level:            level,
+    allowedStrategies: Array.from(strategyPicker.strategiesAllowedAtLevel(level)),
+    cashSettled:      strategyPicker.CASH_SETTLED_INDICES,
+    matrix:           strategyPicker.STRATEGIES_BY_LEVEL,
+  });
+});
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }

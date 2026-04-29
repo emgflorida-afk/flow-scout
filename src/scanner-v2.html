@@ -1044,8 +1044,79 @@ function openDetail(idx) {
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
       </div>
     </div>
+
+    <!-- Strategy picker recommendation (loaded async) -->
+    <div id="strategy-pick-section" style="display:none;">
+      <div class="ticket" id="strategy-pick-ticket">
+        <div class="ticket-head"><span>🎯 Recommended Structure (Level 3)</span></div>
+        <div id="strategy-pick-body"></div>
+      </div>
+    </div>
   `;
   document.getElementById("overlay").classList.add("active");
+
+  // Async: fetch strategy recommendation from /api/strategy-pick
+  fetchStrategyPick(c, isCall).catch(e => console.warn("strategy-pick failed:", e));
+}
+
+async function fetchStrategyPick(c, isCall) {
+  const setup = {
+    ticker:        c.ticker,
+    direction:     isCall ? "LONG" : "SHORT",
+    score:         c.score,
+    catalyst:      c.catalyst || (EARNINGS_BLOCK.has(c.ticker) ? "EARNINGS" : "NONE"),
+    ivPercentile:  c.ivPercentile || null,
+    rangeBoundExpected: false,
+    holdDays:      c.holdDays || (c.timeframe === "Daily" ? 5 : 1),
+  };
+  try {
+    const r = await fetch("/api/strategy-pick", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ ...setup, optionsLevel: 3 }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const pick = await r.json();
+    renderStrategyPick(pick);
+  } catch (e) {
+    document.getElementById("strategy-pick-section").style.display = "block";
+    document.getElementById("strategy-pick-body").innerHTML =
+      `<div style="font-size:11px; color: var(--txt-3);">Strategy picker unavailable: ${e.message}</div>`;
+  }
+}
+
+function renderStrategyPick(pick) {
+  const sec = document.getElementById("strategy-pick-section");
+  const body = document.getElementById("strategy-pick-body");
+  if (!sec || !body) return;
+  sec.style.display = "block";
+  if (!pick.ok) {
+    body.innerHTML = `
+      <div class="ticket-line" style="font-size:14px;">⏸ ${pick.type}: ${pick.reason}</div>
+      <div style="font-size:11px; color: var(--txt-3); margin-top:6px;">Skip this setup. ${JSON.stringify(pick.context || {})}</div>
+    `;
+    return;
+  }
+  const p = pick.params || {};
+  const typeLabel = pick.type.replace(/_/g, " ");
+  const params = [];
+  if (p.underlying)    params.push(`<span><span class="mk">UNDERLYING</span><span class="mv">${p.underlying}</span></span>`);
+  if (p.side)          params.push(`<span><span class="mk">SIDE</span><span class="mv">${p.side.replace(/_/g, " ")}</span></span>`);
+  if (p.strike)        params.push(`<span><span class="mk">STRIKE</span><span class="mv">${p.strike}</span></span>`);
+  if (p.shortLegs)     params.push(`<span><span class="mk">SHORT LEGS</span><span class="mv">${p.shortLegs}</span></span>`);
+  if (p.longLegs)      params.push(`<span><span class="mk">LONG LEGS</span><span class="mv">${p.longLegs}</span></span>`);
+  if (p.shortStrike)   params.push(`<span><span class="mk">SHORT STRIKE</span><span class="mv">${p.shortStrike}</span></span>`);
+  if (p.longStrike)    params.push(`<span><span class="mk">LONG STRIKE</span><span class="mv">${p.longStrike}</span></span>`);
+  if (p.dte)           params.push(`<span><span class="mk">DTE</span><span class="mv">${p.dte}</span></span>`);
+  if (p.creditTarget)  params.push(`<span><span class="mk">CREDIT TGT</span><span class="mv">${p.creditTarget}</span></span>`);
+  if (p.debitTarget)   params.push(`<span><span class="mk">DEBIT TGT</span><span class="mv">${p.debitTarget}</span></span>`);
+  body.innerHTML = `
+    <div class="ticket-line">${typeLabel}</div>
+    <div class="ticket-meta mono" style="margin-top:6px;">${params.join("")}</div>
+    <div style="font-size:11px; color: var(--txt-1); margin-top:10px; padding-top:10px; border-top: 1px solid rgba(255,255,255,0.06); line-height: 1.5;">
+      <strong style="color: var(--aqua);">Why:</strong> ${pick.rationale || ""}
+    </div>
+  `;
 }
 
 async function dispatchToTitan(idx, btn) {
