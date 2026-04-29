@@ -314,24 +314,25 @@ app.post('/api/scanner-fire', async function(req, res) {
     var account = live ? '11975462' : 'SIM3142118M';
     var symbol = orderType === 'STOCK' ? ticker : (b.symbol || ticker);  // option needs OPRA symbol
 
-    // Build the order params for orderExecutor.placeOrder
+    // Build the order params for orderExecutor.placeOrder.
+    // CORRECT param names per orderExecutor signature: limit/t1/t2 (NOT entry/tp1/tp2)
+    // Action: ALWAYS BUYTOOPEN for long entries — direction (call vs put) lives in
+    // the symbol itself. SELLTOOPEN is for short-premium plays (credit spreads etc).
     var orderParams = {
       account:        account,
       symbol:         symbol,
-      action:         direction === 'BULLISH' ? 'BUYTOOPEN' : 'SELLTOOPEN',
+      action:         'BUYTOOPEN',     // long entry; symbol carries C/P
       qty:            qty,
-      entry:          parseFloat(b.entry),
+      limit:          parseFloat(b.entry),     // <-- was 'entry'
       stop:           b.stop ? parseFloat(b.stop) : null,
-      tp1:            parseFloat(b.tp1),
-      tp2:            b.tp2 ? parseFloat(b.tp2) : null,
+      t1:             parseFloat(b.tp1),       // <-- was 'tp1'
+      t2:             b.tp2 ? parseFloat(b.tp2) : null,  // <-- was 'tp2'
       structuralStop: b.structuralStop || null,
       duration:       b.duration || 'GTC',
-      orderType:      orderType,  // STOCK or OPTION (orderExecutor branches)
-      // CRITICAL (Apr 29): scanner-v2 clicks are HUMAN-confirmed manual fires.
+      // CRITICAL: scanner-v2 clicks are HUMAN-confirmed manual fires.
       // Bypass time-based gates (first-15-min, dead-zone) since AB is in the loop.
-      // Dead-zone block exists to stop AUTO-fire chasing chop, not manual entries.
       manualFire:     true,
-      tradeType:      b.tradeType || 'SWING',  // SWING is dead-zone-exempt regardless
+      tradeType:      b.tradeType || 'SWING',
     };
 
     console.log('[SCANNER-FIRE]', JSON.stringify({
