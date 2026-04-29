@@ -1137,6 +1137,92 @@ function renderStrategyPick(pick) {
       <strong style="color: var(--aqua);">Why:</strong> ${pick.rationale || ""}
     </div>
     ${tradePlanHtml}
+    <div id="ic-plan-section"></div>
+  `;
+
+  // If recommendation is iron condor, fetch the real leg structure
+  if (pick.type === "IRON_CONDOR" && p.underlying) {
+    fetchIronCondor(p.underlying, p.dte || 7).catch(e => console.warn("IC fetch:", e));
+  }
+}
+
+async function fetchIronCondor(underlying, dte) {
+  const sec = document.getElementById("ic-plan-section");
+  if (!sec) return;
+  sec.innerHTML = `<div style="margin-top:14px; font-size:11px; color: var(--txt-3);">⏳ Fetching live ${underlying} chain for iron condor legs...</div>`;
+  // Compute target expiry: today + dte days, formatted YYYY-MM-DD
+  const now = new Date();
+  now.setDate(now.getDate() + dte);
+  const expiry = now.toISOString().slice(0, 10);
+  try {
+    const r = await fetch(`/api/iron-condor/${underlying}?expiry=${expiry}`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    if (!d.ok || !d.plan?.ok) {
+      sec.innerHTML = `<div style="margin-top:14px; font-size:11px; color: var(--txt-3);">IC builder: ${d.plan?.reason || d.error || "unable to build"}</div>`;
+      return;
+    }
+    renderIronCondor(d, sec);
+  } catch (e) {
+    sec.innerHTML = `<div style="margin-top:14px; font-size:11px; color: var(--red);">IC fetch failed: ${e.message}</div>`;
+  }
+}
+
+function renderIronCondor(d, sec) {
+  const p = d.plan;
+  const s = p.summary;
+  const legs = p.legs;
+  const conversion = d.converted ? `<div style="font-size:10px; color: var(--amber); margin-bottom:6px;">⚡ Auto-switched ${d.requestedTicker} → ${d.builtTicker} for cash-settled execution</div>` : "";
+  sec.innerHTML = `
+    <div style="margin-top:14px; padding-top:14px; border-top: 1px solid rgba(255,255,255,0.06);">
+      <div style="font-size:11px; color: var(--purple); font-weight:700; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:8px;">💎 Iron Condor Legs (live chain)</div>
+      ${conversion}
+      <div style="display: grid; grid-template-columns: 80px 1fr 50px 60px 50px; gap: 4px 12px; font-size: 11px; align-items: center; margin-bottom: 12px;">
+        <span style="color: var(--txt-3); font-weight:700; font-size:9px;">LEG</span>
+        <span style="color: var(--txt-3); font-weight:700; font-size:9px;">SYMBOL/STRIKE</span>
+        <span style="color: var(--txt-3); font-weight:700; font-size:9px;">DELTA</span>
+        <span style="color: var(--txt-3); font-weight:700; font-size:9px;">MID</span>
+        <span style="color: var(--txt-3); font-weight:700; font-size:9px;">VOL</span>
+
+        <span style="color: var(--green);">SHORT P</span>
+        <span class="mono">${legs.shortPut.strike}P</span>
+        <span class="mono">${legs.shortPut.delta.toFixed(2)}</span>
+        <span class="mono" style="color: var(--green);">+${legs.shortPut.mid.toFixed(2)}</span>
+        <span class="mono" style="color: var(--txt-3);">${legs.shortPut.volume}</span>
+
+        <span style="color: var(--red);">LONG P</span>
+        <span class="mono">${legs.longPut.strike}P</span>
+        <span class="mono">${legs.longPut.delta.toFixed(2)}</span>
+        <span class="mono" style="color: var(--red);">-${legs.longPut.mid.toFixed(2)}</span>
+        <span class="mono" style="color: var(--txt-3);">${legs.longPut.volume}</span>
+
+        <span style="color: var(--green);">SHORT C</span>
+        <span class="mono">${legs.shortCall.strike}C</span>
+        <span class="mono">${legs.shortCall.delta.toFixed(2)}</span>
+        <span class="mono" style="color: var(--green);">+${legs.shortCall.mid.toFixed(2)}</span>
+        <span class="mono" style="color: var(--txt-3);">${legs.shortCall.volume}</span>
+
+        <span style="color: var(--red);">LONG C</span>
+        <span class="mono">${legs.longCall.strike}C</span>
+        <span class="mono">${legs.longCall.delta.toFixed(2)}</span>
+        <span class="mono" style="color: var(--red);">-${legs.longCall.mid.toFixed(2)}</span>
+        <span class="mono" style="color: var(--txt-3);">${legs.longCall.volume}</span>
+      </div>
+      <div class="ticket-meta mono" style="font-size: 11px; flex-wrap: wrap; gap: 10px;">
+        <span><span class="mk">CREDIT</span><span class="mv" style="color: var(--green);">$${s.totalCredit.toFixed(2)}</span></span>
+        <span><span class="mk">MAX LOSS</span><span class="mv" style="color: var(--red);">$${s.maxLossPerSide.toFixed(2)}</span></span>
+        <span><span class="mk">RR</span><span class="mv">${(s.totalCredit / Math.max(0.01, s.maxLossPerSide)).toFixed(2)}</span></span>
+        <span><span class="mk">P PROFIT</span><span class="mv">${(s.probProfit * 100).toFixed(0)}%</span></span>
+        <span><span class="mk">BE LOW</span><span class="mv mono">${s.lowerBreakeven}</span></span>
+        <span><span class="mk">BE HIGH</span><span class="mv mono">${s.upperBreakeven}</span></span>
+        <span><span class="mk">EXPIRY</span><span class="mv">${d.expiry}</span></span>
+        <span><span class="mk">SPOT</span><span class="mv mono">${d.spot.toFixed(2)}</span></span>
+      </div>
+      <div style="font-size: 11px; color: var(--txt-2); margin-top: 10px; padding: 8px 12px; background: rgba(0,0,0,0.25); border-radius: 8px; font-family: 'JetBrains Mono', monospace;">
+        ${p.titanCard}
+      </div>
+      <button class="btn btn-secondary" style="margin-top: 10px; width: 100%;" onclick="navigator.clipboard.writeText('${p.titanCard.replace(/'/g, "\\'")}'); this.textContent='Copied IC ticket ✓'; setTimeout(() => this.textContent='Copy IC Ticket', 1500)">Copy IC Ticket</button>
+    </div>
   `;
 }
 
