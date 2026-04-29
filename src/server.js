@@ -331,10 +331,20 @@ app.post('/api/scanner-fire', async function(req, res) {
     var account = live ? '11975462' : 'SIM3142118M';
     var symbol = orderType === 'STOCK' ? ticker : (b.symbol || ticker);  // option needs OPRA symbol
 
+    // ACTION MAPPING (Apr 29 - AB caught GE FAILED TO BUILD).
+    // STOCK + BULLISH -> BUY ; STOCK + BEARISH -> SELLSHORT (margin acct only)
+    // OPTION + (any direction) -> BUYTOOPEN (the symbol's C/P carries direction)
+    // Was hardcoded BUYTOOPEN which TS rejected on stock symbols.
+    var resolvedAction;
+    if (orderType === 'OPTION') {
+      resolvedAction = 'BUYTOOPEN';
+    } else {
+      // STOCK
+      resolvedAction = (direction === 'BULLISH' || direction === 'LONG') ? 'BUY' : 'SELLSHORT';
+    }
+
     // Build the order params for orderExecutor.placeOrder.
     // CORRECT param names per orderExecutor signature: limit/t1/t2 (NOT entry/tp1/tp2)
-    // Action: ALWAYS BUYTOOPEN for long entries — direction (call vs put) lives in
-    // the symbol itself. SELLTOOPEN is for short-premium plays (credit spreads etc).
     //
     // PRICE ROUNDING (AB caught Apr 29): TS rejects sub-tick option prices with
     // cryptic "TS_REJ: Failed". Options <$3 use $0.01 ticks; >=$3 use $0.05 ticks.
@@ -347,7 +357,7 @@ app.post('/api/scanner-fire', async function(req, res) {
     var orderParams = {
       account:        account,
       symbol:         symbol,
-      action:         'BUYTOOPEN',     // long entry; symbol carries C/P
+      action:         resolvedAction,  // see ACTION MAPPING above
       qty:            qty,
       limit:          isOption ? _roundLimitForTS(rawEntry) : rawEntry,
       stop:           isOption ? (rawStop != null ? _roundLimitForTS(rawStop) : null) : rawStop,
