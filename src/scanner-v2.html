@@ -1060,12 +1060,31 @@ function openDetail(idx) {
 }
 
 async function fetchStrategyPick(c, isCall) {
+  // First: fetch IV percentile (parallel with picker call would be cleaner but
+  // strategyPicker NEEDS ivPercentile to avoid "IV unknown" fallback)
+  let ivPercentile = c.ivPercentile || null;
+  if (!ivPercentile) {
+    try {
+      const ivResp = await fetch(`/api/iv/${encodeURIComponent(c.ticker)}`);
+      if (ivResp.ok) {
+        const ivData = await ivResp.json();
+        if (ivData.ok && ivData.ivPercentile != null) {
+          ivPercentile = ivData.ivPercentile;
+          // Annotate the candidate so subsequent calls reuse it
+          c.ivPercentile = ivPercentile;
+          c.atmIV = ivData.atmIV;
+        }
+      }
+    } catch (e) { /* silent — fall through to picker, which will use unknown fallback */ }
+  }
+
   const setup = {
     ticker:        c.ticker,
     direction:     isCall ? "LONG" : "SHORT",
     score:         c.score,
     catalyst:      c.catalyst || (EARNINGS_BLOCK.has(c.ticker) ? "EARNINGS" : "NONE"),
-    ivPercentile:  c.ivPercentile || null,
+    ivPercentile:  ivPercentile,
+    atmIV:         c.atmIV || null,
     rangeBoundExpected: false,
     holdDays:      c.holdDays || (c.timeframe === "Daily" ? 5 : 1),
   };
@@ -1077,7 +1096,7 @@ async function fetchStrategyPick(c, isCall) {
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const pick = await r.json();
-    renderStrategyPick(pick);
+    renderStrategyPick(pick, setup);
   } catch (e) {
     document.getElementById("strategy-pick-section").style.display = "block";
     document.getElementById("strategy-pick-body").innerHTML =

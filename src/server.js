@@ -327,6 +327,11 @@ app.post('/api/scanner-fire', async function(req, res) {
       structuralStop: b.structuralStop || null,
       duration:       b.duration || 'GTC',
       orderType:      orderType,  // STOCK or OPTION (orderExecutor branches)
+      // CRITICAL (Apr 29): scanner-v2 clicks are HUMAN-confirmed manual fires.
+      // Bypass time-based gates (first-15-min, dead-zone) since AB is in the loop.
+      // Dead-zone block exists to stop AUTO-fire chasing chop, not manual entries.
+      manualFire:     true,
+      tradeType:      b.tradeType || 'SWING',  // SWING is dead-zone-exempt regardless
     };
 
     console.log('[SCANNER-FIRE]', JSON.stringify({
@@ -356,6 +361,77 @@ app.post('/api/scanner-fire', async function(req, res) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// IV LOOKUP (Apr 29 2026) - fetches ATM IV for a ticker so strategyPicker can
+// avoid the "IV unknown - default long single leg" fallback. Without this, the
+// picker can't choose between long-single-leg (low IV) and debit-vertical (high IV).
+//
+// Returns { ok, ticker, atmIV, ivPercentile, source }. ivPercentile is a rough
+// classification mapped from atmIV: <0.20 = low, 0.20-0.40 = mid, >=0.40 = high.
+// (Real IVR/IVP would need historical IV cache; this is a pragmatic proxy.)
+var _ivCache = {};  // { ticker: { atmIV, time } } — 5min TTL
+
+app.get('/api/iv/:ticker', async function(req, res) {
+  if (!optionsChain) return res.status(500).json({ ok: false, error: 'optionsChain not loaded' });
+  try {
+    var ticker = String(req.params.ticker).toUpperCase();
+    var cached = _ivCache[ticker];
+    if (cached && (Date.now() - cached.time < 5 * 60 * 1000)) {
+      return res.json({ ok: true, ticker: ticker, atmIV: cached.atmIV, ivPercentile: cached.ivPercentile, source: 'cache' });
+    }
+
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'TS token unavailable' });
+
+    // Live quote for centering
+    var fetchLib = require('node-fetch');
+    var qr = await fetchLib('https://api.tradestation.com/v3/marketdata/quotes/' + ticker, {
+      headers: { 'Authorization': 'Bearer ' + token },
+    });
+    var qd = await qr.json();
+    var spot = parseFloat((qd && qd.Quotes && qd.Quotes[0] && qd.Quotes[0].Last) || 0);
+    if (!spot) return res.status(500).json({ ok: false, error: 'no live quote', ticker: ticker });
+
+    // Pull next-Friday chain just to grab ATM IV
+    var expiry = _nextFridayISO();
+    var chain = await optionsChain.fetchChain(ticker, expiry, spot, token);
+    if (!chain || !chain.rows || !chain.rows.length) {
+      return res.status(500).json({ ok: false, error: 'chain fetch failed', ticker: ticker });
+    }
+
+    // Find row closest to spot, average call+put IV at ATM
+    var atmRow = chain.rows.reduce(function(best, r) {
+      var bd = Math.abs(best.strike - spot);
+      var rd = Math.abs(r.strike - spot);
+      return rd < bd ? r : best;
+    }, chain.rows[0]);
+    var callIV = (atmRow.call && atmRow.call.iv) || 0;
+    var putIV  = (atmRow.put  && atmRow.put.iv)  || 0;
+    var atmIV  = (callIV + putIV) / (callIV && putIV ? 2 : 1);
+    if (!atmIV) atmIV = callIV || putIV;
+
+    // Map raw IV -> rough percentile bucket (proxy until we cache historical IVs)
+    // SPY/QQQ ~12-20%, mid-cap ~25-40%, small-cap/vol ~50%+
+    var ivPercentile = null;
+    if (atmIV > 0) {
+      if (atmIV < 0.18) ivPercentile = 25;          // very low
+      else if (atmIV < 0.25) ivPercentile = 40;     // low
+      else if (atmIV < 0.35) ivPercentile = 50;     // mid
+      else if (atmIV < 0.45) ivPercentile = 65;     // mid-high
+      else if (atmIV < 0.60) ivPercentile = 75;     // high
+      else if (atmIV < 0.80) ivPercentile = 85;     // very high
+      else                   ivPercentile = 95;     // earnings/event-bloat
+    }
+
+    _ivCache[ticker] = { atmIV: atmIV, ivPercentile: ivPercentile, time: Date.now() };
+    res.json({ ok: true, ticker: ticker, atmIV: round3(atmIV), ivPercentile: ivPercentile, source: 'live' });
+  } catch(e) {
+    console.error('[IV-LOOKUP]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+function round3(n) { return Math.round(n * 1000) / 1000; }
 
 // IRON CONDOR BUILDER (Apr 29 2026) - cash-settled XSP/SPX preferred.
 // GET /api/iron-condor/:ticker?expiry=2026-05-02&shortDelta=0.25&wingDelta=0.15
