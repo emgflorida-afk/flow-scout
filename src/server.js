@@ -112,7 +112,13 @@ app.use(function(req, res, next) {
   next();
 });
 
+// Apr 29 2026 - root now serves the glass scanner (was JSON status).
+// JSON status moved to /status for healthchecks.
 app.get('/', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'scanner-v2.html'));
+});
+
+app.get('/status', function(req, res) {
   res.json({ status: 'Stratum Flow Scout OK', version: '7.2', time: new Date().toISOString() });
 });
 

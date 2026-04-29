@@ -588,11 +588,59 @@ function openDetail(idx) {
       </div>
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
-        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
       </div>
     </div>
   `;
   document.getElementById("overlay").classList.add("active");
+}
+
+async function dispatchToTitan(idx, btn) {
+  const c = scan.candidates[idx];
+  const isCall = c.direction === "CALL";
+  const trigger = isCall ? c.priorHigh : c.priorLow;
+  const stop    = isCall ? c.todayLow  : c.todayHigh;
+  const r       = Math.abs(trigger - stop);
+  const tp1     = isCall ? trigger + r : trigger - r;
+  const conviction = c.score >= 12 ? "high" : c.score >= 9 ? "medium" : "low";
+  const titanCard = `${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${trigger.toFixed(2)} | stop ${stop.toFixed(2)} | tp ${tp1.toFixed(2)} | ${c.pattern} | conv:${conviction}`;
+
+  if (!confirm(`Dispatch to Titan queue?\n\n${titanCard}\n\nMode: REVIEW (manual approval at Titan)\nConviction: ${conviction.toUpperCase()}`)) return;
+
+  const orig = btn.textContent;
+  btn.textContent = "Dispatching...";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch('/api/card-dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: c.ticker,
+        mode: 'review',
+        conviction: conviction,
+        card: c,
+        titanCard: titanCard,
+        source: 'scanner-v2'
+      })
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      btn.textContent = data.deduped ? "Already queued ✓" : "Sent to Titan ✓";
+      btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+      btn.style.color = "#07090f";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 2000);
+    } else {
+      btn.textContent = "❌ " + (data.reason || "failed");
+      btn.style.background = "var(--red-soft)";
+      btn.style.color = "var(--red)";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 3000);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message;
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  }
 }
 
 function closeDetail() {
