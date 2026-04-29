@@ -138,6 +138,11 @@ app.get('/mobile', function(req, res) {
 app.get('/scanner', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'scanner.html'));
 });
+
+// Glass-UI scanner (Apr 29 2026) - new polished design, same /api/wealthprince-scan data
+app.get('/scanner-v2', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'scanner-v2.html'));
+});
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }

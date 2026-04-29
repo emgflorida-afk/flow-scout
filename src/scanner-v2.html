@@ -1,0 +1,656 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Stratum Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-0: #07090f;
+    --bg-1: #0d1220;
+    --bg-2: #141a2e;
+    --bg-3: #1c2440;
+    --line: rgba(255,255,255,0.06);
+    --line-bright: rgba(255,255,255,0.12);
+    --txt-0: #ffffff;
+    --txt-1: #c9d1e0;
+    --txt-2: #8a93a8;
+    --txt-3: #5a6378;
+    --green: #14e87a;
+    --green-soft: rgba(20, 232, 122, 0.12);
+    --red: #ff4d6d;
+    --red-soft: rgba(255, 77, 109, 0.12);
+    --aqua: #4dd6ff;
+    --aqua-soft: rgba(77, 214, 255, 0.12);
+    --amber: #ffb84d;
+    --amber-soft: rgba(255, 184, 77, 0.12);
+    --purple: #b478ff;
+    --purple-soft: rgba(180, 120, 255, 0.12);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    min-height: 100%;
+    background: radial-gradient(ellipse at top, #14182c 0%, #07090f 60%);
+    color: var(--txt-0);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+  .app {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px 24px 60px;
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+  }
+
+  /* HEADER */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 4px;
+  }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-mark {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: linear-gradient(135deg, #4dd6ff 0%, #b478ff 100%);
+    display: grid; place-items: center;
+    font-weight: 800; font-size: 18px; color: #07090f;
+    box-shadow: 0 0 24px rgba(77, 214, 255, 0.5);
+  }
+  .brand-name {
+    font-size: 14px; font-weight: 700; letter-spacing: 0.06em; color: var(--txt-1);
+  }
+  .brand-sub {
+    font-size: 11px; font-weight: 500; color: var(--txt-3);
+    letter-spacing: 0.16em; text-transform: uppercase;
+  }
+  .header-right { display: flex; gap: 8px; align-items: center; }
+  .pill-mini {
+    font-size: 10px; font-weight: 600; padding: 5px 10px;
+    border-radius: 999px; background: rgba(255,255,255,0.04);
+    color: var(--txt-2); letter-spacing: 0.06em; text-transform: uppercase;
+  }
+  .pill-mini.live::before {
+    content: ""; display: inline-block;
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--green); box-shadow: 0 0 8px var(--green);
+    margin-right: 6px; animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  /* STATS */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 4px 24px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04) inset;
+  }
+  .stat {
+    padding: 16px 20px;
+    background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .stat-key {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--txt-3);
+  }
+  .stat-val { font-size: 22px; font-weight: 700; color: var(--txt-0); }
+  .stat-val.green { color: var(--green); }
+  .stat-val.red { color: var(--red); }
+  .stat-val.aqua { color: var(--aqua); }
+
+  /* FILTERS */
+  .filters {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    padding: 4px;
+  }
+  .filter {
+    padding: 8px 14px;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.04);
+    color: var(--txt-2);
+    font-size: 12px; font-weight: 600;
+    cursor: pointer; user-select: none;
+    transition: background .15s ease, color .15s ease;
+    border: 1px solid transparent;
+  }
+  .filter:hover { background: rgba(255,255,255,0.07); color: var(--txt-1); }
+  .filter.active {
+    background: linear-gradient(135deg, rgba(77,214,255,0.18), rgba(180,120,255,0.18));
+    color: var(--txt-0);
+    border-color: rgba(77,214,255,0.32);
+    box-shadow: 0 0 16px rgba(77, 214, 255, 0.18);
+  }
+  .filter .count {
+    margin-left: 6px;
+    font-size: 10px;
+    color: var(--txt-3);
+    font-weight: 500;
+  }
+  .filter.active .count { color: var(--txt-1); }
+
+  /* CARD GRID */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+  }
+
+  .card {
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+    border-radius: 16px;
+    box-shadow: 0 4px 24px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.04) inset;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .15s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 32px rgba(0,0,0,.6), 0 0 0 1px rgba(77,214,255,0.18) inset;
+  }
+  .card.long {
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 70%, rgba(20,232,122,0.04) 100%);
+  }
+  .card.short {
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 70%, rgba(255,77,109,0.04) 100%);
+  }
+  .card.earnings-block {
+    box-shadow: 0 4px 24px rgba(0,0,0,.5), 0 0 0 1px rgba(255,184,77,0.32) inset;
+  }
+  .card.fomc-block {
+    box-shadow: 0 4px 24px rgba(0,0,0,.5), 0 0 0 1px rgba(255,77,109,0.32) inset;
+  }
+
+  .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .ticker {
+    font-size: 28px;
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .dir-pill {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    padding: 4px 9px;
+    border-radius: 6px;
+    text-transform: uppercase;
+  }
+  .dir-pill.call { background: var(--green-soft); color: var(--green); }
+  .dir-pill.put  { background: var(--red-soft);   color: var(--red); }
+
+  .score-badge {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(0,0,0,0.3);
+    min-width: 60px;
+  }
+  .score-num {
+    font-size: 22px; font-weight: 800; line-height: 1;
+  }
+  .score-num.high { color: var(--green); }
+  .score-num.mid  { color: var(--amber); }
+  .score-num.low  { color: var(--txt-2); }
+  .score-lbl {
+    font-size: 9px; color: var(--txt-3);
+    letter-spacing: 0.14em; text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  .pattern {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--txt-1);
+    background: rgba(255,255,255,0.03);
+    padding: 6px 10px;
+    border-radius: 8px;
+    display: inline-block;
+    align-self: flex-start;
+  }
+
+  .metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 16px;
+    font-size: 11px;
+  }
+  .metric { display: flex; justify-content: space-between; gap: 8px; }
+  .metric-key {
+    color: var(--txt-3);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .metric-val {
+    color: var(--txt-1);
+    font-weight: 600;
+    text-align: right;
+  }
+  .metric-val.green { color: var(--green); }
+  .metric-val.red   { color: var(--red); }
+
+  .note {
+    font-size: 11px;
+    color: var(--txt-2);
+    line-height: 1.4;
+    border-top: 1px solid var(--line);
+    padding-top: 10px;
+  }
+
+  .tags {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .tag {
+    font-size: 9px;
+    font-weight: 700;
+    padding: 3px 7px;
+    border-radius: 5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .tag.preferred { background: var(--green-soft); color: var(--green); }
+  .tag.neutral   { background: var(--aqua-soft); color: var(--aqua); }
+  .tag.block     { background: var(--red-soft); color: var(--red); }
+  .tag.warn      { background: var(--amber-soft); color: var(--amber); }
+  .tag.sector    { background: var(--purple-soft); color: var(--purple); }
+
+  /* DETAIL OVERLAY */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(7,9,15,0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    display: none;
+    align-items: flex-start;
+    justify-content: center;
+    z-index: 100;
+    padding: 40px 20px;
+    overflow-y: auto;
+  }
+  .overlay.active { display: flex; }
+  .detail {
+    width: 100%;
+    max-width: 720px;
+    background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-1) 100%);
+    border-radius: 20px;
+    padding: 28px;
+    box-shadow: 0 16px 48px rgba(0,0,0,.7), 0 0 0 1px rgba(255,255,255,.06) inset;
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  .detail-head { display: flex; justify-content: space-between; align-items: flex-start; }
+  .detail-close {
+    background: rgba(255,255,255,0.06);
+    color: var(--txt-1);
+    border: none; border-radius: 8px;
+    width: 32px; height: 32px;
+    cursor: pointer;
+    font-size: 18px;
+    font-weight: 700;
+  }
+  .detail-close:hover { background: var(--red-soft); color: var(--red); }
+  .detail-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1px;
+    background: var(--line);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .detail-cell {
+    padding: 12px 16px;
+    background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .detail-cell .k {
+    font-size: 9px; color: var(--txt-3); letter-spacing: 0.14em;
+    text-transform: uppercase; font-weight: 700;
+  }
+  .detail-cell .v { font-size: 16px; color: var(--txt-0); font-weight: 700; }
+  .detail-note {
+    font-size: 13px;
+    color: var(--txt-1);
+    line-height: 1.5;
+    background: rgba(0,0,0,0.25);
+    padding: 14px 18px;
+    border-radius: 12px;
+  }
+  .ticket {
+    background: linear-gradient(135deg, rgba(20,232,122,0.16), rgba(77,214,255,0.16));
+    border-radius: 14px;
+    padding: 16px 18px;
+    box-shadow: 0 0 0 1px rgba(20,232,122,0.28) inset;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .ticket.short {
+    background: linear-gradient(135deg, rgba(255,77,109,0.16), rgba(180,120,255,0.16));
+    box-shadow: 0 0 0 1px rgba(255,77,109,0.28) inset;
+  }
+  .ticket-head {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--txt-1);
+  }
+  .ticket-line { font-size: 16px; font-weight: 700; color: var(--txt-0); }
+  .ticket-meta { display: flex; gap: 14px; font-size: 11px; color: var(--txt-2); flex-wrap: wrap; }
+  .ticket-actions { display: flex; gap: 8px; margin-top: 4px; }
+  .btn {
+    flex: 1;
+    padding: 10px 14px;
+    border: none; border-radius: 10px;
+    font-family: inherit; font-weight: 700; font-size: 12px;
+    letter-spacing: 0.06em; text-transform: uppercase;
+    cursor: pointer;
+  }
+  .btn-primary { background: linear-gradient(180deg, #14e87a, #0fb960); color: #07090f; }
+  .btn-primary.short { background: linear-gradient(180deg, #ff4d6d, #d12b4d); color: #fff; }
+  .btn-secondary { background: rgba(255,255,255,0.06); color: var(--txt-1); }
+
+  .empty {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--txt-3);
+    font-size: 14px;
+  }
+
+  .foot {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 4px 4px 0;
+    color: var(--txt-3);
+    font-size: 10px;
+    font-weight: 500;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- HEADER -->
+  <div class="header">
+    <div class="brand">
+      <div class="brand-mark">S</div>
+      <div>
+        <div class="brand-name">STRATUM SCANNER</div>
+        <div class="brand-sub" id="scan-date">Loading...</div>
+      </div>
+    </div>
+    <div class="header-right">
+      <span class="pill-mini" id="scan-mode">EOD</span>
+      <span class="pill-mini live">LIVE</span>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <div class="stats" id="stats"></div>
+
+  <!-- FILTERS -->
+  <div class="filters" id="filters"></div>
+
+  <!-- GRID -->
+  <div class="grid" id="grid"><div class="empty">Loading scan...</div></div>
+
+  <!-- FOOT -->
+  <div class="foot">
+    <span>Stratum Scanner · v1.0</span>
+    <span id="meta">--</span>
+  </div>
+</div>
+
+<!-- DETAIL OVERLAY -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="detail" id="detail"></div>
+</div>
+
+<script>
+const EARNINGS_BLOCK = new Set(["AMZN","MSFT","META","GOOGL","GOOG","AAPL","CAT","QCOM"]);
+const FOMC_RISK = false; // wire to current date logic
+
+let scan = null;
+let activeFilter = "all";
+
+const FILTERS = [
+  { id: "all",     label: "All",            test: c => true },
+  { id: "top",     label: "Top 5",          test: (c, i) => i < 5 },
+  { id: "call",    label: "Calls",          test: c => c.direction === "CALL" },
+  { id: "put",     label: "Puts",           test: c => c.direction === "PUT" },
+  { id: "clear",   label: "Earnings clear", test: c => !EARNINGS_BLOCK.has(c.ticker) },
+  { id: "high",    label: "Score 10+",      test: c => (c.score || 0) >= 10 },
+  { id: "preferred", label: "Preferred sector", test: c => c.sectorTier === "preferred" },
+];
+
+function fmtPct(v) {
+  if (v == null) return "-";
+  const sign = v >= 0 ? "+" : "";
+  return sign + v.toFixed(2) + "%";
+}
+function fmtNum(v, dec=2) {
+  if (v == null) return "-";
+  return v.toFixed(dec);
+}
+function scoreClass(s) {
+  if (s >= 10) return "high";
+  if (s >= 7)  return "mid";
+  return "low";
+}
+
+function renderStats() {
+  const cands = scan.candidates || [];
+  const longs  = cands.filter(c => c.direction === "CALL").length;
+  const shorts = cands.filter(c => c.direction === "PUT").length;
+  const cleared = cands.filter(c => !EARNINGS_BLOCK.has(c.ticker)).length;
+  const topScore = cands.reduce((m, c) => Math.max(m, c.score || 0), 0);
+  const stats = [
+    { k: "Candidates", v: cands.length, cls: "" },
+    { k: "Calls", v: longs, cls: "green" },
+    { k: "Puts", v: shorts, cls: "red" },
+    { k: "Earnings clear", v: cleared, cls: "aqua" },
+    { k: "Top score", v: topScore, cls: "" },
+    { k: "Universe", v: scan.universeSize || "-", cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderFilters() {
+  const cands = scan.candidates || [];
+  document.getElementById("filters").innerHTML = FILTERS.map(f => {
+    const count = cands.filter((c, i) => f.test(c, i)).length;
+    return `<div class="filter ${f.id === activeFilter ? "active" : ""}" data-id="${f.id}">${f.label}<span class="count">${count}</span></div>`;
+  }).join("");
+  document.querySelectorAll(".filter").forEach(el => {
+    el.addEventListener("click", () => {
+      activeFilter = el.dataset.id;
+      renderFilters();
+      renderGrid();
+    });
+  });
+}
+
+function renderGrid() {
+  const cands = scan.candidates || [];
+  const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+  const filtered = cands.filter((c, i) => filter.test(c, i));
+  if (!filtered.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No candidates match this filter.</div>`;
+    return;
+  }
+  document.getElementById("grid").innerHTML = filtered.map((c, i) => {
+    const isCall = c.direction === "CALL";
+    const isEarnings = EARNINGS_BLOCK.has(c.ticker);
+    const sectorTier = c.sectorTier || "neutral";
+    const sectorMomDisplay = c.sectorMom != null ? fmtPct(c.sectorMom) : "";
+    return `
+      <div class="card ${isCall ? "long" : "short"} ${isEarnings ? "earnings-block" : ""}" data-idx="${cands.indexOf(c)}">
+        <div class="card-head">
+          <div>
+            <div class="ticker mono">${c.ticker}</div>
+            <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">$${fmtNum(c.spot)} <span style="color: ${c.momentum5d >= 0 ? "var(--green)" : "var(--red)"}; margin-left:4px;">${fmtPct(c.momentum5d)} 5d</span></div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            <span class="dir-pill ${isCall ? "call" : "put"}">${c.direction}</span>
+            <div class="score-badge"><span class="score-num ${scoreClass(c.score)} mono">${c.score}</span><span class="score-lbl">Score</span></div>
+          </div>
+        </div>
+        <div>
+          <span class="pattern">${c.pattern}</span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span class="metric-key">Prior Hi</span><span class="metric-val mono">${fmtNum(c.priorHigh)}</span></div>
+          <div class="metric"><span class="metric-key">Prior Lo</span><span class="metric-val mono">${fmtNum(c.priorLow)}</span></div>
+          <div class="metric"><span class="metric-key">Today Hi</span><span class="metric-val mono">${fmtNum(c.todayHigh)}</span></div>
+          <div class="metric"><span class="metric-key">Today Lo</span><span class="metric-val mono">${fmtNum(c.todayLow)}</span></div>
+          <div class="metric"><span class="metric-key">EMA 9</span><span class="metric-val mono">${fmtNum(c.ema9)}</span></div>
+          <div class="metric"><span class="metric-key">EMA 21</span><span class="metric-val mono">${fmtNum(c.ema21)}</span></div>
+        </div>
+        <div class="tags">
+          <span class="tag sector">${c.sector || "-"} ${sectorMomDisplay}</span>
+          <span class="tag ${sectorTier}">${sectorTier}</span>
+          ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
+          ${c.emaStackBull ? '<span class="tag preferred">EMA Bull</span>' : ""}
+        </div>
+        ${c.note ? `<div class="note">${c.note}</div>` : ""}
+      </div>
+    `;
+  }).join("");
+  document.querySelectorAll(".card").forEach(el => {
+    el.addEventListener("click", () => openDetail(parseInt(el.dataset.idx)));
+  });
+}
+
+function openDetail(idx) {
+  const c = scan.candidates[idx];
+  if (!c) return;
+  const isCall = c.direction === "CALL";
+  // Compute trigger / stop / TP from the pattern
+  const trigger = isCall ? c.priorHigh : c.priorLow;
+  const stop    = isCall ? c.todayLow  : c.todayHigh;
+  const r       = Math.abs(trigger - stop);
+  const tp1     = isCall ? trigger + r : trigger - r;
+  const tp2     = isCall ? trigger + 2*r : trigger - 2*r;
+  const isEarnings = EARNINGS_BLOCK.has(c.ticker);
+
+  document.getElementById("detail").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+          <span class="ticker mono">${c.ticker}</span>
+          <span class="dir-pill ${isCall ? "call" : "put"}">${c.direction}</span>
+          ${isEarnings ? '<span class="tag block">⚠ Earnings blocked</span>' : ""}
+        </div>
+        <div style="font-size: 13px; color: var(--txt-2);">${c.pattern} · Score <span class="${scoreClass(c.score)}" style="font-weight:700;">${c.score}</span> · ${c.sector || ""}</div>
+      </div>
+      <button class="detail-close" onclick="closeDetail()">×</button>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-cell"><span class="k">Spot</span><span class="v mono">$${fmtNum(c.spot)}</span></div>
+      <div class="detail-cell"><span class="k">5-Day Mom</span><span class="v mono ${c.momentum5d>=0?"":""}">${fmtPct(c.momentum5d)}</span></div>
+      <div class="detail-cell"><span class="k">EMA 9 / 21</span><span class="v mono">${fmtNum(c.ema9)} / ${fmtNum(c.ema21)}</span></div>
+      <div class="detail-cell"><span class="k">EMA Stack</span><span class="v">${c.emaStackBull ? "BULL ✓" : "—"}</span></div>
+      <div class="detail-cell"><span class="k">Sector Mom</span><span class="v mono">${fmtPct(c.sectorMom)}</span></div>
+      <div class="detail-cell"><span class="k">Tier</span><span class="v">${c.sectorTier || "-"}</span></div>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-cell"><span class="k">Trigger</span><span class="v mono">${fmtNum(trigger)}</span></div>
+      <div class="detail-cell"><span class="k">Stop</span><span class="v mono" style="color: var(--red);">${fmtNum(stop)}</span></div>
+      <div class="detail-cell"><span class="k">Risk (R)</span><span class="v mono">${fmtNum(r)}</span></div>
+      <div class="detail-cell"><span class="k">TP1 (1R)</span><span class="v mono" style="color: var(--green);">${fmtNum(tp1)}</span></div>
+      <div class="detail-cell"><span class="k">TP2 (2R)</span><span class="v mono" style="color: var(--green);">${fmtNum(tp2)}</span></div>
+      <div class="detail-cell"><span class="k">Direction</span><span class="v">${isCall ? "LONG" : "SHORT"}</span></div>
+    </div>
+
+    ${c.note ? `<div class="detail-note">${c.note}</div>` : ""}
+
+    <div class="ticket ${isCall ? "" : "short"}">
+      <div class="ticket-head">🎟️ Trade Plan (Stock Reference)</div>
+      <div class="ticket-line mono">${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${fmtNum(trigger)} · stop ${fmtNum(stop)} · tp ${fmtNum(tp1)}</div>
+      <div class="ticket-meta">
+        <span><b>R:</b> $${fmtNum(r)}</span>
+        <span><b>RR 1R:</b> 1.0</span>
+        <span><b>RR 2R:</b> 2.0</span>
+        ${isEarnings ? "<span style='color: var(--amber);'><b>⚠</b> Earnings AH</span>" : ""}
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
+      </div>
+    </div>
+  `;
+  document.getElementById("overlay").classList.add("active");
+}
+
+function closeDetail() {
+  document.getElementById("overlay").classList.remove("active");
+}
+
+function copyDetailTicket(idx) {
+  const c = scan.candidates[idx];
+  const isCall = c.direction === "CALL";
+  const trigger = isCall ? c.priorHigh : c.priorLow;
+  const stop    = isCall ? c.todayLow  : c.todayHigh;
+  const tp1     = isCall ? trigger + Math.abs(trigger - stop) : trigger - Math.abs(trigger - stop);
+  const txt = `${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${trigger.toFixed(2)} | stop ${stop.toFixed(2)} | tp ${tp1.toFixed(2)} | ${c.pattern}`;
+  navigator.clipboard.writeText(txt).then(() => {
+    const btn = event.target;
+    const old = btn.textContent;
+    btn.textContent = "Copied ✓";
+    setTimeout(() => btn.textContent = old, 1200);
+  });
+}
+
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeDetail();
+});
+
+// LOAD SCAN ============================================================
+async function loadScan() {
+  const params = new URLSearchParams(window.location.search);
+  const direction = params.get("direction") || "both";
+  const force = params.get("force") === "1" ? "&force=1" : "";
+  const src = `/api/wealthprince-scan?direction=${direction}${force}`;
+  try {
+    if (!scan) document.getElementById("grid").innerHTML = `<div class="empty">Loading scan...</div>`;
+    const r = await fetch(src, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    scan = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">
+      Could not load scan: <code>${e.message}</code><br><br>
+      <span style="font-size:11px;">Try <a style="color: var(--aqua); text-decoration:none;" href="?force=1">force refresh</a> or visit the <a style="color: var(--aqua); text-decoration:none;" href="/scanner">classic scanner</a>.</span>
+    </div>`;
+    return;
+  }
+
+  document.getElementById("scan-date").textContent =
+    "Scan " + (scan.timestamp ? new Date(scan.timestamp).toLocaleString("en-US", {month:"short", day:"numeric", year:"numeric", hour:"2-digit", minute:"2-digit"}) : "Unknown");
+  document.getElementById("meta").textContent =
+    `${scan.scanned || "?"} scanned · ${scan.candidatesFound || scan.candidates?.length || 0} candidates`;
+
+  renderStats();
+  renderFilters();
+  renderGrid();
+}
+
+loadScan();
+setInterval(loadScan, 30000); // re-poll every 30s
+</script>
+</body>
+</html>
