@@ -331,6 +331,50 @@ app.post('/api/scanner-fire', async function(req, res) {
     var account = live ? '11975462' : 'SIM3142118M';
     var symbol = orderType === 'STOCK' ? ticker : (b.symbol || ticker);  // option needs OPRA symbol
 
+    // OPTION AUTO-RESOLVE (Apr 29 - AB ask: SCAN tab should fire options not stocks)
+    // If orderType=OPTION but no resolved OPRA symbol provided, call contractResolver
+    // to pick the right strike/expiry. Replaces the entry/stop/tp1/tp2 with
+    // option-premium values from the resolved contract.
+    var resolvedContract = null;
+    if (orderType === 'OPTION' && (!b.symbol || b.symbol === ticker)) {
+      try {
+        var contractResolver = require('./contractResolver');
+        var optionType = (direction === 'BULLISH' || direction === 'LONG') ? 'call' : 'put';
+        var tradeType = b.tradeType || 'SWING';
+        console.log('[SCANNER-FIRE] Auto-resolving option: ' + ticker + ' ' + optionType + ' ' + tradeType);
+        resolvedContract = await contractResolver.resolveContract(ticker, optionType, tradeType, b.signalMeta || {});
+        if (!resolvedContract || resolvedContract.blocked) {
+          return res.status(400).json({
+            ok: false,
+            error: resolvedContract && resolvedContract.blocked
+              ? ('Contract resolver blocked: ' + resolvedContract.reason)
+              : ('Could not resolve option contract for ' + ticker + ' ' + optionType),
+            ticker: ticker,
+            type: optionType,
+          });
+        }
+        symbol = resolvedContract.symbol;
+        console.log('[SCANNER-FIRE] Resolved: ' + symbol + ' @ $' + resolvedContract.mid + ' (delta ' + resolvedContract.delta + ', ' + resolvedContract.dte + 'DTE)');
+        // Override entry/stop/tp with option-premium values from resolver
+        b.entry = resolvedContract.entryPrice;
+        b.stop  = resolvedContract.optionStop;
+        b.tp1   = resolvedContract.t1Price;
+        // TP2 = entry × 2.0 (100% gain target — runner)
+        b.tp2   = parseFloat((resolvedContract.mid * 2.0).toFixed(2));
+        // Pass underlying stock stop as structuralStop so the option exits if stock breaks
+        if (resolvedContract.underlyingStop) {
+          b.structuralStop = {
+            symbol: ticker,
+            predicate: optionType === 'call' ? 'below' : 'above',
+            price: resolvedContract.underlyingStop,
+          };
+        }
+      } catch (e) {
+        console.error('[SCANNER-FIRE] Resolver error:', e);
+        return res.status(500).json({ ok: false, error: 'Contract resolver failed: ' + e.message });
+      }
+    }
+
     // ACTION MAPPING (Apr 29 - AB caught GE FAILED TO BUILD).
     // STOCK + BULLISH -> BUY ; STOCK + BEARISH -> SELLSHORT (margin acct only)
     // OPTION + (any direction) -> BUYTOOPEN (the symbol's C/P carries direction)
@@ -403,6 +447,16 @@ app.post('/api/scanner-fire', async function(req, res) {
       orderID:  result.orderID || result.OrderID || null,
       result:   result,
       rounded:  Object.keys(rounded).length ? rounded : null,
+      resolved: resolvedContract ? {
+        symbol:   resolvedContract.symbol,
+        strike:   resolvedContract.strike,
+        expiry:   resolvedContract.expiry,
+        dte:      resolvedContract.dte,
+        delta:    resolvedContract.delta,
+        mid:      resolvedContract.mid,
+        bid:      resolvedContract.bid,
+        ask:      resolvedContract.ask,
+      } : null,
       message:  live
         ? 'Order placed in LIVE account ' + account + ' as working LIMIT. Check Titan to confirm.'
         : 'Order placed in SIM account ' + account + '. Test fill behavior, no real $$ risk.',

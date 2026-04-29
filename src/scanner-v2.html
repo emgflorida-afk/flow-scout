@@ -1297,13 +1297,19 @@ async function dispatchToTitan(idx, btn) {
       body: JSON.stringify({
         ticker:    c.ticker,
         direction: isCall ? "BULLISH" : "BEARISH",
-        entry:     trigger,
-        stop:      stop,
-        tp1:       tp1,
-        tp2:       tp2,
+        // Don't pass entry/stop/tp1/tp2 - server will auto-resolve option contract
+        // and override these with option-premium-based bracket. Pass them as
+        // structuralStop hints so resolver knows the underlying levels.
         qty:       2,
         live:      live,
-        orderType: "STOCK",  // future: switch to OPTION when contract resolved
+        orderType: "OPTION",  // server resolves to OPRA contract
+        tradeType: "SWING",   // SCAN tab is swing setups (Daily Strat patterns)
+        signalMeta: {
+          strategy: c.pattern,
+          score:    c.score,
+          underlyingTrigger: trigger,
+          underlyingStop:    stop,
+        },
       }),
     });
     const data = await resp.json();
