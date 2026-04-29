@@ -157,6 +157,11 @@ var lvlComputer = null;
 try { lvlComputer = require('./lvlComputer'); console.log('[SERVER] lvlComputer loaded OK'); }
 catch(e) { console.log('[SERVER] lvlComputer not loaded:', e.message); }
 
+// LVL ALERTER (Apr 29 2026) — top-10 watchlist scan + Discord push to #stratum-lvl
+var lvlAlerter = null;
+try { lvlAlerter = require('./lvlAlerter'); console.log('[SERVER] lvlAlerter loaded OK'); }
+catch(e) { console.log('[SERVER] lvlAlerter not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -250,6 +255,35 @@ app.get('/api/lvl-scan/:ticker', async function(req, res) {
   } catch(e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// LVL ALERTER -- on-demand scan of the curated watchlist + Discord post on transitions.
+// Use ?dryRun=1 to format alerts without posting.
+app.get('/api/lvl-alerter/run', async function(req, res) {
+  if (!lvlAlerter) return res.status(500).json({ ok: false, error: 'lvlAlerter not loaded' });
+  try {
+    var dryRun = req.query.dryRun === '1' || req.query.dryRun === 'true';
+    var watchlist = (req.query.watchlist || '').split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
+    var tfs = (req.query.tfs || '').split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+    var opts = { dryRun: dryRun };
+    if (watchlist.length) opts.watchlist = watchlist;
+    if (tfs.length)       opts.tfs = tfs;
+    var out = await lvlAlerter.runScan(opts);
+    res.json(out);
+  } catch(e) {
+    console.error('[LVL-ALERTER] /api/lvl-alerter/run error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// LVL ALERTER -- introspection: current default watchlist + TFs.
+app.get('/api/lvl-alerter/config', function(req, res) {
+  if (!lvlAlerter) return res.status(500).json({ ok: false, error: 'lvlAlerter not loaded' });
+  res.json({
+    ok: true,
+    watchlist: lvlAlerter.getDefaultWatchlist(),
+    webhookConfigured: !!process.env.DISCORD_STRATUMLVL_WEBHOOK,
+  });
 });
 
 // Strategy picker (Apr 29 2026) - recommends the right options structure
@@ -2526,6 +2560,22 @@ cron.schedule('*/5 9-16 * * 1-5', async function() {
     if (etTime < (9 * 60 + 45) || etTime > (15 * 60 + 30)) return;
     await positionManager.checkAndMoveStops('11975462');
   } catch(e) { console.error('[POS-MGR] Stop monitor error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// LVL ALERTER -- scan top-10 watchlist every 5 min during RTH (9:35-15:55 ET)
+// Posts state-transition alerts to #stratum-lvl Discord channel.
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!lvlAlerter) return;
+    if (!process.env.DISCORD_STRATUMLVL_WEBHOOK) return;  // silent skip if not configured
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
+    // Only run between 9:35 ET (after open settles) and 15:55 ET (before close)
+    if (etTime < (9 * 60 + 35) || etTime > (15 * 60 + 55)) return;
+    var out = await lvlAlerter.runScan();
+    if (out && out.posted > 0) console.log('[LVL-ALERTER] cron posted ' + out.posted + ' alerts');
+  } catch(e) { console.error('[LVL-ALERTER] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // SIM PROMOTION CHECK -- every day at 4:30PM ET
