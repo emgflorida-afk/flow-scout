@@ -728,7 +728,11 @@ function fmtPct(v) {
 }
 function fmtNum(v, dec=2) {
   if (v == null) return "-";
-  return v.toFixed(dec);
+  // Defensive: handle strings and objects gracefully (was throwing on m.structuralStop = {symbol, predicate, price})
+  if (typeof v === 'object') v = v.price || v.value || NaN;
+  const n = typeof v === 'number' ? v : parseFloat(v);
+  if (!isFinite(n)) return "-";
+  return n.toFixed(dec);
 }
 function scoreClass(s) {
   if (s >= 10) return "high";
@@ -1346,8 +1350,12 @@ function openMoverDetail(idx) {
   const isEarnings = EARNINGS_BLOCK.has(m.ticker);
 
   // Stock-level plan (intraday breakout/breakdown)
+  // Note: m.structuralStop is an OBJECT {symbol, predicate, price} - extract .price
+  const stopPrice = (typeof m.structuralStop === 'object' && m.structuralStop !== null)
+    ? m.structuralStop.price
+    : m.structuralStop;
   const trigger = m.triggerPrice || (isCall ? m.high : m.low);
-  const stop    = m.structuralStop || (isCall ? m.low  : m.high);
+  const stop    = stopPrice || (isCall ? m.low  : m.high);
   const tp1     = m.stockTp1 || (isCall ? trigger + Math.abs(trigger - stop) : trigger - Math.abs(trigger - stop));
   const tp2     = m.stockTp2 || tp1;
   const tp3     = m.stockTp3 || null;
@@ -1472,17 +1480,22 @@ async function fireMoverOrder(idx, btn) {
     qty:        2,
     live:       live,
     orderType:  "OPTION",
-  } : {
-    ticker:     m.ticker,
-    direction:  isUp ? "BULLISH" : "BEARISH",
-    entry:      m.triggerPrice || (isUp ? m.high : m.low),
-    stop:       m.structuralStop || (isUp ? m.low : m.high),
-    tp1:        m.stockTp1 || ((isUp ? m.high : m.low) + (isUp ? 1 : -1) * Math.abs(m.high - m.low)),
-    tp2:        m.stockTp2 || null,
-    qty:        2,
-    live:       live,
-    orderType:  "STOCK",
-  };
+  } : (function() {
+    const sp = (typeof m.structuralStop === 'object' && m.structuralStop !== null) ? m.structuralStop.price : m.structuralStop;
+    return {
+      ticker:     m.ticker,
+      direction:  isUp ? "BULLISH" : "BEARISH",
+      entry:      m.triggerPrice || (isUp ? m.high : m.low),
+      stop:       sp || (isUp ? m.low : m.high),
+      tp1:        m.stockTp1 || ((isUp ? m.high : m.low) + (isUp ? 1 : -1) * Math.abs(m.high - m.low)),
+      tp2:        m.stockTp2 || null,
+      qty:        2,
+      live:       live,
+      orderType:  "STOCK",
+      // pass the structural stop object too so orderExecutor can use it for activation rules
+      structuralStop: (typeof m.structuralStop === 'object') ? m.structuralStop : null,
+    };
+  })();
 
   try {
     const resp = await fetch("/api/scanner-fire", {
