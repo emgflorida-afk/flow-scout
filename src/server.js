@@ -149,6 +149,108 @@ app.get('/scanner', function(req, res) {
 app.get('/scanner-v2', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'scanner-v2.html'));
 });
+
+// LVL Scanner endpoint (Apr 29 2026) - computes 25sense / LVL state for the
+// WP universe across multiple timeframes (Daily + 1H by default). Returns
+// per-ticker {tfs: {Daily: {signal, plan, levels, ...}, 1H: {...}}}.
+var lvlComputer = null;
+try { lvlComputer = require('./lvlComputer'); console.log('[SERVER] lvlComputer loaded OK'); }
+catch(e) { console.log('[SERVER] lvlComputer not loaded:', e.message); }
+
+var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
+
+app.get('/api/lvl-scan', async function(req, res) {
+  if (!lvlComputer) return res.status(500).json({ ok: false, error: 'lvlComputer not loaded' });
+  if (!wpScanner)   return res.status(500).json({ ok: false, error: 'universe not loaded' });
+  try {
+    var tfList = (req.query.tfs || 'Daily,1H').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var force  = req.query.force === '1' || req.query.force === 'true';
+    var limit  = parseInt(req.query.limit || '0', 10) || 0;  // 0 = full universe
+    var cacheKey = tfList.sort().join(',');
+
+    // 5-min cache
+    if (!force && _lvlScanCache.payload && _lvlScanCache.tfsKey === cacheKey
+        && (Date.now() - _lvlScanCache.ts) < 5 * 60 * 1000) {
+      return res.json(Object.assign({}, _lvlScanCache.payload, {
+        cached: true,
+        cachedAtAge: Math.round((Date.now() - _lvlScanCache.ts) / 1000) + 's',
+      }));
+    }
+
+    var token = await ts.getAccessToken();
+    var universe = wpScanner.UNIVERSE.slice(0, limit > 0 ? limit : undefined);
+
+    // Concurrency-limited: 6 parallel tickers (each = N bar fetches for N timeframes)
+    var CONCURRENCY = 6;
+    var results = [];
+    for (var i = 0; i < universe.length; i += CONCURRENCY) {
+      var batch = universe.slice(i, i + CONCURRENCY);
+      var batchResults = await Promise.all(batch.map(function(sym) {
+        return lvlComputer.computeMultiTF(sym, tfList, token).catch(function(e) {
+          return { symbol: sym, error: e.message };
+        });
+      }));
+      results = results.concat(batchResults);
+    }
+
+    // Filter: only return tickers where AT LEAST ONE TF has a non-NONE signal
+    var meaningful = results.filter(function(r) {
+      if (!r.tfs) return false;
+      return Object.values(r.tfs).some(function(s) {
+        return s && s.ok && s.signal && s.signal !== 'NONE';
+      });
+    });
+
+    // Compute summary stats
+    var summary = {
+      totalScanned: results.length,
+      withSignals:  meaningful.length,
+      bySignal:     {},
+      aligned:      0,  // multi-TF same-direction alignment (D+1H both LONG or both SHORT)
+    };
+    meaningful.forEach(function(r) {
+      var dirs = [];
+      Object.values(r.tfs).forEach(function(s) {
+        if (!s || !s.ok) return;
+        summary.bySignal[s.signal] = (summary.bySignal[s.signal] || 0) + 1;
+        if (s.direction && s.direction !== 'NONE') dirs.push(s.direction);
+      });
+      // "aligned" = multiple TFs all the same direction
+      if (dirs.length >= 2 && dirs.every(function(d) { return d === dirs[0]; })) {
+        summary.aligned += 1;
+      }
+    });
+
+    var payload = {
+      ok:        true,
+      timestamp: new Date().toISOString(),
+      tfs:       tfList,
+      universe:  universe.length,
+      summary:   summary,
+      results:   meaningful,
+    };
+
+    _lvlScanCache = { ts: Date.now(), tfsKey: cacheKey, payload: payload };
+    res.json(payload);
+  } catch(e) {
+    console.error('[LVL-SCAN] error:', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Get LVL state for a single ticker (handy for testing + future per-ticker views)
+app.get('/api/lvl-scan/:ticker', async function(req, res) {
+  if (!lvlComputer) return res.status(500).json({ ok: false, error: 'lvlComputer not loaded' });
+  try {
+    var sym = String(req.params.ticker).toUpperCase();
+    var tfList = (req.query.tfs || 'Daily,1H').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+    var token = await ts.getAccessToken();
+    var result = await lvlComputer.computeMultiTF(sym, tfList, token);
+    res.json({ ok: true, ...result });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }
