@@ -448,29 +448,59 @@ async function placeOrder(params) {
         });
         console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stop + ' limit $' + stopLimitPrice + ' (preferred over structural)');
       } else if (structuralStop && structuralStop.symbol && structuralStop.price) {
-        // Fallback: structural Market activation when no option premium stop given.
-        // Use only if you explicitly want stock-pivot stops vs option-price stops.
+        // Apr 29 2026: Fixed bad-fills bug. AB SIM account showed GE/GM stops
+        // coming in as Market orders -> bad fills. Now: prefer StopLimit on
+        // the same symbol with a small slippage buffer; only fall back to
+        // Market+ActivationRules when the structural symbol differs from the
+        // order symbol (e.g., option order with stock-price trigger).
         var ssPred = (structuralStop.predicate || 'below').toLowerCase();
-        var ssTsPred = (ssPred === 'above' || ssPred === 'gt' || ssPred === 'gte') ? 'Gt' : 'Lt';
-        bracketOrders.push({
-          AccountID:   account,
-          Symbol:      symbol,
-          Quantity:    String(qty),
-          OrderType:   'Market',
-          TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
-          TimeInForce: { Duration: duration || 'GTC' },
-          Route:       'Intelligent',
-          AdvancedOptions: {
-            MarketActivationRules: [{
-              RuleType:   'Price',
-              Symbol:     String(structuralStop.symbol).toUpperCase(),
-              Predicate:  ssTsPred,
-              TriggerKey: 'STT',
-              Price:      String(parseFloat(structuralStop.price).toFixed(2)),
-            }],
-          },
-        });
-        console.log('[EXECUTOR] StructuralStop=Market (fallback) ' + symbol + ' on ' + structuralStop.symbol + ' ' + ssTsPred + ' $' + structuralStop.price);
+        var isSellStop = (ssPred === 'below' || ssPred === 'lt' || ssPred === 'lte');
+        var ssLimitOffsetPct = parseFloat(process.env.STRUCTURAL_STOP_LIMIT_OFFSET_PCT || '0.005');  // 0.5%
+        var ssTrigger = parseFloat(structuralStop.price);
+        var ssLimit = isSellStop
+          ? Math.max(0.01, ssTrigger * (1 - ssLimitOffsetPct))
+          : ssTrigger * (1 + ssLimitOffsetPct);
+        ssLimit = Math.round(ssLimit * 100) / 100;
+
+        if (String(structuralStop.symbol).toUpperCase() === String(symbol).toUpperCase()) {
+          // Same-symbol structural stop -> StopLimit (wick-resistant, no Market wreckage)
+          bracketOrders.push({
+            AccountID:   account,
+            Symbol:      symbol,
+            Quantity:    String(qty),
+            OrderType:   'StopLimit',
+            StopPrice:   String(ssTrigger.toFixed(2)),
+            LimitPrice:  String(ssLimit),
+            TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+            TimeInForce: { Duration: duration || 'GTC' },
+            Route:       'Intelligent',
+          });
+          console.log('[EXECUTOR] StructuralStop=StopLimit ' + symbol + ' trigger $' + ssTrigger.toFixed(2) + ' limit $' + ssLimit + ' (same-symbol, fixed Market bug)');
+        } else {
+          // Cross-symbol structural stop (e.g., option order with stock trigger)
+          // No StopLimit equivalent in TS API for this; keep Market+ActivationRules
+          // but warn loudly so we know it happened.
+          var ssTsPred = (ssPred === 'above' || ssPred === 'gt' || ssPred === 'gte') ? 'Gt' : 'Lt';
+          bracketOrders.push({
+            AccountID:   account,
+            Symbol:      symbol,
+            Quantity:    String(qty),
+            OrderType:   'Market',
+            TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
+            TimeInForce: { Duration: duration || 'GTC' },
+            Route:       'Intelligent',
+            AdvancedOptions: {
+              MarketActivationRules: [{
+                RuleType:   'Price',
+                Symbol:     String(structuralStop.symbol).toUpperCase(),
+                Predicate:  ssTsPred,
+                TriggerKey: 'STT',
+                Price:      String(ssTrigger.toFixed(2)),
+              }],
+            },
+          });
+          console.warn('[EXECUTOR] StructuralStop=Market+Activation (cross-symbol ONLY: order=' + symbol + ', trigger-on=' + structuralStop.symbol + ') - StopLimit not available for cross-symbol triggers in TS API');
+        }
       }
 
       if (t1) {
