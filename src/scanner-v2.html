@@ -1992,22 +1992,43 @@ function renderGridMovers() {
     const r       = Math.abs(trigger - stop);
     const tp1     = isCall ? trigger + r : trigger - r;
     const spot    = m.last;
-    // Verdict logic similar to scan timing but adapted for intraday momentum
     const directional = isCall ? (spot - trigger) : (trigger - spot);
     const rMultiple = r > 0 ? directional / r : 0;
+
+    // ===== Exhaustion classifier (Apr 29, AB call-out) =====
+    // INTC at +10.75% would have shown "STILL GOOD" before this -- chase trap.
+    // Now: heavy moves get an EXHAUSTED / LATE flag that overrides r-multiple verdict.
+    const pctMove = Math.abs(m.pctChange || 0);
+    const rangePct = m.rangePct || 0;
+    const EXHAUST_PCT = 7.0;
+    const LATE_PCT    = 4.0;
+    const EXHAUST_RANGE = 7.0;
+
     let verdict, color, msg, sub, icon;
-    if (rMultiple < -0.05 && Math.abs(spot - trigger) / spot * 100 < 0.5) {
+    if (pctMove >= EXHAUST_PCT || rangePct >= EXHAUST_RANGE) {
+      verdict = "EXHAUSTED"; color = "red"; icon = "⛔";
+      msg = `${pctMove.toFixed(1)}% move done · range ${rangePct.toFixed(1)}%`;
+      sub = `Most of run gone — chase = bad RR. Wait for retrace or skip.`;
+    } else if (pctMove >= LATE_PCT) {
+      verdict = "LATE"; color = "amber"; icon = "⚠";
+      msg = `${pctMove.toFixed(1)}% extended`;
+      sub = `Move is mature — tight stop only, smaller size`;
+    } else if (rMultiple < -0.05 && Math.abs(spot - trigger) / spot * 100 < 0.5) {
       verdict = "ENTER NOW"; color = "green"; icon = "🟢";
-      msg = "At intraday extreme"; sub = `Spot ${fmtNum(spot)} testing ${fmtNum(trigger)}`;
+      msg = "At intraday extreme";
+      sub = `Spot ${fmtNum(spot)} testing ${fmtNum(trigger)} · ${pctMove.toFixed(1)}% move`;
     } else if (rMultiple < -0.15) {
       verdict = "WAIT"; color = "amber"; icon = "🟡";
-      msg = `Pulled back from ${isCall ? "high" : "low"}`; sub = `${fmtNum(Math.abs(trigger - spot))} away from breakout`;
+      msg = `Pulled back from ${isCall ? "high" : "low"}`;
+      sub = `${fmtNum(Math.abs(trigger - spot))} away from breakout`;
     } else if (rMultiple < 0.5) {
       verdict = "STILL GOOD"; color = "green"; icon = "🟢";
-      msg = `Breaking ${isCall ? "high" : "low"}`; sub = `${rMultiple.toFixed(2)}R extended`;
+      msg = `Breaking ${isCall ? "high" : "low"}`;
+      sub = `${rMultiple.toFixed(2)}R extended · ${pctMove.toFixed(1)}% move`;
     } else {
       verdict = "CHASE RISK"; color = "amber"; icon = "🟡";
-      msg = "Move extended"; sub = `${rMultiple.toFixed(2)}R - tight stop required`;
+      msg = "Move extended";
+      sub = `${rMultiple.toFixed(2)}R - tight stop required`;
     }
     const lo = Math.min(stop, tp1, trigger, spot);
     const hi = Math.max(stop, tp1, trigger, spot);
