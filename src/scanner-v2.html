@@ -1582,6 +1582,11 @@ window.toggleAccount = toggleAccount;
 // LOADERS
 // =============================================================================
 async function loadActiveTab() {
+  // Don't re-render if the detail overlay is open - prevents click handlers from
+  // being destroyed mid-interaction by the 30s auto-poll
+  if (document.getElementById("overlay")?.classList?.contains("active")) {
+    return;
+  }
   if (activeTab === "scan")    return loadScanData();
   if (activeTab === "movers")  return loadMoversData();
   if (activeTab === "lvl")     return loadLvlData();
