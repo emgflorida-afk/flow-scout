@@ -1155,10 +1155,19 @@ async function loadMoversData() {
     "Live Movers · " + (movers.timestamp ? new Date(movers.timestamp).toLocaleString("en-US", {hour:"2-digit", minute:"2-digit", second:"2-digit"}) : "live");
   document.getElementById("meta").textContent =
     `${movers.universeSize || 60} scanned · ${(movers.movers || []).length} movers`;
-  renderStatsMovers();
-  renderFilters();
-  renderTabs();
-  renderGridMovers();
+  // DEBUG: trace each step so we can find where it dies
+  const trace = [];
+  try { renderStatsMovers(); trace.push("stats:OK"); } catch(e) { trace.push("stats:ERR " + e.message); }
+  try { renderFilters();     trace.push("filters:OK"); } catch(e) { trace.push("filters:ERR " + e.message); }
+  try { renderTabs();        trace.push("tabs:OK"); } catch(e) { trace.push("tabs:ERR " + e.message); }
+  try { renderGridMovers();  trace.push("grid:OK"); } catch(e) { trace.push("grid:ERR " + e.message); }
+  // If grid still says "Loading" or anything other than cards, expose the trace
+  const gridEl = document.getElementById("grid");
+  if (!gridEl.querySelector(".card") && !gridEl.querySelector(".empty")) {
+    gridEl.innerHTML = `<div class="empty">Trace: ${trace.join(" → ")}</div>`;
+  } else if (gridEl.textContent.includes("Loading Live Movers")) {
+    gridEl.innerHTML = `<div class="empty">Trace (still loading): ${trace.join(" → ")}</div>`;
+  }
 }
 
 function renderStatsScan() {
