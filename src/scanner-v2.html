@@ -1209,6 +1209,7 @@ function renderStats() {
 // LIVE MOVERS GRID
 // =============================================================================
 function renderGridMovers() {
+  try {
   const ms = movers.movers || [];
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
   const filtered = ms.filter((c, i) => filter.test(c, i));
@@ -1303,6 +1304,12 @@ function renderGridMovers() {
       </div>
     `;
   }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">
+      Movers render error: <code style="color:var(--red)">${e.message}</code><br><br>
+      <span style="font-size:11px;">Stack: <pre style="white-space:pre-wrap; text-align:left; font-size:10px;">${(e.stack || "").slice(0, 500)}</pre></span>
+    </div>`;
+  }
 }
 
 // =============================================================================
