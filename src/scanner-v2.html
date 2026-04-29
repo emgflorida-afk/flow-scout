@@ -613,7 +613,8 @@ const FOMC_RISK = false; // wire to current date logic
 
 let scan = null;          // WP scan data (SCAN tab)
 let movers = null;        // Live movers data (MOVERS tab)
-let activeTab = localStorage.getItem("activeTab") || "scan";
+// activeTab: URL ?tab=movers takes precedence > localStorage > default "scan"
+let activeTab = (new URLSearchParams(window.location.search).get("tab")) || localStorage.getItem("activeTab") || "scan";
 let activeFilter = "all";
 let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 
