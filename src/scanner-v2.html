@@ -396,6 +396,66 @@
   .tag.block     { background: var(--red-soft); color: var(--red); }
   .tag.warn      { background: var(--amber-soft); color: var(--amber); }
   .tag.sector    { background: var(--purple-soft); color: var(--purple); }
+  .tag.swing     { background: var(--purple-soft); color: var(--purple); border: 1px solid rgba(180,120,255,0.32); }
+  .tag.day       { background: var(--aqua-soft); color: var(--aqua); border: 1px solid rgba(77,214,255,0.32); }
+  .tag.scalp     { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(255,184,77,0.32); }
+
+  /* TAB NAV */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg-1);
+    border-radius: 12px;
+    padding: 4px;
+    box-shadow: 0 0 0 1px rgba(255,255,255,.04) inset;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    padding: 10px 16px;
+    border-radius: 8px;
+    color: var(--txt-2);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s ease, color .15s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .tab:hover { background: rgba(255,255,255,0.04); color: var(--txt-1); }
+  .tab.active {
+    background: linear-gradient(135deg, rgba(77,214,255,0.14), rgba(180,120,255,0.14));
+    color: var(--txt-0);
+    box-shadow: 0 0 0 1px rgba(77,214,255,0.28) inset;
+  }
+  .tab.disabled { opacity: 0.35; cursor: not-allowed; }
+  .tab .badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: rgba(255,255,255,0.06);
+    font-size: 9px;
+    color: var(--txt-2);
+  }
+  .tab.active .badge { background: rgba(77,214,255,0.2); color: var(--aqua); }
+
+  /* SIM/LIVE toggle */
+  .pill-mini.sim {
+    cursor: pointer;
+    background: rgba(255,184,77,0.12);
+    color: var(--amber);
+    border: 1px solid rgba(255,184,77,0.32);
+  }
+  .pill-mini.live-acct {
+    cursor: pointer;
+    background: rgba(255,77,109,0.12);
+    color: var(--red);
+    border: 1px solid rgba(255,77,109,0.32);
+  }
 
   /* DETAIL OVERLAY */
   .overlay {
@@ -517,10 +577,14 @@
       </div>
     </div>
     <div class="header-right">
+      <span class="pill-mini sim" id="account-toggle" onclick="toggleAccount()" title="Click to switch account">SIM</span>
       <span class="pill-mini" id="scan-mode">EOD</span>
       <span class="pill-mini live">LIVE</span>
     </div>
   </div>
+
+  <!-- TAB NAV -->
+  <div class="tabs" id="tab-nav"></div>
 
   <!-- STATS -->
   <div class="stats" id="stats"></div>
@@ -547,10 +611,22 @@
 const EARNINGS_BLOCK = new Set(["AMZN","MSFT","META","GOOGL","GOOG","AAPL","CAT","QCOM"]);
 const FOMC_RISK = false; // wire to current date logic
 
-let scan = null;
+let scan = null;          // WP scan data (SCAN tab)
+let movers = null;        // Live movers data (MOVERS tab)
+let activeTab = localStorage.getItem("activeTab") || "scan";
 let activeFilter = "all";
+let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 
-const FILTERS = [
+const TABS = [
+  { id: "scan",     label: "📊 SCAN",        modeDefault: "SWING" },
+  { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
+  { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING", disabled: true, comingSoon: true },
+  { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
+  { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
+  { id: "starred",  label: "⭐ STARRED",     modeDefault: "—",     disabled: true, comingSoon: true },
+];
+
+const FILTERS_SCAN = [
   { id: "all",     label: "All",            test: c => true },
   { id: "top",     label: "Top 5",          test: (c, i) => i < 5 },
   { id: "call",    label: "Calls",          test: c => c.direction === "CALL" },
@@ -559,6 +635,18 @@ const FILTERS = [
   { id: "high",    label: "Score 10+",      test: c => (c.score || 0) >= 10 },
   { id: "preferred", label: "Preferred sector", test: c => c.sectorTier === "preferred" },
 ];
+
+const FILTERS_MOVERS = [
+  { id: "all",     label: "All",            test: c => true },
+  { id: "top",     label: "Top 10",         test: (c, i) => i < 10 },
+  { id: "up",      label: "Up movers",      test: c => c.pctChange > 0 },
+  { id: "down",    label: "Down movers",    test: c => c.pctChange < 0 },
+  { id: "vol",     label: "High volume",    test: c => (c.volRatio || 0) >= 1.5 },
+  { id: "big",     label: "Big move 3%+",   test: c => Math.abs(c.pctChange || 0) >= 3 },
+];
+
+// Variable filter list driven by tab
+let FILTERS = FILTERS_SCAN;
 
 function fmtPct(v) {
   if (v == null) return "-";
@@ -808,6 +896,7 @@ function renderGrid() {
           <div class="metric"><span class="metric-key">Today Lo</span><span class="metric-val mono">${fmtNum(c.todayLow)}</span></div>
         </div>
         <div class="tags">
+          <span class="tag swing">SWING</span>
           <span class="tag sector">${c.sector || "-"} ${sectorMomDisplay}</span>
           <span class="tag ${sectorTier}">${sectorTier}</span>
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
@@ -894,9 +983,9 @@ async function dispatchToTitan(idx, btn) {
   const r       = Math.abs(trigger - stop);
   const tp1     = isCall ? trigger + r : trigger - r;
   const conviction = c.score >= 12 ? "high" : c.score >= 9 ? "medium" : "low";
-  const titanCard = `${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${trigger.toFixed(2)} | stop ${stop.toFixed(2)} | tp ${tp1.toFixed(2)} | ${c.pattern} | conv:${conviction}`;
+  const titanCard = `${isCall ? "BUY" : "SHORT"} ${c.ticker} @ ${trigger.toFixed(2)} | stop ${stop.toFixed(2)} | tp ${tp1.toFixed(2)} | ${c.pattern} | conv:${conviction} | acct:${account}`;
 
-  if (!confirm(`Dispatch to Titan queue?\n\n${titanCard}\n\nMode: REVIEW (manual approval at Titan)\nConviction: ${conviction.toUpperCase()}`)) return;
+  if (!confirm(`Dispatch to Titan queue?\n\nAccount: ${account}\n${titanCard}\n\nMode: REVIEW (manual approval at Titan)\nConviction: ${conviction.toUpperCase()}`)) return;
 
   const orig = btn.textContent;
   btn.textContent = "Dispatching...";
@@ -912,7 +1001,8 @@ async function dispatchToTitan(idx, btn) {
         conviction: conviction,
         card: c,
         titanCard: titanCard,
-        source: 'scanner-v2'
+        source: 'scanner-v2',
+        account: account
       })
     });
     const data = await resp.json();
@@ -956,14 +1046,73 @@ document.addEventListener("keydown", e => {
   if (e.key === "Escape") closeDetail();
 });
 
-// LOAD SCAN ============================================================
-async function loadScan() {
+// =============================================================================
+// TAB NAV
+// =============================================================================
+function renderTabs() {
+  const counts = {
+    scan: scan?.candidates?.length ?? "—",
+    movers: movers?.movers?.length ?? "—",
+  };
+  document.getElementById("tab-nav").innerHTML = TABS.map(t => {
+    const isActive = t.id === activeTab;
+    const cls = ["tab"];
+    if (isActive) cls.push("active");
+    if (t.disabled) cls.push("disabled");
+    const count = counts[t.id];
+    return `<div class="${cls.join(" ")}" data-tab="${t.id}">${t.label}${count !== undefined ? `<span class="badge">${count}</span>` : ""}${t.comingSoon ? `<span class="badge">soon</span>` : ""}</div>`;
+  }).join("");
+  document.querySelectorAll(".tab").forEach(el => {
+    el.addEventListener("click", () => {
+      if (el.classList.contains("disabled")) return;
+      activeTab = el.dataset.tab;
+      activeFilter = "all";
+      localStorage.setItem("activeTab", activeTab);
+      FILTERS = activeTab === "movers" ? FILTERS_MOVERS : FILTERS_SCAN;
+      renderTabs();
+      loadActiveTab();
+    });
+  });
+}
+
+// =============================================================================
+// SIM/LIVE ACCOUNT TOGGLE
+// =============================================================================
+function applyAccount() {
+  const el = document.getElementById("account-toggle");
+  el.textContent = account;
+  el.className = "pill-mini " + (account === "SIM" ? "sim" : "live-acct");
+  el.title = account === "SIM" ? "SIM mode - dispatched cards tagged for paper account. Click to switch to LIVE." : "LIVE mode - dispatched cards tagged for real account. Click to switch to SIM.";
+}
+function toggleAccount() {
+  account = account === "SIM" ? "LIVE" : "SIM";
+  if (account === "LIVE" && !confirm("⚠ Switch to LIVE account?\n\nDispatched cards will be tagged for the real account.\nMake sure you mean to do this.")) {
+    account = "SIM";
+  }
+  localStorage.setItem("account", account);
+  applyAccount();
+}
+window.toggleAccount = toggleAccount;
+
+// =============================================================================
+// LOADERS
+// =============================================================================
+async function loadActiveTab() {
+  if (activeTab === "scan")    return loadScanData();
+  if (activeTab === "movers")  return loadMoversData();
+  document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
+  document.getElementById("stats").innerHTML = "";
+  document.getElementById("filters").innerHTML = "";
+}
+
+async function loadScanData() {
+  FILTERS = FILTERS_SCAN;
   const params = new URLSearchParams(window.location.search);
   const direction = params.get("direction") || "both";
   const force = params.get("force") === "1" ? "&force=1" : "";
   const src = `/api/wealthprince-scan?direction=${direction}${force}`;
   try {
-    if (!scan) document.getElementById("grid").innerHTML = `<div class="empty">Loading scan...</div>`;
+    if (!scan) document.getElementById("grid").innerHTML = `<div class="empty">Loading WP scan...</div>`;
     const r = await fetch(src, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
@@ -971,25 +1120,198 @@ async function loadScan() {
     scan = data;
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">
-      Could not load scan: <code>${e.message}</code><br><br>
-      <span style="font-size:11px;">Try <a style="color: var(--aqua); text-decoration:none;" href="?force=1">force refresh</a> or visit the <a style="color: var(--aqua); text-decoration:none;" href="/scanner">classic scanner</a>.</span>
+      Could not load WP scan: <code>${e.message}</code><br><br>
+      <span style="font-size:11px;">Try <a style="color: var(--aqua); text-decoration:none;" href="?force=1">force refresh</a>.</span>
     </div>`;
     return;
   }
-
   document.getElementById("scan-date").textContent =
-    "Scan " + (scan.timestamp ? new Date(scan.timestamp).toLocaleString("en-US", {month:"short", day:"numeric", year:"numeric", hour:"2-digit", minute:"2-digit"}) : "Unknown");
+    "WP Scan · " + (scan.timestamp ? new Date(scan.timestamp).toLocaleString("en-US", {month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "—");
   document.getElementById("meta").textContent =
     `${scan.scanned || "?"} scanned · ${scan.candidatesFound || scan.candidates?.length || 0} candidates`;
-
-  renderStats();
+  renderStatsScan();
   renderFilters();
+  renderTabs();
   renderGrid();
 }
 
-loadScan();
-setInterval(loadScan, 30000); // re-poll every 30s
+async function loadMoversData() {
+  FILTERS = FILTERS_MOVERS;
+  try {
+    if (!movers) document.getElementById("grid").innerHTML = `<div class="empty">Loading Live Movers...</div>`;
+    const r = await fetch("/api/live-movers", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (data.error) throw new Error(data.error);
+    movers = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">
+      Could not load Live Movers: <code>${e.message}</code>
+    </div>`;
+    return;
+  }
+  document.getElementById("scan-date").textContent =
+    "Live Movers · " + (movers.timestamp ? new Date(movers.timestamp).toLocaleString("en-US", {hour:"2-digit", minute:"2-digit", second:"2-digit"}) : "live");
+  document.getElementById("meta").textContent =
+    `${movers.universeSize || 60} scanned · ${(movers.movers || []).length} movers`;
+  renderStatsMovers();
+  renderFilters();
+  renderTabs();
+  renderGridMovers();
+}
 
+function renderStatsScan() {
+  const cands = scan.candidates || [];
+  const longs  = cands.filter(c => c.direction === "CALL").length;
+  const shorts = cands.filter(c => c.direction === "PUT").length;
+  const cleared = cands.filter(c => !EARNINGS_BLOCK.has(c.ticker)).length;
+  const topScore = cands.reduce((m, c) => Math.max(m, c.score || 0), 0);
+  const stats = [
+    { k: "Candidates", v: cands.length, cls: "" },
+    { k: "Calls", v: longs, cls: "green" },
+    { k: "Puts", v: shorts, cls: "red" },
+    { k: "Earnings clear", v: cleared, cls: "aqua" },
+    { k: "Top score", v: topScore, cls: "" },
+    { k: "Universe", v: scan.universeSize || "—", cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderStatsMovers() {
+  const ms = movers.movers || [];
+  const ups = ms.filter(m => m.pctChange > 0).length;
+  const downs = ms.filter(m => m.pctChange < 0).length;
+  const big = ms.filter(m => Math.abs(m.pctChange) >= 3).length;
+  const highVol = ms.filter(m => (m.volRatio || 0) >= 1.5).length;
+  const top = ms[0];
+  const stats = [
+    { k: "Movers", v: ms.length, cls: "" },
+    { k: "Up", v: ups, cls: "green" },
+    { k: "Down", v: downs, cls: "red" },
+    { k: "3%+", v: big, cls: "aqua" },
+    { k: "1.5x Vol", v: highVol, cls: "" },
+    { k: "Top", v: top ? top.ticker : "—", cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+// Backwards-compat alias: old renderStats() now dispatches by tab
+function renderStats() {
+  return activeTab === "movers" ? renderStatsMovers() : renderStatsScan();
+}
+
+// =============================================================================
+// LIVE MOVERS GRID
+// =============================================================================
+function renderGridMovers() {
+  const ms = movers.movers || [];
+  const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+  const filtered = ms.filter((c, i) => filter.test(c, i));
+  if (!filtered.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No movers match this filter.</div>`;
+    return;
+  }
+  document.getElementById("grid").innerHTML = filtered.map((m, i) => {
+    const isUp = m.pctChange > 0;
+    const isCall = isUp;
+    const isEarnings = EARNINGS_BLOCK.has(m.ticker);
+    const cd = getCandleCountdown("Daily");
+    // For movers: use intraday H/L as the trigger zone
+    const trigger = isCall ? m.high : m.low;
+    const stop    = isCall ? m.low  : m.high;
+    const r       = Math.abs(trigger - stop);
+    const tp1     = isCall ? trigger + r : trigger - r;
+    const spot    = m.last;
+    // Verdict logic similar to scan timing but adapted for intraday momentum
+    const directional = isCall ? (spot - trigger) : (trigger - spot);
+    const rMultiple = r > 0 ? directional / r : 0;
+    let verdict, color, msg, sub, icon;
+    if (rMultiple < -0.05 && Math.abs(spot - trigger) / spot * 100 < 0.5) {
+      verdict = "ENTER NOW"; color = "green"; icon = "🟢";
+      msg = "At intraday extreme"; sub = `Spot ${fmtNum(spot)} testing ${fmtNum(trigger)}`;
+    } else if (rMultiple < -0.15) {
+      verdict = "WAIT"; color = "amber"; icon = "🟡";
+      msg = `Pulled back from ${isCall ? "high" : "low"}`; sub = `${fmtNum(Math.abs(trigger - spot))} away from breakout`;
+    } else if (rMultiple < 0.5) {
+      verdict = "STILL GOOD"; color = "green"; icon = "🟢";
+      msg = `Breaking ${isCall ? "high" : "low"}`; sub = `${rMultiple.toFixed(2)}R extended`;
+    } else {
+      verdict = "CHASE RISK"; color = "amber"; icon = "🟡";
+      msg = "Move extended"; sub = `${rMultiple.toFixed(2)}R - tight stop required`;
+    }
+    const lo = Math.min(stop, tp1, trigger, spot);
+    const hi = Math.max(stop, tp1, trigger, spot);
+    const span = Math.max(0.01, hi - lo);
+    const pct = (val) => Math.max(0, Math.min(100, ((val - lo) / span) * 100));
+    const triggerPct = pct(trigger), stopPct = pct(stop), tp1Pct = pct(tp1), spotPct = pct(spot);
+    const stopBar = isCall ? `left:${stopPct}%; right:${100 - triggerPct}%` : `left:${triggerPct}%; right:${100 - stopPct}%`;
+    const tpBar   = isCall ? `left:${triggerPct}%; right:${100 - tp1Pct}%` : `left:${tp1Pct}%; right:${100 - triggerPct}%`;
+    return `
+      <div class="card ${isUp ? "long" : "short"} ${isEarnings ? "earnings-block" : ""}" data-mover-idx="${ms.indexOf(m)}">
+        <div class="card-head">
+          <div>
+            <div class="ticker mono">${m.ticker}</div>
+            <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">$${fmtNum(m.last)} <span style="color: ${isUp ? "var(--green)" : "var(--red)"}; margin-left:4px;">${fmtPct(m.pctChange)}</span></div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            <span class="dir-pill ${isUp ? "call" : "put"}">${isUp ? "CALL" : "PUT"}</span>
+            <div class="score-badge"><span class="score-num ${scoreClass((m.score||0))} mono">${fmtNum(m.score, 1)}</span><span class="score-lbl">Score</span></div>
+          </div>
+        </div>
+        <div class="timing ${color}">
+          <span class="timing-icon">${icon}</span>
+          <div class="timing-text">
+            <span class="timing-verdict">${verdict}</span>
+            <span class="timing-msg">${msg}</span>
+            <span class="timing-sub">${sub}</span>
+          </div>
+          <div class="timing-countdown">
+            <span class="timing-countdown-val mono" data-countdown="Daily">${cd.remaining}</span>
+            <span class="timing-countdown-lbl">${cd.label}</span>
+          </div>
+        </div>
+        <div>
+          <div class="prox">
+            <div class="prox-stop"  style="${stopBar}"></div>
+            <div class="prox-tp"    style="${tpBar}"></div>
+            <div class="prox-trigger" style="left:${triggerPct}%"></div>
+            <div class="prox-spot" style="left:${spotPct}%"></div>
+          </div>
+          <div class="prox-labels">
+            <span>Stop ${fmtNum(stop)}</span>
+            <span style="color: var(--aqua);">Trig ${fmtNum(trigger)}</span>
+            <span>TP1 ${fmtNum(tp1)}</span>
+          </div>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span class="metric-key">Open</span><span class="metric-val mono">${fmtNum(m.open)}</span></div>
+          <div class="metric"><span class="metric-key">Prev Close</span><span class="metric-val mono">${fmtNum(m.prevClose)}</span></div>
+          <div class="metric"><span class="metric-key">Range %</span><span class="metric-val mono">${fmtNum(m.rangePct, 2)}%</span></div>
+          <div class="metric"><span class="metric-key">Vol Ratio</span><span class="metric-val mono">${m.volRatio ? m.volRatio.toFixed(2) + "x" : "—"}</span></div>
+        </div>
+        <div class="tags">
+          <span class="tag day">DAY</span>
+          ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
+          ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
+          ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+// =============================================================================
+// INIT
+// =============================================================================
+applyAccount();
+renderTabs();
+loadActiveTab();
+// Re-poll active tab every 30s
+setInterval(() => loadActiveTab(), 30000);
 // Live-tick the countdown labels so "5h 23m → 5h 22m" updates without a full re-render
 setInterval(() => {
   document.querySelectorAll("[data-countdown]").forEach(el => {
