@@ -13,6 +13,21 @@ var fetch = require('node-fetch');
 var TS_LIVE = 'https://api.tradestation.com/v3';
 var TS_SIM  = 'https://sim-api.tradestation.com/v3';
 
+// AUTOFIRE GATE wiring (Apr 29 2026): when TS rejects with "Day trading margin
+// rules" we engage TS-LOCK to freeze new fires until next 9:30 ET. We require
+// it lazily so a missing/broken autoFireGate doesn't break order execution.
+function _autoFireGate() {
+  try { return require('./autoFireGate'); } catch(e) { return null; }
+}
+function _maybeEngageTSLock(rejectionMessage) {
+  try {
+    var afg = _autoFireGate();
+    if (afg && typeof afg.triggerTSLock === 'function') {
+      afg.triggerTSLock(rejectionMessage);
+    }
+  } catch(e) { console.error('[EXECUTOR] TS-LOCK engage error:', e.message); }
+}
+
 // ================================================================
 // PRICE ROUNDING -- prevents floating point artifacts
 // e.g. 1.15 * 0.75 = 1.1500000000000001 -> round to 1.15
@@ -594,6 +609,7 @@ async function placeOrder(params) {
     }
     if (embeddedError) {
       console.error('[EXECUTOR] REJECTED --', embeddedError);
+      _maybeEngageTSLock(embeddedError);
       return { error: embeddedError, rejected: true, response: data };
     }
 
@@ -617,6 +633,7 @@ async function placeOrder(params) {
         if (isRej) {
           var rejMsg = liveOrder.RejectReason || liveOrder.StatusDescription || status;
           console.error('[EXECUTOR] ORDER REJECTED POST-PLACEMENT --', orderId, status, rejMsg);
+          _maybeEngageTSLock(rejMsg);
           return { error: 'TS_REJ: ' + status + ' -- ' + rejMsg, rejected: true, orderId: orderId };
         }
         console.log('[EXECUTOR] Order verified alive --', orderId, 'status:', status);

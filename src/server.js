@@ -4770,6 +4770,28 @@ app.post('/api/autofire/config', function(req, res) {
   res.json(autoFireGate.getState());
 });
 
+// TS-LOCK endpoints (Apr 29 2026)
+// Auto-engaged by orderExecutor when TS rejects with day-trade-margin pattern.
+// Frees up at next 9:30 ET unless manually cleared.
+app.get('/api/autofire/ts-lock-status', function(req, res) {
+  if (!autoFireGate || !autoFireGate.getTSLockStatus) return res.status(500).json({ error: 'autoFireGate.getTSLockStatus not available' });
+  res.json(autoFireGate.getTSLockStatus());
+});
+
+app.post('/api/autofire/ts-lock-clear', function(req, res) {
+  if (!autoFireGate || !autoFireGate.clearTSLock) return res.status(500).json({ error: 'autoFireGate.clearTSLock not available' });
+  autoFireGate.clearTSLock();
+  res.json({ ok: true, status: autoFireGate.getTSLockStatus() });
+});
+
+// Manual trigger for testing (POST a {reason: "Day trading margin rules"})
+app.post('/api/autofire/ts-lock-trigger', function(req, res) {
+  if (!autoFireGate || !autoFireGate.triggerTSLock) return res.status(500).json({ error: 'autoFireGate.triggerTSLock not available' });
+  var reason = (req.body && req.body.reason) || 'Day trading margin rules (manual test)';
+  var triggered = autoFireGate.triggerTSLock(reason);
+  res.json({ ok: true, triggered: triggered, status: autoFireGate.getTSLockStatus() });
+});
+
 // AUTO-ARM QUEUE cron (v7.5) -- flip queueActive=true at 9:29 AM ET Mon-Fri
 // so queued trades fire automatically when the market opens, no manual step.
 // Also flips queueActive=false at 4:01 PM to stop stale triggers overnight.

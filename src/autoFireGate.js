@@ -31,6 +31,11 @@ var state = {
   allowedGrades: ['A+'], // A+ only for week 1, open to 'A' after calibration
   lastFtfc: null,
   lastCheck: null,
+  // TS-LOCK (Apr 29 2026): when TS rejects with "Day trading margin rules" we
+  // freeze new fires until next 9:30 ET so we stop burning push attempts.
+  tsLockedUntil: 0,        // unix ms; 0 = no lock
+  tsLockReason: null,      // last rejection message that triggered the lock
+  tsLockTriggeredAt: 0,    // when the lock was set
 };
 
 function loadState() {
@@ -40,6 +45,9 @@ function loadState() {
       if (typeof s.enabled === 'boolean') state.enabled = s.enabled;
       if (Array.isArray(s.allowedGrades)) state.allowedGrades = s.allowedGrades;
       if (isFinite(s.maxRiskPerTrade)) state.maxRiskPerTrade = s.maxRiskPerTrade;
+      if (isFinite(s.tsLockedUntil))    state.tsLockedUntil = s.tsLockedUntil;
+      if (typeof s.tsLockReason === 'string') state.tsLockReason = s.tsLockReason;
+      if (isFinite(s.tsLockTriggeredAt)) state.tsLockTriggeredAt = s.tsLockTriggeredAt;
     }
   } catch(e) { console.error('[AUTOFIRE] state load:', e.message); }
 }
@@ -48,9 +56,50 @@ function saveState() {
     enabled: state.enabled,
     allowedGrades: state.allowedGrades,
     maxRiskPerTrade: state.maxRiskPerTrade,
+    tsLockedUntil: state.tsLockedUntil,
+    tsLockReason: state.tsLockReason,
+    tsLockTriggeredAt: state.tsLockTriggeredAt,
   })); } catch(e) { console.error('[AUTOFIRE] state save:', e.message); }
 }
 loadState();
+
+// -----------------------------------------------------------------
+// TS-LOCK helpers (Apr 29 2026)
+// Pattern matched against TS rejection messages. Conservative — only
+// match phrases that clearly indicate day-trade-margin rejection,
+// NOT generic "insufficient buying power" or "contract not found" etc.
+// -----------------------------------------------------------------
+var TS_LOCK_PATTERN = /day[- ]?trading margin|pattern day trader|day[- ]?trade buying power|day[- ]?trading buying power/i;
+
+function nextMarketOpenET() {
+  // Compute next 9:30 ET timestamp. If now is before 9:30 ET today and it's
+  // a weekday → today 9:30 ET. Otherwise next business day 9:30 ET.
+  var now = new Date();
+  var etStr = now.toLocaleString('en-US', { timeZone: 'America/New_York' });
+  var etNow = new Date(etStr);
+
+  var target = new Date(etNow);
+  target.setHours(9, 30, 0, 0);
+
+  // If now (in ET) is at/after 9:30 today, advance to next day
+  if (etNow >= target) {
+    target.setDate(target.getDate() + 1);
+  }
+  // Skip weekends — Saturday(6) → Monday, Sunday(0) → Monday
+  while (target.getDay() === 0 || target.getDay() === 6) {
+    target.setDate(target.getDate() + 1);
+  }
+
+  // Convert ET wall-clock target back to UTC timestamp
+  // toLocaleString gave us a Date that's been "offset-shifted" — compute the actual UTC ms
+  var etOffsetMs = etNow.getTime() - now.getTime();   // delta between local and ET wall-clock
+  var utcTargetMs = target.getTime() - etOffsetMs;
+  return utcTargetMs;
+}
+
+function isTSLocked() {
+  return state.tsLockedUntil > Date.now();
+}
 
 function getFires() {
   try {
@@ -95,6 +144,13 @@ function evaluateGates(item, ctx) {
 
   // Gate 0: master switch
   if (!state.enabled) return { fire: false, reason: 'AUTO_FIRE_DISABLED', blocking: 'master' };
+
+  // Gate 0.5 (Apr 29 2026): TS-LOCKED -- TS rejected with day-trade-margin earlier.
+  // Block all new fires until next 9:30 ET to stop burning rejected pushes.
+  if (isTSLocked()) {
+    var unlockAt = new Date(state.tsLockedUntil).toLocaleString('en-US', { timeZone: 'America/New_York' });
+    return { fire: false, reason: 'TS_LOCKED until ' + unlockAt + ' ET (last rej: ' + (state.tsLockReason || 'day-trade margin') + ')', blocking: 'ts_lock' };
+  }
 
   // Gate 1: grade whitelist
   var grade = item.grade || 'B';
@@ -222,4 +278,47 @@ module.exports = {
   setLastFtfc: function(ftfcString) {
     state.lastFtfc = ftfcString;
   },
+
+  // -----------------------------------------------------------------
+  // TS-LOCK API (Apr 29 2026)
+  // -----------------------------------------------------------------
+  // Call from orderExecutor when a TS rejection message matches the
+  // day-trade-margin pattern. Lock holds until next 9:30 ET.
+  triggerTSLock: function(rejectionMessage) {
+    if (!rejectionMessage) return false;
+    if (!TS_LOCK_PATTERN.test(rejectionMessage)) return false;
+    state.tsLockedUntil    = nextMarketOpenET();
+    state.tsLockReason     = String(rejectionMessage).slice(0, 200);
+    state.tsLockTriggeredAt = Date.now();
+    saveState();
+    var unlockAt = new Date(state.tsLockedUntil).toLocaleString('en-US', { timeZone: 'America/New_York' });
+    console.error('[AUTOFIRE] 🔒 TS-LOCK ENGAGED until ' + unlockAt + ' ET — reason:', rejectionMessage);
+    return true;
+  },
+
+  // Manual override (use endpoint /api/auto-fire/ts-lock-clear)
+  clearTSLock: function() {
+    state.tsLockedUntil = 0;
+    state.tsLockReason  = null;
+    state.tsLockTriggeredAt = 0;
+    saveState();
+    console.log('[AUTOFIRE] TS-LOCK manually cleared');
+    return true;
+  },
+
+  // Status (for /api/auto-fire/ts-lock-status)
+  getTSLockStatus: function() {
+    var locked = isTSLocked();
+    return {
+      locked: locked,
+      lockedUntil: state.tsLockedUntil || null,
+      lockedUntilET: locked ? new Date(state.tsLockedUntil).toLocaleString('en-US', { timeZone: 'America/New_York' }) : null,
+      reason: state.tsLockReason,
+      triggeredAt: state.tsLockTriggeredAt || null,
+      triggeredAtET: state.tsLockTriggeredAt ? new Date(state.tsLockTriggeredAt).toLocaleString('en-US', { timeZone: 'America/New_York' }) : null,
+    };
+  },
+
+  // Probe — useful for tests / manual triggers
+  isTSLocked: isTSLocked,
 };
