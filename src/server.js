@@ -284,6 +284,23 @@ app.get('/api/strategy-pick/info', function(req, res) {
   });
 });
 
+// Round option price to valid tick (Apr 29 2026 - AB caught GS rejection
+// "TS_REJ: Failed" because $9.18 entry was off the $0.05 tick grid).
+// Options <$3.00 use $0.01 (penny), >=$3.00 use $0.05 (nickel).
+function _roundToOptionTick(price) {
+  if (price == null || !isFinite(price) || price <= 0) return price;
+  var tick = price < 3.00 ? 0.01 : 0.05;
+  return Math.round(price / tick) * tick;
+}
+function _roundLimitForTS(price, tradeSide) {
+  if (price == null || !isFinite(price)) return price;
+  var rounded = _roundToOptionTick(price);
+  // For BUY orders: round UP slightly so we cross the bid
+  // For SELL orders: round DOWN slightly so we cross the ask
+  // (Currently we use the rounded mid - good enough)
+  return Math.round(rounded * 100) / 100;
+}
+
 // SCANNER FIRE (Apr 29 2026) - dispatched orders go LIVE in TS account so AB
 // sees them as working orders ready to confirm/cancel. Defaults to SIM account
 // for safety; LIVE flag must be explicit.
@@ -318,22 +335,35 @@ app.post('/api/scanner-fire', async function(req, res) {
     // CORRECT param names per orderExecutor signature: limit/t1/t2 (NOT entry/tp1/tp2)
     // Action: ALWAYS BUYTOOPEN for long entries — direction (call vs put) lives in
     // the symbol itself. SELLTOOPEN is for short-premium plays (credit spreads etc).
+    //
+    // PRICE ROUNDING (AB caught Apr 29): TS rejects sub-tick option prices with
+    // cryptic "TS_REJ: Failed". Options <$3 use $0.01 ticks; >=$3 use $0.05 ticks.
+    // GS optionEntry was $9.18 (not on $0.05 grid) -> rounded to $9.20.
+    var isOption = orderType === 'OPTION' || (symbol && symbol !== ticker && symbol.length > 6);
+    var rawEntry = parseFloat(b.entry);
+    var rawStop  = b.stop ? parseFloat(b.stop) : null;
+    var rawT1    = parseFloat(b.tp1);
+    var rawT2    = b.tp2 ? parseFloat(b.tp2) : null;
     var orderParams = {
       account:        account,
       symbol:         symbol,
       action:         'BUYTOOPEN',     // long entry; symbol carries C/P
       qty:            qty,
-      limit:          parseFloat(b.entry),     // <-- was 'entry'
-      stop:           b.stop ? parseFloat(b.stop) : null,
-      t1:             parseFloat(b.tp1),       // <-- was 'tp1'
-      t2:             b.tp2 ? parseFloat(b.tp2) : null,  // <-- was 'tp2'
+      limit:          isOption ? _roundLimitForTS(rawEntry) : rawEntry,
+      stop:           isOption ? (rawStop != null ? _roundLimitForTS(rawStop) : null) : rawStop,
+      t1:             isOption ? _roundLimitForTS(rawT1)  : rawT1,
+      t2:             isOption ? (rawT2 != null ? _roundLimitForTS(rawT2) : null)   : rawT2,
       structuralStop: b.structuralStop || null,
       duration:       b.duration || 'GTC',
-      // CRITICAL: scanner-v2 clicks are HUMAN-confirmed manual fires.
-      // Bypass time-based gates (first-15-min, dead-zone) since AB is in the loop.
       manualFire:     true,
       tradeType:      b.tradeType || 'SWING',
     };
+    // Track if rounding changed any price (for the response)
+    var rounded = {};
+    if (orderParams.limit !== rawEntry) rounded.limit = { from: rawEntry, to: orderParams.limit };
+    if (orderParams.stop !== rawStop && rawStop != null) rounded.stop = { from: rawStop, to: orderParams.stop };
+    if (orderParams.t1 !== rawT1) rounded.t1 = { from: rawT1, to: orderParams.t1 };
+    if (orderParams.t2 !== rawT2 && rawT2 != null) rounded.t2 = { from: rawT2, to: orderParams.t2 };
 
     console.log('[SCANNER-FIRE]', JSON.stringify({
       ticker: ticker, qty: qty, live: live, account: account,
@@ -343,7 +373,16 @@ app.post('/api/scanner-fire', async function(req, res) {
     var result = await orderExecutor.placeOrder(orderParams);
 
     if (result.error) {
-      return res.status(400).json({ ok: false, error: result.error, params: orderParams });
+      // Surface the full TS response when available so AB can see WHY it failed
+      var errResp = {
+        ok: false,
+        error: result.error,
+        rejected: !!result.rejected,
+        params: orderParams,
+        rounded: Object.keys(rounded).length ? rounded : null,
+        tsResponse: result.response || null,
+      };
+      return res.status(400).json(errResp);
     }
 
     res.json({
@@ -353,6 +392,7 @@ app.post('/api/scanner-fire', async function(req, res) {
       qty:      qty,
       orderID:  result.orderID || result.OrderID || null,
       result:   result,
+      rounded:  Object.keys(rounded).length ? rounded : null,
       message:  live
         ? 'Order placed in LIVE account ' + account + ' as working LIMIT. Check Titan to confirm.'
         : 'Order placed in SIM account ' + account + '. Test fill behavior, no real $$ risk.',
