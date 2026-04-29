@@ -457,6 +457,66 @@
     border: 1px solid rgba(255,77,109,0.32);
   }
 
+  /* LVL TAB - multi-TF stacked pills per card */
+  .lvl-tfrow {
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .lvl-tfpill {
+    display: grid;
+    grid-template-columns: 32px 22px 1fr auto;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.25);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.04) inset;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .lvl-tfpill-tf {
+    font-size: 11px;
+    font-weight: 800;
+    color: var(--txt-3);
+    letter-spacing: 0.1em;
+  }
+  .lvl-tfpill-icon { font-size: 14px; line-height: 1; text-align: center; }
+  .lvl-tfpill-txt {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--txt-1);
+  }
+  .lvl-tfpill-px {
+    font-size: 10px;
+    color: var(--txt-2);
+    font-weight: 600;
+  }
+  .lvl-tfpill.lvl-green {
+    background: linear-gradient(90deg, rgba(20,232,122,0.18), rgba(20,232,122,0.05));
+    box-shadow: 0 0 0 1px rgba(20,232,122,0.32) inset, 0 0 12px rgba(20,232,122,0.08);
+  }
+  .lvl-tfpill.lvl-green .lvl-tfpill-txt { color: var(--green); }
+  .lvl-tfpill.lvl-red {
+    background: linear-gradient(90deg, rgba(255,77,109,0.18), rgba(255,77,109,0.05));
+    box-shadow: 0 0 0 1px rgba(255,77,109,0.32) inset, 0 0 12px rgba(255,77,109,0.08);
+  }
+  .lvl-tfpill.lvl-red .lvl-tfpill-txt { color: var(--red); }
+  .lvl-tfpill.lvl-aqua {
+    background: linear-gradient(90deg, rgba(77,214,255,0.16), rgba(77,214,255,0.05));
+    box-shadow: 0 0 0 1px rgba(77,214,255,0.28) inset;
+  }
+  .lvl-tfpill.lvl-aqua .lvl-tfpill-txt { color: var(--aqua); }
+  .lvl-tfpill.lvl-gray {
+    background: rgba(140,150,170,0.06);
+    box-shadow: 0 0 0 1px rgba(140,150,170,0.18) inset;
+    opacity: 0.7;
+  }
+  .lvl-tfpill.lvl-gray .lvl-tfpill-txt { color: var(--txt-2); }
+
+  .metric-val.aqua  { color: var(--aqua); }
+  .metric-val.red   { color: var(--red); }
+  .metric-val.green { color: var(--green); }
+
   /* DETAIL OVERLAY */
   .overlay {
     position: fixed;
@@ -621,6 +681,7 @@ let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 const TABS = [
   { id: "scan",     label: "📊 SCAN",        modeDefault: "SWING" },
   { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
+  { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
   { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING", disabled: true, comingSoon: true },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -646,8 +707,19 @@ const FILTERS_MOVERS = [
   { id: "big",     label: "Big move 3%+",   test: c => Math.abs(c.pctChange || 0) >= 3 },
 ];
 
+const FILTERS_LVL = [
+  { id: "all",       label: "All",                test: r => true },
+  { id: "aligned",   label: "D + 1H Aligned",     test: r => r._aligned === true },
+  { id: "enternow",  label: "ENTER NOW (any TF)", test: r => r._anyEnterNow === true },
+  { id: "armed",     label: "ARMED LONG/SHORT",   test: r => r._anyArmed === true },
+  { id: "long",      label: "Long bias",          test: r => r._dominantDirection === "LONG" },
+  { id: "short",     label: "Short bias",         test: r => r._dominantDirection === "SHORT" },
+  { id: "no_stop",   label: "Not stopped",        test: r => r._anyStopped === false },
+];
+
 // Variable filter list driven by tab
 let FILTERS = FILTERS_SCAN;
+let lvlData = null;  // /api/lvl-scan response cache
 
 function fmtPct(v) {
   if (v == null) return "-";
@@ -1069,7 +1141,9 @@ function renderTabs() {
       activeTab = el.dataset.tab;
       activeFilter = "all";
       localStorage.setItem("activeTab", activeTab);
-      FILTERS = activeTab === "movers" ? FILTERS_MOVERS : FILTERS_SCAN;
+      FILTERS = activeTab === "movers" ? FILTERS_MOVERS
+              : activeTab === "lvl"    ? FILTERS_LVL
+              : FILTERS_SCAN;
       renderTabs();
       loadActiveTab();
     });
@@ -1101,9 +1175,150 @@ window.toggleAccount = toggleAccount;
 async function loadActiveTab() {
   if (activeTab === "scan")    return loadScanData();
   if (activeTab === "movers")  return loadMoversData();
+  if (activeTab === "lvl")     return loadLvlData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
   document.getElementById("filters").innerHTML = "";
+}
+
+async function loadLvlData() {
+  FILTERS = FILTERS_LVL;
+  try {
+    if (!lvlData) document.getElementById("grid").innerHTML = `<div class="empty">Computing LVL state across universe...<br><span style="font-size:11px;">First run takes ~30s (110 tickers × 2 timeframes).</span></div>`;
+    const r = await fetch("/api/lvl-scan?tfs=Daily,1H", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || "lvl-scan failed");
+    // Annotate each result with derived flags used by filters
+    (data.results || []).forEach(r => {
+      const tfStates = Object.values(r.tfs || {}).filter(s => s && s.ok);
+      r._anyEnterNow = tfStates.some(s => s.signal === 'LVL_LONG_25' || s.signal === 'LVL_SHORT_75');
+      r._anyArmed    = tfStates.some(s => ['LVL_LONG_25','EARLY_LONG','LVL_SHORT_75','EARLY_SHORT','HIGH_BREAK','LOW_BREAK'].includes(s.signal));
+      r._anyStopped  = tfStates.some(s => s.signal === 'STOP_HIT');
+      const dirs = tfStates.map(s => s.direction).filter(d => d && d !== 'NONE');
+      r._dominantDirection = dirs[0] || 'NONE';
+      r._aligned = dirs.length >= 2 && dirs.every(d => d === dirs[0]);
+    });
+    lvlData = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">
+      Could not load LVL scan: <code>${e.message}</code>
+    </div>`;
+    return;
+  }
+  document.getElementById("scan-date").textContent =
+    "LVL Scan · " + new Date(lvlData.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent =
+    `${lvlData.universe} scanned · ${lvlData.summary.withSignals} active · ${lvlData.summary.aligned} aligned`;
+  renderStatsLvl();
+  renderFilters();
+  renderTabs();
+  renderGridLvl();
+}
+
+function renderStatsLvl() {
+  const s = lvlData.summary;
+  const stats = [
+    { k: "Active",    v: s.withSignals,                     cls: "" },
+    { k: "Aligned",   v: s.aligned,                         cls: "green" },
+    { k: "Enter Now", v: lvlData.results.filter(r => r._anyEnterNow).length, cls: "green" },
+    { k: "Stopped",   v: s.bySignal['STOP_HIT'] || 0,       cls: "red" },
+    { k: "TP1 Hit",   v: s.bySignal['TP1_HIT']  || 0,       cls: "aqua" },
+    { k: "Universe",  v: lvlData.universe,                  cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+// Map LVL signal to a friendly pill display
+const SIGNAL_PILLS = {
+  'LVL_LONG_25':  { txt: 'LONG ARMED',  cls: 'lvl-green', icon: '🟢' },
+  'EARLY_LONG':   { txt: 'EARLY LONG',  cls: 'lvl-aqua',  icon: '🔵' },
+  'LVL_SHORT_75': { txt: 'SHORT ARMED', cls: 'lvl-red',   icon: '🔴' },
+  'EARLY_SHORT':  { txt: 'EARLY SHORT', cls: 'lvl-aqua',  icon: '🔵' },
+  'HIGH_BREAK':   { txt: 'HIGH BREAK',  cls: 'lvl-green', icon: '⬆️' },
+  'LOW_BREAK':    { txt: 'LOW BREAK',   cls: 'lvl-red',   icon: '⬇️' },
+  'TP1_HIT':      { txt: 'TP1 HIT',     cls: 'lvl-aqua',  icon: '🎯' },
+  'STOP_HIT':     { txt: 'STOP HIT',    cls: 'lvl-gray',  icon: '🔒' },
+  'NONE':         { txt: 'WAITING',     cls: 'lvl-gray',  icon: '⏳' },
+};
+
+function renderGridLvl() {
+  try {
+  const rs = lvlData.results || [];
+  const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+  const filtered = rs.filter(r => filter.test(r));
+  if (!filtered.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No tickers match "${filter.label}".</div>`;
+    return;
+  }
+  // Sort: aligned first, then ENTER NOW, then anything else
+  filtered.sort((a, b) => {
+    if (a._aligned !== b._aligned) return b._aligned - a._aligned;
+    if (a._anyEnterNow !== b._anyEnterNow) return b._anyEnterNow - a._anyEnterNow;
+    return 0;
+  });
+  document.getElementById("grid").innerHTML = filtered.map((r, i) => {
+    const tfList = Object.keys(r.tfs);
+    const dailyState = r.tfs.Daily || {};
+    const oneHState = r.tfs['1H'] || {};
+    const aligned = r._aligned;
+    const dom = r._dominantDirection;
+    const isCall = dom === 'LONG';
+    const isShort = dom === 'SHORT';
+    const dailySig = SIGNAL_PILLS[dailyState.signal] || SIGNAL_PILLS.NONE;
+    const oneHSig  = SIGNAL_PILLS[oneHState.signal]  || SIGNAL_PILLS.NONE;
+    const cd = getCandleCountdown("Daily");
+    return `
+      <div class="card ${isCall ? "long" : ""} ${isShort ? "short" : ""}" data-lvl-idx="${rs.indexOf(r)}">
+        <div class="card-head">
+          <div>
+            <div class="ticker mono">${r.symbol}</div>
+            <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">$${fmtNum(dailyState.spot || oneHState.spot || 0)} ${aligned ? '<span style="color: var(--green); margin-left:4px; font-weight:700;">★ ALIGNED</span>' : ''}</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            ${dom !== 'NONE' ? `<span class="dir-pill ${isCall ? "call" : "put"}">${isCall ? 'LONG' : 'SHORT'}</span>` : ''}
+            <span class="tag ${aligned ? 'preferred' : 'neutral'}">${aligned ? 'A+' : 'WATCH'}</span>
+          </div>
+        </div>
+
+        <!-- Multi-TF stacked pills -->
+        <div class="lvl-tfrow">
+          <div class="lvl-tfpill ${dailySig.cls}">
+            <span class="lvl-tfpill-tf">D</span>
+            <span class="lvl-tfpill-icon">${dailySig.icon}</span>
+            <span class="lvl-tfpill-txt">${dailySig.txt}</span>
+            ${dailyState.plan?.entry ? `<span class="lvl-tfpill-px mono">@ ${fmtNum(dailyState.plan.entry)}</span>` : ''}
+          </div>
+          <div class="lvl-tfpill ${oneHSig.cls}">
+            <span class="lvl-tfpill-tf">1H</span>
+            <span class="lvl-tfpill-icon">${oneHSig.icon}</span>
+            <span class="lvl-tfpill-txt">${oneHSig.txt}</span>
+            ${oneHState.plan?.entry ? `<span class="lvl-tfpill-px mono">@ ${fmtNum(oneHState.plan.entry)}</span>` : ''}
+          </div>
+        </div>
+
+        ${dailyState.ok && dailyState.plan?.entry ? `
+        <div class="metrics">
+          <div class="metric"><span class="metric-key">D Entry</span><span class="metric-val mono aqua">${fmtNum(dailyState.plan.entry)}</span></div>
+          <div class="metric"><span class="metric-key">D Stop</span><span class="metric-val mono red">${fmtNum(dailyState.plan.stop)}</span></div>
+          <div class="metric"><span class="metric-key">D TP1</span><span class="metric-val mono green">${fmtNum(dailyState.plan.tp1)}</span></div>
+          <div class="metric"><span class="metric-key">D TP2</span><span class="metric-val mono green">${fmtNum(dailyState.plan.tp2)}</span></div>
+        </div>` : ''}
+
+        <div class="tags">
+          <span class="tag swing">SWING (D)</span>
+          <span class="tag day">DAY (1H)</span>
+          ${aligned ? '<span class="tag preferred">★ Multi-TF Aligned</span>' : ''}
+          ${r._anyStopped ? '<span class="tag block">Stopped on a TF</span>' : ''}
+        </div>
+      </div>
+    `;
+  }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">LVL render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
 }
 
 async function loadScanData() {
