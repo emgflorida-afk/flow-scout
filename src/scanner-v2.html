@@ -1316,6 +1316,180 @@ function closeDetail() {
   document.getElementById("overlay").classList.remove("active");
 }
 
+// =============================================================================
+// LIVE MOVERS detail — uses pre-resolved option contract data from API
+// =============================================================================
+function openMoverDetail(idx) {
+  const m = (movers && movers.movers) ? movers.movers[idx] : null;
+  if (!m) return;
+  const isUp = m.pctChange > 0;
+  const isCall = isUp;
+  const isEarnings = EARNINGS_BLOCK.has(m.ticker);
+
+  // Stock-level plan (intraday breakout/breakdown)
+  const trigger = m.triggerPrice || (isCall ? m.high : m.low);
+  const stop    = m.structuralStop || (isCall ? m.low  : m.high);
+  const tp1     = m.stockTp1 || (isCall ? trigger + Math.abs(trigger - stop) : trigger - Math.abs(trigger - stop));
+  const tp2     = m.stockTp2 || tp1;
+  const tp3     = m.stockTp3 || null;
+
+  // Option contract (resolved by movers API)
+  const hasContract = !!m.optionSymbol;
+
+  document.getElementById("detail").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+          <span class="ticker mono">${m.ticker}</span>
+          <span class="dir-pill ${isCall ? "call" : "put"}">${isCall ? "CALL" : "PUT"}</span>
+          <span class="tag day">DAY</span>
+          ${isEarnings ? '<span class="tag block">⚠ Earnings blocked</span>' : ""}
+        </div>
+        <div style="font-size: 13px; color: var(--txt-2);">Live Mover · Score <span style="color: ${(m.score||0) >= 10 ? 'var(--green)' : 'var(--amber)'}; font-weight:700;">${fmtNum(m.score, 1)}</span> · ${fmtPct(m.pctChange)} · vol ratio ${m.volRatio ? m.volRatio.toFixed(2) + 'x' : '—'}</div>
+      </div>
+      <button class="detail-close" onclick="closeDetail()">×</button>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-cell"><span class="k">Spot</span><span class="v mono">$${fmtNum(m.last)}</span></div>
+      <div class="detail-cell"><span class="k">Open</span><span class="v mono">${fmtNum(m.open)}</span></div>
+      <div class="detail-cell"><span class="k">High</span><span class="v mono" style="color: var(--green);">${fmtNum(m.high)}</span></div>
+      <div class="detail-cell"><span class="k">Low</span><span class="v mono" style="color: var(--red);">${fmtNum(m.low)}</span></div>
+      <div class="detail-cell"><span class="k">Range %</span><span class="v mono">${fmtNum(m.rangePct, 2)}%</span></div>
+      <div class="detail-cell"><span class="k">Vol</span><span class="v mono">${m.volume ? (m.volume/1e6).toFixed(2)+'M' : '—'}</span></div>
+    </div>
+
+    <div class="detail-grid">
+      <div class="detail-cell"><span class="k">Stock Trigger</span><span class="v mono aqua">${fmtNum(trigger)}</span></div>
+      <div class="detail-cell"><span class="k">Stop</span><span class="v mono" style="color: var(--red);">${fmtNum(stop)}</span></div>
+      <div class="detail-cell"><span class="k">TP1</span><span class="v mono" style="color: var(--green);">${fmtNum(tp1)}</span></div>
+      <div class="detail-cell"><span class="k">TP2</span><span class="v mono" style="color: var(--green);">${fmtNum(tp2)}</span></div>
+      ${tp3 ? `<div class="detail-cell"><span class="k">TP3 (Runner)</span><span class="v mono" style="color: var(--green);">${fmtNum(tp3)}</span></div>` : ''}
+    </div>
+
+    ${hasContract ? `
+    <div class="ticket ${isCall ? "" : "short"}">
+      <div class="ticket-head"><span>📋 Option Contract (resolved)</span></div>
+      <div class="ticket-line mono">BUY ${m.ticker} ${m.expiry || ''} ${m.atmStrike}${isCall ? 'C' : 'P'} @ ~$${fmtNum(m.optionMid)} LMT</div>
+      <div class="ticket-meta mono">
+        <span><span class="mk">SYMBOL</span><span class="mv" style="font-size:11px;">${m.optionSymbol}</span></span>
+        <span><span class="mk">BID/ASK</span><span class="mv">${fmtNum(m.optionBid)}/${fmtNum(m.optionAsk)}</span></span>
+        <span><span class="mk">ENTRY</span><span class="mv aqua">$${fmtNum(m.optionEntry)}</span></span>
+        <span><span class="mk">STOP</span><span class="mv" style="color: var(--red);">$${fmtNum(m.optionStop)}</span></span>
+        <span><span class="mk">TP1</span><span class="mv" style="color: var(--green);">$${fmtNum(m.optionTp1)}</span></span>
+        <span><span class="mk">TP2</span><span class="mv" style="color: var(--green);">$${fmtNum(m.optionTp2)}</span></span>
+        ${m.optionTp3 ? `<span><span class="mk">TP3</span><span class="mv" style="color: var(--green);">$${fmtNum(m.optionTp3)}</span></span>` : ''}
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+      </div>
+    </div>
+    ` : `
+    <div class="ticket ${isCall ? "" : "short"}">
+      <div class="ticket-head"><span>📋 Stock Order</span></div>
+      <div class="ticket-line mono">${isCall ? "BUY" : "SHORT"} ${m.ticker} @ ${fmtNum(trigger)} LMT</div>
+      <div class="ticket-meta mono">
+        <span><span class="mk">RISK / SHARE</span><span class="mv">$${fmtNum(Math.abs(trigger - stop))}</span></span>
+        <span><span class="mk">RR 1R</span><span class="mv">1.0</span></span>
+        <span><span class="mk">RR 2R</span><span class="mv">2.0</span></span>
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+      </div>
+    </div>
+    `}
+  `;
+  document.getElementById("overlay").classList.add("active");
+}
+
+function copyMoverTicket(idx) {
+  const m = movers.movers[idx];
+  const isUp = m.pctChange > 0;
+  const txt = m.optionSymbol
+    ? `BUY ${m.ticker} ${m.expiry} ${m.atmStrike}${isUp?'C':'P'} @ ~$${m.optionMid.toFixed(2)} LMT | stop $${m.optionStop.toFixed(2)} | tp $${m.optionTp1.toFixed(2)} | sym ${m.optionSymbol}`
+    : `${isUp?'BUY':'SHORT'} ${m.ticker} @ ${m.triggerPrice?.toFixed(2) || (isUp?m.high:m.low).toFixed(2)} | stop ${(m.structuralStop || (isUp?m.low:m.high)).toFixed(2)} | tp ${m.stockTp1?.toFixed(2) || ''}`;
+  navigator.clipboard.writeText(txt).then(() => {
+    const btn = event.target;
+    const old = btn.textContent;
+    btn.textContent = "Copied ✓";
+    setTimeout(() => btn.textContent = old, 1200);
+  });
+}
+
+async function fireMoverOrder(idx, btn) {
+  const m = movers.movers[idx];
+  const isUp = m.pctChange > 0;
+  const live = account === "LIVE";
+  const hasContract = !!m.optionSymbol;
+
+  const banner = live
+    ? `🚨 LIVE ORDER — REAL MONEY 🚨\n\n`
+    : `🧪 SIM ORDER (paper)\n`;
+  const ticketLine = hasContract
+    ? `BUY ${m.ticker} ${m.expiry} ${m.atmStrike}${isUp?'C':'P'} @ ~$${m.optionMid.toFixed(2)}`
+    : `${isUp?'BUY':'SHORT'} ${m.ticker} @ ${(m.triggerPrice || m.last).toFixed(2)}`;
+
+  if (!confirm(`${banner}\n${ticketLine}\nQty: 2 ct\n${live ? "Confirm LIVE order?" : "Place SIM test order?"}`)) return;
+
+  const secret = getStratumSecret();
+  if (!secret) { btn.textContent = "❌ Secret required"; return; }
+
+  const orig = btn.textContent;
+  btn.textContent = "Placing...";
+  btn.disabled = true;
+
+  const payload = hasContract ? {
+    ticker:     m.ticker,
+    symbol:     m.optionSymbol,
+    direction:  isUp ? "BULLISH" : "BEARISH",
+    entry:      m.optionEntry,
+    stop:       m.optionStop,
+    tp1:        m.optionTp1,
+    tp2:        m.optionTp2,
+    qty:        2,
+    live:       live,
+    orderType:  "OPTION",
+  } : {
+    ticker:     m.ticker,
+    direction:  isUp ? "BULLISH" : "BEARISH",
+    entry:      m.triggerPrice || (isUp ? m.high : m.low),
+    stop:       m.structuralStop || (isUp ? m.low : m.high),
+    tp1:        m.stockTp1 || ((isUp ? m.high : m.low) + (isUp ? 1 : -1) * Math.abs(m.high - m.low)),
+    tp2:        m.stockTp2 || null,
+    qty:        2,
+    live:       live,
+    orderType:  "STOCK",
+  };
+
+  try {
+    const resp = await fetch("/api/scanner-fire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-stratum-secret": secret },
+      body: JSON.stringify(payload),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      btn.textContent = `✓ ${live ? "LIVE" : "SIM"} placed`;
+      btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+      btn.style.color = "#07090f";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
+    } else {
+      btn.textContent = "❌ " + (data.error || "fail").slice(0, 60);
+      btn.style.background = "var(--red-soft)";
+      btn.style.color = "var(--red)";
+      if (resp.status === 401) localStorage.removeItem("stratumSecret");
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message.slice(0, 40);
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
+  }
+}
+
 function copyDetailTicket(idx) {
   const c = scan.candidates[idx];
   const isCall = c.direction === "CALL";
@@ -1532,8 +1706,158 @@ function renderGridLvl() {
       </div>
     `;
   }).join("");
+  // Attach click handlers (Apr 29 - was missing, AB caught it)
+  document.querySelectorAll('.card[data-lvl-idx]').forEach(el => {
+    el.addEventListener("click", () => openLvlDetail(parseInt(el.dataset.lvlIdx)));
+  });
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">LVL render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// LVL detail — shows D + 1H signal state side by side, lets you pick which TF to fire
+// =============================================================================
+function openLvlDetail(idx) {
+  const r = (lvlData && lvlData.results) ? lvlData.results[idx] : null;
+  if (!r) return;
+  const dailyState = r.tfs.Daily || {};
+  const oneHState = r.tfs['1H'] || {};
+  const aligned = r._aligned;
+  const isLong = r._dominantDirection === 'LONG';
+
+  function renderTfBlock(tf, state) {
+    if (!state || !state.ok) return `
+      <div class="detail-cell" style="grid-column: 1 / -1; padding: 16px;">
+        <span class="k">${tf}</span>
+        <span class="v" style="color: var(--txt-3);">No data: ${state?.reason || '—'}</span>
+      </div>`;
+    const sig = SIGNAL_PILLS[state.signal] || SIGNAL_PILLS.NONE;
+    const plan = state.plan || {};
+    const lvls = state.levels || {};
+    return `
+      <div class="lvl-tfpill ${sig.cls}" style="grid-column: 1 / -1; padding: 12px 16px;">
+        <span class="lvl-tfpill-tf">${tf}</span>
+        <span class="lvl-tfpill-icon">${sig.icon}</span>
+        <span class="lvl-tfpill-txt">${sig.txt}</span>
+        ${plan.entry ? `<span class="lvl-tfpill-px mono">@ ${fmtNum(plan.entry)}</span>` : ''}
+      </div>
+      <div class="detail-cell"><span class="k">${tf} priorH</span><span class="v mono">${fmtNum(lvls.priorH)}</span></div>
+      <div class="detail-cell"><span class="k">${tf} priorL</span><span class="v mono">${fmtNum(lvls.priorL)}</span></div>
+      <div class="detail-cell"><span class="k">${tf} 50% TP</span><span class="v mono" style="color: var(--green);">${fmtNum(lvls.lvl50)}</span></div>
+      <div class="detail-cell"><span class="k">${tf} Entry</span><span class="v mono aqua">${plan.entry ? fmtNum(plan.entry) : '—'}</span></div>
+      <div class="detail-cell"><span class="k">${tf} Stop</span><span class="v mono" style="color: var(--red);">${plan.stop ? fmtNum(plan.stop) : '—'}</span></div>
+      <div class="detail-cell"><span class="k">${tf} TP2</span><span class="v mono" style="color: var(--green);">${plan.tp2 ? fmtNum(plan.tp2) : '—'}</span></div>
+    `;
+  }
+
+  // Decide which TF to use for the firing button - prefer 1H if armed, else Daily
+  const oneHArmed = ['LVL_LONG_25','EARLY_LONG','LVL_SHORT_75','EARLY_SHORT','HIGH_BREAK','LOW_BREAK'].includes(oneHState.signal);
+  const dailyArmed = ['LVL_LONG_25','EARLY_LONG','LVL_SHORT_75','EARLY_SHORT','HIGH_BREAK','LOW_BREAK'].includes(dailyState.signal);
+  const fireTf = oneHArmed ? '1H' : (dailyArmed ? 'Daily' : null);
+  const fireState = fireTf === '1H' ? oneHState : dailyState;
+  const firePlan = fireState?.plan || {};
+
+  document.getElementById("detail").innerHTML = `
+    <div class="detail-head">
+      <div>
+        <div style="display:flex; align-items:center; gap:12px; margin-bottom:8px;">
+          <span class="ticker mono">${r.symbol}</span>
+          ${r._dominantDirection !== 'NONE' ? `<span class="dir-pill ${isLong ? 'call' : 'put'}">${r._dominantDirection}</span>` : ''}
+          ${aligned ? '<span class="tag preferred">★ A+ Aligned</span>' : '<span class="tag neutral">WATCH</span>'}
+        </div>
+        <div style="font-size: 13px; color: var(--txt-2);">LVL Multi-TF · spot $${fmtNum(dailyState.spot || oneHState.spot || 0)}</div>
+      </div>
+      <button class="detail-close" onclick="closeDetail()">×</button>
+    </div>
+
+    <div class="lvl-tfrow" style="margin-bottom: 4px;">
+      <div style="font-size:11px; color: var(--txt-3); font-weight:700; letter-spacing: 0.12em; text-transform: uppercase;">Daily (Swing)</div>
+    </div>
+    <div class="detail-grid">${renderTfBlock('Daily', dailyState)}</div>
+
+    <div class="lvl-tfrow" style="margin-bottom: 4px;">
+      <div style="font-size:11px; color: var(--txt-3); font-weight:700; letter-spacing: 0.12em; text-transform: uppercase;">1H (Day Trade)</div>
+    </div>
+    <div class="detail-grid">${renderTfBlock('1H', oneHState)}</div>
+
+    ${fireTf ? `
+    <div class="ticket ${isLong ? '' : 'short'}">
+      <div class="ticket-head"><span>🎯 Fire ${fireTf} Setup</span><span class="badge">${fireState.signal}</span></div>
+      <div class="ticket-line mono">${isLong ? 'BUY' : 'SHORT'} ${r.symbol} @ ${fmtNum(firePlan.entry)} LMT</div>
+      <div class="ticket-meta mono">
+        <span><span class="mk">STOP</span><span class="mv" style="color: var(--red);">${fmtNum(firePlan.stop)}</span></span>
+        <span><span class="mk">TP1</span><span class="mv" style="color: var(--green);">${fmtNum(firePlan.tp1)}</span></span>
+        <span><span class="mk">TP2</span><span class="mv" style="color: var(--green);">${fmtNum(firePlan.tp2)}</span></span>
+        <span><span class="mk">RISK</span><span class="mv">$${fmtNum(Math.abs(firePlan.entry - firePlan.stop))}</span></span>
+        <span><span class="mk">QTY</span><span class="mv">2 ct (trim+runner)</span></span>
+      </div>
+      <div class="ticket-actions">
+        <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('${(isLong?'BUY':'SHORT') + ' ' + r.symbol + ' @ ' + firePlan.entry + ' | stop ' + firePlan.stop + ' | tp ' + firePlan.tp1 + ' | LVL ' + fireTf + ' ' + fireState.signal}'); this.textContent='Copied ✓'; setTimeout(()=>this.textContent='Copy', 1500)">Copy</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${r.symbol}', '_blank')">Open Chart</button>
+        <button class="btn btn-primary ${isLong ? '' : 'short'}" onclick="fireLvlOrder(${idx}, '${fireTf}', this)">⚡ Fire ${fireTf} ${account}</button>
+      </div>
+    </div>
+    ` : `
+    <div class="ticket disabled">
+      <div class="ticket-head"><span>⏸ No armed setup on either TF</span></div>
+      <div class="ticket-line">${r.symbol} is in WATCH state — wait for D or 1H to arm before firing</div>
+    </div>
+    `}
+  `;
+  document.getElementById("overlay").classList.add("active");
+}
+
+async function fireLvlOrder(idx, tf, btn) {
+  const r = lvlData.results[idx];
+  const state = r.tfs[tf];
+  if (!state || !state.ok || !state.plan) { btn.textContent = "❌ No plan"; return; }
+  const plan = state.plan;
+  const isLong = state.direction === 'LONG';
+  const live = account === "LIVE";
+
+  const banner = live ? `🚨 LIVE ORDER 🚨\n\n` : `🧪 SIM ORDER\n`;
+  if (!confirm(`${banner}\n${isLong?'BUY':'SHORT'} ${r.symbol} 2 ct @ ${fmtNum(plan.entry)} LMT\nStop: ${fmtNum(plan.stop)} | TP1: ${fmtNum(plan.tp1)} | TP2: ${fmtNum(plan.tp2)}\nLVL ${tf} ${state.signal}\n\n${live ? "Confirm LIVE?" : "Place SIM?"}`)) return;
+
+  const secret = getStratumSecret();
+  if (!secret) { btn.textContent = "❌ Secret required"; return; }
+
+  const orig = btn.textContent;
+  btn.textContent = "Placing...";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch("/api/scanner-fire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-stratum-secret": secret },
+      body: JSON.stringify({
+        ticker:     r.symbol,
+        direction:  isLong ? "BULLISH" : "BEARISH",
+        entry:      plan.entry,
+        stop:       plan.stop,
+        tp1:        plan.tp1,
+        tp2:        plan.tp2,
+        qty:        2,
+        live:       live,
+        orderType:  "STOCK",
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      btn.textContent = `✓ ${live ? "LIVE" : "SIM"} placed`;
+      btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+      btn.style.color = "#07090f";
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
+    } else {
+      btn.textContent = "❌ " + (data.error || "fail").slice(0, 60);
+      btn.style.background = "var(--red-soft)";
+      btn.style.color = "var(--red)";
+      if (resp.status === 401) localStorage.removeItem("stratumSecret");
+      setTimeout(() => { btn.textContent = orig; btn.disabled = false; btn.style.background = ""; btn.style.color = ""; }, 4000);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message.slice(0, 40);
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 3000);
   }
 }
 
@@ -1740,10 +2064,15 @@ function renderGridMovers() {
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}
+          ${m.optionSymbol ? '<span class="tag neutral">📋 Contract Ready</span>' : ""}
         </div>
       </div>
     `;
   }).join("");
+  // Attach click handlers (Apr 29 - was missing, AB caught it)
+  document.querySelectorAll('.card[data-mover-idx]').forEach(el => {
+    el.addEventListener("click", () => openMoverDetail(parseInt(el.dataset.moverIdx)));
+  });
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">
       Movers render error: <code style="color:var(--red)">${e.message}</code><br><br>
