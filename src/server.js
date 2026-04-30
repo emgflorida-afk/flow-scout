@@ -2907,6 +2907,8 @@ var brainEngine = null;
 try { brainEngine = require('./brainEngine'); console.log('[BRAIN] Loaded OK'); } catch(e) { console.log('[BRAIN] Skipped:', e.message); }
 var backtester = null;
 try { backtester = require('./backtester'); console.log('[BACKTEST] Loaded OK'); } catch(e) { console.log('[BACKTEST] Skipped:', e.message); }
+var bullflowArchiver = null;
+try { bullflowArchiver = require('./bullflowArchiver'); console.log('[ARCHIVER] Loaded OK -> ' + bullflowArchiver.ARCHIVE_DIR); } catch(e) { console.log('[ARCHIVER] Skipped:', e.message); }
 var flowConc = null;
 try { flowConc = require('./flowConcentration'); console.log('[FLOW-CONC] Loaded OK'); } catch(e) { console.log('[FLOW-CONC] Skipped:', e.message); }
 
@@ -3052,6 +3054,94 @@ app.get('/api/brain/peak-return', async function(req, res) {
       timestamp: req.query.timestamp,
     });
     res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// =====================================================================
+// BULLFLOW ARCHIVAL — Apr 30 2026
+// One-shot historical backfill before AB cancels API tier.
+// All endpoints write to /data/bullflow_archive/ on Railway volume.
+// Endpoints are server-side; data persists across deploys.
+// =====================================================================
+
+// POST /api/admin/bullflow-archive/start  body: { startDate, endDate, speed?, force? }
+// Kicks off a backfill in the background. Returns immediately.
+app.post('/api/admin/bullflow-archive/start', async function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    var b = req.body || {};
+    var result = await bullflowArchiver.runBackfill({
+      startDate: b.startDate,
+      endDate: b.endDate,
+      speed: b.speed || 60,
+      force: !!b.force,
+    });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/admin/bullflow-archive/status — current backfill progress
+app.get('/api/admin/bullflow-archive/status', function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    res.json(bullflowArchiver.getStatus());
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/admin/bullflow-archive/list — list all archived days
+app.get('/api/admin/bullflow-archive/list', function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    res.json({ files: bullflowArchiver.listArchive() });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/admin/bullflow-archive/download/:date — download one day's JSON
+app.get('/api/admin/bullflow-archive/download/:date', function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    var content = bullflowArchiver.readArchiveFile(req.params.date);
+    if (!content) return res.status(404).json({ error: 'date not archived' });
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + req.params.date + '.json"');
+    res.send(content);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/admin/bullflow-archive/test-one  body: { date, speed?, force? }
+// Runs a single-day archive synchronously and returns the result. Use this to
+// sanity-check the pipeline before kicking off a 60-day backfill.
+app.post('/api/admin/bullflow-archive/test-one', async function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    var b = req.body || {};
+    if (!b.date) return res.status(400).json({ error: 'date required' });
+    var result = await bullflowArchiver.archiveOneDay(b.date, b.speed || 60, !!b.force);
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// POST /api/admin/bullflow-archive/enrich  body: { startDate, endDate, topN }
+// Second pass: for each archived day, take top N alerts by premium and call
+// peakReturn. Throttled to 50/min to stay under the 60/min rate limit.
+app.post('/api/admin/bullflow-archive/enrich', async function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    var b = req.body || {};
+    var result = await bullflowArchiver.runEnrichSweep({
+      startDate: b.startDate,
+      endDate: b.endDate,
+      topN: b.topN || 10,
+    });
+    res.json(result);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// GET /api/admin/bullflow-archive/enrich-status
+app.get('/api/admin/bullflow-archive/enrich-status', function(req, res) {
+  try {
+    if (!bullflowArchiver) return res.status(503).json({ error: 'archiver not loaded' });
+    res.json(bullflowArchiver.getEnrichStatus());
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
