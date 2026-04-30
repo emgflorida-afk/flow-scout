@@ -3058,6 +3058,63 @@ app.get('/api/brain/peak-return', async function(req, res) {
 });
 
 // =====================================================================
+// SETUP RADAR — Apr 30 2026
+// Living EOD watchlist (READY / FORMING / DEAD / EARNINGS_WATCH).
+// Persisted to /data/setup_radar.json on Railway volume.
+// Read by scanner-v2 TOMORROW tab. Written by morningSetupScanner.js
+// (next-session build) or manually via POST.
+// =====================================================================
+var SETUP_RADAR_FILE = (function() {
+  var dataRoot = process.env.DATA_DIR || (require('fs').existsSync('/data') ? '/data' : require('path').join(__dirname, '..', 'data'));
+  return require('path').join(dataRoot, 'setup_radar.json');
+})();
+
+// Seed default — overwritten by scanner output but always valid for the UI.
+function defaultSetupRadar() {
+  return {
+    updatedAt: new Date().toISOString(),
+    note: 'No scan run yet. Update via POST /api/setup-radar or run morningSetupScanner.',
+    ready: [],
+    forming: [],
+    dead: [],
+    earningsWatch: [],
+  };
+}
+
+app.get('/api/setup-radar', function(req, res) {
+  try {
+    var fs = require('fs');
+    if (!fs.existsSync(SETUP_RADAR_FILE)) return res.json(defaultSetupRadar());
+    var raw = fs.readFileSync(SETUP_RADAR_FILE, 'utf8');
+    var data = JSON.parse(raw);
+    res.json(data);
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/setup-radar', function(req, res) {
+  try {
+    var fs = require('fs');
+    var b = req.body;
+    if (!b || typeof b !== 'object') return res.status(400).json({ error: 'body required' });
+    // Coerce shape
+    var record = {
+      updatedAt: new Date().toISOString(),
+      note: b.note || null,
+      ready: Array.isArray(b.ready) ? b.ready : [],
+      forming: Array.isArray(b.forming) ? b.forming : [],
+      dead: Array.isArray(b.dead) ? b.dead : [],
+      earningsWatch: Array.isArray(b.earningsWatch) ? b.earningsWatch : [],
+    };
+    fs.writeFileSync(SETUP_RADAR_FILE, JSON.stringify(record, null, 2));
+    res.json({ ok: true, file: SETUP_RADAR_FILE, counts: { ready: record.ready.length, forming: record.forming.length, dead: record.dead.length, earnings: record.earningsWatch.length } });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// =====================================================================
 // BULLFLOW ARCHIVAL — Apr 30 2026
 // One-shot historical backfill before AB cancels API tier.
 // All endpoints write to /data/bullflow_archive/ on Railway volume.

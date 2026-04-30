@@ -682,10 +682,10 @@ const TABS = [
   { id: "scan",     label: "📊 SCAN",        modeDefault: "SWING" },
   { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
   { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
-  { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING", disabled: true, comingSoon: true },
+  { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING" },
+  { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
-  { id: "starred",  label: "⭐ STARRED",     modeDefault: "—",     disabled: true, comingSoon: true },
 ];
 
 const FILTERS_SCAN = [
@@ -717,9 +717,30 @@ const FILTERS_LVL = [
   { id: "no_stop",   label: "Not stopped",        test: r => r._anyStopped === false },
 ];
 
+// TOMORROW tab: filters across the 4 setup states
+const FILTERS_TOMORROW = [
+  { id: "all",      label: "All",          test: r => true },
+  { id: "ready",    label: "🔥 READY",     test: r => r._state === "ready" },
+  { id: "forming",  label: "🟡 FORMING",   test: r => r._state === "forming" },
+  { id: "earnings", label: "📅 Earnings",  test: r => r._state === "earnings" },
+  { id: "long",     label: "Long bias",    test: r => (r.direction || "").toUpperCase() === "LONG" || (r.type === "A" && (r.target || 0) > (r.spot || 0)) },
+  { id: "short",    label: "Short bias",   test: r => (r.direction || "").toUpperCase() === "SHORT" || (r.target || 0) < (r.spot || 0) },
+  { id: "typeA",    label: "Type A",       test: r => r.type === "A" },
+];
+
+// STARRED tab: filters by ticker bucket (resolved from cached scan/movers/lvl/tomorrow)
+const FILTERS_STARRED = [
+  { id: "all",     label: "All",      test: r => true },
+  { id: "scan",    label: "From SCAN",     test: r => r._source === "scan" },
+  { id: "movers",  label: "From MOVERS",   test: r => r._source === "movers" },
+  { id: "lvl",     label: "From LVL",      test: r => r._source === "lvl" },
+  { id: "tomorrow", label: "From TOMORROW", test: r => r._source === "tomorrow" },
+];
+
 // Variable filter list driven by tab
 let FILTERS = FILTERS_SCAN;
-let lvlData = null;  // /api/lvl-scan response cache
+let lvlData = null;       // /api/lvl-scan response cache
+let radarData = null;     // /api/setup-radar response cache
 
 function fmtPct(v) {
   if (v == null) return "-";
@@ -1621,12 +1642,307 @@ async function loadActiveTab() {
   if (document.getElementById("overlay")?.classList?.contains("active")) {
     return;
   }
-  if (activeTab === "scan")    return loadScanData();
-  if (activeTab === "movers")  return loadMoversData();
-  if (activeTab === "lvl")     return loadLvlData();
+  if (activeTab === "scan")     return loadScanData();
+  if (activeTab === "movers")   return loadMoversData();
+  if (activeTab === "lvl")      return loadLvlData();
+  if (activeTab === "tomorrow") return loadTomorrowData();
+  if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
   document.getElementById("filters").innerHTML = "";
+}
+
+// =============================================================================
+// 🌅 TOMORROW tab — reads /api/setup-radar (Living EOD watchlist)
+// =============================================================================
+async function loadTomorrowData() {
+  FILTERS = FILTERS_TOMORROW;
+  try {
+    if (!radarData) document.getElementById("grid").innerHTML = `<div class="empty">Loading tomorrow's setup radar...</div>`;
+    const r = await fetch("/api/setup-radar", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    // Combine all states into a flat list with state markers
+    const flat = [];
+    (data.ready || []).forEach(x => flat.push(Object.assign({ _state: "ready" }, x)));
+    (data.forming || []).forEach(x => flat.push(Object.assign({ _state: "forming" }, x)));
+    (data.earningsWatch || []).forEach(x => flat.push(Object.assign({ _state: "earnings" }, x)));
+    radarData = { ...data, _flat: flat };
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load setup radar: <code>${e.message}</code><br>Run an EOD scan or POST /api/setup-radar to populate.</div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  document.getElementById("scan-date").textContent =
+    "Setup Radar · " + new Date(radarData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent =
+    `${radarData.ready.length} ready · ${radarData.forming.length} forming · ${radarData.earningsWatch.length} earnings · ${radarData.dead.length} dead`;
+  renderStatsTomorrow();
+  renderFilters();
+  renderTabs();
+  renderGridTomorrow();
+}
+
+function renderStatsTomorrow() {
+  const stats = [
+    { k: "READY",     v: radarData.ready.length,         cls: "green" },
+    { k: "FORMING",   v: radarData.forming.length,       cls: "aqua" },
+    { k: "EARNINGS",  v: radarData.earningsWatch.length, cls: "" },
+    { k: "DEAD",      v: radarData.dead.length,          cls: "red" },
+    { k: "Last Scan", v: new Date(radarData.updatedAt || Date.now()).toLocaleString("en-US", { hour: "numeric", minute: "2-digit" }), cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+const RADAR_STATE_PILLS = {
+  ready:    { txt: '🔥 READY',    cls: 'lvl-green' },
+  forming:  { txt: '🟡 FORMING',  cls: 'lvl-aqua' },
+  earnings: { txt: '📅 EARNINGS', cls: 'lvl-gray' },
+};
+
+const RADAR_TYPE_LABELS = {
+  A: 'Post-beat continuation',
+  B: 'Post-miss continuation',
+  C: 'Reversal bounce',
+  D: 'LVL retracement',
+  E: 'Strat 3-1-2 coil',
+};
+
+function renderGridTomorrow() {
+  try {
+    const all = radarData._flat || [];
+    const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+    const filtered = all.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No setups match "${filter.label}".${all.length === 0 ? '<br><span style="font-size:11px;">Run EOD scanner to populate the radar.</span>' : ''}</div>`;
+      return;
+    }
+    // Sort: READY first, then FORMING, then EARNINGS
+    const order = { ready: 0, forming: 1, earnings: 2 };
+    filtered.sort((a, b) => (order[a._state] ?? 99) - (order[b._state] ?? 99));
+
+    document.getElementById("grid").innerHTML = filtered.map(r => {
+      const pill = RADAR_STATE_PILLS[r._state] || RADAR_STATE_PILLS.forming;
+      const isLong = (r.target || 0) >= (r.spot || 0);
+      const dirClass = isLong ? "long" : "short";
+      const dirPill = isLong ? "call" : "put";
+      const dirText = isLong ? "LONG" : "SHORT";
+      const starred = isStarred(r.ticker);
+
+      // EARNINGS state cards have a different shape (date-only)
+      if (r._state === "earnings") {
+        return `
+          <div class="card" data-radar-ticker="${r.ticker}">
+            <div class="card-head">
+              <div>
+                <div class="ticker mono">${r.ticker}</div>
+                <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${r.date || ''}</div>
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+                <span class="dir-pill" style="background: rgba(120,120,120,0.2); border:1px solid var(--border);">EARNINGS</span>
+                <button class="star-btn" data-ticker="${r.ticker}" onclick="event.stopPropagation();toggleStar('${r.ticker}','tomorrow')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;">${starred?'★':'☆'}</button>
+              </div>
+            </div>
+            <div class="tags"><span class="tag block">No trade through print</span></div>
+            ${r.action ? `<div style="font-size:12px; color: var(--txt-2); margin-top:8px;">${r.action}</div>` : ''}
+          </div>
+        `;
+      }
+
+      // READY/FORMING shape — full trade card
+      return `
+        <div class="card ${dirClass}" data-radar-ticker="${r.ticker}">
+          <div class="card-head">
+            <div>
+              <div class="ticker mono">${r.ticker}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">$${fmtNum(r.spot || 0)}${r.type ? ` · Type ${r.type}` : ''}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="dir-pill ${dirPill}">${dirText}</span>
+              <span class="lvl-tfpill ${pill.cls}" style="padding: 4px 10px; font-size:11px;">${pill.txt}</span>
+              <button class="star-btn" data-ticker="${r.ticker}" onclick="event.stopPropagation();toggleStar('${r.ticker}','tomorrow')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;">${starred?'★':'☆'}</button>
+            </div>
+          </div>
+
+          <div class="metrics">
+            ${r.trigger ? `<div class="metric"><span class="metric-key">Trigger</span><span class="metric-val mono aqua">${typeof r.trigger === 'number' ? '$'+fmtNum(r.trigger) : r.trigger}</span></div>` : ''}
+            ${r.stop != null ? `<div class="metric"><span class="metric-key">Stop</span><span class="metric-val mono red">$${fmtNum(r.stop)}</span></div>` : ''}
+            ${r.target != null ? `<div class="metric"><span class="metric-key">Target</span><span class="metric-val mono green">$${fmtNum(r.target)}</span></div>` : ''}
+            ${r.contract ? `<div class="metric"><span class="metric-key">Contract</span><span class="metric-val mono" style="font-size:11px;">${r.contract}</span></div>` : ''}
+            ${r.optionEntry != null ? `<div class="metric"><span class="metric-key">Opt Entry</span><span class="metric-val mono">$${fmtNum(r.optionEntry)}</span></div>` : ''}
+            ${r.dollarRiskPerCt != null ? `<div class="metric"><span class="metric-key">$Risk/ct</span><span class="metric-val mono red">$${fmtNum(r.dollarRiskPerCt, 0)}</span></div>` : ''}
+            ${r.rrRatio != null ? `<div class="metric"><span class="metric-key">R:R</span><span class="metric-val mono green">${fmtNum(r.rrRatio, 1)}:1</span></div>` : ''}
+          </div>
+
+          ${r.why ? `<div style="font-size:12px; color: var(--txt-2); margin-top:8px; line-height:1.5;">${r.why}</div>` : ''}
+
+          <div class="tags">
+            ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
+            ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Tomorrow render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// ⭐ STARRED tab — local-only watchlist (localStorage). Pulls latest data per ticker
+// =============================================================================
+const STAR_STORE_KEY = "scanner_starred_v1";
+
+function getStars() {
+  try { return JSON.parse(localStorage.getItem(STAR_STORE_KEY) || "{}"); }
+  catch (e) { return {}; }
+}
+function setStars(obj) { localStorage.setItem(STAR_STORE_KEY, JSON.stringify(obj)); }
+function isStarred(ticker) { const s = getStars(); return !!s[ticker]; }
+function toggleStar(ticker, source) {
+  const s = getStars();
+  if (s[ticker]) { delete s[ticker]; }
+  else { s[ticker] = { ticker, source: source || "manual", starredAt: new Date().toISOString() }; }
+  setStars(s);
+  // Re-render current tab to update star button visuals
+  if (typeof loadActiveTab === "function") loadActiveTab();
+}
+window.toggleStar = toggleStar;
+window.isStarred = isStarred;
+
+async function loadStarredData() {
+  FILTERS = FILTERS_STARRED;
+  const stars = getStars();
+  const tickers = Object.keys(stars);
+
+  document.getElementById("scan-date").textContent = "Starred Watchlist";
+  document.getElementById("meta").textContent = `${tickers.length} starred ticker${tickers.length === 1 ? '' : 's'}`;
+
+  if (!tickers.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No starred tickers yet.<br><span style="font-size:11px;">Click ☆ on any card in SCAN / MOVERS / LVL / TOMORROW to star it. Starred tickers persist locally on this device.</span></div>`;
+    document.getElementById("stats").innerHTML = `<div class="stat"><span class="stat-key">Stars</span><span class="stat-val mono">0</span></div>`;
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+
+  // Pull in parallel: setup-radar (for tomorrow data), latest scan, latest movers
+  // Use existing endpoints to enrich starred tickers with whatever we know about them.
+  let scanArr = [], moversArr = [], radarFlat = [];
+  try {
+    const [scanR, moversR, radarR] = await Promise.all([
+      fetch("/api/scan-result", { cache: "no-store" }).catch(() => null),
+      fetch("/api/movers", { cache: "no-store" }).catch(() => null),
+      fetch("/api/setup-radar", { cache: "no-store" }).catch(() => null),
+    ]);
+    if (scanR && scanR.ok) {
+      const j = await scanR.json();
+      scanArr = (j.candidates || j.results || j || []).map(x => Object.assign({ _source: "scan" }, x));
+    }
+    if (moversR && moversR.ok) {
+      const j = await moversR.json();
+      moversArr = (j.movers || j.results || j || []).map(x => Object.assign({ _source: "movers" }, x));
+    }
+    if (radarR && radarR.ok) {
+      const r = await radarR.json();
+      [...(r.ready || []), ...(r.forming || [])].forEach(x => radarFlat.push(Object.assign({ _source: "tomorrow", _state: r.ready.includes(x) ? "ready" : "forming" }, x)));
+    }
+  } catch (e) { /* swallow — partial data is fine */ }
+
+  // For each starred ticker, find the best record across sources (priority: tomorrow > scan > movers)
+  const cards = tickers.map(t => {
+    const tom = radarFlat.find(x => (x.ticker || x.symbol) === t);
+    if (tom) return tom;
+    const sc = scanArr.find(x => (x.ticker || x.symbol) === t);
+    if (sc) return sc;
+    const mv = moversArr.find(x => (x.ticker || x.symbol) === t);
+    if (mv) return mv;
+    // Fallback: stub card
+    return { ticker: t, _source: "manual", _stub: true, starredAt: stars[t].starredAt };
+  });
+
+  starredCache = cards;
+
+  renderStatsStarred();
+  renderFilters();
+  renderTabs();
+  renderGridStarred();
+}
+
+let starredCache = [];
+
+function renderStatsStarred() {
+  const counts = { scan: 0, movers: 0, lvl: 0, tomorrow: 0, manual: 0 };
+  starredCache.forEach(c => { counts[c._source] = (counts[c._source] || 0) + 1; });
+  const stats = [
+    { k: "Total",    v: starredCache.length, cls: "" },
+    { k: "Tomorrow", v: counts.tomorrow,     cls: "green" },
+    { k: "Scan",     v: counts.scan,         cls: "aqua" },
+    { k: "Movers",   v: counts.movers,       cls: "" },
+    { k: "Manual",   v: counts.manual,       cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridStarred() {
+  try {
+    const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+    const filtered = starredCache.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No starred items match "${filter.label}".</div>`;
+      return;
+    }
+    document.getElementById("grid").innerHTML = filtered.map(r => {
+      const t = r.ticker || r.symbol;
+      const sourceTag = r._source === "tomorrow" ? "🌅 TOMORROW"
+                     : r._source === "scan" ? "📊 SCAN"
+                     : r._source === "movers" ? "⚡ MOVERS"
+                     : "⭐";
+      const dir = (r.direction || "").toUpperCase() ||
+                  ((r.target || 0) >= (r.spot || 0) ? "LONG" : "");
+      const dirClass = dir === "LONG" ? "long" : (dir === "SHORT" || dir === "PUT" ? "short" : "");
+
+      if (r._stub) {
+        return `
+          <div class="card" data-starred-ticker="${t}">
+            <div class="card-head">
+              <div>
+                <div class="ticker mono">${t}</div>
+                <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">No active scan data</div>
+              </div>
+              <button class="star-btn" onclick="event.stopPropagation();toggleStar('${t}','manual')" style="background:transparent;border:none;cursor:pointer;color:gold;font-size:18px;">★</button>
+            </div>
+            <div style="font-size:11px; color: var(--txt-3); margin-top:6px;">Starred ${new Date(r.starredAt).toLocaleString()}</div>
+          </div>
+        `;
+      }
+
+      // Use spot/score/trigger fields if available
+      const spot = r.spot ?? r.price ?? r.last ?? null;
+      return `
+        <div class="card ${dirClass}" data-starred-ticker="${t}">
+          <div class="card-head">
+            <div>
+              <div class="ticker mono">${t}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${spot != null ? '$'+fmtNum(spot) : ''}${r.type ? ` · Type ${r.type}` : ''}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag preferred" style="font-size:10px;">${sourceTag}</span>
+              <button class="star-btn" onclick="event.stopPropagation();toggleStar('${t}','${r._source}')" style="background:transparent;border:none;cursor:pointer;color:gold;font-size:18px;">★</button>
+            </div>
+          </div>
+          ${r.score != null ? `<div class="metrics"><div class="metric"><span class="metric-key">Score</span><span class="metric-val mono aqua">${fmtNum(r.score, 1)}</span></div>${r.rrRatio != null ? `<div class="metric"><span class="metric-key">R:R</span><span class="metric-val mono green">${fmtNum(r.rrRatio,1)}:1</span></div>` : ''}${r.dollarRiskPerCt != null ? `<div class="metric"><span class="metric-key">$Risk/ct</span><span class="metric-val mono red">$${fmtNum(r.dollarRiskPerCt,0)}</span></div>` : ''}${r.contract ? `<div class="metric"><span class="metric-key">Contract</span><span class="metric-val mono" style="font-size:11px;">${r.contract}</span></div>` : ''}</div>` : ''}
+          ${r.why ? `<div style="font-size:12px; color: var(--txt-2); margin-top:8px;">${r.why}</div>` : ''}
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Starred render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
 }
 
 async function loadLvlData() {
