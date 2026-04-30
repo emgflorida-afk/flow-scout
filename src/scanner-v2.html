@@ -691,6 +691,14 @@ const TABS = [
 const FILTERS_SCAN = [
   { id: "all",     label: "All",            test: c => true },
   { id: "top",     label: "Top 5",          test: (c, i) => i < 5 },
+  { id: "fresh",   label: "🟢 Fresh / Armed", test: c => {
+      const cf = computeFreshness(c, getEntryTiming(c));
+      return cf.state === "fresh" || cf.state === "armed";
+  }},
+  { id: "no_stale", label: "Hide Stale/TP-hit", test: c => {
+      const cf = computeFreshness(c, getEntryTiming(c));
+      return !["stale","exhausted","past_tp","expansion"].includes(cf.state);
+  }},
   { id: "call",    label: "Calls",          test: c => c.direction === "CALL" },
   { id: "put",     label: "Puts",           test: c => c.direction === "PUT" },
   { id: "clear",   label: "Earnings clear", test: c => !EARNINGS_BLOCK.has(c.ticker) },
@@ -909,6 +917,37 @@ function renderFilters() {
   });
 }
 
+// Apr 30 2026 — freshness classifier addresses AB's WFC/UNH/MS pain:
+// scanner was showing setups where trigger already fired & TP was hit.
+// Returns { state, distPct, label, color, advice }
+function computeFreshness(c, t) {
+  if (!c || !t || !t.trigger || !t.stop) return { state: "unknown", label: "—", color: "" };
+  const spot = c.spot || 0;
+  const trigger = t.trigger;
+  const tp1 = t.tp1;
+  const isCall = c.direction === "CALL";
+  // Distance from spot to trigger as % of trigger price
+  // isCall: positive = past trigger up; isPut: positive = past trigger down
+  const distPct = isCall
+    ? ((spot - trigger) / trigger) * 100
+    : ((trigger - spot) / trigger) * 100;
+  // Has TP already hit?
+  const tpHit = tp1 != null && (isCall ? spot >= tp1 : spot <= tp1);
+  // Daily Strat 3 = today's range fully outside prior bar's range = expansion / day-1 caution
+  const todayRange = (c.todayHigh - c.todayLow) || 0;
+  const priorRange = (c.priorHigh - c.priorLow) || 0;
+  const isStrat3Today = todayRange > priorRange * 1.2 &&
+                       (c.todayHigh > c.priorHigh && c.todayLow < c.priorLow);
+
+  if (tpHit)        return { state: "past_tp", label: "✅ TP HIT", color: "lvl-aqua", advice: "Move done — find next setup" };
+  if (isStrat3Today) return { state: "expansion", label: "⛔ EXPANSION DAY", color: "lvl-gray", advice: "Strat 3 range expansion — pause, expect retrace tomorrow" };
+  if (distPct < -1)  return { state: "fresh",    label: "🟢 FRESH", color: "lvl-green", advice: `${(-distPct).toFixed(2)}% from trigger` };
+  if (distPct < 1)   return { state: "armed",    label: "🟡 ARMED", color: "lvl-aqua", advice: "Trigger zone live, enter on confirmation" };
+  if (distPct < 3)   return { state: "chasable", label: "🟡 CHASABLE", color: "lvl-aqua", advice: `Already ${distPct.toFixed(2)}% past trigger — wait for pullback` };
+  if (distPct < 6)   return { state: "stale",    label: "🔴 STALE", color: "lvl-red", advice: `${distPct.toFixed(2)}% past trigger — needs pullback for clean entry` };
+  return { state: "exhausted", label: "⛔ EXHAUSTED", color: "lvl-gray", advice: `${distPct.toFixed(2)}% past trigger — too late, find next` };
+}
+
 function renderGrid() {
   const cands = scan.candidates || [];
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
@@ -925,6 +964,7 @@ function renderGrid() {
     const t = getEntryTiming(c);
     const cd = getCandleCountdown("Daily");
     const icon = t.color === "green" ? "🟢" : t.color === "amber" ? "🟡" : t.color === "red" ? "🔴" : "⚪";
+    const fresh = computeFreshness(c, t);
 
     // Proximity bar layout: map stop -> trigger -> tp1 to a 0-100% scale
     // stop at left, trigger in middle (50%), tp1 at right (100%)
@@ -953,6 +993,7 @@ function renderGrid() {
           </div>
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             <span class="dir-pill ${isCall ? "call" : "put"}">${c.direction}</span>
+            <span class="lvl-tfpill ${fresh.color}" style="padding: 4px 10px; font-size:11px;" title="${fresh.advice}">${fresh.label}</span>
             <div class="score-badge"><span class="score-num ${scoreClass(c.score)} mono">${c.score}</span><span class="score-lbl">Score</span></div>
           </div>
         </div>
