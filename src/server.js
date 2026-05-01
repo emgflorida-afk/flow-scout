@@ -207,6 +207,16 @@ var sniperFeed = null;
 try { sniperFeed = require('./sniperFeed'); console.log('[SERVER] sniperFeed loaded OK'); }
 catch(e) { console.log('[SERVER] sniperFeed not loaded:', e.message); }
 
+// SWING/LEAP FEED — #cvo-trades-swings-leaps channel. Charts-only setups requiring
+// vision-LLM analysis. Module pair: swingLeapFeed (parser) + swingLeapAnalyzer (Claude vision).
+var swingLeapFeed = null;
+try { swingLeapFeed = require('./swingLeapFeed'); console.log('[SERVER] swingLeapFeed loaded OK'); }
+catch(e) { console.log('[SERVER] swingLeapFeed not loaded:', e.message); }
+
+var swingLeapAnalyzer = null;
+try { swingLeapAnalyzer = require('./swingLeapAnalyzer'); console.log('[SERVER] swingLeapAnalyzer loaded OK'); }
+catch(e) { console.log('[SERVER] swingLeapAnalyzer not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -473,6 +483,56 @@ app.get('/api/sniper-feed', function(req, res) {
     var limit = parseInt(req.query.limit || '20');
     res.json(sniperFeed.loadFeed({ limit: limit }));
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// SWING/LEAP FEED — cvo-trades-swings-leaps channel (charts-only, vision-LLM analyzed)
+app.get('/api/swing-leap-feed', function(req, res) {
+  if (!swingLeapFeed) return res.status(500).json({ ok: false, error: 'swingLeapFeed not loaded' });
+  try {
+    var limit = parseInt(req.query.limit || '20');
+    var onlyCharts = req.query.onlyCharts === '1';
+    var feed = swingLeapFeed.loadFeed({ limit: limit, onlyCharts: onlyCharts });
+    // Attach cached analysis if available
+    if (swingLeapAnalyzer) {
+      var cache = swingLeapAnalyzer.loadCache();
+      feed.posts = feed.posts.map(function(p) {
+        if (cache[p.msgId]) p.analysis = cache[p.msgId];
+        return p;
+      });
+    }
+    res.json(feed);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Run vision analysis on a single swing/leap post (cached idempotent)
+app.get('/api/swing-leap-analyze/:msgId', async function(req, res) {
+  if (!swingLeapFeed)     return res.status(500).json({ ok: false, error: 'swingLeapFeed not loaded' });
+  if (!swingLeapAnalyzer) return res.status(500).json({ ok: false, error: 'swingLeapAnalyzer not loaded' });
+  try {
+    var force = req.query.force === '1';
+    // Find post by msgId
+    var feed = swingLeapFeed.loadFeed({ limit: 100 });
+    var post = feed.posts.find(function(p) { return p.msgId === req.params.msgId; });
+    if (!post) return res.status(404).json({ ok: false, error: 'msgId not in feed' });
+    if (!post.hasChart) return res.status(400).json({ ok: false, error: 'post has no chart' });
+    var result = await swingLeapAnalyzer.analyzeOrCached(
+      post.msgId, post.attachmentUrls, post.ticker, post.body, { force: force }
+    );
+    res.json({ ok: true, ticker: post.ticker, postedAt: post.postedAt, analysis: result });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Batch-analyze the full feed (used for nightly cron or manual warmup)
+app.post('/api/swing-leap-batch', async function(req, res) {
+  if (!swingLeapFeed)     return res.status(500).json({ ok: false, error: 'swingLeapFeed not loaded' });
+  if (!swingLeapAnalyzer) return res.status(500).json({ ok: false, error: 'swingLeapAnalyzer not loaded' });
+  try {
+    var max = parseInt((req.body && req.body.max) || req.query.max || '10');
+    var force = (req.body && req.body.force === true) || req.query.force === '1';
+    var feed = swingLeapFeed.loadFeed({ limit: max * 2, onlyCharts: true });
+    var results = await swingLeapAnalyzer.batchAnalyze(feed.posts, { max: max, force: force });
+    res.json({ ok: true, count: results.length, results: results });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)

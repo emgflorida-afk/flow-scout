@@ -31,6 +31,8 @@ var TARGET_CHANNELS_BY_ID = [
   { name: 'option-trade-ideas',     id: '1401666517292023940' },
   { name: 'vip-flow-options-alerts', id: '1417547885754712134' },
   { name: 'free-charts',              id: '1373875477420179476' },
+  // CVO (different guild) — swings + leaps with chart analysis
+  { name: 'cvo-swings-leaps',         id: '1437546513160212610' },
 ];
 
 if (!TOKEN) {

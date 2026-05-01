@@ -685,6 +685,7 @@ const TABS = [
   { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING" },
   { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "DAY" },
   { id: "sniper",   label: "📈 SNIPER",      modeDefault: "ANALYSIS" },
+  { id: "swings",   label: "🚀 SWINGS",      modeDefault: "SWING/LEAP" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -750,6 +751,23 @@ const FILTERS_SNIPER = [
       const d = new Date(r.postedAt);
       return (Date.now() - d.getTime()) < 7 * 24 * 3600 * 1000;
   }},
+];
+
+// SWINGS tab: cvo-trades-swings-leaps channel (chart-only swing/leap setups, vision-LLM analyzed)
+const FILTERS_SWINGS = [
+  { id: "all",       label: "All",            test: r => true },
+  { id: "withChart", label: "With chart",     test: r => r.hasChart === true },
+  { id: "analyzed",  label: "🤖 Analyzed",    test: r => !!r.analysis && !r.analysis.error },
+  { id: "highConv",  label: "Conviction 7+",  test: r => (r.analysis && r.analysis.conviction || 0) >= 7 },
+  { id: "today",     label: "Today",          test: r => {
+      const d = new Date(r.postedAt);
+      return d.toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+  }},
+  { id: "week",      label: "Last 7d",        test: r => {
+      const d = new Date(r.postedAt);
+      return (Date.now() - d.getTime()) < 7 * 24 * 3600 * 1000;
+  }},
+  { id: "long",      label: "Long bias",      test: r => r.analysis && r.analysis.direction === "long" },
 ];
 
 // LOTTO tab: cheap-call lottery picks (John VIP feed)
@@ -940,6 +958,7 @@ function renderFilters() {
   else if (activeTab === "tomorrow") dataSource = (radarData && radarData._flat) || [];
   else if (activeTab === "lotto")    dataSource = (lottoData && lottoData.picks) || [];
   else if (activeTab === "sniper")   dataSource = (sniperData && sniperData.posts) || [];
+  else if (activeTab === "swings")   dataSource = (swingLeapData && swingLeapData.posts) || [];
   else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
 
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
@@ -959,6 +978,7 @@ function renderFilters() {
       else if (activeTab === "tomorrow") renderGridTomorrow();
       else if (activeTab === "lotto")    renderGridLotto();
       else if (activeTab === "sniper")   renderGridSniper();
+      else if (activeTab === "swings")   renderGridSwingLeap();
       else if (activeTab === "starred")  renderGridStarred();
     });
   });
@@ -2003,8 +2023,13 @@ function renderTabs() {
       activeTab = el.dataset.tab;
       activeFilter = "all";
       localStorage.setItem("activeTab", activeTab);
-      FILTERS = activeTab === "movers" ? FILTERS_MOVERS
-              : activeTab === "lvl"    ? FILTERS_LVL
+      FILTERS = activeTab === "movers"   ? FILTERS_MOVERS
+              : activeTab === "lvl"      ? FILTERS_LVL
+              : activeTab === "tomorrow" ? FILTERS_TOMORROW
+              : activeTab === "lotto"    ? FILTERS_LOTTO
+              : activeTab === "sniper"   ? FILTERS_SNIPER
+              : activeTab === "swings"   ? FILTERS_SWINGS
+              : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
       renderTabs();
       loadActiveTab();
@@ -2046,6 +2071,7 @@ async function loadActiveTab() {
   if (activeTab === "tomorrow") return loadTomorrowData();
   if (activeTab === "lotto")    return loadLottoData();
   if (activeTab === "sniper")   return loadSniperData();
+  if (activeTab === "swings")   return loadSwingLeapData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -2300,6 +2326,148 @@ function renderGridSniper() {
     }).join("");
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Sniper render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// 🚀 SWINGS tab — cvo-trades-swings-leaps channel (charts → vision-LLM analysis)
+// =============================================================================
+let swingLeapData = null;
+
+async function loadSwingLeapData() {
+  FILTERS = FILTERS_SWINGS;
+  if (!FILTERS_SWINGS.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!swingLeapData) document.getElementById("grid").innerHTML = `<div class="empty">Loading swing/leap analysis...</div>`;
+    const r = await fetch("/api/swing-leap-feed?limit=30", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    swingLeapData = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load swing/leap feed: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const posts = swingLeapData.posts || [];
+  document.getElementById("scan-date").textContent = "Swings/Leaps · " + new Date(swingLeapData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${posts.length} posts · last ${swingLeapData.freshnessDays}d`;
+  renderStatsSwingLeap();
+  renderFilters();
+  renderTabs();
+  renderGridSwingLeap();
+}
+
+function renderStatsSwingLeap() {
+  const posts = swingLeapData.posts || [];
+  const today = posts.filter(p => new Date(p.postedAt).toISOString().slice(0,10) === new Date().toISOString().slice(0,10)).length;
+  const charts = posts.filter(p => p.hasChart).length;
+  const analyzed = posts.filter(p => p.analysis && !p.analysis.error).length;
+  const highConv = posts.filter(p => (p.analysis?.conviction || 0) >= 7).length;
+  const stats = [
+    { k: "Total",     v: posts.length, cls: "" },
+    { k: "Today",     v: today,        cls: "green" },
+    { k: "W/Chart",   v: charts,       cls: "aqua" },
+    { k: "🤖 Analyzed", v: analyzed,   cls: "" },
+    { k: "Conv 7+",   v: highConv,     cls: "green" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+// Trigger AI analysis on demand (called from card button)
+async function analyzeSwingLeap(msgId, btnEl) {
+  if (!btnEl) btnEl = document.querySelector(`[data-swing-msg="${msgId}"] .swing-analyze-btn`);
+  if (btnEl) { btnEl.disabled = true; btnEl.textContent = "🤖 Analyzing..."; }
+  try {
+    const r = await fetch(`/api/swing-leap-analyze/${encodeURIComponent(msgId)}`, { cache: "no-store" });
+    const data = await r.json();
+    if (!data.ok) throw new Error(data.error || "analysis failed");
+    // Patch into local cache and re-render
+    const post = (swingLeapData.posts || []).find(p => p.msgId === msgId);
+    if (post) post.analysis = data.analysis;
+    renderGridSwingLeap();
+  } catch (e) {
+    if (btnEl) { btnEl.disabled = false; btnEl.textContent = "🤖 Analyze chart"; }
+    alert("Analysis failed: " + e.message);
+  }
+}
+window.analyzeSwingLeap = analyzeSwingLeap;
+
+function renderGridSwingLeap() {
+  try {
+    FILTERS = FILTERS_SWINGS;
+    const posts = swingLeapData.posts || [];
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = posts.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No posts match "${filter.label}".</div>`;
+      return;
+    }
+    document.getElementById("grid").innerHTML = filtered.map(p => {
+      const starred = p.ticker ? isStarred(p.ticker) : false;
+      const postedDate = p.postedAt ? new Date(p.postedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+      const isToday = p.postedAt && new Date(p.postedAt).toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+      const chartImg = (p.attachmentUrls && p.attachmentUrls[0]) || null;
+      const a = p.analysis || null;
+
+      // Build AI verdict block
+      let verdictBlock = '';
+      if (a && !a.error) {
+        const dirColor = a.direction === 'long' ? '#16e39d' : a.direction === 'short' ? '#ff6b6b' : '#ffc107';
+        const convColor = a.conviction >= 8 ? '#16e39d' : a.conviction >= 6 ? '#ffc107' : '#ff6b6b';
+        verdictBlock = `
+          <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:#46b4ff; font-weight:700;">🤖 AI VERDICT</span>
+              <span style="font-size:10px; color:var(--txt-3);">${a.timeframe || '?'} · ${a.setup || '?'}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
+              <div><span style="color:var(--txt-3);">Dir:</span> <span style="color:${dirColor}; font-weight:700; text-transform:uppercase;">${a.direction || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Conv:</span> <span style="color:${convColor}; font-weight:700;">${a.conviction || 0}/10</span></div>
+              <div><span style="color:var(--txt-3);">Entry:</span> <span class="mono" style="color:var(--txt);">${a.entry ?? '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Stop:</span> <span class="mono" style="color:#ff6b6b;">${a.stop ?? '—'}</span></div>
+              <div><span style="color:var(--txt-3);">T1:</span> <span class="mono" style="color:#16e39d;">${a.target1 ?? '—'}</span></div>
+              <div><span style="color:var(--txt-3);">T2:</span> <span class="mono" style="color:#16e39d;">${a.target2 ?? '—'}</span></div>
+            </div>
+            ${a.summary ? `<div style="font-style:italic; color:var(--txt-2); margin-top:4px; line-height:1.4;">"${a.summary}"</div>` : ''}
+            <div style="font-size:9px; color:var(--txt-3); margin-top:4px;">${a.cached ? '(cached)' : '(fresh)'}${a.rr ? ' · RR ' + a.rr.toFixed(1) : ''}</div>
+          </div>`;
+      } else if (a && a.error) {
+        verdictBlock = `<div style="margin-top:10px; padding:8px; background:rgba(255,107,107,0.08); border-radius:6px; font-size:11px; color:#ff6b6b;">Analysis error: ${a.error}</div>`;
+      }
+
+      const dispatchDir = (a && a.direction === 'short') ? 'PUT' : 'CALL';
+
+      return `
+        <div class="card" data-swing-msg="${p.msgId}">
+          <div class="card-head">
+            <div style="flex:1;">
+              <div class="ticker mono">${p.ticker || (p.isCommentary ? '💬 NOTE' : '—')}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${postedDate}${isToday ? ' • <span style="color:var(--green); font-weight:700;">TODAY</span>' : ''}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">🚀 SWING/LEAP</span>
+              ${p.hasChart ? `<span class="tag preferred" style="font-size:10px;">📊 ${p.chartCount} CHART${p.chartCount > 1 ? 'S' : ''}</span>` : ''}
+              ${p.ticker ? `<button onclick="event.stopPropagation();toggleStar('${p.ticker}','swings')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>` : ''}
+            </div>
+          </div>
+          ${p.body ? `<div style="font-size:12px; color: var(--txt-2); margin-top:8px; line-height:1.5; max-height:80px; overflow:hidden;">${p.body}</div>` : ''}
+          ${chartImg ? `<div style="margin-top:10px;"><a href="${chartImg}" target="_blank" rel="noopener noreferrer"><img src="${chartImg}" style="width:100%; max-height:280px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.08);" loading="lazy"/></a></div>` : ''}
+          ${verdictBlock}
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            ${p.hasChart && !a ? `<button class="btn btn-secondary swing-analyze-btn" style="background:rgba(70,180,255,0.18); color:#46b4ff; padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();analyzeSwingLeap('${p.msgId}',this)">🤖 Analyze chart</button>` : ''}
+            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>` : ''}
+            ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0}},this)" title="Place on Public.com">📱 Public</button>` : ''}
+            ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0},stop:${a.stop || 0},tp1:${a.target1 || 0},tp2:${a.target2 || 0}},this)" title="Place bracket OCO">📱 Bracket</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Swings render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
 
