@@ -203,6 +203,95 @@ function round2(v) { return Math.round(v * 100) / 100; }
 // Computed at scan time so the Discord card carries the volume threshold AB
 // must see on the breakout candle to consider it confirmed (not a false break).
 // =============================================================================
+// =============================================================================
+// BREAKOUT CONFIRM — pulls intraday 5m bars, checks if a coil setup has fired
+// with John's rule (>=1.5x avg vol on breakout candle = confirmed).
+// Returns: { verdict, breakoutBar, avgVolume, threshold, lastClose, ... }
+// Verdicts: CONFIRMED_STRONG (>=1.5x) | CONFIRMED_LIGHT (>=1.2x) |
+//           UNCONFIRMED_LOW_VOL (<1.2x) | NOT_TRIGGERED | STALE_BREAKOUT |
+//           INSUFFICIENT_BARS | TS_ERROR
+// =============================================================================
+async function checkBreakoutConfirm(ticker, trigger, direction, opts) {
+  opts = opts || {};
+  trigger = parseFloat(trigger);
+  direction = String(direction || 'long').toLowerCase();
+  if (!ticker || !isFinite(trigger)) return { ok: false, error: 'bad-args' };
+  var token = opts.token;
+  if (!token && ts && ts.getAccessToken) {
+    try { token = await ts.getAccessToken(); } catch(e) {}
+  }
+  if (!token) return { ok: false, error: 'no-token' };
+
+  var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+    + '?unit=Minute&interval=5&barsback=60&sessiontemplate=Default';
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  try {
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return { ok: false, error: 'TS-bars-' + r.status, verdict: 'TS_ERROR' };
+    var data = await r.json();
+    var raw = (data && (data.Bars || data.bars)) || [];
+    if (raw.length < 25) return { ok: true, ticker: ticker, verdict: 'INSUFFICIENT_BARS', barCount: raw.length };
+
+    var bars = raw.map(function(b) {
+      return {
+        High: parseFloat(b.High), Low: parseFloat(b.Low),
+        Open: parseFloat(b.Open), Close: parseFloat(b.Close),
+        Volume: parseFloat(b.TotalVolume || b.Volume || 0),
+        TimeStamp: b.TimeStamp,
+      };
+    });
+
+    var breakoutIdx = -1;
+    for (var i = 1; i < bars.length; i++) {
+      var prevClose = bars[i - 1].Close;
+      var thisClose = bars[i].Close;
+      if (direction === 'long' && prevClose < trigger && thisClose >= trigger) { breakoutIdx = i; break; }
+      if (direction === 'short' && prevClose > trigger && thisClose <= trigger) { breakoutIdx = i; break; }
+    }
+
+    var refEnd = breakoutIdx > 0 ? breakoutIdx : bars.length;
+    var refStart = Math.max(0, refEnd - 20);
+    var sum = 0, n = 0;
+    for (var j = refStart; j < refEnd; j++) {
+      if (isFinite(bars[j].Volume) && bars[j].Volume > 0) { sum += bars[j].Volume; n++; }
+    }
+    var avgVol = n > 0 ? sum / n : 0;
+    var threshold = Math.round(avgVol * 1.5);
+    var lastBar = bars[bars.length - 1];
+    var lastBreached = direction === 'long' ? lastBar.Close >= trigger : lastBar.Close <= trigger;
+
+    var verdict, breakoutBar = null, breakoutRatio = null;
+    if (breakoutIdx === -1) {
+      verdict = lastBreached ? 'STALE_BREAKOUT' : 'NOT_TRIGGERED';
+    } else {
+      breakoutBar = bars[breakoutIdx];
+      breakoutRatio = avgVol > 0 ? Math.round((breakoutBar.Volume / avgVol) * 100) / 100 : null;
+      if (breakoutRatio >= 1.5)      verdict = 'CONFIRMED_STRONG';
+      else if (breakoutRatio >= 1.2) verdict = 'CONFIRMED_LIGHT';
+      else                            verdict = 'UNCONFIRMED_LOW_VOL';
+    }
+
+    return {
+      ok: true,
+      ticker: ticker, direction: direction, trigger: trigger,
+      verdict: verdict,
+      breakoutIndex: breakoutIdx,
+      breakoutBar: breakoutBar ? {
+        time: breakoutBar.TimeStamp,
+        close: breakoutBar.Close,
+        volume: breakoutBar.Volume,
+        ratio: breakoutRatio,
+      } : null,
+      avgVolume: Math.round(avgVol),
+      threshold: threshold,
+      lastClose: lastBar.Close,
+      barCount: bars.length,
+    };
+  } catch(e) {
+    return { ok: false, error: e.message, verdict: 'TS_ERROR' };
+  }
+}
+
 function computeVolumeContext(bars) {
   if (!bars || bars.length < 4) return null;
   var lookback = Math.min(20, bars.length - 1);
@@ -600,6 +689,7 @@ module.exports = {
   loadLast: loadLast,
   getStatus: getStatus,
   pushToDiscord: pushToDiscord,
+  checkBreakoutConfirm: checkBreakoutConfirm,
   // Exposed for testing
   stratNumber: stratNumber,
   classifySequence: classifySequence,

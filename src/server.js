@@ -229,6 +229,11 @@ var dailyCoilScanner = null;
 try { dailyCoilScanner = require('./dailyCoilScanner'); console.log('[SERVER] dailyCoilScanner loaded OK'); }
 catch(e) { console.log('[SERVER] dailyCoilScanner not loaded:', e.message); }
 
+// BREAKOUT WATCHER — RTH polls conv >=9 setups for John volume rule (>=1.5x)
+var breakoutWatcher = null;
+try { breakoutWatcher = require('./breakoutWatcher'); console.log('[SERVER] breakoutWatcher loaded OK'); }
+catch(e) { console.log('[SERVER] breakoutWatcher not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -665,93 +670,38 @@ app.get('/api/coil-scan/status', function(req, res) {
   res.json(Object.assign({ ok: true }, dailyCoilScanner.getStatus()));
 });
 
-// BREAKOUT-CONFIRM — pulls intraday 5m bars, checks if a coil setup has fired
-// with John's volume rule (≥1.5x avg on the breakout candle).
+// BREAKOUT WATCHER -- manual trigger + status
+app.post('/api/breakout-watch/run', async function(req, res) {
+  if (!breakoutWatcher) return res.status(500).json({ ok: false, error: 'breakout watcher not loaded' });
+  try {
+    var skipPush = req.query.dry === '1' || (req.body && req.body.dry === true);
+    var out = await breakoutWatcher.runWatch({ skipPush: skipPush });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/breakout-watch/status', function(req, res) {
+  if (!breakoutWatcher) return res.status(500).json({ ok: false, error: 'breakout watcher not loaded' });
+  res.json(Object.assign({ ok: true }, breakoutWatcher.getStatus()));
+});
+
+// BREAKOUT-CONFIRM — uses shared dailyCoilScanner.checkBreakoutConfirm so the
+// watcher cron and this endpoint share identical logic.
 // Usage: GET /api/coil/breakout-confirm/XLY?trigger=119.01&direction=long
-//        GET /api/coil/breakout-confirm/ABT?trigger=89.88&direction=short
 app.get('/api/coil/breakout-confirm/:ticker', async function(req, res) {
   try {
+    if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
     var ticker = String(req.params.ticker || '').toUpperCase();
     var trigger = parseFloat(req.query.trigger);
     var direction = String(req.query.direction || 'long').toLowerCase();
     if (!ticker || !isFinite(trigger)) {
       return res.status(400).json({ ok: false, error: 'usage: /api/coil/breakout-confirm/TICKER?trigger=PRICE&direction=long|short' });
     }
-    var ts = require('./tradestation');
-    var token = await ts.getAccessToken();
-    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
-
-    // Pull last 60 5m bars (~5 hours of RTH) — enough for 20-bar avg + breakout window
-    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
-      + '?unit=Minute&interval=5&barsback=60&sessiontemplate=Default';
-    var fetchLib = require('node-fetch');
-    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
-    if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-bars-' + r.status });
-    var data = await r.json();
-    var raw = (data && (data.Bars || data.bars)) || [];
-    if (raw.length < 25) return res.json({ ok: true, ticker: ticker, verdict: 'INSUFFICIENT_BARS', barCount: raw.length });
-
-    var bars = raw.map(function(b) {
-      return {
-        High: parseFloat(b.High), Low: parseFloat(b.Low),
-        Open: parseFloat(b.Open), Close: parseFloat(b.Close),
-        Volume: parseFloat(b.TotalVolume || b.Volume || 0),
-        TimeStamp: b.TimeStamp,
-      };
-    });
-
-    // Find the FIRST bar that closed across the trigger (the breakout bar candidate)
-    var breakoutIdx = -1;
-    for (var i = 1; i < bars.length; i++) {
-      var prevClose = bars[i - 1].Close;
-      var thisClose = bars[i].Close;
-      if (direction === 'long' && prevClose < trigger && thisClose >= trigger) { breakoutIdx = i; break; }
-      if (direction === 'short' && prevClose > trigger && thisClose <= trigger) { breakoutIdx = i; break; }
+    var out = await dailyCoilScanner.checkBreakoutConfirm(ticker, trigger, direction);
+    if (out && out.ok) {
+      out.johnRule = 'Vol ≥ 1.5× avg on breakout candle = confirmed (≥1.2× = light, <1.2× = false break risk)';
     }
-
-    // Compute 20-bar avg vol from bars BEFORE the breakout (or all if no breakout yet)
-    var refEnd = breakoutIdx > 0 ? breakoutIdx : bars.length;
-    var refStart = Math.max(0, refEnd - 20);
-    var sum = 0, n = 0;
-    for (var j = refStart; j < refEnd; j++) {
-      if (isFinite(bars[j].Volume) && bars[j].Volume > 0) { sum += bars[j].Volume; n++; }
-    }
-    var avgVol = n > 0 ? sum / n : 0;
-    var threshold = Math.round(avgVol * 1.5);
-
-    var lastBar = bars[bars.length - 1];
-    var lastBreached = direction === 'long' ? lastBar.Close >= trigger : lastBar.Close <= trigger;
-
-    var verdict, breakoutBar = null, breakoutRatio = null;
-    if (breakoutIdx === -1) {
-      verdict = lastBreached ? 'STALE_BREAKOUT' : 'NOT_TRIGGERED';
-    } else {
-      breakoutBar = bars[breakoutIdx];
-      breakoutRatio = avgVol > 0 ? Math.round((breakoutBar.Volume / avgVol) * 100) / 100 : null;
-      if (breakoutRatio >= 1.5)      verdict = 'CONFIRMED_STRONG';
-      else if (breakoutRatio >= 1.2) verdict = 'CONFIRMED_LIGHT';
-      else                            verdict = 'UNCONFIRMED_LOW_VOL';
-    }
-
-    res.json({
-      ok: true,
-      ticker: ticker,
-      direction: direction,
-      trigger: trigger,
-      verdict: verdict,
-      breakoutIndex: breakoutIdx,
-      breakoutBar: breakoutBar ? {
-        time: breakoutBar.TimeStamp,
-        close: breakoutBar.Close,
-        volume: breakoutBar.Volume,
-        ratio: breakoutRatio,
-      } : null,
-      avgVolume: Math.round(avgVol),
-      threshold: threshold,
-      lastClose: lastBar.Close,
-      barCount: bars.length,
-      johnRule: 'Vol ≥ 1.5× avg on breakout candle = confirmed (≥1.2× = light, <1.2× = false break risk)',
-    });
+    res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -3379,6 +3329,26 @@ cron.schedule('50 15 * * 1-5', async function() {
                   (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
     }
   } catch(e) { console.error('[COIL] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// BREAKOUT WATCHER -- every 5 min 9:35 AM to 3:55 PM ET weekdays.
+// Polls conv >= 9 setups from latest coil scan, fires Discord ping the moment
+// any setup hits CONFIRMED_STRONG (>=1.5x avg vol on breakout candle = John rule).
+// One push per setup per day; skips already-fired keys.
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!breakoutWatcher) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    // Skip 9:00-9:34 (let ORB settle) and after 3:55
+    if (etHr === 9 && etMin < 35) return;
+    if (etHr === 15 && etMin > 55) return;
+    var out = await breakoutWatcher.runWatch();
+    if (out && out.newFires > 0) {
+      console.log('[BREAKOUT] cron · polled=' + out.polled + ' newFires=' + out.newFires);
+    }
+  } catch(e) { console.error('[BREAKOUT] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // OVERNIGHT TRADE MANAGER -- Friday 4:05 PM ET snapshot of held positions.
