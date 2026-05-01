@@ -2212,6 +2212,8 @@ window.holdPill = holdPill;
 
 async function loadLottoData() {
   FILTERS = FILTERS_LOTTO;
+  // Reset activeFilter if it's not a LOTTO filter id (avoids cross-tab residue)
+  if (!FILTERS_LOTTO.find(f => f.id === activeFilter)) activeFilter = "all";
   try {
     if (!lottoData) document.getElementById("grid").innerHTML = `<div class="empty">Loading lotto feed...</div>`;
     const r = await fetch("/api/lotto-feed?limit=30", { cache: "no-store" });
@@ -2259,8 +2261,15 @@ function renderStatsLotto() {
 
 function renderGridLotto() {
   try {
+    // Defensive: re-pin LOTTO filters in case auto-poll/tab-switch race left FILTERS pointing elsewhere
+    FILTERS = FILTERS_LOTTO;
     const picks = lottoData.picks || [];
-    const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) {
+      // activeFilter was from a different tab — reset to "all"
+      activeFilter = "all";
+      filter = FILTERS[0];
+    }
     const filtered = picks.filter(r => filter.test(r));
     if (!filtered.length) {
       document.getElementById("grid").innerHTML = `<div class="empty">No picks match "${filter.label}".${picks.length === 0 ? '<br><span style="font-size:11px;">Run the John extractor or wait for new posts.</span>' : ''}</div>`;
