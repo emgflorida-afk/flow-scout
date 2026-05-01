@@ -273,15 +273,41 @@
     }
 
     try {
-      var resp = await fetch(API_BASE + '/api/panel/' + encodeURIComponent(ticker), { cache: 'no-store' });
+      // 8s timeout so Railway cold-starts don't hang the poll loop
+      var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+      var timeoutId = ctrl ? setTimeout(function(){ ctrl.abort(); }, 8000) : null;
+      var resp = await fetch(API_BASE + '/api/panel/' + encodeURIComponent(ticker), {
+        cache: 'no-store',
+        signal: ctrl ? ctrl.signal : undefined,
+      });
+      if (timeoutId) clearTimeout(timeoutId);
       if (!resp.ok) throw new Error('HTTP ' + resp.status);
       var data = await resp.json();
       renderPanel(data);
       state.lastFetched = Date.now();
+      state.consecutiveFails = 0;
+      // Clear any stale-data warning on the title
+      if (state.titleEl) state.titleEl.style.color = '#46b4ff';
     } catch(e) {
-      if (state.panelEl) {
-        state.panelEl.innerHTML = '<div style="color:#ff6b6b;font-size:11px;text-align:center;padding:20px;">Fetch failed: ' + e.message + '</div>';
+      // PERSISTENCE FIX: do NOT nuke the panel on transient failures.
+      // Keep last-good data visible and just flag stale state in the title.
+      // Next poll (2s later) will auto-recover.
+      state.consecutiveFails = (state.consecutiveFails || 0) + 1;
+      if (state.titleEl) {
+        // Yellow title = stale; red = many failures in a row
+        state.titleEl.style.color = state.consecutiveFails >= 5 ? '#ff6b6b' : '#fbbf24';
       }
+      // Only show explicit error overlay after 5+ failures (≈10s+) — and only in the body
+      if (state.consecutiveFails >= 5 && state.bodyEl) {
+        var ageS = Math.round((Date.now() - state.lastFetched) / 1000);
+        state.bodyEl.innerHTML =
+          '<div style="color:#fbbf24;font-size:11px;text-align:center;padding:14px;">' +
+          '⚠️ Connection issue (' + state.consecutiveFails + ' fails)<br>' +
+          '<span style="color:#888;font-size:10px;">last data: ' + ageS + 's ago · auto-retry every 2s</span><br>' +
+          '<span style="color:#666;font-size:10px;">' + (e.message || 'fetch failed') + '</span>' +
+          '</div>';
+      }
+      // First few fails: silently keep existing render in place — no flicker, no panic
     } finally {
       state.isFetching = false;
     }
