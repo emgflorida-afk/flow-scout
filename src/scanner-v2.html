@@ -948,8 +948,31 @@ function computeFreshness(c, t) {
   return { state: "exhausted", label: "⛔ EXHAUSTED", color: "lvl-gray", advice: `${distPct.toFixed(2)}% past trigger — too late, find next` };
 }
 
+// May 1 v6: dedup same-ticker different-direction entries.
+// AB caught a ticker appearing twice (CALL + PUT) on the WP page.
+// When this happens, keep the higher-scored direction — picks the cleaner setup.
+function dedupByTicker(cands) {
+  const seen = new Map();   // ticker -> best candidate
+  for (const c of cands) {
+    if (!c || !c.ticker) continue;
+    const existing = seen.get(c.ticker);
+    if (!existing) {
+      seen.set(c.ticker, c);
+      continue;
+    }
+    // Pick the one with higher score; on tie pick CALL (long bias preferred for momentum)
+    const exScore = existing.score || 0;
+    const cScore  = c.score || 0;
+    if (cScore > exScore) seen.set(c.ticker, c);
+    else if (cScore === exScore && c.direction === "CALL" && existing.direction === "PUT") {
+      seen.set(c.ticker, c);
+    }
+  }
+  return Array.from(seen.values());
+}
+
 function renderGrid() {
-  const cands = scan.candidates || [];
+  const cands = dedupByTicker(scan.candidates || []);
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
   const filtered = cands.filter((c, i) => filter.test(c, i));
   if (!filtered.length) {
