@@ -267,11 +267,26 @@ async function checkTicker(ticker, opts) {
   }
   if (!token) return { ticker: ticker, rating: 'CAUTION', error: 'no TS token' };
 
-  // Pull daily bars
+  // Pull 30 daily bars (lvlComputer's Daily spec is only 3 bars — too few for ATR/EMA)
   var bars = [];
   try {
-    if (lvlComputer && lvlComputer.fetchBars) {
-      bars = await lvlComputer.fetchBars(ticker, 'Daily', token);
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var TS_BASE = process.env.TS_BASE || 'https://api.tradestation.com/v3';
+    var bUrl = TS_BASE + '/marketdata/barcharts/' + encodeURIComponent(ticker) + '?unit=Daily&interval=1&barsback=30';
+    var br = await fetchLib(bUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (br.ok) {
+      var bData = await br.json();
+      var raw = (bData && (bData.Bars || bData.bars)) || [];
+      bars = raw.map(function(b) {
+        return {
+          Open:        parseFloat(b.Open),
+          High:        parseFloat(b.High),
+          Low:         parseFloat(b.Low),
+          Close:       parseFloat(b.Close),
+          TotalVolume: parseInt(b.TotalVolume || 0),
+          TimeStamp:   b.TimeStamp,
+        };
+      }).filter(function(b) { return isFinite(b.High) && isFinite(b.Low); });
     }
   } catch (e) {
     return { ticker: ticker, rating: 'CAUTION', error: 'fetchBars: ' + e.message };
