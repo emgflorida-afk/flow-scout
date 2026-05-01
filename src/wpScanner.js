@@ -59,7 +59,9 @@ try { dailyCoilScanner = require('./dailyCoilScanner'); } catch (e) {}
 
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var WP_FILE = path.join(DATA_ROOT, 'wp_scan.json');
-var DISCORD_WEBHOOK = process.env.DISCORD_WP_WEBHOOK || process.env.DISCORD_STRATUMSWING_WEBHOOK || null;
+var DISCORD_WEBHOOK = process.env.DISCORD_WP_WEBHOOK
+  || process.env.DISCORD_STRATUMSWING_WEBHOOK
+  || 'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
 
 // Account size for risk-based sizing (set via env, default $20K)
 var ACCOUNT_SIZE = parseInt(process.env.WP_ACCOUNT_SIZE || '20000');

@@ -51,7 +51,11 @@ try { holdOvernightChecker = require('./holdOvernightChecker'); } catch (e) {}
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var COIL_FILE = path.join(DATA_ROOT, 'coil_scan.json');
 
-var DISCORD_WEBHOOK = process.env.DISCORD_COIL_WEBHOOK || process.env.DISCORD_STRATUMSWING_WEBHOOK || null;
+// Hardcoded fallback to #stratum-swing webhook (per discord_webhooks.md memory).
+// Avoids Railway env-var dependency for auto-push to work out of the box.
+var DISCORD_WEBHOOK = process.env.DISCORD_COIL_WEBHOOK
+  || process.env.DISCORD_STRATUMSWING_WEBHOOK
+  || 'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
 
 // =============================================================================
 // STRAT BAR CLASSIFICATION

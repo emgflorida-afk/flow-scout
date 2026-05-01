@@ -27,7 +27,9 @@ catch (e) {}
 
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var OVERNIGHT_FILE = path.join(DATA_ROOT, 'overnight_positions.json');
-var DISCORD_WEBHOOK = process.env.DISCORD_OVERNIGHT_WEBHOOK || process.env.DISCORD_STRATUMSWING_WEBHOOK || null;
+var DISCORD_WEBHOOK = process.env.DISCORD_OVERNIGHT_WEBHOOK
+  || process.env.DISCORD_STRATUMSWING_WEBHOOK
+  || 'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
 
 // =============================================================================
 // OPRA SYMBOL PARSING
