@@ -250,20 +250,33 @@ function buildUniverse() {
 }
 
 // =============================================================================
-// SCAN ONE TICKER
+// TIMEFRAME SPECS — Daily and 6HR (240 min × 1.5 = 360 min)
 // =============================================================================
-async function scanTicker(ticker, token) {
+var TF_SPECS = {
+  'Daily': { unit: 'Daily',  interval: 1,   barsback: 5,  sessiontemplate: null,      label: 'Daily' },
+  '6HR':   { unit: 'Minute', interval: 360, barsback: 10, sessiontemplate: 'Default', label: '6HR' },
+};
+
+// =============================================================================
+// SCAN ONE TICKER — supports Daily + 6HR via opts.tf
+// =============================================================================
+async function scanTicker(ticker, token, opts) {
+  opts = opts || {};
+  var tf = opts.tf || 'Daily';
+  var spec = TF_SPECS[tf];
+  if (!spec) return { ticker: ticker, tf: tf, error: 'unknown-tf-' + tf };
+
   try {
-    // Fetch last 5 daily bars (need at least 4 for 1-3-1 detection with prior reference)
-    var TF_SPEC = { unit: 'Daily', interval: 1, barsback: 5 };
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
-      + '?unit=' + TF_SPEC.unit + '&interval=' + TF_SPEC.interval + '&barsback=' + TF_SPEC.barsback;
+      + '?unit=' + spec.unit + '&interval=' + spec.interval + '&barsback=' + spec.barsback;
+    if (spec.sessiontemplate) url += '&sessiontemplate=' + spec.sessiontemplate;
+
     var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
     var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
-    if (!r.ok) return { ticker: ticker, error: 'TS-bars-' + r.status };
+    if (!r.ok) return { ticker: ticker, tf: tf, error: 'TS-bars-' + r.status };
     var data = await r.json();
     var raw = (data && (data.Bars || data.bars)) || [];
-    if (raw.length < 3) return { ticker: ticker, error: 'not-enough-bars-' + raw.length };
+    if (raw.length < 3) return { ticker: ticker, tf: tf, error: 'not-enough-bars-' + raw.length };
 
     var bars = raw.map(function(b) {
       return {
@@ -275,10 +288,10 @@ async function scanTicker(ticker, token) {
 
     var seq = classifySequence(bars);
     var pattern = detectCoilPattern(seq, bars);
-    if (!pattern) return { ticker: ticker, sequence: seq.join('-'), pattern: null };
+    if (!pattern) return { ticker: ticker, tf: tf, sequence: seq.join('-'), pattern: null };
 
     var plan = buildPlan(pattern, bars);
-    if (!plan || !plan.primary) return { ticker: ticker, sequence: seq.join('-'), pattern: pattern.name, error: 'no-plan' };
+    if (!plan || !plan.primary) return { ticker: ticker, tf: tf, sequence: seq.join('-'), pattern: pattern.name, error: 'no-plan' };
 
     var lastClose = bars[bars.length - 1].Close;
 
@@ -296,6 +309,7 @@ async function scanTicker(ticker, token) {
 
     return {
       ticker: ticker,
+      tf: tf,
       pattern: pattern.name,
       direction: pattern.direction,
       sequence: seq.join('-'),
@@ -306,7 +320,7 @@ async function scanTicker(ticker, token) {
       bars: bars.length,
     };
   } catch (e) {
-    return { ticker: ticker, error: e.message };
+    return { ticker: ticker, tf: tf, error: e.message };
   }
 }
 
@@ -333,17 +347,34 @@ async function runScan(opts) {
     var universe = opts.tickers || buildUniverse();
     if (!universe.length) return { error: 'empty-universe' };
 
-    console.log('[COIL] scanning', universe.length, 'tickers');
+    // Default: scan BOTH Daily and 6HR timeframes (John uses 6HR primarily,
+    // Daily catches the bigger structural plays like KO Apr 30 double-inside)
+    var tfs = opts.tfs || ['Daily', '6HR'];
+    if (typeof tfs === 'string') tfs = [tfs];
+
+    console.log('[COIL] scanning', universe.length, 'tickers across TFs:', tfs.join(','));
 
     var CONCURRENCY = 5;
     var results = [];
-    for (var i = 0; i < universe.length; i += CONCURRENCY) {
-      var batch = universe.slice(i, i + CONCURRENCY);
-      var batchResults = await Promise.all(batch.map(function(t) { return scanTicker(t, token); }));
-      results = results.concat(batchResults);
-      // Light throttle to ease TS rate limits
-      if (i + CONCURRENCY < universe.length) {
-        await new Promise(function(r) { setTimeout(r, 100); });
+
+    // Run scan once per timeframe, accumulate all results (each tagged with tf)
+    for (var tfIdx = 0; tfIdx < tfs.length; tfIdx++) {
+      var currentTF = tfs[tfIdx];
+      console.log('[COIL]   ↳', currentTF);
+      for (var i = 0; i < universe.length; i += CONCURRENCY) {
+        var batch = universe.slice(i, i + CONCURRENCY);
+        var batchTF = currentTF;  // closure-safe capture
+        var batchResults = await Promise.all(batch.map(function(t) {
+          return scanTicker(t, token, { tf: batchTF });
+        }));
+        results = results.concat(batchResults);
+        if (i + CONCURRENCY < universe.length) {
+          await new Promise(function(r) { setTimeout(r, 100); });
+        }
+      }
+      // Throttle harder between timeframes (different bar fetches stress TS)
+      if (tfIdx < tfs.length - 1) {
+        await new Promise(function(r) { setTimeout(r, 500); });
       }
     }
 
@@ -368,13 +399,22 @@ async function runScan(opts) {
       ok: true,
       generatedAt: new Date().toISOString(),
       tookMs: Date.now() - start,
+      timeframes: tfs,
       scanned: results.length,
       matched: matches.length,
       ready: ready,
       watching: watching,
       prep: prep,
       // Counts of each pattern across all matches
-      byPattern: matches.reduce(function(acc, m) { acc[m.pattern] = (acc[m.pattern] || 0) + 1; return acc; }, {}),
+      byPattern: matches.reduce(function(acc, m) {
+        var key = m.tf + ':' + m.pattern;
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {}),
+      byTF: matches.reduce(function(acc, m) {
+        acc[m.tf] = (acc[m.tf] || 0) + 1;
+        return acc;
+      }, {}),
     };
 
     // Persist for the cron + UI to read
@@ -428,37 +468,62 @@ async function pushToDiscord(payload) {
   }
 
   var lines = [];
-  lines.push('# 🌀 COIL SCAN — Pre-Close Pre-Position');
-  lines.push('_' + new Date(payload.generatedAt).toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET · ' + payload.matched + ' coils across ' + payload.scanned + ' tickers_');
+  var tfTag = (payload.timeframes || ['Daily']).join('+');
+  lines.push('# 🌀 COIL SCAN — ' + tfTag + ' Pre-Position');
+  lines.push('_' + new Date(payload.generatedAt).toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET · ' + payload.matched + ' coils across ' + payload.scanned + ' (' + (payload.byTF ? Object.keys(payload.byTF).map(function(t) { return t + ':' + payload.byTF[t]; }).join(' / ') : '?') + ')_');
   lines.push('');
 
+  // Group ready setups by TF for cleaner display
+  var readyByTF = {};
+  ready.forEach(function(r) {
+    var t = r.tf || 'Daily';
+    if (!readyByTF[t]) readyByTF[t] = [];
+    readyByTF[t].push(r);
+  });
+
   if (ready.length) {
-    lines.push('## 🔥 READY (8+ conviction)');
-    ready.forEach(function(r) {
-      var p = r.plan || {};
-      var pp = p.primary || {};
-      var dirIcon = r.direction === 'long' ? '🟢⬆️' : r.direction === 'short' ? '🔴⬇️' : '⚪';
-      var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
-      lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · conv ' + r.conviction + '/10 ' + holdIcon);
-      lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
-      lines.push('  → 1ct Public + 2ct TS overnight pre-position');
+    Object.keys(readyByTF).forEach(function(tfKey) {
+      var arr = readyByTF[tfKey];
+      var tfIcon = tfKey === '6HR' ? '⏱️' : '📅';
+      lines.push('## 🔥 READY · ' + tfIcon + ' ' + tfKey + ' (' + arr.length + ')');
+      arr.forEach(function(r) {
+        var p = r.plan || {};
+        var pp = p.primary || {};
+        var dirIcon = r.direction === 'long' ? '🟢⬆️' : r.direction === 'short' ? '🔴⬇️' : '⚪';
+        var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
+        lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · conv ' + r.conviction + '/10 ' + holdIcon);
+        lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+        lines.push('  → 1ct Public + 2ct TS overnight pre-position');
+      });
+      lines.push('');
     });
-    lines.push('');
   }
 
+  // Watching grouped likewise
+  var watchingByTF = {};
+  watching.forEach(function(r) {
+    var t = r.tf || 'Daily';
+    if (!watchingByTF[t]) watchingByTF[t] = [];
+    watchingByTF[t].push(r);
+  });
+
   if (watching.length) {
-    lines.push('## 🟡 WATCHING (6-7 conviction)');
-    watching.forEach(function(r) {
-      var p = r.plan || {};
-      var pp = p.primary || {};
-      var dirIcon = r.direction === 'long' ? '⬆️' : '⬇️';
-      lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · ' + r.conviction + '/10 · trig `$' + (pp.trigger || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+    Object.keys(watchingByTF).forEach(function(tfKey) {
+      var arr = watchingByTF[tfKey];
+      var tfIcon = tfKey === '6HR' ? '⏱️' : '📅';
+      lines.push('## 🟡 WATCHING · ' + tfIcon + ' ' + tfKey + ' (' + arr.length + ')');
+      arr.forEach(function(r) {
+        var p = r.plan || {};
+        var pp = p.primary || {};
+        var dirIcon = r.direction === 'long' ? '⬆️' : '⬇️';
+        lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · ' + r.conviction + '/10 · trig `$' + (pp.trigger || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+      });
+      lines.push('');
     });
-    lines.push('');
   }
 
   lines.push('---');
-  lines.push('🕒 Run cron: 3:50 PM ET · Fire by 3:55-4:00 PM for RTH fills · TS allows AH option queue for next-day');
+  lines.push('🕒 3:50 PM ET cron · 📅 Daily = bigger structure (rare) · ⏱️ 6HR = John\'s primary signal');
 
   var content = lines.join('\n');
   // Discord limits content to 2000 chars
