@@ -2809,17 +2809,36 @@ function renderGridStarred() {
 async function loadLvlData() {
   FILTERS = FILTERS_LVL;
   try {
-    if (!lvlData) document.getElementById("grid").innerHTML = `<div class="empty">Computing LVL state across universe...<br><span style="font-size:11px;">First run takes ~30s (110 tickers × 2 timeframes).</span></div>`;
+    if (!lvlData) document.getElementById("grid").innerHTML = `<div class="empty">Computing LVL state across universe...<br><span style="font-size:11px;">First run takes ~30s (143 tickers × 2 timeframes).</span></div>`;
     const r = await fetch("/api/lvl-scan?tfs=Daily,1H", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const data = await r.json();
     if (!data.ok) throw new Error(data.error || "lvl-scan failed");
+
+    // Backfill errored entries with per-ticker direct call (TS rate limits sometimes
+    // 429 part of the bulk scan — small caps especially affected). Limit to 8 retries
+    // in parallel so we don't re-trigger the same rate limit.
+    const errored = (data.results || []).filter(r => !r.tfs || Object.values(r.tfs || {}).every(s => !s || !s.ok));
+    if (errored.length && errored.length <= 12) {
+      console.log('[LVL] backfilling', errored.length, 'errored tickers via per-ticker endpoint');
+      await Promise.all(errored.slice(0, 12).map(async r => {
+        try {
+          const r2 = await fetch(`/api/lvl-scan/${encodeURIComponent(r.symbol)}?tfs=Daily,1H`, { cache: "no-store" });
+          if (!r2.ok) return;
+          const d2 = await r2.json();
+          if (d2 && d2.tfs) r.tfs = d2.tfs;
+        } catch (e) { /* swallow — best effort */ }
+      }));
+    }
+
     // Annotate each result with derived flags used by filters
     (data.results || []).forEach(r => {
       const tfStates = Object.values(r.tfs || {}).filter(s => s && s.ok);
       r._anyEnterNow = tfStates.some(s => s.signal === 'LVL_LONG_25' || s.signal === 'LVL_SHORT_75');
       r._anyArmed    = tfStates.some(s => ['LVL_LONG_25','EARLY_LONG','LVL_SHORT_75','EARLY_SHORT','HIGH_BREAK','LOW_BREAK'].includes(s.signal));
       r._anyStopped  = tfStates.some(s => s.signal === 'STOP_HIT');
+      // Active rawSignal (for stopped setups that still show direction/levels)
+      r._anyRawActive = tfStates.some(s => s.rawSignal && s.rawSignal !== 'NONE' && ['LVL_LONG_25','EARLY_LONG','LVL_SHORT_75','EARLY_SHORT','HIGH_BREAK','LOW_BREAK'].includes(s.rawSignal));
       const dirs = tfStates.map(s => s.direction).filter(d => d && d !== 'NONE');
       r._dominantDirection = dirs[0] || 'NONE';
       r._aligned = dirs.length >= 2 && dirs.every(d => d === dirs[0]);
