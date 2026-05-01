@@ -199,6 +199,35 @@ function buildPlan(pattern, bars) {
 function round2(v) { return Math.round(v * 100) / 100; }
 
 // =============================================================================
+// VOLUME CONTEXT — John's rule: low vol on coil, expand on breakout (≥1.5×)
+// Computed at scan time so the Discord card carries the volume threshold AB
+// must see on the breakout candle to consider it confirmed (not a false break).
+// =============================================================================
+function computeVolumeContext(bars) {
+  if (!bars || bars.length < 4) return null;
+  var lookback = Math.min(20, bars.length - 1);
+  // Use bars BEFORE the current inside bar (excludes the latest 1 bar so the
+  // average reflects the prior swing, not the just-formed coil).
+  var ref = bars.slice(-1 - lookback, -1);
+  var sum = 0, n = 0;
+  for (var i = 0; i < ref.length; i++) {
+    if (isFinite(ref[i].Volume) && ref[i].Volume > 0) { sum += ref[i].Volume; n++; }
+  }
+  if (n < 3) return null;
+  var avg = sum / n;
+  var insideBarVol = bars[bars.length - 1].Volume || 0;
+  return {
+    avgN: n,
+    avgVolume: Math.round(avg),
+    insideBarVolume: Math.round(insideBarVol),
+    insideBarRatio: avg > 0 ? round2(insideBarVol / avg) : null,
+    breakoutMin: Math.round(avg * 1.2),     // baseline confirmation
+    breakoutTarget: Math.round(avg * 1.5),  // John's "with volume" standard
+    breakoutStrong: Math.round(avg * 2.0),  // power-candle level
+  };
+}
+
+// =============================================================================
 // CONVICTION SCORING — refines the base pattern conviction with extra factors
 // =============================================================================
 function adjustConviction(base, ticker, bars, holdRating) {
@@ -286,6 +315,7 @@ async function scanTicker(ticker, token, opts) {
       return {
         High: parseFloat(b.High), Low: parseFloat(b.Low),
         Open: parseFloat(b.Open), Close: parseFloat(b.Close),
+        Volume: parseFloat(b.TotalVolume || b.Volume || 0),
         TimeStamp: b.TimeStamp,
       };
     }).filter(function(b) { return isFinite(b.High) && isFinite(b.Low); });
@@ -310,6 +340,7 @@ async function scanTicker(ticker, token, opts) {
     }
 
     var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating);
+    var volumeContext = computeVolumeContext(bars);
 
     return {
       ticker: ticker,
@@ -321,6 +352,7 @@ async function scanTicker(ticker, token, opts) {
       lastClose: round2(lastClose),
       plan: plan,
       holdRating: holdRating || null,
+      volumeContext: volumeContext,
       bars: bars.length,
     };
   } catch (e) {
@@ -497,6 +529,12 @@ async function pushToDiscord(payload) {
         var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
         lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · conv ' + r.conviction + '/10 ' + holdIcon);
         lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+        // Volume confirmation rule (John): ≥1.5× avg on breakout candle = confirmed
+        if (r.volumeContext) {
+          var vc = r.volumeContext;
+          var coilVol = vc.insideBarRatio != null ? (vc.insideBarRatio + '×') : '?';
+          lines.push('  📊 Coil vol `' + coilVol + '` · Need ≥`' + Math.round(vc.breakoutTarget / 1000) + 'k` (1.5× avg) on breakout candle to fire');
+        }
         lines.push('  → 1ct Public + 2ct TS overnight pre-position');
       });
       lines.push('');

@@ -665,6 +665,96 @@ app.get('/api/coil-scan/status', function(req, res) {
   res.json(Object.assign({ ok: true }, dailyCoilScanner.getStatus()));
 });
 
+// BREAKOUT-CONFIRM — pulls intraday 5m bars, checks if a coil setup has fired
+// with John's volume rule (≥1.5x avg on the breakout candle).
+// Usage: GET /api/coil/breakout-confirm/XLY?trigger=119.01&direction=long
+//        GET /api/coil/breakout-confirm/ABT?trigger=89.88&direction=short
+app.get('/api/coil/breakout-confirm/:ticker', async function(req, res) {
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    var trigger = parseFloat(req.query.trigger);
+    var direction = String(req.query.direction || 'long').toLowerCase();
+    if (!ticker || !isFinite(trigger)) {
+      return res.status(400).json({ ok: false, error: 'usage: /api/coil/breakout-confirm/TICKER?trigger=PRICE&direction=long|short' });
+    }
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+
+    // Pull last 60 5m bars (~5 hours of RTH) — enough for 20-bar avg + breakout window
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?unit=Minute&interval=5&barsback=60&sessiontemplate=Default';
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-bars-' + r.status });
+    var data = await r.json();
+    var raw = (data && (data.Bars || data.bars)) || [];
+    if (raw.length < 25) return res.json({ ok: true, ticker: ticker, verdict: 'INSUFFICIENT_BARS', barCount: raw.length });
+
+    var bars = raw.map(function(b) {
+      return {
+        High: parseFloat(b.High), Low: parseFloat(b.Low),
+        Open: parseFloat(b.Open), Close: parseFloat(b.Close),
+        Volume: parseFloat(b.TotalVolume || b.Volume || 0),
+        TimeStamp: b.TimeStamp,
+      };
+    });
+
+    // Find the FIRST bar that closed across the trigger (the breakout bar candidate)
+    var breakoutIdx = -1;
+    for (var i = 1; i < bars.length; i++) {
+      var prevClose = bars[i - 1].Close;
+      var thisClose = bars[i].Close;
+      if (direction === 'long' && prevClose < trigger && thisClose >= trigger) { breakoutIdx = i; break; }
+      if (direction === 'short' && prevClose > trigger && thisClose <= trigger) { breakoutIdx = i; break; }
+    }
+
+    // Compute 20-bar avg vol from bars BEFORE the breakout (or all if no breakout yet)
+    var refEnd = breakoutIdx > 0 ? breakoutIdx : bars.length;
+    var refStart = Math.max(0, refEnd - 20);
+    var sum = 0, n = 0;
+    for (var j = refStart; j < refEnd; j++) {
+      if (isFinite(bars[j].Volume) && bars[j].Volume > 0) { sum += bars[j].Volume; n++; }
+    }
+    var avgVol = n > 0 ? sum / n : 0;
+    var threshold = Math.round(avgVol * 1.5);
+
+    var lastBar = bars[bars.length - 1];
+    var lastBreached = direction === 'long' ? lastBar.Close >= trigger : lastBar.Close <= trigger;
+
+    var verdict, breakoutBar = null, breakoutRatio = null;
+    if (breakoutIdx === -1) {
+      verdict = lastBreached ? 'STALE_BREAKOUT' : 'NOT_TRIGGERED';
+    } else {
+      breakoutBar = bars[breakoutIdx];
+      breakoutRatio = avgVol > 0 ? Math.round((breakoutBar.Volume / avgVol) * 100) / 100 : null;
+      if (breakoutRatio >= 1.5)      verdict = 'CONFIRMED_STRONG';
+      else if (breakoutRatio >= 1.2) verdict = 'CONFIRMED_LIGHT';
+      else                            verdict = 'UNCONFIRMED_LOW_VOL';
+    }
+
+    res.json({
+      ok: true,
+      ticker: ticker,
+      direction: direction,
+      trigger: trigger,
+      verdict: verdict,
+      breakoutIndex: breakoutIdx,
+      breakoutBar: breakoutBar ? {
+        time: breakoutBar.TimeStamp,
+        close: breakoutBar.Close,
+        volume: breakoutBar.Volume,
+        ratio: breakoutRatio,
+      } : null,
+      avgVolume: Math.round(avgVol),
+      threshold: threshold,
+      lastClose: lastBar.Close,
+      barCount: bars.length,
+      johnRule: 'Vol ≥ 1.5× avg on breakout candle = confirmed (≥1.2× = light, <1.2× = false break risk)',
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // OVERNIGHT TRADE MANAGER — Fri snapshot, Mon exit plan, manual triggers
 app.get('/api/overnight/snapshot', function(req, res) {
   if (!overnightTradeManager) return res.status(500).json({ ok: false, error: 'overnight not loaded' });
