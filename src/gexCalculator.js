@@ -99,13 +99,17 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
     + '&enableGreeks=true';
   if (spot) url += '&priceCenter=' + Math.round(spot);
 
+  console.log('[GEX-CHAIN] fetching ' + ticker + ' ' + optType + ' ' + formatExpiry(expiry));
   var res = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token } });
   if (!res.ok) {
+    console.warn('[GEX-CHAIN] HTTP ' + res.status + ' for ' + ticker + ' ' + optType);
     return { error: 'chain-' + res.status, contracts: [] };
   }
 
   var contracts = [];
   var buffer = '';
+  var rawLineCount = 0;
+  var sampleLine = null;
 
   await new Promise(function(resolve) {
     var done = false;
@@ -122,13 +126,13 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
         if (!line || line.startsWith(':')) continue;
         if (line.startsWith('data:')) line = line.slice(5).trim();
         if (!line) continue;
+        rawLineCount++;
+        if (!sampleLine && line.length > 30) sampleLine = line.slice(0, 250);
         try {
           var obj = JSON.parse(line);
-          // Match contractResolver's permissive filter — accept any quote-like packet,
-          // then derive strike from object directly OR from Legs[0]
-          if (obj && (obj.Legs || obj.legs || obj.Delta !== undefined || obj.Gamma !== undefined || obj.Ask || obj.Bid)) {
+          if (obj && typeof obj === 'object') {
             var strikeObj = obj;
-            if (obj.Legs && obj.Legs[0]) strikeObj = Object.assign({}, obj.Legs[0], obj);  // merge top-level greeks if present
+            if (obj.Legs && obj.Legs[0]) strikeObj = Object.assign({}, obj.Legs[0], obj);
             if (strikeObj.Strike !== undefined) {
               contracts.push(strikeObj);
             }
@@ -150,7 +154,9 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
     });
   });
 
-  return { contracts: contracts };
+  console.log('[GEX-CHAIN] ' + ticker + ' ' + optType + ': rawLines=' + rawLineCount + ' contracts=' + contracts.length + (sampleLine ? ' sample=' + sampleLine.slice(0, 150) : ''));
+
+  return { contracts: contracts, rawLines: rawLineCount, sample: sampleLine };
 }
 
 // =============================================================================
@@ -265,6 +271,8 @@ async function computeForTicker(ticker, token, opts) {
     // Pull chain for each expiration (call + put), aggregate
     var allCalls = [];
     var allPuts = [];
+    var debugSample = null;
+    var totalRawLines = 0;
     for (var i = 0; i < nearTerm.length; i++) {
       var exp = nearTerm[i];
       try {
@@ -272,6 +280,9 @@ async function computeForTicker(ticker, token, opts) {
         var putRes = await fetchChainSide(ticker, exp.date, 'Put', spot, token);
         allCalls = allCalls.concat(callRes.contracts || []);
         allPuts = allPuts.concat(putRes.contracts || []);
+        if (!debugSample && callRes.sample) debugSample = callRes.sample;
+        if (!debugSample && putRes.sample) debugSample = putRes.sample;
+        totalRawLines += (callRes.rawLines || 0) + (putRes.rawLines || 0);
       } catch (e) {
         console.warn('[GEX] chain fetch fail for ' + ticker + ' ' + exp.date + ':', e.message);
       }
@@ -282,7 +293,13 @@ async function computeForTicker(ticker, token, opts) {
     }
 
     if (!allCalls.length && !allPuts.length) {
-      return { ticker: ticker, spot: spot, error: 'no-chain-data' };
+      return {
+        ticker: ticker,
+        spot: spot,
+        error: 'no-chain-data',
+        expirations: nearTerm,
+        debug: { totalRawLines: totalRawLines, sample: debugSample },
+      };
     }
 
     var rows = computeGEX(allCalls, allPuts, spot);
