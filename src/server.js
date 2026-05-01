@@ -762,6 +762,99 @@ app.get('/api/gex/status/check', function(req, res) {
   res.json(Object.assign({ ok: true }, gexCalculator.getStatus()));
 });
 
+// HOOD CHECK — fresh real-time evaluator for AB's HOOD swing add decision.
+// Pulls live spot + volume + hold rating, evaluates against conviction gates,
+// returns ADD 2ct / ADD 1ct / DON'T ADD recommendation. Optional Discord push.
+app.get('/api/hood-check', async function(req, res) {
+  if (!holdOvernightChecker) return res.status(500).json({ ok: false, error: 'holdOvernightChecker not loaded' });
+  try {
+    var hr = await holdOvernightChecker.checkTicker('HOOD', { direction: 'LONG' });
+    var spot = parseFloat(hr.spot || 0);
+
+    // Extract volume ratio from cautions msg (format: "Volume today X.XX× MA")
+    var volMatch = (hr.cautions || []).map(function(c) { return c.msg; }).join(' ').match(/(\d+\.?\d*)×\s*MA/);
+    var volRatio = volMatch ? parseFloat(volMatch[1]) : null;
+
+    // Conviction gate evaluation
+    var gate = 'UNKNOWN';
+    var action = 'CHECK';
+    var sizing = '';
+    var rationale = '';
+
+    var spotOK = spot >= 75.00;
+    var spotMid = spot >= 74.00 && spot < 75.00;
+    var spotFail = spot < 74.00;
+    var volStrong = volRatio !== null && volRatio >= 0.7;
+    var volMid = volRatio !== null && volRatio >= 0.5 && volRatio < 0.7;
+    var volWeak = volRatio !== null && volRatio < 0.4;
+
+    if (spotOK && volStrong) {
+      gate = 'GATE_A_STRONG';
+      action = 'ADD 2ct TS';
+      sizing = '1ct Public + 2ct TS = 3ct overnight';
+      rationale = 'Spot $' + spot.toFixed(2) + ' ≥ $75 AND volume ' + (volRatio || 0).toFixed(2) + '× ≥ 0.7× — conviction lifts to 7-8 STANDARD tier.';
+    } else if ((spotMid || spotOK) && volMid) {
+      gate = 'GATE_B_MODERATE';
+      action = 'ADD 1ct TS only';
+      sizing = '1ct Public + 1ct TS = 2ct overnight (discipline guard active)';
+      rationale = 'Spot $' + spot.toFixed(2) + ' OR volume ' + (volRatio || 0).toFixed(2) + '× insufficient for STANDARD — TRIAL tier 1ct only.';
+    } else if (spotFail || volWeak) {
+      gate = 'GATE_C_DEGRADED';
+      action = 'DO NOT ADD';
+      sizing = 'Hold Public 1ct only · manage Mon AM exit';
+      rationale = 'Setup degrading — spot $' + spot.toFixed(2) + ' or volume ' + (volRatio || 0).toFixed(2) + '× failed gate.';
+    } else {
+      gate = 'GATE_BORDERLINE';
+      action = 'WATCH 5 more min';
+      sizing = 'Don\'t fire yet — wait for clarity';
+      rationale = 'Borderline state — neither strong nor degraded. Re-check in 5 min.';
+    }
+
+    var output = {
+      ok: true,
+      checkedAt: new Date().toISOString(),
+      ticker: 'HOOD',
+      spot: spot,
+      volRatio: volRatio,
+      holdRating: hr.rating,
+      holdScore: hr.score,
+      cautions: (hr.cautions || []).map(function(c) { return c.msg; }),
+      gate: gate,
+      action: action,
+      sizing: sizing,
+      rationale: rationale,
+      contracts: {
+        suggested: 'HOOD 5/30 $77C',
+        stopUnderlying: 72.50,
+        tp1Underlying: 79.00,
+        tp2Underlying: 81.75,
+      },
+    };
+
+    // Optional Discord push if ?push=1
+    if (req.query.push === '1') {
+      try {
+        var fetchLib = require('node-fetch');
+        var emoji = action.includes('2ct') ? '🚀' : action.includes('1ct') ? '🟡' : action.includes('NOT') ? '🛑' : '⏳';
+        var msg = '# ' + emoji + ' HOOD CHECK · ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET\n\n' +
+          '**Spot:** `$' + spot.toFixed(2) + '`  ·  **Vol:** `' + (volRatio || 0).toFixed(2) + '× MA`  ·  **Hold:** `' + hr.rating + '`\n\n' +
+          '**🎯 ACTION: ' + action + '**\n' +
+          '_' + sizing + '_\n\n' +
+          '**Why:** ' + rationale + '\n\n' +
+          (action.includes('ct') ? '📋 Contract: HOOD 5/30 $77C · Stop $72.50 · TP1 $79 · TP2 $81.75' : '');
+        await fetchLib('https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username: 'HOOD Check Bot', content: msg }),
+        });
+        output.discordPushed = true;
+      } catch(e) { output.discordError = e.message; }
+    }
+
+    res.json(output);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
 // GET /api/safe-to-hold/AAPL?direction=LONG
 app.get('/api/safe-to-hold/:ticker', async function(req, res) {
