@@ -1131,6 +1131,7 @@ function openDetail(idx) {
         <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchScanToPublic(${idx}, this)" title="Place on Public.com (cash account, no PDT)">📱 Send to Public</button>
       </div>
     </div>
 
@@ -1344,6 +1345,135 @@ function getStratumSecret() {
   return s;
 }
 
+// =============================================================================
+// PUBLIC.COM FIRE (May 1 2026) — cash account, no PDT, used Friday for day trades
+// AB: "PDT day, can't use TS, need Public on cards"
+// =============================================================================
+//
+// Defaults to OPTION fire if the card has a resolved contract symbol; otherwise
+// falls back to EQUITY (stock) at trigger price. Always 1 ct/sh, LIMIT, DAY.
+// AB can edit qty/price in the confirm dialog.
+async function dispatchToPublic(payload, btn) {
+  const orig = btn.textContent;
+  // payload contract: { ticker, direction, contract?, optionEntry?, trigger, stop?, tp1?, tp2? }
+  const ticker = payload.ticker;
+  const direction = (payload.direction || '').toUpperCase();
+  const isLong = direction === 'CALL' || direction === 'LONG' || direction === 'BULLISH';
+  const side = isLong ? 'BUY' : 'SELL';
+
+  // Choose option (preferred for leverage) or equity. Public requires OPRA-without-spaces for options.
+  let symbol = payload.contract || payload.ticker;
+  let isOption = !!payload.contract;
+  let priceHint = isOption ? (payload.optionEntry || payload.optionMid || payload.trigger) : payload.trigger;
+
+  if (!priceHint || !isFinite(priceHint)) {
+    btn.textContent = '❌ no price';
+    setTimeout(() => { btn.textContent = orig; }, 2000);
+    return;
+  }
+
+  // Default qty: 1 contract for options (≈100 shares exposure), 1 share for equity
+  let qty = isOption ? 1 : 1;
+
+  // Confirm dialog — short, scannable
+  const kind = isOption ? `1 ct ${symbol}` : `1 sh ${ticker}`;
+  const confirmed = confirm(
+    `📱 PUBLIC.COM ORDER — CASH ACCOUNT\n\n` +
+    `${side} ${kind} @ $${priceHint.toFixed(2)} LIMIT (DAY)\n\n` +
+    `${isOption ? 'OPTIONS' : 'EQUITY'} order — Friday day trade\n\n` +
+    `Confirm placement?`
+  );
+  if (!confirmed) return;
+
+  btn.textContent = "Placing on Public...";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch("/api/public/order", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: symbol,
+        side: side,
+        quantity: qty,
+        orderType: "LIMIT",
+        limitPrice: priceHint,
+        timeInForce: "DAY",
+        instrumentType: isOption ? "OPTION" : "EQUITY",
+        openCloseIndicator: side === "BUY" ? "OPEN" : "CLOSE",
+      }),
+    });
+    const data = await resp.json();
+    if (data && data.ok && data.orderId) {
+      btn.textContent = `✓ Public ${data.orderId.slice(0,8)}`;
+      btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+      btn.style.color = "#07090f";
+      btn.disabled = false;
+    } else {
+      const errTxt = (data && data.error) ? String(data.error).slice(0,80) : "unknown error";
+      btn.textContent = "❌ " + errTxt;
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 5000);
+      console.error("Public order error:", data);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message.slice(0,40);
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = orig; }, 5000);
+  }
+}
+window.dispatchToPublic = dispatchToPublic;
+
+// Convenience wrapper for SCAN cards (uses scan.candidates[idx])
+async function dispatchScanToPublic(idx, btn) {
+  const c = scan.candidates[idx];
+  if (!c) return;
+  const t = getEntryTiming(c);
+  return dispatchToPublic({
+    ticker: c.ticker,
+    direction: c.direction,
+    contract: c.contract,
+    optionEntry: c.optionEntry || c.optionMid,
+    trigger: t.trigger,
+    stop: t.stop,
+    tp1: t.tp1,
+  }, btn);
+}
+window.dispatchScanToPublic = dispatchScanToPublic;
+
+// MOVERS dispatcher — uses moversData[idx]
+async function dispatchMoverToPublic(idx, btn) {
+  const m = (moversData && moversData[idx]) || (scan && scan.movers && scan.movers[idx]);
+  if (!m) { btn.textContent = '❌ no mover'; return; }
+  const trigger = m.triggerPrice || m.last || m.optionEntry;
+  return dispatchToPublic({
+    ticker: m.ticker,
+    direction: (m.pctChange >= 0) ? 'CALL' : 'PUT',
+    contract: m.contract || m.optionSymbol,
+    optionEntry: m.optionEntry || m.optionMid,
+    trigger: trigger,
+    stop: m.structuralStop || m.optionStop,
+    tp1: m.optionTp1 || m.stockTp1,
+  }, btn);
+}
+window.dispatchMoverToPublic = dispatchMoverToPublic;
+
+// TOMORROW (radar) dispatcher — fires the setup card
+async function dispatchRadarToPublic(ticker, btn) {
+  const setup = (radarData && radarData._flat || []).find(s => s.ticker === ticker);
+  if (!setup) { btn.textContent = '❌ no card'; return; }
+  return dispatchToPublic({
+    ticker: setup.ticker,
+    direction: setup.direction || ((setup.target || 0) >= (setup.spot || 0) ? 'CALL' : 'PUT'),
+    contract: setup.contract,
+    optionEntry: setup.optionEntry,
+    trigger: typeof setup.trigger === 'number' ? setup.trigger : setup.spot,
+    stop: setup.stop,
+    tp1: setup.target,
+  }, btn);
+}
+window.dispatchRadarToPublic = dispatchRadarToPublic;
+
 async function dispatchToTitan(idx, btn) {
   const c = scan.candidates[idx];
   const isCall = c.direction === "CALL";
@@ -1502,6 +1632,7 @@ function openMoverDetail(idx) {
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
       </div>
     </div>
     ` : `
@@ -1517,6 +1648,7 @@ function openMoverDetail(idx) {
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
       </div>
     </div>
     `}
@@ -1846,6 +1978,10 @@ function renderGridTomorrow() {
           <div class="tags">
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
+          </div>
+
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 Send to Public</button>
           </div>
         </div>
       `;
