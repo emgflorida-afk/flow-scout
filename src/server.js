@@ -103,7 +103,7 @@ var app  = express();
 var PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '25mb' }));   // bumped from default 100KB so John-data admin upload (3MB raw files) fits
-app.use(express.text());  // TradingView sends alerts as text/plain — parse into req.body string
+app.use(express.text({ limit: '25mb' }));  // TradingView alerts are text/plain — bumped to fit large admin uploads too
 app.use(function(req, res, next) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
