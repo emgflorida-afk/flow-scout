@@ -349,6 +349,35 @@ app.get('/api/john-precedent', function(req, res) {
   res.json(johnPatternMatcher.getStatus());
 });
 
+// Admin upload — POST raw JSON to /api/admin/john-data/:filename
+// Used to seed Railway's /data/john_history/ from local files.
+// Filename must match a known channel file (.parsed.json or .raw.json).
+app.post('/api/admin/john-data/:filename', express.text({ limit: '20mb', type: '*/*' }), function(req, res) {
+  try {
+    var fs = require('fs');
+    var path = require('path');
+    var fname = req.params.filename;
+    if (!/^[a-z0-9_-]+\.(parsed|raw)\.json$/i.test(fname)) {
+      return res.status(400).json({ error: 'invalid filename — must be {channel}.{parsed|raw}.json' });
+    }
+    var dataRoot = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+    var dir = path.join(dataRoot, 'john_history');
+    fs.mkdirSync(dir, { recursive: true });
+    var fp = path.join(dir, fname);
+    var body = req.body || '';
+    if (typeof body !== 'string') body = JSON.stringify(body);
+    // Validate JSON before writing
+    try { JSON.parse(body); } catch(e) { return res.status(400).json({ error: 'invalid JSON: ' + e.message }); }
+    fs.writeFileSync(fp, body);
+    var size = fs.statSync(fp).size;
+    // Force re-index next time matcher is queried
+    if (johnPatternMatcher && johnPatternMatcher.buildIndex) {
+      try { johnPatternMatcher.buildIndex(); } catch(e) { /* swallow */ }
+    }
+    res.json({ ok: true, file: fp, sizeBytes: size });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
 // Strategy picker (Apr 29 2026) - recommends the right options structure
 // for a setup based on AB's Level 3 approval + market conditions.
 var strategyPicker = null;
