@@ -391,16 +391,41 @@ async function scanTicker(ticker, token, opts) {
       johnPrecedent: johnPrecedent,
     });
 
-    // Plan: structural stop below 21 EMA for longs, above for shorts
-    // Target: 2× ATR projection
+    // PLAN BUILDER — tight risk-based plan with sane RR
+    // Stop = the closer of: pattern bar low (hammer wick), or 1× ATR below entry
+    //        (whichever is FARTHER from entry — so we use real structure if it's
+    //        wider than ATR, but cap at ATR if structure too far)
+    // Wait — actually we want the TIGHTEST sane stop:
+    //   Stop = max(pattern low, entry - 1.0 × ATR)  for longs
+    //          = the higher of the two = closer to entry
     var atr = computeATR(bars, 14);
     var entry = lastBar.Close;
-    var stop = sig.direction === 'long' ? Math.min(lastBar.Low, lastEma21 * 0.99) : Math.max(lastBar.High, lastEma21 * 1.01);
+    var stop;
+    if (sig.direction === 'long') {
+      // Use pattern bar low if it's within 1.5×ATR of entry, else cap at 1.5×ATR below
+      var patternLow = lastBar.Low;
+      var atrCap = entry - atr * 1.5;
+      stop = Math.max(patternLow * 0.998, atrCap);  // 0.998 = 0.2% cushion below wick
+    } else {
+      var patternHigh = lastBar.High;
+      var atrCapShort = entry + atr * 1.5;
+      stop = Math.min(patternHigh * 1.002, atrCapShort);
+    }
     var risk = Math.abs(entry - stop);
-    var tp1 = sig.direction === 'long' ? entry + atr * 1.0 : entry - atr * 1.0;
-    var tp2 = sig.direction === 'long' ? entry + atr * 2.0 : entry - atr * 2.0;
-    var rr1 = risk > 0 ? Math.abs(tp1 - entry) / risk : null;
-    var rr2 = risk > 0 ? Math.abs(tp2 - entry) / risk : null;
+
+    // Targets: 1.5× risk and 3× risk (clean RR setup)
+    var tp1 = sig.direction === 'long' ? entry + risk * 1.5 : entry - risk * 1.5;
+    var tp2 = sig.direction === 'long' ? entry + risk * 3.0 : entry - risk * 3.0;
+
+    // Sanity check: TP1 should be at least 0.75× ATR away (avoid scalp targets)
+    var minMove = atr * 0.75;
+    if (Math.abs(tp1 - entry) < minMove) {
+      tp1 = sig.direction === 'long' ? entry + minMove : entry - minMove;
+      tp2 = sig.direction === 'long' ? entry + minMove * 2 : entry - minMove * 2;
+    }
+
+    var rr1 = risk > 0 ? round2(Math.abs(tp1 - entry) / risk) : null;
+    var rr2 = risk > 0 ? round2(Math.abs(tp2 - entry) / risk) : null;
 
     return {
       ticker: ticker,
