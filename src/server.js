@@ -183,6 +183,12 @@ var publicBroker = null;
 try { publicBroker = require('./public'); console.log('[SERVER] public.js (broker) loaded OK'); }
 catch(e) { console.log('[SERVER] public.js not loaded:', e.message); }
 
+// PUBLIC SYNTHETIC BRACKET — Public has no native OCO, so this manages
+// entry → fill → place 3 child orders (TP1 + TP2 + Stop) → first-fill OCO cancel.
+var publicBracket = null;
+try { publicBracket = require('./publicBracket'); console.log('[SERVER] publicBracket loaded OK'); }
+catch(e) { console.log('[SERVER] publicBracket not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -407,6 +413,29 @@ app.delete('/api/public/order/:id', async function(req, res) {
 app.get('/api/public/order/:id', async function(req, res) {
   if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
   try { res.json(await publicBroker.getOrder(req.params.id)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// PUBLIC SYNTHETIC BRACKET — entry + auto stop + auto TP after fill
+// POST body: { symbol, quantity, entryPrice, stopPrice, tp1Price, tp2Price?, instrumentType? }
+app.post('/api/public/bracket', async function(req, res) {
+  if (!publicBracket) return res.status(500).json({ ok: false, error: 'publicBracket not loaded' });
+  try { res.json(await publicBracket.placeBracket(req.body || {})); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/public/bracket', function(req, res) {
+  if (!publicBracket) return res.status(500).json({ ok: false, error: 'publicBracket not loaded' });
+  res.json({ brackets: publicBracket.listBrackets() });
+});
+app.get('/api/public/bracket/:id', function(req, res) {
+  if (!publicBracket) return res.status(500).json({ ok: false, error: 'publicBracket not loaded' });
+  var b = publicBracket.getBracket(req.params.id);
+  if (!b) return res.status(404).json({ error: 'bracket not found' });
+  res.json(b);
+});
+app.delete('/api/public/bracket/:id', async function(req, res) {
+  if (!publicBracket) return res.status(500).json({ ok: false, error: 'publicBracket not loaded' });
+  try { res.json(await publicBracket.cancelBracket(req.params.id)); }
   catch(e) { res.status(500).json({ error: e.message }); }
 });
 
