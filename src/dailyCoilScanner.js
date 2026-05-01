@@ -51,6 +51,8 @@ try { holdOvernightChecker = require('./holdOvernightChecker'); } catch (e) {}
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var COIL_FILE = path.join(DATA_ROOT, 'coil_scan.json');
 
+var DISCORD_WEBHOOK = process.env.DISCORD_COIL_WEBHOOK || process.env.DISCORD_STRATUMSWING_WEBHOOK || null;
+
 // =============================================================================
 // STRAT BAR CLASSIFICATION
 // =============================================================================
@@ -383,6 +385,18 @@ async function runScan(opts) {
     _lastRun = { finishedAt: payload.generatedAt, scanned: payload.scanned, matched: payload.matched };
     console.log('[COIL] done in', payload.tookMs + 'ms · matched', payload.matched + '/' + payload.scanned,
                 '· ready', ready.length, '· watching', watching.length);
+
+    // Push to Discord — only on cron/EOD runs (skip on manual force scans to avoid spam)
+    if (opts.pushDiscord !== false && (opts.cron || ready.length > 0)) {
+      try {
+        var pushResult = await pushToDiscord(payload);
+        payload.discordPush = pushResult;
+      } catch (e) {
+        console.warn('[COIL] discord push failed:', e.message);
+        payload.discordPush = { error: e.message };
+      }
+    }
+
     return payload;
   } finally {
     _running = false;
@@ -395,6 +409,80 @@ function loadLast() {
   catch (e) { return { error: 'parse: ' + e.message }; }
 }
 
+// =============================================================================
+// DISCORD PUSH — top coil setups posted at 3:50 PM ET pre-close
+// =============================================================================
+async function pushToDiscord(payload) {
+  if (!DISCORD_WEBHOOK) {
+    console.log('[COIL] no DISCORD_COIL_WEBHOOK set — skipping push');
+    return { skipped: 'no webhook' };
+  }
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+
+  var ready = (payload.ready || []).slice(0, 5);
+  var watching = (payload.watching || []).slice(0, 3);
+
+  if (!ready.length && !watching.length) {
+    console.log('[COIL] no coils to push to Discord');
+    return { skipped: 'no coils' };
+  }
+
+  var lines = [];
+  lines.push('# 🌀 COIL SCAN — Pre-Close Pre-Position');
+  lines.push('_' + new Date(payload.generatedAt).toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET · ' + payload.matched + ' coils across ' + payload.scanned + ' tickers_');
+  lines.push('');
+
+  if (ready.length) {
+    lines.push('## 🔥 READY (8+ conviction)');
+    ready.forEach(function(r) {
+      var p = r.plan || {};
+      var pp = p.primary || {};
+      var dirIcon = r.direction === 'long' ? '🟢⬆️' : r.direction === 'short' ? '🔴⬇️' : '⚪';
+      var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
+      lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · conv ' + r.conviction + '/10 ' + holdIcon);
+      lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+      lines.push('  → 1ct Public + 2ct TS overnight pre-position');
+    });
+    lines.push('');
+  }
+
+  if (watching.length) {
+    lines.push('## 🟡 WATCHING (6-7 conviction)');
+    watching.forEach(function(r) {
+      var p = r.plan || {};
+      var pp = p.primary || {};
+      var dirIcon = r.direction === 'long' ? '⬆️' : '⬇️';
+      lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · ' + r.conviction + '/10 · trig `$' + (pp.trigger || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+    });
+    lines.push('');
+  }
+
+  lines.push('---');
+  lines.push('🕒 Run cron: 3:50 PM ET · Fire by 3:55-4:00 PM for RTH fills · TS allows AH option queue for next-day');
+
+  var content = lines.join('\n');
+  // Discord limits content to 2000 chars
+  if (content.length > 1900) content = content.slice(0, 1880) + '\n…(truncated)';
+
+  try {
+    var r = await fetchLib(DISCORD_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content, username: 'Coil Scanner Bot' }),
+    });
+    if (!r.ok) {
+      var t = await r.text();
+      console.warn('[COIL] discord push failed:', r.status, t.slice(0, 200));
+      return { error: 'discord-' + r.status };
+    }
+    console.log('[COIL] discord push OK (' + ready.length + ' ready, ' + watching.length + ' watching)');
+    return { posted: true, readyCount: ready.length, watchingCount: watching.length };
+  } catch (e) {
+    console.error('[COIL] discord push error:', e.message);
+    return { error: e.message };
+  }
+}
+
 function getStatus() {
   return { running: _running, lastRun: _lastRun, file: COIL_FILE };
 }
@@ -404,6 +492,7 @@ module.exports = {
   scanTicker: scanTicker,
   loadLast: loadLast,
   getStatus: getStatus,
+  pushToDiscord: pushToDiscord,
   // Exposed for testing
   stratNumber: stratNumber,
   classifySequence: classifySequence,

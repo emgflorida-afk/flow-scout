@@ -3028,21 +3028,41 @@ cron.schedule('30 16 * * 1-5', async function() {
   } catch(e) { console.error('[MSS] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
-// DAILY COIL SCANNER -- 4:00 PM ET weekdays after RTH close.
-// Outputs /data/coil_scan.json with Strat coil patterns (1-3-1, double-inside, 3-1-1)
-// for tomorrow's overnight pre-position trades.
-cron.schedule('0 16 * * 1-5', async function() {
+// DAILY COIL SCANNER -- 3:50 PM ET weekdays (10 min before close).
+// Why 3:50 not 4:00: AB needs to fire pre-position orders DURING RTH so they
+// fill same session. By 4:00 PM, RTH options orders won't fill until next-day
+// open (and Public doesn't queue AH options at all). 10 min lead time = ~95%
+// of daily bar classification stable (last 10 min rarely shifts inside/outside).
+//
+// Outputs /data/coil_scan.json + Discord push to #stratum-swing webhook.
+cron.schedule('50 15 * * 1-5', async function() {
   try {
     if (!dailyCoilScanner) return;
-    console.log('[COIL] cron triggered — scanning for daily coil patterns');
-    var out = await dailyCoilScanner.runScan({});
+    console.log('[COIL] cron triggered (3:50 PM ET) — pre-close coil scan');
+    var out = await dailyCoilScanner.runScan({ cron: true });
     if (out && out.ok) {
       console.log('[COIL] cron complete · matched ' + out.matched +
                   ' · ready=' + (out.ready || []).length +
                   ' watching=' + (out.watching || []).length +
-                  ' prep=' + (out.prep || []).length);
+                  ' prep=' + (out.prep || []).length +
+                  (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
     }
   } catch(e) { console.error('[COIL] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// COIL SCANNER FINAL run -- 4:05 PM ET weekdays (after close).
+// Re-runs against the FINAL closing bar so file/UI shows post-close-clean
+// classifications. No Discord push (already posted at 3:50). Idempotent overlay
+// for any setup that flipped in the last 10 min.
+cron.schedule('5 16 * * 1-5', async function() {
+  try {
+    if (!dailyCoilScanner) return;
+    console.log('[COIL] cron triggered (4:05 PM ET) — final post-close scan');
+    var out = await dailyCoilScanner.runScan({ cron: false, pushDiscord: false });
+    if (out && out.ok) {
+      console.log('[COIL] post-close run · matched ' + out.matched);
+    }
+  } catch(e) { console.error('[COIL] post-close cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JOHN HISTORY EXTRACTOR -- every 15 min, 8AM-10PM ET, weekdays + weekends.

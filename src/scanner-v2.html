@@ -1508,6 +1508,90 @@ async function dispatchToPublic(payload, btn) {
 }
 window.dispatchToPublic = dispatchToPublic;
 
+// =============================================================================
+// dispatchToTS — fires option order on TradeStation via /api/scanner-fire which
+// auto-resolves a swing-DTE option, picks ATM strike, and queues. Used for the
+// 2ct overnight pre-position leg of COIL setups (and elsewhere on demand).
+// =============================================================================
+async function dispatchToTS(payload, btn) {
+  const orig = btn.textContent;
+  const ticker = payload.ticker;
+  const direction = (payload.direction || '').toUpperCase();
+  const isCall = direction === 'CALL' || direction === 'LONG' || direction === 'BULLISH';
+  const qty = payload.qty || 2;
+  const tradeType = payload.tradeType || 'SWING';
+
+  const secret = getStratumSecret();
+  if (!secret) { btn.textContent = '❌ no secret'; setTimeout(() => { btn.textContent = orig; }, 2000); return; }
+
+  // Default LIVE — TS account is the margin/no-PDT one for overnight pre-positions
+  const liveDefault = payload.live !== false;
+  const liveLabel = liveDefault ? 'LIVE' : 'SIM';
+
+  if (!confirm(
+    `📱 TRADESTATION ${liveLabel} ORDER\n\n` +
+    `${isCall ? 'BUYTOOPEN CALL' : 'BUYTOOPEN PUT'} on ${ticker}\n` +
+    `Quantity: ${qty} contracts\n` +
+    `Trade type: ${tradeType}\n` +
+    `Strategy: server auto-resolves swing-DTE option (typically 2-3 weeks out, near-ATM)\n\n` +
+    `${payload.trigger ? 'Underlying trigger: $' + payload.trigger.toFixed(2) + '\n' : ''}` +
+    `${payload.stop ? 'Underlying stop: $' + payload.stop.toFixed(2) + '\n' : ''}` +
+    `${payload.tp1 ? 'TP1: $' + payload.tp1.toFixed(2) + '\n' : ''}` +
+    `\nProceed?`
+  )) return;
+
+  btn.textContent = "Placing on TS...";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch("/api/scanner-fire", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-stratum-secret": secret },
+      body: JSON.stringify({
+        ticker: ticker,
+        direction: isCall ? "BULLISH" : "BEARISH",
+        qty: qty,
+        live: liveDefault,
+        orderType: "OPTION",
+        tradeType: tradeType,
+        signalMeta: {
+          strategy: payload.pattern || 'COIL',
+          score: payload.conviction || 7,
+          underlyingTrigger: payload.trigger || null,
+          underlyingStop: payload.stop || null,
+          tp1: payload.tp1 || null,
+          tp2: payload.tp2 || null,
+        },
+      }),
+    });
+    const data = await resp.json();
+    if (resp.status === 401) {
+      localStorage.removeItem("stratumSecret");
+      btn.textContent = '❌ auth failed — refresh page';
+      btn.disabled = false;
+      return;
+    }
+    if (data && data.ok) {
+      const fillId = data.orderId || data.parentOrderId || (data.brackets && data.brackets[0] && data.brackets[0].orderId) || '';
+      btn.textContent = `✓ TS ${liveLabel} ${String(fillId).slice(0,8)}`;
+      btn.style.background = "linear-gradient(180deg, #f59e0b, #b45309)";
+      btn.style.color = "#fff";
+      btn.disabled = false;
+    } else {
+      const errTxt = (data && (data.error || data.stage)) ? String(data.error || data.stage).slice(0,80) : "unknown";
+      btn.textContent = "❌ " + errTxt;
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 6000);
+      console.error("TS order error:", data);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message.slice(0,40);
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = orig; }, 5000);
+  }
+}
+window.dispatchToTS = dispatchToTS;
+
 // Convenience wrapper for SCAN cards (uses scan.candidates[idx])
 async function dispatchScanToPublic(idx, btn) {
   const c = scan.candidates[idx];
@@ -2642,7 +2726,8 @@ function renderGridCoil() {
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0}},this)" title="Place 1ct on Public.com">📱 Public 1ct</button>
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0}},this)" title="Place bracket OCO with full plan">📱 Bracket</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0},qty:2,tradeType:'SWING',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="Place 2ct on TradeStation (auto-resolves option, queues for next-day open)">📱 TS 2ct</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0}},this)" title="Place bracket OCO on Public with full plan">📱 Public Bracket</button>
           </div>
         </div>
       `;
