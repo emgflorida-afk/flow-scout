@@ -283,7 +283,7 @@ async function preflightOrder(opts) {
   if (orderType === 'STOP'  || orderType === 'STOP_LIMIT') payload.stopPrice  = Number(opts.stopPrice).toFixed(2);
   if (instrumentType === 'OPTION') payload.openCloseIndicator = (opts.openCloseIndicator || (String(opts.side).toUpperCase() === 'BUY' ? 'OPEN' : 'CLOSE'));
 
-  var url = BASE_URL + '/orders/preflight-single-leg';
+  var url = BASE_URL + '/' + encodeURIComponent(a.accountId) + '/orders/preflight-single-leg';
   var r = await fetch(url, { method: 'POST', headers: a.headers, body: JSON.stringify(payload) });
   var t = '';
   try { t = await r.text(); } catch(e) {}
