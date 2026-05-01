@@ -240,6 +240,12 @@ var wpSwingScanner = null;
 try { wpSwingScanner = require('./wpScanner'); console.log('[SERVER] wpScanner (WP) loaded OK'); }
 catch(e) { console.log('[SERVER] wpScanner not loaded:', e.message); }
 
+// GEX CALCULATOR — replaces Bullflow gamma layer at $0/mo. Pulls TS chain, computes
+// per-strike Net GEX, identifies king nodes (price magnets), zero gamma flip, walls.
+var gexCalculator = null;
+try { gexCalculator = require('./gexCalculator'); console.log('[SERVER] gexCalculator loaded OK'); }
+catch(e) { console.log('[SERVER] gexCalculator not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -720,6 +726,40 @@ app.post('/api/wp-scan/size', function(req, res) {
 app.get('/api/wp-scan/status', function(req, res) {
   if (!wpSwingScanner) return res.status(500).json({ ok: false, error: 'wp scanner not loaded' });
   res.json(Object.assign({ ok: true }, wpSwingScanner.getStatus()));
+});
+
+// GEX CALCULATOR — last cached map, single-ticker compute, manual run, status
+app.get('/api/gex', function(req, res) {
+  if (!gexCalculator) return res.status(500).json({ ok: false, error: 'gex calculator not loaded' });
+  var data = gexCalculator.loadLast();
+  if (!data) return res.json({ ok: true, maps: [], note: 'no map yet — POST /api/gex/run' });
+  res.json(data);
+});
+
+app.get('/api/gex/:ticker', async function(req, res) {
+  if (!gexCalculator) return res.status(500).json({ ok: false, error: 'gex calculator not loaded' });
+  if (!ts) return res.status(500).json({ ok: false, error: 'TS not loaded' });
+  try {
+    var token = await ts.getAccessToken();
+    var out = await gexCalculator.computeForTicker(String(req.params.ticker).toUpperCase(), token);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/gex/run', async function(req, res) {
+  if (!gexCalculator) return res.status(500).json({ ok: false, error: 'gex calculator not loaded' });
+  try {
+    var b = req.body || {};
+    var tickers = b.tickers || (b.ticker ? [b.ticker] : null);
+    var force = b.force === true || req.query.force === '1';
+    var out = await gexCalculator.runDailyMap({ tickers: tickers, force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/gex/status/check', function(req, res) {
+  if (!gexCalculator) return res.status(500).json({ ok: false, error: 'gex calculator not loaded' });
+  res.json(Object.assign({ ok: true }, gexCalculator.getStatus()));
 });
 
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
@@ -3150,6 +3190,23 @@ cron.schedule('25 9 * * 1', async function() {
       console.log('[OVERNIGHT] Monday exit plan · ' + plan.plan.length + ' positions');
     }
   } catch(e) { console.error('[OVERNIGHT] Monday cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// GEX CALCULATOR -- 8:30 AM ET weekdays (60 min before bell).
+// Pulls full options chain for SPY/QQQ/IWM/DIA + custom GEX_TICKERS env list.
+// Computes per-strike Net GEX, king nodes, zero gamma flip. Pushes Discord map.
+// Replaces Bullflow gamma layer at $0/mo using TS chain (free).
+cron.schedule('30 8 * * 1-5', async function() {
+  try {
+    if (!gexCalculator) return;
+    console.log('[GEX] cron triggered (8:30 AM ET) — daily GEX map');
+    var out = await gexCalculator.runDailyMap({});
+    if (out && out.ok) {
+      var validCount = (out.maps || []).filter(function(m) { return !m.error; }).length;
+      console.log('[GEX] cron complete · ' + validCount + '/' + (out.maps || []).length + ' tickers mapped' +
+                  (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
+    }
+  } catch(e) { console.error('[GEX] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // WP SWING SCANNER -- 4:30 PM ET weekdays (after coil scan + post-close).
