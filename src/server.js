@@ -217,6 +217,12 @@ var swingLeapAnalyzer = null;
 try { swingLeapAnalyzer = require('./swingLeapAnalyzer'); console.log('[SERVER] swingLeapAnalyzer loaded OK'); }
 catch(e) { console.log('[SERVER] swingLeapAnalyzer not loaded:', e.message); }
 
+// JOHN HISTORY EXTRACTOR — Discord pull for all 4 channels (LOTTO/SNIPER/SWINGS feeds)
+// Cron auto-refreshes every 15 min during active hours; manual trigger via API
+var johnHistoryExtractor = null;
+try { johnHistoryExtractor = require('./johnHistoryExtractor'); console.log('[SERVER] johnHistoryExtractor loaded OK'); }
+catch(e) { console.log('[SERVER] johnHistoryExtractor not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -532,6 +538,21 @@ app.post('/api/swing-leap-batch', async function(req, res) {
     var feed = swingLeapFeed.loadFeed({ limit: max * 2, onlyCharts: true });
     var results = await swingLeapAnalyzer.batchAnalyze(feed.posts, { max: max, force: force });
     res.json({ ok: true, count: results.length, results: results });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// JOHN EXTRACTOR — status + manual trigger
+app.get('/api/john-extract/status', function(req, res) {
+  if (!johnHistoryExtractor) return res.status(500).json({ ok: false, error: 'extractor not loaded' });
+  res.json(Object.assign({ ok: true }, johnHistoryExtractor.getStatus()));
+});
+
+app.post('/api/john-extract/run', async function(req, res) {
+  if (!johnHistoryExtractor) return res.status(500).json({ ok: false, error: 'extractor not loaded' });
+  try {
+    var incremental = (req.body && req.body.incremental !== false) && req.query.full !== '1';
+    var out = await johnHistoryExtractor.runOnce({ incremental: incremental });
+    res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
@@ -2918,6 +2939,28 @@ cron.schedule('30 16 * * 1-5', async function() {
                   ' dead=' + (out.dead || []).length);
     }
   } catch(e) { console.error('[MSS] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// JOHN HISTORY EXTRACTOR -- every 15 min, 8AM-10PM ET, weekdays + weekends.
+// Refreshes raw.json for all 4 channels (option-trade-ideas, vip-flow-options-alerts,
+// free-charts, cvo-swings-leaps). Incremental mode: just fetches latest 100 msgs and
+// merges with existing — fast (~3-8s total).
+cron.schedule('*/15 8-21 * * *', async function() {
+  try {
+    if (!johnHistoryExtractor) return;
+    var out = await johnHistoryExtractor.runOnce({ incremental: true });
+    if (out.skipped) return;  // another run in flight
+    if (!out.ok) {
+      console.warn('[EXTRACT] cron partial fail:', JSON.stringify(out.errors || out.error));
+      return;
+    }
+    var totals = Object.keys(out.summary).reduce(function(acc, k) {
+      var v = out.summary[k];
+      if (v && typeof v.raw === 'number') acc += v.raw;
+      return acc;
+    }, 0);
+    console.log('[EXTRACT] cron OK · ' + out.tookMs + 'ms · ' + totals + ' total msgs across ' + Object.keys(out.summary).length + ' channels');
+  } catch(e) { console.error('[EXTRACT] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // SIM PROMOTION CHECK -- every day at 4:30PM ET

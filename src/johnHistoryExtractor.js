@@ -15,17 +15,12 @@
 // Note: bot must be a member of the JSmithTrades server with "Read Message History"
 // permission on both target channels. If 403/404 errors, that's the issue.
 
-require('dotenv').config({ path: '/tmp/john_extract.env' });
+// CLI mode: load .env from /tmp; cron mode: env already in process.env
+try { require('dotenv').config({ path: '/tmp/john_extract.env' }); } catch (e) {}
 var fs = require('fs');
 var path = require('path');
 var jsmithParser = require('./jsmithParser');
 
-// Prefer USER_TOKEN (reads JSmithTrades server you're a member of).
-// Fallback to BOT_TOKEN (only works in Stratum where the bot was added).
-var USER_TOKEN = process.env.DISCORD_USER_TOKEN;
-var BOT_TOKEN  = process.env.DISCORD_BOT_TOKEN;
-var TOKEN = USER_TOKEN || BOT_TOKEN;
-var IS_USER_TOKEN = !!USER_TOKEN;
 // Direct channel IDs (discovered from list — most reliable, skips fuzzy match issues)
 var TARGET_CHANNELS_BY_ID = [
   { name: 'option-trade-ideas',     id: '1401666517292023940' },
@@ -35,13 +30,9 @@ var TARGET_CHANNELS_BY_ID = [
   { name: 'cvo-swings-leaps',         id: '1437546513160212610' },
 ];
 
-if (!TOKEN) {
-  console.error('[EXTRACT] No DISCORD_USER_TOKEN or DISCORD_BOT_TOKEN — aborting');
-  process.exit(1);
-}
-console.log('[EXTRACT] using ' + (IS_USER_TOKEN ? 'USER token' : 'BOT token'));
-
-var OUT_DIR = '/Users/NinjaMon/Desktop/flow-scout/data/john_history';
+// OUT_DIR respects Railway /data volume; falls back to local repo data dir
+var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+var OUT_DIR = path.join(DATA_ROOT, 'john_history');
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
 var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
@@ -50,13 +41,21 @@ function api(p) {
   return 'https://discord.com/api/v10' + p;
 }
 
+// Read token at call-time so cron mode (loaded after env is set) works
+function getTokenInfo() {
+  var userToken = process.env.DISCORD_USER_TOKEN;
+  var botToken  = process.env.DISCORD_BOT_TOKEN;
+  var token = userToken || botToken;
+  return { token: token, isUserToken: !!userToken };
+}
+
 function authHeader() {
-  // User tokens are bare; bot tokens require "Bot " prefix
-  var auth = IS_USER_TOKEN ? TOKEN : ('Bot ' + TOKEN);
+  var t = getTokenInfo();
+  if (!t.token) throw new Error('No DISCORD_USER_TOKEN or DISCORD_BOT_TOKEN in env');
+  var auth = t.isUserToken ? t.token : ('Bot ' + t.token);
   return {
     'Authorization': auth,
     'Content-Type': 'application/json',
-    // Some Discord routes require a User-Agent for user-token auth
     'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36'
   };
 }
@@ -80,12 +79,26 @@ async function fetchMessages(channelId, beforeId) {
   return r.json();
 }
 
-async function backfillChannel(channel) {
-  console.log('[EXTRACT] backfilling #' + channel.name + ' (' + channel.id + ')...');
+async function backfillChannel(channel, opts) {
+  opts = opts || {};
+  var incremental = opts.incremental === true;
+  console.log('[EXTRACT] ' + (incremental ? 'incremental ' : 'full ') + '#' + channel.name + ' (' + channel.id + ')...');
+
+  // Load existing raw.json so we can dedupe-merge
+  var rawPath = path.join(OUT_DIR, channel.name + '.raw.json');
+  var existing = [];
+  if (fs.existsSync(rawPath)) {
+    try { existing = JSON.parse(fs.readFileSync(rawPath, 'utf8')) || []; }
+    catch (e) { console.warn('  existing raw parse fail: ' + e.message); existing = []; }
+  }
+
   var allMessages = [];
   var beforeId = null;
   var page = 0;
-  while (true) {
+  // Incremental: just fetch the most recent page (100 msgs) — cron runs every 15min
+  // so 100 covers the gap with huge margin. Full mode = paginate to oldest.
+  var maxPages = incremental ? 1 : 1000;
+  while (page < maxPages) {
     page++;
     var batch;
     try {
@@ -98,13 +111,19 @@ async function backfillChannel(channel) {
     allMessages = allMessages.concat(batch);
     console.log('  page ' + page + ': +' + batch.length + ' messages, total=' + allMessages.length);
     beforeId = batch[batch.length - 1].id;
-    // Discord rate limit: ~50 reqs / sec, but we throttle for safety
     await new Promise(function(r){ setTimeout(r, 250); });
-    if (batch.length < 100) break;  // last page
+    if (batch.length < 100) break;
   }
 
-  // Save raw
-  var rawPath = path.join(OUT_DIR, channel.name + '.raw.json');
+  // Merge with existing (existing wins on dupe — preserves edits/reactions)
+  if (incremental && existing.length) {
+    var existingIds = new Set(existing.map(function(m) { return m.id; }));
+    var fresh = allMessages.filter(function(m) { return !existingIds.has(m.id); });
+    allMessages = fresh.concat(existing);
+    console.log('  merged: ' + fresh.length + ' new + ' + existing.length + ' existing');
+  }
+
+  // Save raw (rawPath was set at top of function)
   fs.writeFileSync(rawPath, JSON.stringify(allMessages, null, 2));
   console.log('  raw saved -> ' + rawPath + ' (' + allMessages.length + ' msgs)');
 
@@ -146,45 +165,72 @@ async function backfillChannel(channel) {
   return { raw: allMessages.length, parsed: parsed.length };
 }
 
-async function main() {
-  console.log('[EXTRACT] starting John history backfill');
+// Track in-flight runs so cron can't double-fire
+var _running = false;
+var _lastRun = null;
 
-  // Discover the JSmith server (or use hardcoded GUILD_ID)
-  var jsmithGuildId = process.env.JSMITH_GUILD_ID;
-  if (!jsmithGuildId) {
-    var guilds = await listGuilds();
-    var jsmith = guilds.find(function(g){
-      return /jsmith|john.*smith|smith/i.test(g.name);
-    });
-    if (!jsmith) {
-      console.error('[EXTRACT] could not find JSmithTrades guild. Available guilds:');
-      guilds.forEach(function(g){ console.error('  - ' + g.name + ' (' + g.id + ')'); });
-      process.exit(1);
+async function runOnce(opts) {
+  opts = opts || {};
+  var incremental = opts.incremental === true;
+
+  if (_running) {
+    return { ok: false, error: 'extractor already running', skipped: true };
+  }
+  _running = true;
+  var start = Date.now();
+
+  try {
+    var t = getTokenInfo();
+    if (!t.token) {
+      return { ok: false, error: 'No DISCORD_USER_TOKEN or DISCORD_BOT_TOKEN in env' };
     }
-    jsmithGuildId = jsmith.id;
-    console.log('[EXTRACT] found guild: ' + jsmith.name + ' (' + jsmith.id + ')');
+    console.log('[EXTRACT] ' + (incremental ? 'incremental' : 'full') + ' run · using ' + (t.isUserToken ? 'USER token' : 'BOT token'));
+
+    var targets = TARGET_CHANNELS_BY_ID.slice();
+
+    var summary = {};
+    var errors = [];
+    for (var i = 0; i < targets.length; i++) {
+      try {
+        summary[targets[i].name] = await backfillChannel(targets[i], { incremental: incremental });
+      } catch (e) {
+        console.error('[EXTRACT] ' + targets[i].name + ' failed: ' + e.message);
+        errors.push({ channel: targets[i].name, error: e.message });
+        summary[targets[i].name] = { error: e.message };
+      }
+    }
+
+    var tookMs = Date.now() - start;
+    _lastRun = { startedAt: new Date(start).toISOString(), tookMs: tookMs, summary: summary, errors: errors, incremental: incremental };
+    console.log('[EXTRACT] done in ' + tookMs + 'ms');
+    return { ok: errors.length === 0, tookMs: tookMs, summary: summary, errors: errors };
+  } finally {
+    _running = false;
   }
-
-  // Use direct channel IDs — most reliable
-  var targets = TARGET_CHANNELS_BY_ID.map(function(t){
-    return { id: t.id, name: t.name };
-  });
-
-  console.log('[EXTRACT] targeting ' + targets.length + ' channels by ID:');
-  targets.forEach(function(c){ console.log('  - #' + c.name + ' (' + c.id + ')'); });
-
-  var summary = {};
-  for (var i = 0; i < targets.length; i++) {
-    summary[targets[i].name] = await backfillChannel(targets[i]);
-  }
-
-  console.log('[EXTRACT] DONE. Summary:');
-  console.log(JSON.stringify(summary, null, 2));
-  console.log('Files saved to: ' + OUT_DIR);
 }
 
-main().catch(function(e){
-  console.error('[EXTRACT] fatal:', e.message);
-  console.error(e.stack);
-  process.exit(1);
-});
+function getStatus() {
+  return { running: _running, lastRun: _lastRun, outDir: OUT_DIR };
+}
+
+module.exports = {
+  runOnce: runOnce,
+  getStatus: getStatus,
+  TARGET_CHANNELS_BY_ID: TARGET_CHANNELS_BY_ID,
+};
+
+// CLI entry point: only run if invoked directly (node johnHistoryExtractor.js)
+if (require.main === module) {
+  var incremental = process.argv.indexOf('--incremental') !== -1;
+  runOnce({ incremental: incremental })
+    .then(function(r) {
+      console.log('[EXTRACT] result:');
+      console.log(JSON.stringify(r, null, 2));
+      process.exit(r.ok ? 0 : 1);
+    })
+    .catch(function(e) {
+      console.error('[EXTRACT] fatal:', e.message);
+      console.error(e.stack);
+      process.exit(1);
+    });
+}
