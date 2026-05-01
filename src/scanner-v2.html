@@ -687,6 +687,7 @@ const TABS = [
   { id: "sniper",   label: "📈 SNIPER",      modeDefault: "ANALYSIS" },
   { id: "swings",   label: "🚀 SWINGS",      modeDefault: "SWING/LEAP" },
   { id: "coil",     label: "🌀 COIL",        modeDefault: "EOD PRE-POS" },
+  { id: "wp",       label: "🌊 WP",          modeDefault: "4HR SWING" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -752,6 +753,19 @@ const FILTERS_SNIPER = [
       const d = new Date(r.postedAt);
       return (Date.now() - d.getTime()) < 7 * 24 * 3600 * 1000;
   }},
+];
+
+// WP tab: 4HR/EMA swing scanner with risk-based sizing tiers
+const FILTERS_WP = [
+  { id: "all",       label: "All",            test: r => true },
+  { id: "max",       label: "🚀 MAX (9-10)",  test: r => (r.conviction||0) >= 9 },
+  { id: "ready",     label: "🔥 Ready (7+)",  test: r => (r.conviction||0) >= 7 },
+  { id: "trial",     label: "🟡 Trial (5-6)", test: r => (r.conviction||0) >= 5 && (r.conviction||0) < 7 },
+  { id: "long",      label: "Long bias",      test: r => r.direction === "long" },
+  { id: "short",     label: "Short bias",     test: r => r.direction === "short" },
+  { id: "ftfc",      label: "Daily aligned",  test: r => r.dailyAligned === true },
+  { id: "coilstack", label: "Coil + WP",      test: r => r.coilAligned === true },
+  { id: "safe",      label: "🟢 SAFE hold",   test: r => r.holdRating === "SAFE" },
 ];
 
 // COIL tab: daily 1-3-1 / double-inside / 3-1-1 coil patterns from dailyCoilScanner
@@ -973,6 +987,7 @@ function renderFilters() {
   else if (activeTab === "sniper")   dataSource = (sniperData && sniperData.posts) || [];
   else if (activeTab === "swings")   dataSource = (swingLeapData && swingLeapData.posts) || [];
   else if (activeTab === "coil")     dataSource = (coilData && [].concat(coilData.ready||[], coilData.watching||[], coilData.prep||[])) || [];
+  else if (activeTab === "wp")       dataSource = (wpData && [].concat(wpData.ready||[], wpData.trial||[])) || [];
   else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
 
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
@@ -994,6 +1009,7 @@ function renderFilters() {
       else if (activeTab === "sniper")   renderGridSniper();
       else if (activeTab === "swings")   renderGridSwingLeap();
       else if (activeTab === "coil")     renderGridCoil();
+      else if (activeTab === "wp")       renderGridWP();
       else if (activeTab === "starred")  renderGridStarred();
     });
   });
@@ -2129,6 +2145,7 @@ function renderTabs() {
               : activeTab === "sniper"   ? FILTERS_SNIPER
               : activeTab === "swings"   ? FILTERS_SWINGS
               : activeTab === "coil"     ? FILTERS_COIL
+              : activeTab === "wp"       ? FILTERS_WP
               : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
       renderTabs();
@@ -2173,6 +2190,7 @@ async function loadActiveTab() {
   if (activeTab === "sniper")   return loadSniperData();
   if (activeTab === "swings")   return loadSwingLeapData();
   if (activeTab === "coil")     return loadCoilData();
+  if (activeTab === "wp")       return loadWPData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -2734,6 +2752,207 @@ function renderGridCoil() {
     }).join("");
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Coil render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// 🌊 WP tab — Wealth Prince 4HR/EMA swing scanner with risk-based sizing tiers
+// + discipline guards (NO size-up <7, TURBO requires YES_AAA override)
+// =============================================================================
+let wpData = null;
+
+async function loadWPData() {
+  FILTERS = FILTERS_WP;
+  if (!FILTERS_WP.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!wpData) document.getElementById("grid").innerHTML = `<div class="empty">Loading WP scan... 4HR EMA setups across universe.<br><span style="font-size:11px;">First run takes ~25s — pulls 4HR bars + computes 9/21 EMA + multi-TF alignment.</span></div>`;
+    const r = await fetch("/api/wp-scan", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    wpData = await r.json();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load WP scan: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const ready = wpData.ready || [];
+  const trial = wpData.trial || [];
+  document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${ready.length + trial.length} setups · ${(wpData.scanned || 0)} scanned · acct $${(wpData.accountSize || 20000).toLocaleString()}`;
+  renderStatsWP();
+  renderFilters();
+  renderTabs();
+  renderGridWP();
+}
+
+function renderStatsWP() {
+  const ready = wpData.ready || [];
+  const trial = wpData.trial || [];
+  const max = ready.filter(r => r.conviction >= 9).length;
+  const standard = ready.filter(r => r.conviction >= 7 && r.conviction < 9).length;
+  const stats = [
+    { k: "🚀 MAX",     v: max,           cls: "green" },
+    { k: "🔥 Ready",   v: ready.length,  cls: "" },
+    { k: "🟡 Trial",   v: trial.length,  cls: "" },
+    { k: "FTFC",       v: ready.filter(r => r.dailyAligned).length, cls: "green" },
+    { k: "Coil+WP",    v: ready.filter(r => r.coilAligned).length, cls: "" },
+    { k: "Long",       v: [...ready, ...trial].filter(r => r.direction === "long").length, cls: "green" },
+    { k: "Short",      v: [...ready, ...trial].filter(r => r.direction === "short").length, cls: "red" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+async function refreshWPScan() {
+  const btn = document.getElementById("wp-refresh-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "🌊 Scanning..."; }
+  try {
+    const r = await fetch("/api/wp-scan/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const data = await r.json();
+    if (data.skipped) { alert("Scan already running, please wait."); return; }
+    wpData = data;
+    renderStatsWP();
+    renderGridWP();
+  } catch (e) { alert("Refresh failed: " + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "🌊 Re-scan"; } }
+}
+window.refreshWPScan = refreshWPScan;
+
+// Computes recommended sizing on the fly given a card's conviction + premium hint
+async function getWPSizing(conviction, premium, turbo) {
+  try {
+    const r = await fetch("/api/wp-scan/size", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conviction, premium, turboOverride: !!turbo, overrideKeyword: turbo ? 'YES_AAA' : '' }),
+    });
+    const data = await r.json();
+    return data.sizing || { skip: true };
+  } catch (e) { return { skip: true, error: e.message }; }
+}
+
+const WP_SIGNAL_INFO = {
+  'hammer-long':              { icon: '🔨', desc: 'Hammer at 4HR support — bullish reversal' },
+  'pullback-9ema-long':       { icon: '📈', desc: 'Pullback to 9 EMA + bounce — trend continuation' },
+  'inside-after-up-long':     { icon: '🟢', desc: 'Inside bar after directional up — coil prep' },
+  'star-short':               { icon: '⭐', desc: 'Shooting star at 4HR resistance — bearish reversal' },
+  'pullback-9ema-short':      { icon: '📉', desc: 'Pullback to 9 EMA + reject — short trend continuation' },
+  'inside-after-down-short':  { icon: '🔴', desc: 'Inside bar after directional down — coil prep' },
+};
+
+function renderGridWP() {
+  try {
+    FILTERS = FILTERS_WP;
+    const all = [].concat(wpData.ready || [], wpData.trial || []);
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = all.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `
+        <div class="empty">
+          No WP setups match "${filter.label}".<br>
+          <button id="wp-refresh-btn" onclick="refreshWPScan()" class="btn btn-primary" style="margin-top:12px;">🌊 Re-scan now</button>
+        </div>`;
+      return;
+    }
+
+    const refreshBtn = `<div style="margin-bottom:12px; text-align:right;"><button id="wp-refresh-btn" onclick="refreshWPScan()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">🌊 Re-scan</button></div>`;
+
+    const focusBanner = `
+      <div style="margin-bottom:12px; padding:10px; background:rgba(180,70,255,0.08); border:1px solid rgba(180,70,255,0.3); border-radius:8px; font-size:12px; color:var(--txt-2);">
+        <strong style="color:#b446ff;">🎯 FOCUS RULE</strong> · Pick ONE setup. Watch it. Wait for trigger to fire perfectly. Don't spread across multiple — that's where money gets lost.
+      </div>`;
+
+    document.getElementById("grid").innerHTML = refreshBtn + focusBanner + filtered.map(r => {
+      const info = WP_SIGNAL_INFO[r.signal] || { icon: '🌊', desc: r.signal };
+      const dirColor = r.direction === 'long' ? '#16e39d' : r.direction === 'short' ? '#ff6b6b' : '#ffc107';
+      const convColor = r.conviction >= 9 ? '#16e39d' : r.conviction >= 7 ? '#ffc107' : '#ff6b6b';
+      const tier = r.conviction >= 9 ? '🚀 MAX' : r.conviction >= 7 ? '🔥 STANDARD' : r.conviction >= 5 ? '🟡 TRIAL' : '⛔ SKIP';
+      const tierColor = r.conviction >= 9 ? '#16e39d' : r.conviction >= 7 ? '#46b4ff' : '#ffc107';
+      const allowSizeUp = r.conviction >= 7;
+      const starred = isStarred(r.ticker);
+      const plan = r.plan || {};
+
+      // Hold rating pill
+      let holdPillHtml = '';
+      if (r.holdRating === 'SAFE') holdPillHtml = `<span class="tag" style="background:rgba(22,227,157,0.18); color:#16e39d; font-size:10px;">🟢 SAFE</span>`;
+      else if (r.holdRating === 'CAUTION') holdPillHtml = `<span class="tag" style="background:rgba(255,193,7,0.18); color:#ffc107; font-size:10px;">🟡 CAUTION</span>`;
+      else if (r.holdRating === 'AVOID') holdPillHtml = `<span class="tag" style="background:rgba(255,107,107,0.18); color:#ff6b6b; font-size:10px;">🔴 AVOID</span>`;
+
+      // Confluence pills
+      const confluencePills = [
+        r.dailyAligned ? `<span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">FTFC ✅</span>` : '',
+        r.coilAligned ? `<span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">COIL ✅</span>` : '',
+        r.counterTrendDaily ? `<span class="tag" style="background:rgba(255,107,107,0.15); color:#ff6b6b; font-size:10px;">⚠ COUNTER-TREND</span>` : '',
+        r.johnPrecedent > 0 ? `<span class="tag" style="background:rgba(255,193,7,0.18); color:#ffc107; font-size:10px;">JOHN ${r.johnPrecedent}×</span>` : '',
+      ].filter(Boolean).join(' ');
+
+      const optDir = r.direction === 'long' ? 'CALL' : 'PUT';
+      const sizeUpDisabled = !allowSizeUp;
+
+      return `
+        <div class="card" data-wp-ticker="${r.ticker}">
+          <div class="card-head">
+            <div style="flex:1;">
+              <div class="ticker mono">${r.ticker} ${info.icon}</div>
+              <div style="font-size:11px; color:var(--txt-3); margin-top:4px;">
+                ${r.signal} · 4HR · close $${r.lastClose}
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag" style="background:${tierColor}22; color:${tierColor}; font-weight:700; font-size:11px;">${tier}</span>
+              <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              <button onclick="event.stopPropagation();toggleStar('${r.ticker}','wp')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
+            </div>
+          </div>
+
+          <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
+
+          ${confluencePills ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>` : (holdPillHtml ? `<div style="margin-top:8px;">${holdPillHtml}</div>` : '')}
+
+          <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:#46b4ff; font-weight:700;">📋 WP SWING PLAN</span>
+              <span style="color:${dirColor}; font-weight:700; text-transform:uppercase;">${r.direction}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+              <div><span style="color:var(--txt-3);">Entry:</span> <span class="mono" style="color:var(--txt);">$${plan.entry || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Stop:</span> <span class="mono" style="color:#ff6b6b;">$${plan.stop || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP1:</span> <span class="mono" style="color:#16e39d;">$${plan.tp1 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP2:</span> <span class="mono" style="color:#16e39d;">$${plan.tp2 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Risk:</span> <span class="mono">$${plan.risk || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">RR1:</span> <span class="mono" style="color:${plan.rr1 >= 1.5 ? '#16e39d' : '#ffc107'};">${plan.rr1 || '—'}×</span></div>
+              <div><span style="color:var(--txt-3);">9 EMA:</span> <span class="mono">$${r.ema9 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">21 EMA:</span> <span class="mono">$${r.ema21 || '—'}</span></div>
+            </div>
+          </div>
+
+          <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px; font-size:10px; color:var(--txt-3); line-height:1.5;">
+            <strong style="color:var(--txt-2);">Sizing tier:</strong> ${tier} (${r.conviction}/10)<br>
+            <strong style="color:var(--txt-2);">Action:</strong> ${
+              r.conviction >= 10 ? 'TURBO available — requires YES_AAA override word' :
+              r.conviction >= 9 ? 'MAX TIER — 7.5% of account ($1,500 budget) · QCOM-quality' :
+              r.conviction >= 7 ? 'STANDARD — 5% of account ($1,000 budget) · 2-3ct typical' :
+              r.conviction >= 5 ? 'TRIAL ONLY — 2.5% ($500 budget) · 1ct, NO size-up' :
+              'SKIP — conviction too low'
+            }
+          </div>
+
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            ${allowSizeUp ? `
+              <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="Public 1ct (cash leg)">📱 Public 1ct</button>
+              <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0},stop:${plan.stop||0},tp1:${plan.tp1||0},tp2:${plan.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'SWING',pattern:'${r.signal}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct (margin/no-PDT, swing)">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
+            ` : `
+              <button class="btn btn-primary" style="background:rgba(255,193,7,0.2); color:#ffc107; padding:5px 10px; font-size:11px; border:1px dashed #ffc107;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="TRIAL only — 1ct Public, NO size-up">🟡 Public 1ct (trial)</button>
+              <span style="padding:5px 10px; font-size:10px; color:var(--txt-3); font-style:italic;">⚠️ Conviction <7 — system blocks size-up</span>
+            `}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">WP render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
 
