@@ -931,16 +931,35 @@ function renderStats() {
 }
 
 function renderFilters() {
-  const cands = scan.candidates || [];
+  // FIX May 1: pick the right data source for the ACTIVE tab — was always
+  // reading scan.candidates which is null when user jumps direct to LOTTO/SNIPER
+  let dataSource = [];
+  if (activeTab === "scan")          dataSource = (scan && scan.candidates) || [];
+  else if (activeTab === "movers")   dataSource = (typeof moversData !== 'undefined' && moversData) || [];
+  else if (activeTab === "lvl")      dataSource = (lvlData && lvlData.results) || [];
+  else if (activeTab === "tomorrow") dataSource = (radarData && radarData._flat) || [];
+  else if (activeTab === "lotto")    dataSource = (lottoData && lottoData.picks) || [];
+  else if (activeTab === "sniper")   dataSource = (sniperData && sniperData.posts) || [];
+  else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
+
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
-    const count = cands.filter((c, i) => f.test(c, i)).length;
+    let count = 0;
+    try { count = dataSource.filter((c, i) => f.test(c, i)).length; }
+    catch (e) { count = 0; }
     return `<div class="filter ${f.id === activeFilter ? "active" : ""}" data-id="${f.id}">${f.label}<span class="count">${count}</span></div>`;
   }).join("");
   document.querySelectorAll(".filter").forEach(el => {
     el.addEventListener("click", () => {
       activeFilter = el.dataset.id;
       renderFilters();
-      renderGrid();
+      // Re-render the active tab's grid (was hardcoded to renderGrid which is SCAN-only)
+      if (activeTab === "scan")          renderGrid();
+      else if (activeTab === "movers")   renderGridMovers();
+      else if (activeTab === "lvl")      renderGridLvl();
+      else if (activeTab === "tomorrow") renderGridTomorrow();
+      else if (activeTab === "lotto")    renderGridLotto();
+      else if (activeTab === "sniper")   renderGridSniper();
+      else if (activeTab === "starred")  renderGridStarred();
     });
   });
 }
