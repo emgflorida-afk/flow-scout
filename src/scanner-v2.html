@@ -1131,7 +1131,8 @@ function openDetail(idx) {
         <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
-        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchScanToPublic(${idx}, this)" title="Place on Public.com (cash account, no PDT)">📱 Send to Public</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchScanToPublic(${idx}, this)" title="Place on Public.com (cash account, no PDT)">📱 Public</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchScanToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
     </div>
 
@@ -1441,6 +1442,157 @@ async function dispatchScanToPublic(idx, btn) {
 }
 window.dispatchScanToPublic = dispatchScanToPublic;
 
+// =============================================================================
+// PUBLIC BRACKET FIRE — entry + auto stop + auto TP1/TP2 (synth OCO)
+// Calls /api/public/bracket which manages the full lifecycle server-side.
+// =============================================================================
+async function dispatchToBracket(payload, btn) {
+  const orig = btn.textContent;
+  const ticker = payload.ticker;
+  const direction = (payload.direction || '').toUpperCase();
+  const isLong = direction === 'CALL' || direction === 'LONG' || direction === 'BULLISH';
+  if (!isLong) {
+    if (!confirm('⚠ Bracket on PUT/SHORT side requires manual review — continue?')) return;
+  }
+
+  // Pick symbol (option preferred for leverage)
+  let symbol = payload.contract || payload.ticker;
+  let isOption = !!payload.contract;
+  let entryPrice = isOption ? (payload.optionEntry || payload.optionMid || payload.trigger) : payload.trigger;
+  let stopPrice  = isOption ? (payload.optionStop || payload.stop) : payload.stop;
+  let tp1Price   = isOption ? (payload.optionTp1  || payload.tp1)  : payload.tp1;
+  let tp2Price   = isOption ? (payload.optionTp2  || payload.tp2)  : payload.tp2;
+
+  if (!entryPrice || !stopPrice || !tp1Price) {
+    btn.textContent = '❌ need entry/stop/tp1';
+    setTimeout(() => { btn.textContent = orig; }, 3000);
+    return;
+  }
+  if (!tp2Price) tp2Price = tp1Price;   // fall back if no tp2
+
+  // Default 2 ct (≈ matches QCOM bracket pattern: split into 2× 1-ct legs)
+  const defaultQty = 2;
+  const qtyStr = prompt(
+    `📱 PUBLIC BRACKET — ${ticker} (${isOption ? 'OPTION' : 'EQUITY'})\n\n` +
+    `Entry:  $${entryPrice.toFixed(2)}\n` +
+    `Stop:   $${stopPrice.toFixed(2)}\n` +
+    `TP1:    $${tp1Price.toFixed(2)} (half qty)\n` +
+    `TP2:    $${tp2Price.toFixed(2)} (runner half)\n\n` +
+    `How many ${isOption ? 'contracts' : 'shares'}? (default 2)`,
+    String(defaultQty)
+  );
+  if (!qtyStr) return;
+  const qty = parseInt(qtyStr) || defaultQty;
+
+  if (!confirm(
+    `📱 PUBLIC BRACKET CONFIRM\n\n` +
+    `${ticker} ${isOption ? '(OPTION)' : '(EQUITY)'}\n` +
+    `Entry: BUY ${qty} @ $${entryPrice.toFixed(2)} LIMIT\n` +
+    `Then auto-place after fill:\n` +
+    `  SELL ${Math.floor(qty/2)||1} @ $${tp1Price.toFixed(2)} LIMIT (TP1)\n` +
+    `  SELL ${qty - (Math.floor(qty/2)||1)} @ $${tp2Price.toFixed(2)} LIMIT (TP2)\n` +
+    `  SELL ${qty} @ $${stopPrice.toFixed(2)} STOP_LIMIT (Stop)\n\n` +
+    `OCO: first leg fills cancels the others.\n\nProceed?`
+  )) return;
+
+  btn.textContent = "📱 Placing bracket...";
+  btn.disabled = true;
+
+  try {
+    const resp = await fetch("/api/public/bracket", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        symbol: symbol,
+        quantity: qty,
+        entryPrice: entryPrice,
+        stopPrice: stopPrice,
+        tp1Price: tp1Price,
+        tp2Price: tp2Price,
+        instrumentType: isOption ? "OPTION" : "EQUITY",
+      }),
+    });
+    const data = await resp.json();
+    if (data && data.ok && data.bracketId) {
+      btn.textContent = `✓ BRK ${data.bracketId.slice(0,8)} (waiting fill)`;
+      btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+      btn.style.color = "#07090f";
+      btn.disabled = false;
+      console.log("Bracket placed:", data);
+    } else {
+      const errTxt = (data && (data.error || data.stage)) ? String(data.error || data.stage).slice(0,80) : "unknown error";
+      btn.textContent = "❌ " + errTxt;
+      btn.disabled = false;
+      setTimeout(() => { btn.textContent = orig; }, 6000);
+    }
+  } catch (e) {
+    btn.textContent = "❌ " + e.message.slice(0,40);
+    btn.disabled = false;
+    setTimeout(() => { btn.textContent = orig; }, 5000);
+  }
+}
+window.dispatchToBracket = dispatchToBracket;
+
+async function dispatchScanToBracket(idx, btn) {
+  const c = scan.candidates[idx];
+  if (!c) return;
+  const t = getEntryTiming(c);
+  const r = Math.abs(t.trigger - t.stop);
+  const tp2 = c.direction === 'CALL' ? t.trigger + 2*r : t.trigger - 2*r;
+  return dispatchToBracket({
+    ticker: c.ticker,
+    direction: c.direction,
+    contract: c.contract,
+    optionEntry: c.optionEntry || c.optionMid,
+    optionStop: c.optionStop,
+    optionTp1: c.optionTp1,
+    optionTp2: c.optionTp2,
+    trigger: t.trigger,
+    stop: t.stop,
+    tp1: t.tp1,
+    tp2: tp2,
+  }, btn);
+}
+window.dispatchScanToBracket = dispatchScanToBracket;
+
+async function dispatchMoverToBracket(idx, btn) {
+  const m = (moversData && moversData[idx]) || (scan && scan.movers && scan.movers[idx]);
+  if (!m) { btn.textContent = '❌ no mover'; return; }
+  const trigger = m.triggerPrice || m.last || m.optionEntry;
+  return dispatchToBracket({
+    ticker: m.ticker,
+    direction: (m.pctChange >= 0) ? 'CALL' : 'PUT',
+    contract: m.contract || m.optionSymbol,
+    optionEntry: m.optionEntry || m.optionMid,
+    optionStop: m.optionStop,
+    optionTp1: m.optionTp1,
+    optionTp2: m.optionTp2,
+    trigger: trigger,
+    stop: m.structuralStop || m.optionStop,
+    tp1: m.optionTp1 || m.stockTp1,
+    tp2: m.optionTp2 || m.stockTp2,
+  }, btn);
+}
+window.dispatchMoverToBracket = dispatchMoverToBracket;
+
+async function dispatchRadarToBracket(ticker, btn) {
+  const setup = (radarData && radarData._flat || []).find(s => s.ticker === ticker);
+  if (!setup) { btn.textContent = '❌ no card'; return; }
+  const isLong = (setup.target || 0) >= (setup.spot || 0);
+  const tp1 = setup.target ? (setup.spot + (setup.target - setup.spot) * 0.5) : null;   // 50% to target
+  return dispatchToBracket({
+    ticker: setup.ticker,
+    direction: setup.direction || (isLong ? 'CALL' : 'PUT'),
+    contract: setup.contract,
+    optionEntry: setup.optionEntry,
+    trigger: typeof setup.trigger === 'number' ? setup.trigger : setup.spot,
+    stop: setup.stop,
+    tp1: tp1 || setup.target,
+    tp2: setup.target,
+  }, btn);
+}
+window.dispatchRadarToBracket = dispatchRadarToBracket;
+
 // MOVERS dispatcher — uses moversData[idx]
 async function dispatchMoverToPublic(idx, btn) {
   const m = (moversData && moversData[idx]) || (scan && scan.movers && scan.movers[idx]);
@@ -1633,6 +1785,7 @@ function openMoverDetail(idx) {
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
     </div>
     ` : `
@@ -1649,6 +1802,7 @@ function openMoverDetail(idx) {
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
     </div>
     `}
@@ -1981,7 +2135,8 @@ function renderGridTomorrow() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 Send to Public</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 Public</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 Bracket</button>
           </div>
         </div>
       `;
