@@ -130,7 +130,7 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
         if (line.startsWith('data:')) line = line.slice(5).trim();
         if (!line) continue;
         rawLineCount++;
-        if (!sampleLine && line.length > 30) sampleLine = line.slice(0, 250);
+        if (!sampleLine && line.length > 30) sampleLine = line.slice(0, 800);
         try {
           var obj = JSON.parse(line);
           if (obj && typeof obj === 'object') {
