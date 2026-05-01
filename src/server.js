@@ -195,6 +195,12 @@ var lottoFeed = null;
 try { lottoFeed = require('./lottoFeed'); console.log('[SERVER] lottoFeed loaded OK'); }
 catch(e) { console.log('[SERVER] lottoFeed not loaded:', e.message); }
 
+// HOLD OVERNIGHT CHECKER — per-ticker safety classifier. Returns SAFE/CAUTION/AVOID
+// with reasons. Used to decide which setups can be held past EOD without exposure.
+var holdOvernightChecker = null;
+try { holdOvernightChecker = require('./holdOvernightChecker'); console.log('[SERVER] holdOvernightChecker loaded OK'); }
+catch(e) { console.log('[SERVER] holdOvernightChecker not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -451,6 +457,36 @@ app.get('/api/lotto-feed', function(req, res) {
   try {
     var limit = parseInt(req.query.limit || '20');
     res.json(lottoFeed.loadFeed({ limit: limit }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
+// GET /api/safe-to-hold/AAPL?direction=LONG
+app.get('/api/safe-to-hold/:ticker', async function(req, res) {
+  if (!holdOvernightChecker) return res.status(500).json({ ok: false, error: 'holdOvernightChecker not loaded' });
+  try {
+    var direction = req.query.direction || 'LONG';
+    var out = await holdOvernightChecker.checkTicker(req.params.ticker, { direction: direction });
+    res.json(out);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// Batch — POST { tickers: [{ticker, direction}], }
+app.post('/api/safe-to-hold/batch', async function(req, res) {
+  if (!holdOvernightChecker) return res.status(500).json({ ok: false, error: 'holdOvernightChecker not loaded' });
+  try {
+    var list = (req.body && req.body.tickers) || [];
+    var results = [];
+    for (var i = 0; i < list.length; i++) {
+      var t = list[i];
+      try {
+        var r = await holdOvernightChecker.checkTicker(t.ticker, { direction: t.direction || 'LONG' });
+        results.push(r);
+      } catch (e) {
+        results.push({ ticker: t.ticker, rating: 'CAUTION', error: e.message });
+      }
+    }
+    res.json({ results: results });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

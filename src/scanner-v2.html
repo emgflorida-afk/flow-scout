@@ -2089,6 +2089,20 @@ function renderGridTomorrow() {
     const order = { ready: 0, forming: 1, earnings: 2 };
     filtered.sort((a, b) => (order[a._state] ?? 99) - (order[b._state] ?? 99));
 
+    // Async hold-overnight lookups
+    setTimeout(() => {
+      filtered.forEach(r => {
+        if (r._state === 'earnings') return;   // earnings cards are already AVOID
+        const isLong = (r.target || 0) >= (r.spot || 0);
+        const dir = r.direction || (isLong ? 'LONG' : 'SHORT');
+        getHoldRating(r.ticker, dir).then(rating => {
+          if (!rating) return;
+          const el = document.getElementById(`hold-pill-${r.ticker}-tomorrow`);
+          if (el) el.outerHTML = `<span id="hold-pill-${r.ticker}-tomorrow">${holdPill(rating)}</span>`;
+        });
+      });
+    }, 100);
+
     document.getElementById("grid").innerHTML = filtered.map(r => {
       const pill = RADAR_STATE_PILLS[r._state] || RADAR_STATE_PILLS.forming;
       const isLong = (r.target || 0) >= (r.spot || 0);
@@ -2128,6 +2142,7 @@ function renderGridTomorrow() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="dir-pill ${dirPill}">${dirText}</span>
               <span class="lvl-tfpill ${pill.cls}" style="padding: 4px 10px; font-size:11px;">${pill.txt}</span>
+              <span id="hold-pill-${r.ticker}-tomorrow" data-hold-ticker="${r.ticker}" data-hold-dir="${dirText}"></span>
               <button class="star-btn" data-ticker="${r.ticker}" onclick="event.stopPropagation();toggleStar('${r.ticker}','tomorrow')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;">${starred?'★':'☆'}</button>
             </div>
           </div>
@@ -2165,6 +2180,35 @@ function renderGridTomorrow() {
 // 🎰 LOTTO tab — John VIP daily picks (cheap-call lotteries) from /api/lotto-feed
 // =============================================================================
 let lottoData = null;
+
+// Cache hold-overnight ratings by ticker so we don't re-query every render
+const _holdCache = new Map();
+async function getHoldRating(ticker, direction) {
+  if (!ticker) return null;
+  const key = ticker + ':' + (direction || 'LONG');
+  if (_holdCache.has(key)) return _holdCache.get(key);
+  try {
+    const r = await fetch(`/api/safe-to-hold/${encodeURIComponent(ticker)}?direction=${encodeURIComponent(direction || 'LONG')}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const data = await r.json();
+    _holdCache.set(key, data);
+    // Clear cache after 5 min so it refreshes naturally
+    setTimeout(() => _holdCache.delete(key), 5 * 60 * 1000);
+    return data;
+  } catch (e) { return null; }
+}
+window.getHoldRating = getHoldRating;
+
+function holdPill(rating) {
+  if (!rating) return '';
+  const r = rating.rating || 'CAUTION';
+  const icon = r === 'SAFE' ? '🟢' : r === 'CAUTION' ? '🟡' : '🔴';
+  const bg = r === 'SAFE' ? 'rgba(76,175,80,0.18)' : r === 'CAUTION' ? 'rgba(255,193,7,0.18)' : 'rgba(255,59,59,0.18)';
+  const fg = r === 'SAFE' ? '#4caf50' : r === 'CAUTION' ? '#ffc107' : '#ff3b3b';
+  const tooltip = (rating.reasons || []).map(x => x.msg).slice(0, 6).join(' • ');
+  return `<span class="tag" style="background:${bg};color:${fg};font-size:10px;" title="${tooltip}">${icon} HOLD ${r}</span>`;
+}
+window.holdPill = holdPill;
 
 async function loadLottoData() {
   FILTERS = FILTERS_LOTTO;
@@ -2222,6 +2266,17 @@ function renderGridLotto() {
       document.getElementById("grid").innerHTML = `<div class="empty">No picks match "${filter.label}".${picks.length === 0 ? '<br><span style="font-size:11px;">Run the John extractor or wait for new posts.</span>' : ''}</div>`;
       return;
     }
+    // Async hold-overnight lookups for each ticker — populate pills after grid renders
+    setTimeout(() => {
+      filtered.forEach(p => {
+        getHoldRating(p.ticker, p.direction || 'LONG').then(rating => {
+          if (!rating) return;
+          const el = document.getElementById(`hold-pill-${p.ticker}-lotto`);
+          if (el) el.outerHTML = `<span id="hold-pill-${p.ticker}-lotto">${holdPill(rating)}</span>`;
+        });
+      });
+    }, 100);
+
     document.getElementById("grid").innerHTML = filtered.map(p => {
       const isCall = p.direction === "CALL";
       const dirClass = isCall ? "long" : (p.direction === "PUT" ? "short" : "");
@@ -2239,6 +2294,7 @@ function renderGridLotto() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               ${p.direction ? `<span class="dir-pill ${isCall ? 'call' : 'put'}">${p.direction}</span>` : ''}
               <span class="tag" style="background:rgba(155,109,255,0.2); color:#9b6dff; font-size:10px;">🎰 LOTTO</span>
+              <span id="hold-pill-${p.ticker}-lotto" data-hold-ticker="${p.ticker}" data-hold-dir="${p.direction || 'LONG'}"></span>
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
           </div>
