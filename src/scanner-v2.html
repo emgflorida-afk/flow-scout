@@ -683,6 +683,7 @@ const TABS = [
   { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
   { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
   { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING" },
+  { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "DAY" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -734,6 +735,18 @@ const FILTERS_TOMORROW = [
   { id: "long",     label: "Long bias",    test: r => (r.direction || "").toUpperCase() === "LONG" || (r.type === "A" && (r.target || 0) > (r.spot || 0)) },
   { id: "short",    label: "Short bias",   test: r => (r.direction || "").toUpperCase() === "SHORT" || (r.target || 0) < (r.spot || 0) },
   { id: "typeA",    label: "Type A",       test: r => r.type === "A" },
+];
+
+// LOTTO tab: cheap-call lottery picks (John VIP feed)
+const FILTERS_LOTTO = [
+  { id: "all",     label: "All",          test: r => true },
+  { id: "call",    label: "Calls",        test: r => r.direction === "CALL" },
+  { id: "put",     label: "Puts",         test: r => r.direction === "PUT" },
+  { id: "today",   label: "Today only",   test: r => {
+      const d = new Date(r.postedAt);
+      const today = new Date();
+      return d.toISOString().slice(0,10) === today.toISOString().slice(0,10);
+  }},
 ];
 
 // STARRED tab: filters by ticker bucket (resolved from cached scan/movers/lvl/tomorrow)
@@ -1018,6 +1031,7 @@ function renderGrid() {
             <span class="dir-pill ${isCall ? "call" : "put"}">${c.direction}</span>
             <span class="lvl-tfpill ${fresh.color}" style="padding: 4px 10px; font-size:11px;" title="${fresh.advice}">${fresh.label}</span>
             <div class="score-badge"><span class="score-num ${scoreClass(c.score)} mono">${c.score}</span><span class="score-lbl">Score</span></div>
+            <button onclick="event.stopPropagation();toggleStar('${c.ticker}','scan')" style="background:transparent;border:none;cursor:pointer;color:${isStarred(c.ticker)?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;" title="Star this ticker">${isStarred(c.ticker)?'★':'☆'}</button>
           </div>
         </div>
 
@@ -1996,6 +2010,7 @@ async function loadActiveTab() {
   if (activeTab === "movers")   return loadMoversData();
   if (activeTab === "lvl")      return loadLvlData();
   if (activeTab === "tomorrow") return loadTomorrowData();
+  if (activeTab === "lotto")    return loadLottoData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -2145,6 +2160,137 @@ function renderGridTomorrow() {
     document.getElementById("grid").innerHTML = `<div class="empty">Tomorrow render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
+
+// =============================================================================
+// 🎰 LOTTO tab — John VIP daily picks (cheap-call lotteries) from /api/lotto-feed
+// =============================================================================
+let lottoData = null;
+
+async function loadLottoData() {
+  FILTERS = FILTERS_LOTTO;
+  try {
+    if (!lottoData) document.getElementById("grid").innerHTML = `<div class="empty">Loading lotto feed...</div>`;
+    const r = await fetch("/api/lotto-feed?limit=30", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    lottoData = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load lotto feed: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  document.getElementById("scan-date").textContent = "Lotto Feed · " + new Date(lottoData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const picks = lottoData.picks || [];
+  const todayPicks = picks.filter(p => {
+    const d = new Date(p.postedAt);
+    const today = new Date();
+    return d.toISOString().slice(0,10) === today.toISOString().slice(0,10);
+  });
+  document.getElementById("meta").textContent = `${picks.length} recent picks · ${todayPicks.length} today · last ${lottoData.freshnessDays}d`;
+  renderStatsLotto();
+  renderFilters();
+  renderTabs();
+  renderGridLotto();
+}
+
+function renderStatsLotto() {
+  const picks = lottoData.picks || [];
+  const calls = picks.filter(p => p.direction === "CALL").length;
+  const puts  = picks.filter(p => p.direction === "PUT").length;
+  const today = picks.filter(p => {
+    const d = new Date(p.postedAt);
+    return d.toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+  }).length;
+  const stats = [
+    { k: "Total",  v: picks.length, cls: "" },
+    { k: "Today",  v: today,        cls: "green" },
+    { k: "Calls",  v: calls,        cls: "aqua" },
+    { k: "Puts",   v: puts,         cls: "red" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridLotto() {
+  try {
+    const picks = lottoData.picks || [];
+    const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
+    const filtered = picks.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No picks match "${filter.label}".${picks.length === 0 ? '<br><span style="font-size:11px;">Run the John extractor or wait for new posts.</span>' : ''}</div>`;
+      return;
+    }
+    document.getElementById("grid").innerHTML = filtered.map(p => {
+      const isCall = p.direction === "CALL";
+      const dirClass = isCall ? "long" : (p.direction === "PUT" ? "short" : "");
+      const starred = isStarred(p.ticker);
+      const postedDate = p.postedAt ? new Date(p.postedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+      const isToday = p.postedAt && new Date(p.postedAt).toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+      return `
+        <div class="card ${dirClass}" data-lotto-ticker="${p.ticker}">
+          <div class="card-head">
+            <div>
+              <div class="ticker mono">${p.ticker}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${p.contract || (p.strike + (p.direction === 'CALL' ? 'C' : 'P') + ' ' + (p.expiry || '?'))}</div>
+              ${isToday ? '<span class="tag preferred" style="margin-top:4px; display:inline-block; font-size:10px;">🔥 TODAY</span>' : ''}
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              ${p.direction ? `<span class="dir-pill ${isCall ? 'call' : 'put'}">${p.direction}</span>` : ''}
+              <span class="tag" style="background:rgba(155,109,255,0.2); color:#9b6dff; font-size:10px;">🎰 LOTTO</span>
+              <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
+            </div>
+          </div>
+          <div class="metrics">
+            ${p.stockEntry != null ? `<div class="metric"><span class="metric-key">Stock entry</span><span class="metric-val mono aqua">$${fmtNum(p.stockEntry)}</span></div>` : ''}
+            ${p.stockStop != null ? `<div class="metric"><span class="metric-key">Stock stop</span><span class="metric-val mono red">$${fmtNum(p.stockStop)}</span></div>` : (p.rawStopText ? `<div class="metric"><span class="metric-key">Stop</span><span class="metric-val mono red">${p.rawStopText}</span></div>` : '')}
+            <div class="metric"><span class="metric-key">Posted</span><span class="metric-val mono" style="font-size:11px;">${postedDate}</span></div>
+            <div class="metric"><span class="metric-key">Source</span><span class="metric-val mono" style="font-size:10px;">${p.source.replace('option-trade-ideas','option-ideas').replace('vip-flow-options-alerts','vip-flow')}</span></div>
+          </div>
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchLottoToPublic('${p.ticker}', this)" title="Place on Public.com (1 ct LIMIT)">📱 Public</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchLottoToBracket('${p.ticker}', this)" title="Place full bracket on Public">📱 Bracket</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Lotto render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// LOTTO dispatchers — find the pick by ticker, fire Public or Bracket
+async function dispatchLottoToPublic(ticker, btn) {
+  const p = (lottoData && lottoData.picks || []).find(x => x.ticker === ticker);
+  if (!p) { btn.textContent = '❌ no pick'; return; }
+  return dispatchToPublic({
+    ticker: p.ticker,
+    direction: p.direction,
+    contract: null,                  // John picks don't have OPRA — fire as equity for now
+    trigger: p.stockEntry,
+    stop: p.stockStop,
+  }, btn);
+}
+window.dispatchLottoToPublic = dispatchLottoToPublic;
+
+async function dispatchLottoToBracket(ticker, btn) {
+  const p = (lottoData && lottoData.picks || []).find(x => x.ticker === ticker);
+  if (!p) { btn.textContent = '❌ no pick'; return; }
+  // Lotto bracket: tp1 = +25%, tp2 = +50% in stock terms (default John ladder)
+  const tp1 = p.stockEntry ? p.stockEntry * 1.25 : null;
+  const tp2 = p.stockEntry ? p.stockEntry * 1.50 : null;
+  return dispatchToBracket({
+    ticker: p.ticker,
+    direction: p.direction,
+    contract: null,
+    trigger: p.stockEntry,
+    stop: p.stockStop,
+    tp1: tp1,
+    tp2: tp2,
+  }, btn);
+}
+window.dispatchLottoToBracket = dispatchLottoToBracket;
 
 // =============================================================================
 // ⭐ STARRED tab — local-only watchlist (localStorage). Pulls latest data per ticker
@@ -2399,6 +2545,7 @@ function renderGridLvl() {
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             ${dom !== 'NONE' ? `<span class="dir-pill ${isCall ? "call" : "put"}">${isCall ? 'LONG' : 'SHORT'}</span>` : ''}
             <span class="tag ${aligned ? 'preferred' : 'neutral'}">${aligned ? 'A+' : 'WATCH'}</span>
+            <button onclick="event.stopPropagation();toggleStar('${r.symbol}','lvl')" style="background:transparent;border:none;cursor:pointer;color:${isStarred(r.symbol)?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;" title="Star this ticker">${isStarred(r.symbol)?'★':'☆'}</button>
           </div>
         </div>
 
@@ -2776,6 +2923,7 @@ function renderGridMovers() {
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             <span class="dir-pill ${isUp ? "call" : "put"}">${isUp ? "CALL" : "PUT"}</span>
             <div class="score-badge"><span class="score-num ${scoreClass((m.score||0))} mono">${fmtNum(m.score, 1)}</span><span class="score-lbl">Score</span></div>
+            <button onclick="event.stopPropagation();toggleStar('${m.ticker}','movers')" style="background:transparent;border:none;cursor:pointer;color:${isStarred(m.ticker)?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;" title="Star this ticker">${isStarred(m.ticker)?'★':'☆'}</button>
           </div>
         </div>
         <div class="timing ${color}">

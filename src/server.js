@@ -189,6 +189,12 @@ var publicBracket = null;
 try { publicBracket = require('./publicBracket'); console.log('[SERVER] publicBracket loaded OK'); }
 catch(e) { console.log('[SERVER] publicBracket not loaded:', e.message); }
 
+// LOTTO FEED — surfaces John's daily VIP picks (cheap-call lottos) for the
+// scanner-v2 🎰 LOTTO tab. Reads john_history/*.parsed.json; defaults to last 7 days.
+var lottoFeed = null;
+try { lottoFeed = require('./lottoFeed'); console.log('[SERVER] lottoFeed loaded OK'); }
+catch(e) { console.log('[SERVER] lottoFeed not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -437,6 +443,15 @@ app.delete('/api/public/bracket/:id', async function(req, res) {
   if (!publicBracket) return res.status(500).json({ ok: false, error: 'publicBracket not loaded' });
   try { res.json(await publicBracket.cancelBracket(req.params.id)); }
   catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// LOTTO FEED — surfaces John's daily VIP picks for the scanner-v2 LOTTO tab
+app.get('/api/lotto-feed', function(req, res) {
+  if (!lottoFeed) return res.status(500).json({ ok: false, error: 'lottoFeed not loaded' });
+  try {
+    var limit = parseInt(req.query.limit || '20');
+    res.json(lottoFeed.loadFeed({ limit: limit }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // Admin upload — POST raw JSON to /api/admin/john-data/:filename
