@@ -298,7 +298,8 @@ async function preflightOrder(opts) {
 async function cancelOrder(orderId) {
   if (!orderId) throw new Error('cancelOrder: orderId required');
   var a = await getAuth();
-  var r = await fetch(BASE_URL + '/orders/' + encodeURIComponent(orderId) + '?accountId=' + encodeURIComponent(a.accountId), {
+  // Same path pattern as place: /{accountId}/order/{orderId}
+  var r = await fetch(BASE_URL + '/' + encodeURIComponent(a.accountId) + '/order/' + encodeURIComponent(orderId), {
     method: 'DELETE',
     headers: a.headers,
   });
@@ -311,7 +312,7 @@ async function cancelOrder(orderId) {
 
 async function getOrder(orderId) {
   var a = await getAuth();
-  var r = await fetch(BASE_URL + '/orders/' + encodeURIComponent(orderId) + '?accountId=' + encodeURIComponent(a.accountId), {
+  var r = await fetch(BASE_URL + '/' + encodeURIComponent(a.accountId) + '/order/' + encodeURIComponent(orderId), {
     headers: a.headers,
   });
   if (!r.ok) {
