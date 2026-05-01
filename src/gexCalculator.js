@@ -32,10 +32,10 @@ var DISCORD_WEBHOOK = process.env.DISCORD_GEX_WEBHOOK || process.env.DISCORD_GEX
 // Default tickers to map daily — indices + AB's typical universe
 var DEFAULT_TICKERS = (process.env.GEX_TICKERS || 'SPY,QQQ,IWM,DIA').split(',');
 
-// Strike range: ±N strikes from ATM (TS streaming endpoint accepts up to ~50)
-var STRIKE_PROXIMITY = parseInt(process.env.GEX_STRIKE_PROXIMITY || '40');
-var STREAM_TIMEOUT_MS = parseInt(process.env.GEX_STREAM_TIMEOUT_MS || '8000');
-var MAX_CONTRACTS_PER_SIDE = parseInt(process.env.GEX_MAX_CONTRACTS || '80');
+// Strike range: ±N strikes from ATM (TS streaming endpoint optimal ~12-20)
+var STRIKE_PROXIMITY = parseInt(process.env.GEX_STRIKE_PROXIMITY || '20');
+var STREAM_TIMEOUT_MS = parseInt(process.env.GEX_STREAM_TIMEOUT_MS || '7000');
+var MAX_CONTRACTS_PER_SIDE = parseInt(process.env.GEX_MAX_CONTRACTS || '40');
 
 // =============================================================================
 // HELPERS
@@ -124,11 +124,14 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
         if (!line) continue;
         try {
           var obj = JSON.parse(line);
-          // Each "leg" object should have: Strike, OpenInterest, Gamma, Bid, Ask, Delta, etc.
-          if (obj && (obj.Strike !== undefined || (obj.Legs && obj.Legs[0] && obj.Legs[0].Strike !== undefined))) {
-            // Some payloads wrap strike in Legs
-            var strikeObj = obj.Strike !== undefined ? obj : obj.Legs[0];
-            if (strikeObj.Strike !== undefined) contracts.push(strikeObj);
+          // Match contractResolver's permissive filter — accept any quote-like packet,
+          // then derive strike from object directly OR from Legs[0]
+          if (obj && (obj.Legs || obj.legs || obj.Delta !== undefined || obj.Gamma !== undefined || obj.Ask || obj.Bid)) {
+            var strikeObj = obj;
+            if (obj.Legs && obj.Legs[0]) strikeObj = Object.assign({}, obj.Legs[0], obj);  // merge top-level greeks if present
+            if (strikeObj.Strike !== undefined) {
+              contracts.push(strikeObj);
+            }
           }
           if (contracts.length >= MAX_CONTRACTS_PER_SIDE) {
             clearTimeout(timer);
