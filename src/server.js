@@ -201,6 +201,12 @@ var holdOvernightChecker = null;
 try { holdOvernightChecker = require('./holdOvernightChecker'); console.log('[SERVER] holdOvernightChecker loaded OK'); }
 catch(e) { console.log('[SERVER] holdOvernightChecker not loaded:', e.message); }
 
+// SNIPER FEED — Sniper Trades #free-charts channel analysis posts (TSLA/NVDA/PLTR
+// chart breakdowns with key levels). Different from LOTTO which is John VIP day-trade picks.
+var sniperFeed = null;
+try { sniperFeed = require('./sniperFeed'); console.log('[SERVER] sniperFeed loaded OK'); }
+catch(e) { console.log('[SERVER] sniperFeed not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -457,6 +463,15 @@ app.get('/api/lotto-feed', function(req, res) {
   try {
     var limit = parseInt(req.query.limit || '20');
     res.json(lottoFeed.loadFeed({ limit: limit }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// SNIPER FEED — Sniper Trades chart-analysis posts
+app.get('/api/sniper-feed', function(req, res) {
+  if (!sniperFeed) return res.status(500).json({ ok: false, error: 'sniperFeed not loaded' });
+  try {
+    var limit = parseInt(req.query.limit || '20');
+    res.json(sniperFeed.loadFeed({ limit: limit }));
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 

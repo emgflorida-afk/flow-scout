@@ -684,6 +684,7 @@ const TABS = [
   { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
   { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING" },
   { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "DAY" },
+  { id: "sniper",   label: "📈 SNIPER",      modeDefault: "ANALYSIS" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -735,6 +736,20 @@ const FILTERS_TOMORROW = [
   { id: "long",     label: "Long bias",    test: r => (r.direction || "").toUpperCase() === "LONG" || (r.type === "A" && (r.target || 0) > (r.spot || 0)) },
   { id: "short",    label: "Short bias",   test: r => (r.direction || "").toUpperCase() === "SHORT" || (r.target || 0) < (r.spot || 0) },
   { id: "typeA",    label: "Type A",       test: r => r.type === "A" },
+];
+
+// SNIPER tab: chart-analysis posts from Sniper Trades free-charts channel
+const FILTERS_SNIPER = [
+  { id: "all",       label: "All",          test: r => true },
+  { id: "withChart", label: "With chart",   test: r => r.hasChart === true },
+  { id: "today",     label: "Today",        test: r => {
+      const d = new Date(r.postedAt);
+      return d.toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+  }},
+  { id: "week",      label: "Last 7d",      test: r => {
+      const d = new Date(r.postedAt);
+      return (Date.now() - d.getTime()) < 7 * 24 * 3600 * 1000;
+  }},
 ];
 
 // LOTTO tab: cheap-call lottery picks (John VIP feed)
@@ -2011,6 +2026,7 @@ async function loadActiveTab() {
   if (activeTab === "lvl")      return loadLvlData();
   if (activeTab === "tomorrow") return loadTomorrowData();
   if (activeTab === "lotto")    return loadLottoData();
+  if (activeTab === "sniper")   return loadSniperData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -2173,6 +2189,98 @@ function renderGridTomorrow() {
     }).join("");
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Tomorrow render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// 📈 SNIPER tab — Sniper Trades chart-analysis posts from /api/sniper-feed
+// =============================================================================
+let sniperData = null;
+
+async function loadSniperData() {
+  FILTERS = FILTERS_SNIPER;
+  if (!FILTERS_SNIPER.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!sniperData) document.getElementById("grid").innerHTML = `<div class="empty">Loading sniper analysis...</div>`;
+    const r = await fetch("/api/sniper-feed?limit=30", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    sniperData = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load sniper feed: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const posts = sniperData.posts || [];
+  document.getElementById("scan-date").textContent = "Sniper Analysis · " + new Date(sniperData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${posts.length} posts · last ${sniperData.freshnessDays}d`;
+  renderStatsSniper();
+  renderFilters();
+  renderTabs();
+  renderGridSniper();
+}
+
+function renderStatsSniper() {
+  const posts = sniperData.posts || [];
+  const today = posts.filter(p => new Date(p.postedAt).toISOString().slice(0,10) === new Date().toISOString().slice(0,10)).length;
+  const charts = posts.filter(p => p.hasChart).length;
+  const tickers = new Set(posts.map(p => p.ticker).filter(Boolean));
+  const stats = [
+    { k: "Total",   v: posts.length, cls: "" },
+    { k: "Today",   v: today,        cls: "green" },
+    { k: "W/Chart", v: charts,       cls: "aqua" },
+    { k: "Tickers", v: tickers.size, cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridSniper() {
+  try {
+    FILTERS = FILTERS_SNIPER;
+    const posts = sniperData.posts || [];
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = posts.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No posts match "${filter.label}".</div>`;
+      return;
+    }
+    document.getElementById("grid").innerHTML = filtered.map(p => {
+      const starred = p.ticker ? isStarred(p.ticker) : false;
+      const postedDate = p.postedAt ? new Date(p.postedAt).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
+      const isToday = p.postedAt && new Date(p.postedAt).toISOString().slice(0,10) === new Date().toISOString().slice(0,10);
+      const chartImg = (p.attachmentUrls && p.attachmentUrls[0]) || p.imageUrl || null;
+      // Pull out a short level/pivot mention from title or body
+      const levelHint = (p.title.match(/\b(\d+(?:\.\d+)?)\s*(?:PIVOT|TARGET|KEY|RESISTANCE|SUPPORT)/i) || [])[0] || '';
+      return `
+        <div class="card" data-sniper-msg="${p.msgId}">
+          <div class="card-head">
+            <div style="flex:1;">
+              <div class="ticker mono">${p.ticker || '—'}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${postedDate}${isToday ? ' • <span style="color:var(--green); font-weight:700;">TODAY</span>' : ''}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">📈 SNIPER</span>
+              ${p.hasChart ? '<span class="tag preferred" style="font-size:10px;">📊 CHART</span>' : ''}
+              ${p.ticker ? `<button onclick="event.stopPropagation();toggleStar('${p.ticker}','sniper')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>` : ''}
+            </div>
+          </div>
+          ${p.title ? `<div style="font-size:13px; color: var(--txt); font-weight:700; margin-top:8px; line-height:1.4;">${p.title}</div>` : ''}
+          ${p.body ? `<div style="font-size:12px; color: var(--txt-2); margin-top:6px; line-height:1.5; max-height:120px; overflow:hidden;">${p.body}</div>` : ''}
+          ${levelHint ? `<div style="margin-top:8px;"><span class="tag" style="background:rgba(255,193,7,0.15); color:#ffc107; font-size:11px;">🎯 ${levelHint}</span></div>` : ''}
+          ${chartImg ? `<div style="margin-top:10px;"><a href="${chartImg}" target="_blank" rel="noopener noreferrer"><img src="${chartImg}" style="width:100%; max-height:240px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.08);"/></a></div>` : ''}
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>` : ''}
+            ${p.ticker ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'CALL',trigger:0},this)" title="Place on Public.com">📱 Public</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Sniper render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
 
