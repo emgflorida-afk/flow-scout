@@ -244,7 +244,53 @@ app.get('/api/lvl-scan', async function(req, res) {
     }
 
     var token = await ts.getAccessToken();
-    var universe = wpScanner.UNIVERSE.slice(0, limit > 0 ? limit : undefined);
+    var staticUniverse = wpScanner.UNIVERSE.slice(0, limit > 0 ? limit : undefined);
+
+    // DYNAMIC UNIVERSE: merge in tickers AB actually trades (LOTTO, SWINGS, SNIPER,
+    // STARRED). Fixes the gap where John/CVO small-caps (FCEL, PLUG, RGTI, QMCO,
+    // OPEN) never appeared on LVL cards because the curated universe is mid+large
+    // cap only.
+    var dynamicTickers = [];
+    try {
+      if (lottoFeed) {
+        var lf = lottoFeed.loadFeed({ limit: 50 });
+        (lf.picks || []).forEach(function(p) { if (p.ticker) dynamicTickers.push(p.ticker); });
+      }
+      if (swingLeapFeed) {
+        var sf = swingLeapFeed.loadFeed({ limit: 30 });
+        (sf.posts || []).forEach(function(p) { if (p.ticker) dynamicTickers.push(p.ticker); });
+      }
+      if (sniperFeed) {
+        var snf = sniperFeed.loadFeed({ limit: 30 });
+        (snf.posts || []).forEach(function(p) { if (p.ticker) dynamicTickers.push(p.ticker); });
+      }
+      // Starred tickers from /data/stars.json (if present)
+      try {
+        var starsPath = path.join(process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data')), 'stars.json');
+        if (fs.existsSync(starsPath)) {
+          var stars = JSON.parse(fs.readFileSync(starsPath, 'utf8')) || [];
+          if (Array.isArray(stars)) stars.forEach(function(s) {
+            var t = typeof s === 'string' ? s : (s && s.ticker);
+            if (t) dynamicTickers.push(t);
+          });
+        }
+      } catch(e) {}
+    } catch(e) { console.warn('[LVL] dynamic universe build error:', e.message); }
+
+    // Merge + dedup (case-normalize). Static curated tickers first so concurrency
+    // batches the high-volume names early.
+    var seenTickers = {};
+    var universe = [];
+    staticUniverse.forEach(function(t) {
+      var u = String(t).toUpperCase();
+      if (!seenTickers[u]) { seenTickers[u] = true; universe.push(u); }
+    });
+    var dynamicAdded = 0;
+    dynamicTickers.forEach(function(t) {
+      var u = String(t).toUpperCase();
+      if (!seenTickers[u]) { seenTickers[u] = true; universe.push(u); dynamicAdded++; }
+    });
+    if (dynamicAdded > 0) console.log('[LVL] universe expanded: +' + dynamicAdded + ' dynamic tickers (lotto/swing/sniper/starred)');
 
     // Concurrency-limited: 6 parallel tickers (each = N bar fetches for N timeframes)
     var CONCURRENCY = 6;
