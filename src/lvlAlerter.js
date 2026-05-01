@@ -192,18 +192,26 @@ async function postToDiscord(message) {
 //
 // Returns true if (prev → curr) is a transition we should announce.
 // Rules:
-//   - Any → TP1_HIT  : YES
-//   - Any → STOP_HIT : YES
-//   - NONE → active : YES
+//   - Any → TP1_HIT  : YES (positive, locked profit)
+//   - NONE → active : YES (new setup forming)
+//   - active → different active : YES (escalation)
 //   - prev === curr : NO (no change)
-//   - active → NONE : NO (silent reset, no spam)
-//   - active → different active (e.g. EARLY_LONG → LVL_LONG_25) : YES (real escalation)
+//   - active → NONE : NO (silent reset)
+//   - Any → STOP_HIT : NO BY DEFAULT (was YES; flooded #stratum-lvl with red noise)
+//                      Set env LVL_ALERT_STOP_HITS=1 to re-enable.
+//
+// Apr 30 v6 fix per AB: "all I'm getting is stop hit. Stop hit. Not setups."
+// Stops are still tracked in state and counted in /api/lvl-alerter/status, just
+// not posted as Discord alerts. Setups + TP1 wins are what shows in chat.
 // =============================================================================
+var ALERT_STOP_HITS = process.env.LVL_ALERT_STOP_HITS === '1';
+
 function isTransition(prev, curr) {
   prev = prev || 'NONE';
   if (curr === prev) return false;
   if (curr === 'NONE') return false;          // active → NONE = silent
-  if (curr === 'TP1_HIT' || curr === 'STOP_HIT') return true;
+  if (curr === 'STOP_HIT') return ALERT_STOP_HITS;   // suppressed by default
+  if (curr === 'TP1_HIT') return true;
   if (prev === 'NONE') return true;
   // Active → different active - alert (e.g. promotion EARLY_LONG → LVL_LONG_25)
   return true;

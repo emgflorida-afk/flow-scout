@@ -162,6 +162,21 @@ var lvlAlerter = null;
 try { lvlAlerter = require('./lvlAlerter'); console.log('[SERVER] lvlAlerter loaded OK'); }
 catch(e) { console.log('[SERVER] lvlAlerter not loaded:', e.message); }
 
+// =============================================================================
+// v6 MODULES (Apr 30 PM — built locally, deploying May 1 AM)
+// =============================================================================
+var triggerAlerter = null;
+try { triggerAlerter = require('./triggerAlerter'); console.log('[SERVER] triggerAlerter loaded OK'); }
+catch(e) { console.log('[SERVER] triggerAlerter not loaded:', e.message); }
+
+var morningSetupScanner = null;
+try { morningSetupScanner = require('./morningSetupScanner'); console.log('[SERVER] morningSetupScanner loaded OK'); }
+catch(e) { console.log('[SERVER] morningSetupScanner not loaded:', e.message); }
+
+var johnPatternMatcher = null;
+try { johnPatternMatcher = require('./johnPatternMatcher'); console.log('[SERVER] johnPatternMatcher loaded OK'); }
+catch(e) { console.log('[SERVER] johnPatternMatcher not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -284,6 +299,54 @@ app.get('/api/lvl-alerter/config', function(req, res) {
     watchlist: lvlAlerter.getDefaultWatchlist(),
     webhookConfigured: !!process.env.DISCORD_STRATUMLVL_WEBHOOK,
   });
+});
+
+// =============================================================================
+// v6 ENDPOINTS (May 1) — triggerAlerter / morningSetupScanner / johnPatternMatcher
+// =============================================================================
+
+// TRIGGER ALERTER — fires Discord pings when a SETUP_RADAR ticker's 5m bar
+// closes through its trigger price with volume confirmation.
+app.post('/api/trigger-alerter/run', async function(req, res) {
+  if (!triggerAlerter) return res.status(500).json({ ok: false, error: 'triggerAlerter not loaded' });
+  try {
+    var out = await triggerAlerter.runScan(req.body || {});
+    res.json(out);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/trigger-alerter/status', function(req, res) {
+  if (!triggerAlerter) return res.status(500).json({ ok: false, error: 'triggerAlerter not loaded' });
+  res.json(triggerAlerter.getStatus());
+});
+
+// MORNING SETUP SCANNER — EOD coordinator builds tomorrow's SETUP_RADAR.json.
+app.post('/api/morning-scanner/run', async function(req, res) {
+  if (!morningSetupScanner) return res.status(500).json({ ok: false, error: 'morningSetupScanner not loaded' });
+  try {
+    var out = await morningSetupScanner.runScan(req.body || {});
+    res.json(out);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/morning-scanner/status', function(req, res) {
+  if (!morningSetupScanner) return res.status(500).json({ ok: false, error: 'morningSetupScanner not loaded' });
+  res.json(morningSetupScanner.getStatus());
+});
+
+// JOHN PATTERN MATCHER — surface "John precedent" on a ticker.
+//   GET /api/john-precedent/AAPL?direction=LONG&limit=10
+//   GET /api/john-precedent          (status / index info)
+app.get('/api/john-precedent/:ticker', function(req, res) {
+  if (!johnPatternMatcher) return res.status(500).json({ ok: false, error: 'johnPatternMatcher not loaded' });
+  try {
+    var ticker = req.params.ticker;
+    var direction = req.query.direction || '';
+    var limit = parseInt(req.query.limit || '10');
+    res.json(johnPatternMatcher.findPrecedent(ticker, direction, { limit: limit }));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/john-precedent', function(req, res) {
+  if (!johnPatternMatcher) return res.status(500).json({ ok: false, error: 'johnPatternMatcher not loaded' });
+  res.json(johnPatternMatcher.getStatus());
 });
 
 // Strategy picker (Apr 29 2026) - recommends the right options structure
@@ -2576,6 +2639,40 @@ cron.schedule('*/5 9-15 * * 1-5', async function() {
     var out = await lvlAlerter.runScan();
     if (out && out.posted > 0) console.log('[LVL-ALERTER] cron posted ' + out.posted + ' alerts');
   } catch(e) { console.error('[LVL-ALERTER] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// =============================================================================
+// v6 CRONS (May 1 deploy)
+// =============================================================================
+
+// TRIGGER ALERTER -- every minute during RTH (9:31-15:59 ET).
+// Reads SETUP_RADAR ready/forming, polls 5m bars, fires Discord on close-through.
+cron.schedule('* 9-15 * * 1-5', async function() {
+  try {
+    if (!triggerAlerter) return;
+    var etNow = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+    var etParts = etNow.split(', ')[1].split(':');
+    var etTime = parseInt(etParts[0]) * 60 + parseInt(etParts[1]);
+    // Only run during RTH after first 1m of bell
+    if (etTime < (9 * 60 + 31) || etTime > (15 * 60 + 59)) return;
+    var out = await triggerAlerter.runScan();
+    if (out && out.posted > 0) console.log('[TRIGGER] cron posted ' + out.posted + ' fires');
+  } catch(e) { console.error('[TRIGGER] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// MORNING SETUP SCANNER -- daily at 4:30 PM ET, builds tomorrow's SETUP_RADAR.
+// Output: /data/setup_radar.json which scanner-v2 TOMORROW tab reads.
+cron.schedule('30 16 * * 1-5', async function() {
+  try {
+    if (!morningSetupScanner) return;
+    console.log('[MSS] cron triggered — building tomorrow SETUP_RADAR');
+    var out = await morningSetupScanner.runScan();
+    if (out && !out.error) {
+      console.log('[MSS] cron complete: ready=' + (out.ready || []).length +
+                  ' forming=' + (out.forming || []).length +
+                  ' dead=' + (out.dead || []).length);
+    }
+  } catch(e) { console.error('[MSS] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // SIM PROMOTION CHECK -- every day at 4:30PM ET

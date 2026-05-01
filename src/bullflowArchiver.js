@@ -25,6 +25,47 @@ fs.mkdirSync(ARCHIVE_DIR, { recursive: true });
 
 var BULLFLOW_URL = 'https://api.bullflow.io/v1/streaming/backtesting';
 
+// =============================================================================
+// DISK PERSISTENCE — Apr 30 2026 (added so Railway redeploys don't lose state)
+// =============================================================================
+// Problem before this patch: jobState lived only in Node memory. Every Railway
+// deploy = fresh process = state wiped, currently-running backfill killed.
+// AB had to re-kick the job 3+ times in one evening.
+//
+// Fix: persist jobState to /data/_job_state.json after every meaningful change.
+// On module load, restore. If a job was running, mark for auto-resume so the
+// new process picks up where the old one died (skip-already-done logic in
+// archiveOneDay handles the seam — completed days are already on disk).
+//
+// Same pattern for enrichState (peak-return enrichment).
+// =============================================================================
+var STATE_FILE        = path.join(ARCHIVE_DIR, '_job_state.json');
+var ENRICH_STATE_FILE = path.join(ARCHIVE_DIR, '_enrich_state.json');
+
+function safeWriteJson(filePath, obj) {
+  try {
+    var tmp = filePath + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+    fs.renameSync(tmp, filePath);  // atomic on POSIX
+  } catch (e) {
+    console.error('[ARCHIVER] persist failed:', filePath, e.message);
+  }
+}
+
+function safeReadJson(filePath) {
+  try {
+    if (!fs.existsSync(filePath)) return null;
+    var raw = fs.readFileSync(filePath, 'utf8');
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error('[ARCHIVER] load failed:', filePath, e.message);
+    return null;
+  }
+}
+
+function persistJobState()    { safeWriteJson(STATE_FILE, jobState); }
+function persistEnrichState() { safeWriteJson(ENRICH_STATE_FILE, enrichState); }
+
 // In-memory job state. Single-job model — if a backfill is running, the start
 // endpoint refuses a second one until done.
 var jobState = {
@@ -44,6 +85,23 @@ var jobState = {
   log: [],          // last 200 log lines
   lastError: null,
 };
+
+// On module load, restore from disk. If a job was running when we got killed,
+// mark for auto-resume — the bottom of the file fires the resume after all
+// functions are defined.
+var __savedJobState = safeReadJson(STATE_FILE);
+var __resumeNeeded  = false;
+if (__savedJobState) {
+  jobState = Object.assign(jobState, __savedJobState);
+  if (jobState.running) {
+    console.log('[ARCHIVER] interrupted job detected — will auto-resume:',
+                jobState.startDate, '->', jobState.endDate);
+    jobState.running = false;        // we are not actually running yet
+    __resumeNeeded   = true;
+  } else if (jobState.finishedAt) {
+    console.log('[ARCHIVER] last job finished cleanly at', jobState.finishedAt);
+  }
+}
 
 function logLine(msg) {
   var stamp = new Date().toISOString();
@@ -235,6 +293,7 @@ async function runBackfill(opts) {
   };
 
   logLine('backfill starting: ' + startDate + ' → ' + endDate + ' (' + days.length + ' trading days, speed=' + speed + ', force=' + force + ')');
+  persistJobState();   // write initial state so a redeploy can detect interrupted job
 
   // Run sequentially in background — return immediately to caller.
   setImmediate(async function() {
@@ -261,6 +320,7 @@ async function runBackfill(opts) {
         logLine((i + 1) + '/' + days.length + ' EXCEPTION ' + d + ' : ' + e.message);
         jobState.results.push({ date: d, error: 'exception:' + e.message });
       }
+      persistJobState();   // checkpoint after each day so redeploy can resume
       // Be polite — 1s pause between days
       await new Promise(function(res) { setTimeout(res, 1000); });
     }
@@ -268,6 +328,7 @@ async function runBackfill(opts) {
     jobState.finishedAt = new Date().toISOString();
     jobState.currentDate = null;
     logLine('backfill DONE — done=' + jobState.daysDone + ' skipped=' + jobState.daysSkipped + ' errored=' + jobState.daysErrored);
+    persistJobState();   // final state — running=false, finishedAt set
 
     // Write summary
     fs.writeFileSync(path.join(ARCHIVE_DIR, '_SUMMARY.json'), JSON.stringify({
@@ -351,6 +412,18 @@ var enrichState = {
   lastError: null,
   log: [],
 };
+
+// Restore enrich state from disk if a job was interrupted
+var __savedEnrichState = safeReadJson(ENRICH_STATE_FILE);
+var __enrichResumeNeeded = false;
+if (__savedEnrichState) {
+  enrichState = Object.assign(enrichState, __savedEnrichState);
+  if (enrichState.running) {
+    console.log('[ENRICH] interrupted enrich detected — will auto-resume');
+    enrichState.running = false;
+    __enrichResumeNeeded = true;
+  }
+}
 
 function enrichLog(msg) {
   var stamp = new Date().toISOString();
@@ -466,6 +539,7 @@ async function runEnrichSweep(opts) {
   };
 
   enrichLog('enrich sweep starting: ' + inRange.length + ' days, topN=' + topN);
+  persistEnrichState();   // initial state — survive redeploy
 
   setImmediate(async function() {
     for (var i = 0; i < inRange.length; i++) {
@@ -481,11 +555,13 @@ async function runEnrichSweep(opts) {
         enrichState.lastError = e.message;
         enrichLog('  exception: ' + e.message);
       }
+      persistEnrichState();   // checkpoint per-day
     }
     enrichState.running = false;
     enrichState.finishedAt = new Date().toISOString();
     enrichState.currentDate = null;
     enrichLog('enrich sweep DONE — calls=' + enrichState.callsDone + ' errored=' + enrichState.callsErrored);
+    persistEnrichState();   // final
   });
 
   return { ok: true, message: 'enrich sweep started', totalDays: inRange.length };
@@ -506,6 +582,45 @@ function getEnrichStatus() {
   };
 }
 
+// =============================================================================
+// AUTO-RESUME on module load
+// =============================================================================
+// If a backfill or enrich job was running when the process died (Railway
+// redeploy), restart it now. Day-skip logic in archiveOneDay handles seam:
+// already-archived days are skipped, mid-stream day re-runs cleanly.
+// Wrapped in setImmediate so all functions are defined before resume fires.
+// =============================================================================
+if (__resumeNeeded) {
+  setImmediate(function() {
+    console.log('[ARCHIVER] auto-resuming backfill:', jobState.startDate, '->', jobState.endDate);
+    runBackfill({
+      startDate: jobState.startDate,
+      endDate: jobState.endDate,
+      speed: jobState.speed,
+      force: false,                  // skip-already-done logic kicks in
+    }).then(function(r) {
+      console.log('[ARCHIVER] auto-resume kicked:', JSON.stringify(r));
+    }).catch(function(e) {
+      console.error('[ARCHIVER] auto-resume error:', e.message);
+    });
+  });
+}
+
+if (__enrichResumeNeeded) {
+  setImmediate(function() {
+    console.log('[ENRICH] auto-resuming enrich sweep, topN=' + enrichState.topN);
+    runEnrichSweep({
+      startDate: null,    // re-scan all archived days
+      endDate: null,
+      topN: enrichState.topN || 10,
+    }).then(function(r) {
+      console.log('[ENRICH] auto-resume kicked:', JSON.stringify(r));
+    }).catch(function(e) {
+      console.error('[ENRICH] auto-resume error:', e.message);
+    });
+  });
+}
+
 module.exports = {
   // Backfill
   runBackfill: runBackfill,
@@ -518,6 +633,11 @@ module.exports = {
   getEnrichStatus: getEnrichStatus,
   enrichDay: enrichDay,
   getPeakReturn: getPeakReturn,        // exposed for direct lookups
+  // Persistence (exposed for diagnostics)
+  persistJobState: persistJobState,
+  persistEnrichState: persistEnrichState,
   // Constants
   ARCHIVE_DIR: ARCHIVE_DIR,
+  STATE_FILE: STATE_FILE,
+  ENRICH_STATE_FILE: ENRICH_STATE_FILE,
 };
