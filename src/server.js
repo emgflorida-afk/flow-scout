@@ -229,6 +229,11 @@ var dailyCoilScanner = null;
 try { dailyCoilScanner = require('./dailyCoilScanner'); console.log('[SERVER] dailyCoilScanner loaded OK'); }
 catch(e) { console.log('[SERVER] dailyCoilScanner not loaded:', e.message); }
 
+// OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
+var overnightTradeManager = null;
+try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
+catch(e) { console.log('[SERVER] overnightTradeManager not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -641,6 +646,38 @@ app.post('/api/coil-scan/run', async function(req, res) {
 app.get('/api/coil-scan/status', function(req, res) {
   if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
   res.json(Object.assign({ ok: true }, dailyCoilScanner.getStatus()));
+});
+
+// OVERNIGHT TRADE MANAGER — Fri snapshot, Mon exit plan, manual triggers
+app.get('/api/overnight/snapshot', function(req, res) {
+  if (!overnightTradeManager) return res.status(500).json({ ok: false, error: 'overnight not loaded' });
+  var data = overnightTradeManager.loadLast();
+  if (!data) return res.json({ ok: true, positions: [], note: 'no snapshot yet — POST /api/overnight/snapshot' });
+  res.json(data);
+});
+
+app.post('/api/overnight/snapshot', async function(req, res) {
+  if (!overnightTradeManager) return res.status(500).json({ ok: false, error: 'overnight not loaded' });
+  try {
+    var snap = await overnightTradeManager.runFridaySnapshot();
+    res.json(snap);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/overnight/exit-plan', async function(req, res) {
+  if (!overnightTradeManager) return res.status(500).json({ ok: false, error: 'overnight not loaded' });
+  try {
+    var plan = await overnightTradeManager.buildExitPlan({});
+    res.json(plan);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/overnight/exit-plan', async function(req, res) {
+  if (!overnightTradeManager) return res.status(500).json({ ok: false, error: 'overnight not loaded' });
+  try {
+    var plan = await overnightTradeManager.runMondayExitPlan();
+    res.json(plan);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
@@ -3048,6 +3085,29 @@ cron.schedule('50 15 * * 1-5', async function() {
                   (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
     }
   } catch(e) { console.error('[COIL] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// OVERNIGHT TRADE MANAGER -- Friday 4:05 PM ET snapshot of held positions.
+// Computes weekend theta decay + posts Discord summary of what's held over weekend.
+cron.schedule('5 16 * * 5', async function() {
+  try {
+    if (!overnightTradeManager) return;
+    console.log('[OVERNIGHT] Friday cron triggered (4:05 PM ET) — snapshot weekend holds');
+    var snap = await overnightTradeManager.runFridaySnapshot();
+    console.log('[OVERNIGHT] Friday snapshot · ' + (snap.totalPositions || 0) + ' positions');
+  } catch(e) { console.error('[OVERNIGHT] Friday cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// OVERNIGHT TRADE MANAGER -- Monday 9:25 AM ET exit plan based on pre-mkt move.
+cron.schedule('25 9 * * 1', async function() {
+  try {
+    if (!overnightTradeManager) return;
+    console.log('[OVERNIGHT] Monday cron triggered (9:25 AM ET) — building exit plan');
+    var plan = await overnightTradeManager.runMondayExitPlan();
+    if (plan && plan.plan) {
+      console.log('[OVERNIGHT] Monday exit plan · ' + plan.plan.length + ' positions');
+    }
+  } catch(e) { console.error('[OVERNIGHT] Monday cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // COIL SCANNER FINAL run -- 4:05 PM ET weekdays (after close).
