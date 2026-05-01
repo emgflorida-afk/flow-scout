@@ -305,11 +305,22 @@ app.get('/api/lvl-scan', async function(req, res) {
       results = results.concat(batchResults);
     }
 
-    // Filter: only return tickers where AT LEAST ONE TF has a non-NONE signal
+    // Filter: keep tickers with EITHER an active signal OR a triggered rawSignal
+    // (rawSignal captures setups that fired earlier today even if currently in
+    // STOP_HIT / TP_HIT state). Also keeps anything explicitly added via
+    // dynamic universe (LOTTO/SWING/SNIPER/STARRED) even with NONE/NONE — AB
+    // needs to see those tickers regardless so he can fire from the LVL card.
+    var dynamicSet = {};
+    dynamicTickers.forEach(function(t) { dynamicSet[String(t).toUpperCase()] = true; });
     var meaningful = results.filter(function(r) {
       if (!r.tfs) return false;
+      var sym = String(r.symbol || '').toUpperCase();
+      if (dynamicSet[sym]) return true;  // always keep dynamic-added tickers
       return Object.values(r.tfs).some(function(s) {
-        return s && s.ok && s.signal && s.signal !== 'NONE';
+        if (!s || !s.ok) return false;
+        var hasSig = s.signal && s.signal !== 'NONE';
+        var hasRaw = s.rawSignal && s.rawSignal !== 'NONE';
+        return hasSig || hasRaw;
       });
     });
 
