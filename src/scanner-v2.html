@@ -686,6 +686,7 @@ const TABS = [
   { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "DAY" },
   { id: "sniper",   label: "📈 SNIPER",      modeDefault: "ANALYSIS" },
   { id: "swings",   label: "🚀 SWINGS",      modeDefault: "SWING/LEAP" },
+  { id: "coil",     label: "🌀 COIL",        modeDefault: "EOD PRE-POS" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -751,6 +752,18 @@ const FILTERS_SNIPER = [
       const d = new Date(r.postedAt);
       return (Date.now() - d.getTime()) < 7 * 24 * 3600 * 1000;
   }},
+];
+
+// COIL tab: daily 1-3-1 / double-inside / 3-1-1 coil patterns from dailyCoilScanner
+const FILTERS_COIL = [
+  { id: "all",       label: "All",            test: r => true },
+  { id: "ready",     label: "🔥 Ready (8+)",  test: r => (r.conviction||0) >= 8 && r.direction !== "neutral" },
+  { id: "watching",  label: "🟡 Watching",    test: r => (r.conviction||0) >= 6 && (r.conviction||0) < 8 },
+  { id: "131",       label: "1-3-1",          test: r => r.pattern === "1-3-1" },
+  { id: "doubleIn",  label: "Double Inside",  test: r => r.pattern === "double-inside" || r.pattern === "3-1-1" },
+  { id: "long",      label: "Long bias",      test: r => r.direction === "long" },
+  { id: "short",     label: "Short bias",     test: r => r.direction === "short" },
+  { id: "safe",      label: "🟢 SAFE hold",   test: r => r.holdRating === "SAFE" },
 ];
 
 // SWINGS tab: cvo-trades-swings-leaps channel (chart-only swing/leap setups, vision-LLM analyzed)
@@ -959,6 +972,7 @@ function renderFilters() {
   else if (activeTab === "lotto")    dataSource = (lottoData && lottoData.picks) || [];
   else if (activeTab === "sniper")   dataSource = (sniperData && sniperData.posts) || [];
   else if (activeTab === "swings")   dataSource = (swingLeapData && swingLeapData.posts) || [];
+  else if (activeTab === "coil")     dataSource = (coilData && [].concat(coilData.ready||[], coilData.watching||[], coilData.prep||[])) || [];
   else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
 
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
@@ -979,6 +993,7 @@ function renderFilters() {
       else if (activeTab === "lotto")    renderGridLotto();
       else if (activeTab === "sniper")   renderGridSniper();
       else if (activeTab === "swings")   renderGridSwingLeap();
+      else if (activeTab === "coil")     renderGridCoil();
       else if (activeTab === "starred")  renderGridStarred();
     });
   });
@@ -2029,6 +2044,7 @@ function renderTabs() {
               : activeTab === "lotto"    ? FILTERS_LOTTO
               : activeTab === "sniper"   ? FILTERS_SNIPER
               : activeTab === "swings"   ? FILTERS_SWINGS
+              : activeTab === "coil"     ? FILTERS_COIL
               : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
       renderTabs();
@@ -2072,6 +2088,7 @@ async function loadActiveTab() {
   if (activeTab === "lotto")    return loadLottoData();
   if (activeTab === "sniper")   return loadSniperData();
   if (activeTab === "swings")   return loadSwingLeapData();
+  if (activeTab === "coil")     return loadCoilData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -2468,6 +2485,170 @@ function renderGridSwingLeap() {
     }).join("");
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Swings render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// 🌀 COIL tab — Daily Strat coil patterns from dailyCoilScanner (1-3-1, double
+// inside, 3-1-1, 2U-1-1, 2D-1-1). EOD pre-position scanner — fires at 4:00 PM
+// to find tomorrow's overnight scale-in plays.
+// =============================================================================
+let coilData = null;
+
+async function loadCoilData() {
+  FILTERS = FILTERS_COIL;
+  if (!FILTERS_COIL.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!coilData) document.getElementById("grid").innerHTML = `<div class="empty">Loading coil scan...<br><span style="font-size:11px;">Last EOD scan or click Refresh to run live.</span></div>`;
+    const r = await fetch("/api/coil-scan", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    coilData = await r.json();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load coil scan: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const ready = coilData.ready || [];
+  const watching = coilData.watching || [];
+  const prep = coilData.prep || [];
+  const total = ready.length + watching.length + prep.length;
+  document.getElementById("scan-date").textContent = "Coil Scan · " + new Date(coilData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${total} coiled · ${(coilData.scanned || 0)} scanned · ${coilData.tookMs || 0}ms`;
+  renderStatsCoil();
+  renderFilters();
+  renderTabs();
+  renderGridCoil();
+}
+
+function renderStatsCoil() {
+  const ready = coilData.ready || [];
+  const watching = coilData.watching || [];
+  const prep = coilData.prep || [];
+  const byPattern = coilData.byPattern || {};
+  const stats = [
+    { k: "🔥 Ready",   v: ready.length,    cls: "green" },
+    { k: "🟡 Watching", v: watching.length, cls: "" },
+    { k: "Prep",       v: prep.length,     cls: "" },
+    { k: "1-3-1",      v: byPattern["1-3-1"] || 0, cls: "" },
+    { k: "Double-In",  v: (byPattern["double-inside"] || 0) + (byPattern["3-1-1"] || 0), cls: "" },
+    { k: "Long",       v: [...ready, ...watching].filter(r => r.direction === "long").length, cls: "green" },
+    { k: "Short",      v: [...ready, ...watching].filter(r => r.direction === "short").length, cls: "red" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+async function refreshCoilScan() {
+  const btn = document.getElementById("coil-refresh-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "🌀 Scanning..."; }
+  try {
+    const r = await fetch("/api/coil-scan/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const data = await r.json();
+    if (data.skipped) { alert("Scan already running, please wait."); return; }
+    coilData = data;
+    renderStatsCoil();
+    renderGridCoil();
+  } catch (e) { alert("Refresh failed: " + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "🌀 Re-scan"; } }
+}
+window.refreshCoilScan = refreshCoilScan;
+
+const COIL_PATTERN_INFO = {
+  '1-3-1':         { icon: '🌀', desc: 'inside-outside-inside (max coil)' },
+  'double-inside': { icon: '📦', desc: 'two consecutive inside bars' },
+  '3-1-1':         { icon: '⚡', desc: 'outside + 2 insides (energy stored)' },
+  '2U-1-1':        { icon: '⬆️', desc: 'directional up + 2 inside (continuation prep)' },
+  '2D-1-1':        { icon: '⬇️', desc: 'directional down + 2 inside (continuation prep)' },
+  '2U-1-prep':     { icon: '🟢', desc: 'directional up + inside (waiting for trigger)' },
+  '2D-1-prep':     { icon: '🔴', desc: 'directional down + inside (waiting for trigger)' },
+};
+
+function renderGridCoil() {
+  try {
+    FILTERS = FILTERS_COIL;
+    const all = [].concat(coilData.ready || [], coilData.watching || [], coilData.prep || []);
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = all.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `
+        <div class="empty">
+          No coiled tickers match "${filter.label}".<br>
+          <button id="coil-refresh-btn" onclick="refreshCoilScan()" class="btn btn-primary" style="margin-top:12px;">🌀 Re-scan now</button>
+        </div>`;
+      return;
+    }
+
+    const refreshBtn = `<div style="margin-bottom:12px; text-align:right;"><button id="coil-refresh-btn" onclick="refreshCoilScan()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">🌀 Re-scan</button></div>`;
+
+    document.getElementById("grid").innerHTML = refreshBtn + filtered.map(r => {
+      const info = COIL_PATTERN_INFO[r.pattern] || { icon: '🌀', desc: r.pattern };
+      const dirColor = r.direction === 'long' ? '#16e39d' : r.direction === 'short' ? '#ff6b6b' : '#ffc107';
+      const convColor = r.conviction >= 8 ? '#16e39d' : r.conviction >= 6 ? '#ffc107' : '#ff6b6b';
+      const starred = isStarred(r.ticker);
+      const plan = r.plan || {};
+      const primary = plan.primary || {};
+
+      // Hold rating pill
+      let holdPillHtml = '';
+      if (r.holdRating === 'SAFE') holdPillHtml = `<span class="tag" style="background:rgba(22,227,157,0.18); color:#16e39d; font-size:10px;">🟢 SAFE</span>`;
+      else if (r.holdRating === 'CAUTION') holdPillHtml = `<span class="tag" style="background:rgba(255,193,7,0.18); color:#ffc107; font-size:10px;">🟡 CAUTION</span>`;
+      else if (r.holdRating === 'AVOID') holdPillHtml = `<span class="tag" style="background:rgba(255,107,107,0.18); color:#ff6b6b; font-size:10px;">🔴 AVOID</span>`;
+
+      // Estimated option premium based on inside-bar range — rough placeholder
+      const optDir = r.direction === 'long' ? 'CALL' : 'PUT';
+      const trigDispatch = primary.trigger || (r.direction === 'short' ? plan.bearTrigger : plan.bullTrigger);
+
+      return `
+        <div class="card" data-coil-ticker="${r.ticker}">
+          <div class="card-head">
+            <div style="flex:1;">
+              <div class="ticker mono">${r.ticker} ${info.icon}</div>
+              <div style="font-size:11px; color:var(--txt-3); margin-top:4px;">
+                ${r.pattern} · seq ${r.sequence} · close $${r.lastClose}
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">🌀 COIL</span>
+              <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              <button onclick="event.stopPropagation();toggleStar('${r.ticker}','coil')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
+            </div>
+          </div>
+
+          <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
+
+          <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:#46b4ff; font-weight:700;">📋 OVERNIGHT PRE-POSITION</span>
+              <span style="color:${dirColor}; font-weight:700; text-transform:uppercase;">${r.direction}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:6px;">
+              <div><span style="color:var(--txt-3);">Trigger:</span> <span class="mono" style="color:var(--txt);">$${primary.trigger || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Stop:</span> <span class="mono" style="color:#ff6b6b;">$${primary.stop || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP1:</span> <span class="mono" style="color:#16e39d;">$${primary.tp1 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP2:</span> <span class="mono" style="color:#16e39d;">$${primary.tp2 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Risk:</span> <span class="mono">$${primary.risk || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">RR:</span> <span class="mono" style="color:${plan.rr1 >= 1.5 ? '#16e39d' : '#ffc107'};">${plan.rr1 || '—'}×</span></div>
+            </div>
+            ${holdPillHtml ? `<div style="margin-top:6px;">${holdPillHtml}</div>` : ''}
+          </div>
+
+          <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px; font-size:10px; color:var(--txt-3); line-height:1.5;">
+            <strong style="color:var(--txt-2);">Sizing plan:</strong> 1ct Public ($${(primary.risk*100*2 || 200).toFixed(0)}) + 2ct TS ($${(primary.risk*100*4 || 400).toFixed(0)}) = 3ct overnight position. Exit AM if gap-up triggers, scale 4th ct on 9:50 retest.
+          </div>
+
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0}},this)" title="Place 1ct on Public.com">📱 Public 1ct</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0}},this)" title="Place bracket OCO with full plan">📱 Bracket</button>
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Coil render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
 

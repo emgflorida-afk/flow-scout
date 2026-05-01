@@ -1,0 +1,412 @@
+// =============================================================================
+// DAILY COIL SCANNER (May 1 2026)
+//
+// Hunts overnight-plannable Strat patterns where the setup completes at
+// prior-day close. Catches the "KO May 1" type plays — Daily 1-3-1 + double
+// inside day = max coil = explosion at next-day open.
+//
+// Setup taxonomy:
+//   1-3-1       inside, outside, inside (classic coil-explode-coil)
+//   double-1    two consecutive inside bars (energy compression)
+//   3-1-1       outside followed by 2 insides (releasing into double coil)
+//   2U-1-1      directional up then 2 insides (looking for continuation)
+//   2D-1-1      directional down then 2 insides (looking for continuation)
+//   2-1         prep state — one directional + one inside (waiting for trigger)
+//
+// Output per match:
+//   ticker, pattern, direction bias, bull/bear triggers, stop, target,
+//   conviction, RR, broker-split sizing (Public 1ct + TS 2ct default)
+//
+// Cron: 4:00 PM ET weekdays (after RTH close, after morningSetupScanner queues)
+// Endpoint: GET /api/coil-scan (cached) + POST /api/coil-scan/run (force)
+// =============================================================================
+
+var fs = require('fs');
+var path = require('path');
+
+var lvlComputer = null;
+try { lvlComputer = require('./lvlComputer'); }
+catch (e) { console.log('[COIL] lvlComputer not loaded:', e.message); }
+
+var ts = null;
+try { ts = require('./tradestation'); }
+catch (e) { console.log('[COIL] tradestation not loaded:', e.message); }
+
+var wpScanner = null;
+try { wpScanner = require('./wealthPrinceScanner'); }
+catch (e) { console.log('[COIL] wealthPrinceScanner not loaded:', e.message); }
+
+var lottoFeed = null;
+try { lottoFeed = require('./lottoFeed'); } catch (e) {}
+
+var swingLeapFeed = null;
+try { swingLeapFeed = require('./swingLeapFeed'); } catch (e) {}
+
+var sniperFeed = null;
+try { sniperFeed = require('./sniperFeed'); } catch (e) {}
+
+var holdOvernightChecker = null;
+try { holdOvernightChecker = require('./holdOvernightChecker'); } catch (e) {}
+
+var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+var COIL_FILE = path.join(DATA_ROOT, 'coil_scan.json');
+
+// =============================================================================
+// STRAT BAR CLASSIFICATION
+// =============================================================================
+function stratNumber(bar, prev) {
+  if (!bar || !prev) return null;
+  var insideHigh = bar.High <= prev.High;
+  var insideLow  = bar.Low >= prev.Low;
+  var outsideHigh = bar.High > prev.High;
+  var outsideLow  = bar.Low < prev.Low;
+
+  if (insideHigh && insideLow)   return '1';   // inside bar
+  if (outsideHigh && outsideLow) return '3';   // outside bar
+  if (outsideHigh && insideLow)  return '2U';  // directional up (took prior high, held above prior low)
+  if (insideHigh && outsideLow)  return '2D';  // directional down
+  // Edge cases (equal H or L) — treat as directional based on close
+  if (bar.High > prev.High) return '2U';
+  if (bar.Low < prev.Low)   return '2D';
+  return '1';
+}
+
+// Build sequence of last N Strat numbers
+function classifySequence(bars) {
+  var seq = [];
+  for (var i = 1; i < bars.length; i++) {
+    seq.push(stratNumber(bars[i], bars[i - 1]));
+  }
+  return seq;
+}
+
+// =============================================================================
+// PATTERN DETECTION
+// =============================================================================
+// Returns { name, direction, conviction } or null
+function detectCoilPattern(seq, bars) {
+  var n = seq.length;
+  if (n < 1) return null;
+
+  var last = seq[n - 1];
+  var prev = n >= 2 ? seq[n - 2] : null;
+  var p3 = n >= 3 ? seq[n - 3] : null;
+
+  // Classic 1-3-1 (3 most recent: inside, outside, inside)
+  if (p3 === '1' && prev === '3' && last === '1') {
+    var dir = directionFromOutside(bars[bars.length - 2]);  // bar 3 = bars[n-1]
+    return { name: '1-3-1', direction: dir, conviction: 9 };
+  }
+
+  // Double inside day (last 2 are inside)
+  if (prev === '1' && last === '1') {
+    // Direction inferred from the bar BEFORE the doubles (the parent directional)
+    var parent = n >= 3 ? seq[n - 3] : null;
+    var pdir = parent === '2U' ? 'long' : parent === '2D' ? 'short' : 'neutral';
+    if (parent === '3') pdir = directionFromOutside(bars[bars.length - 3]);
+    var convBoost = parent === '2U' || parent === '2D' ? 1 : 0;
+    return { name: 'double-inside', direction: pdir, conviction: 7 + convBoost };
+  }
+
+  // 3-1-1 (outside + 2 insides) — same shape as KO Apr 30 (when read as 3 then 1 then 1)
+  if (p3 === '3' && prev === '1' && last === '1') {
+    var d = directionFromOutside(bars[bars.length - 3]);  // bar 3 = bars[n-3]+1 = bars[n-2]
+    return { name: '3-1-1', direction: d, conviction: 8 };
+  }
+
+  // 2U/2D-1-1 (directional + 2 insides) — momentum coil
+  if (p3 === '2U' && prev === '1' && last === '1') {
+    return { name: '2U-1-1', direction: 'long', conviction: 7 };
+  }
+  if (p3 === '2D' && prev === '1' && last === '1') {
+    return { name: '2D-1-1', direction: 'short', conviction: 7 };
+  }
+
+  // 2-1 prep (only 2 bars matter — directional + inside) — lower conviction, "watch for trigger"
+  if (prev === '2U' && last === '1') {
+    return { name: '2U-1-prep', direction: 'long', conviction: 5 };
+  }
+  if (prev === '2D' && last === '1') {
+    return { name: '2D-1-prep', direction: 'short', conviction: 5 };
+  }
+
+  return null;
+}
+
+function directionFromOutside(bar) {
+  if (!bar) return 'neutral';
+  // Outside bar that closed higher than open = bull bias; lower = bear
+  if (bar.Close > bar.Open) return 'long';
+  if (bar.Close < bar.Open) return 'short';
+  return 'neutral';
+}
+
+// =============================================================================
+// PLAN BUILDER — given pattern + bars, compute entry/stop/target/RR
+// =============================================================================
+function buildPlan(pattern, bars) {
+  if (!bars || bars.length < 2) return null;
+  var lastBar = bars[bars.length - 1];   // the most recent inside (or current state)
+  var range = lastBar.High - lastBar.Low;
+  if (range <= 0) return null;
+
+  // For a coil setup, triggers are ABOVE the inside bar high (bull) or BELOW (bear)
+  var bullTrigger = round2(lastBar.High);
+  var bearTrigger = round2(lastBar.Low);
+  var bullStop = round2(lastBar.Low);
+  var bearStop = round2(lastBar.High);
+
+  // Target = projection of the prior bar's range (where the energy was stored)
+  var priorBar = bars[bars.length - 2];
+  var priorRange = (priorBar && priorBar.High > priorBar.Low) ? (priorBar.High - priorBar.Low) : range * 1.5;
+
+  var bullTarget1 = round2(bullTrigger + priorRange * 0.5);
+  var bullTarget2 = round2(bullTrigger + priorRange);
+  var bearTarget1 = round2(bearTrigger - priorRange * 0.5);
+  var bearTarget2 = round2(bearTrigger - priorRange);
+
+  var direction = pattern.direction;
+  var primary = direction === 'long' ? {
+    trigger: bullTrigger, stop: bullStop, tp1: bullTarget1, tp2: bullTarget2,
+    risk: round2(bullTrigger - bullStop),
+    reward1: round2(bullTarget1 - bullTrigger),
+    reward2: round2(bullTarget2 - bullTrigger),
+  } : direction === 'short' ? {
+    trigger: bearTrigger, stop: bearStop, tp1: bearTarget1, tp2: bearTarget2,
+    risk: round2(bearStop - bearTrigger),
+    reward1: round2(bearTrigger - bearTarget1),
+    reward2: round2(bearTrigger - bearTarget2),
+  } : null;
+
+  return {
+    direction: direction,
+    primary: primary,
+    bullTrigger: bullTrigger, bullStop: bullStop, bullTarget1: bullTarget1, bullTarget2: bullTarget2,
+    bearTrigger: bearTrigger, bearStop: bearStop, bearTarget1: bearTarget1, bearTarget2: bearTarget2,
+    insideRange: round2(range),
+    priorRange: round2(priorRange),
+    rr1: primary && primary.risk > 0 ? round2(primary.reward1 / primary.risk) : null,
+    rr2: primary && primary.risk > 0 ? round2(primary.reward2 / primary.risk) : null,
+  };
+}
+
+function round2(v) { return Math.round(v * 100) / 100; }
+
+// =============================================================================
+// CONVICTION SCORING — refines the base pattern conviction with extra factors
+// =============================================================================
+function adjustConviction(base, ticker, bars, holdRating) {
+  var conv = base;
+  // Liquidity bonus: avg volume — but we don't have volume in fetchBars output
+  // (skip for now, can add)
+
+  // Hold-overnight rating
+  if (holdRating === 'AVOID')   conv -= 3;
+  if (holdRating === 'CAUTION') conv -= 1;
+  if (holdRating === 'SAFE')    conv += 1;
+
+  // Tight inside bar (range < 1.5% of price) = high coil
+  if (bars && bars.length >= 1) {
+    var lastBar = bars[bars.length - 1];
+    var rangePct = lastBar.High > 0 ? ((lastBar.High - lastBar.Low) / lastBar.High) * 100 : 99;
+    if (rangePct < 1.5) conv += 1;
+    if (rangePct < 1.0) conv += 1;
+  }
+
+  // Clamp 1-10
+  return Math.max(1, Math.min(10, conv));
+}
+
+// =============================================================================
+// BUILD UNIVERSE — same dynamic merge as LVL scan
+// =============================================================================
+function buildUniverse() {
+  var staticUniverse = (wpScanner && wpScanner.UNIVERSE) ? wpScanner.UNIVERSE.slice() : [];
+  var dynamic = [];
+  try {
+    if (lottoFeed) {
+      var lf = lottoFeed.loadFeed({ limit: 50 });
+      (lf.picks || []).forEach(function(p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+    if (swingLeapFeed) {
+      var sf = swingLeapFeed.loadFeed({ limit: 30 });
+      (sf.posts || []).forEach(function(p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+    if (sniperFeed) {
+      var snf = sniperFeed.loadFeed({ limit: 30 });
+      (snf.posts || []).forEach(function(p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+  } catch(e) {}
+
+  var seen = {};
+  var universe = [];
+  staticUniverse.concat(dynamic).forEach(function(t) {
+    var u = String(t).toUpperCase();
+    if (!seen[u]) { seen[u] = true; universe.push(u); }
+  });
+  return universe;
+}
+
+// =============================================================================
+// SCAN ONE TICKER
+// =============================================================================
+async function scanTicker(ticker, token) {
+  try {
+    // Fetch last 5 daily bars (need at least 4 for 1-3-1 detection with prior reference)
+    var TF_SPEC = { unit: 'Daily', interval: 1, barsback: 5 };
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?unit=' + TF_SPEC.unit + '&interval=' + TF_SPEC.interval + '&barsback=' + TF_SPEC.barsback;
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return { ticker: ticker, error: 'TS-bars-' + r.status };
+    var data = await r.json();
+    var raw = (data && (data.Bars || data.bars)) || [];
+    if (raw.length < 3) return { ticker: ticker, error: 'not-enough-bars-' + raw.length };
+
+    var bars = raw.map(function(b) {
+      return {
+        High: parseFloat(b.High), Low: parseFloat(b.Low),
+        Open: parseFloat(b.Open), Close: parseFloat(b.Close),
+        TimeStamp: b.TimeStamp,
+      };
+    }).filter(function(b) { return isFinite(b.High) && isFinite(b.Low); });
+
+    var seq = classifySequence(bars);
+    var pattern = detectCoilPattern(seq, bars);
+    if (!pattern) return { ticker: ticker, sequence: seq.join('-'), pattern: null };
+
+    var plan = buildPlan(pattern, bars);
+    if (!plan || !plan.primary) return { ticker: ticker, sequence: seq.join('-'), pattern: pattern.name, error: 'no-plan' };
+
+    var lastClose = bars[bars.length - 1].Close;
+
+    // Hold-overnight rating
+    var holdRating = null;
+    if (holdOvernightChecker) {
+      try {
+        var dir = pattern.direction === 'long' ? 'LONG' : 'SHORT';
+        var hr = await holdOvernightChecker.checkTicker(ticker, { direction: dir });
+        holdRating = hr && hr.rating;
+      } catch(e) {}
+    }
+
+    var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating);
+
+    return {
+      ticker: ticker,
+      pattern: pattern.name,
+      direction: pattern.direction,
+      sequence: seq.join('-'),
+      conviction: conviction,
+      lastClose: round2(lastClose),
+      plan: plan,
+      holdRating: holdRating || null,
+      bars: bars.length,
+    };
+  } catch (e) {
+    return { ticker: ticker, error: e.message };
+  }
+}
+
+// =============================================================================
+// MAIN SCAN — runs across universe with concurrency
+// =============================================================================
+var _lastRun = null;
+var _running = false;
+
+async function runScan(opts) {
+  opts = opts || {};
+  if (_running && !opts.force) return { skipped: true, reason: 'already-running' };
+  _running = true;
+  var start = Date.now();
+
+  try {
+    var token = opts.token;
+    if (!token && ts && ts.getAccessToken) {
+      try { token = await ts.getAccessToken(); }
+      catch (e) { return { error: 'TS auth: ' + e.message }; }
+    }
+    if (!token) return { error: 'no-token' };
+
+    var universe = opts.tickers || buildUniverse();
+    if (!universe.length) return { error: 'empty-universe' };
+
+    console.log('[COIL] scanning', universe.length, 'tickers');
+
+    var CONCURRENCY = 5;
+    var results = [];
+    for (var i = 0; i < universe.length; i += CONCURRENCY) {
+      var batch = universe.slice(i, i + CONCURRENCY);
+      var batchResults = await Promise.all(batch.map(function(t) { return scanTicker(t, token); }));
+      results = results.concat(batchResults);
+      // Light throttle to ease TS rate limits
+      if (i + CONCURRENCY < universe.length) {
+        await new Promise(function(r) { setTimeout(r, 100); });
+      }
+    }
+
+    // Filter to actual matches with plans
+    var matches = results.filter(function(r) { return r.pattern && r.plan; });
+
+    // Sort by conviction desc, then by direction-bias clarity
+    matches.sort(function(a, b) {
+      if (b.conviction !== a.conviction) return b.conviction - a.conviction;
+      // Long/short over neutral
+      if (a.direction === 'neutral' && b.direction !== 'neutral') return 1;
+      if (b.direction === 'neutral' && a.direction !== 'neutral') return -1;
+      return 0;
+    });
+
+    // Bucket by quality
+    var ready    = matches.filter(function(m) { return m.conviction >= 8 && m.direction !== 'neutral'; });
+    var watching = matches.filter(function(m) { return m.conviction >= 6 && m.conviction < 8 && m.direction !== 'neutral'; });
+    var prep     = matches.filter(function(m) { return m.conviction < 6 || m.direction === 'neutral'; });
+
+    var payload = {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      tookMs: Date.now() - start,
+      scanned: results.length,
+      matched: matches.length,
+      ready: ready,
+      watching: watching,
+      prep: prep,
+      // Counts of each pattern across all matches
+      byPattern: matches.reduce(function(acc, m) { acc[m.pattern] = (acc[m.pattern] || 0) + 1; return acc; }, {}),
+    };
+
+    // Persist for the cron + UI to read
+    try {
+      fs.writeFileSync(COIL_FILE, JSON.stringify(payload, null, 2));
+    } catch (e) { console.warn('[COIL] write fail:', e.message); }
+
+    _lastRun = { finishedAt: payload.generatedAt, scanned: payload.scanned, matched: payload.matched };
+    console.log('[COIL] done in', payload.tookMs + 'ms · matched', payload.matched + '/' + payload.scanned,
+                '· ready', ready.length, '· watching', watching.length);
+    return payload;
+  } finally {
+    _running = false;
+  }
+}
+
+function loadLast() {
+  if (!fs.existsSync(COIL_FILE)) return null;
+  try { return JSON.parse(fs.readFileSync(COIL_FILE, 'utf8')); }
+  catch (e) { return { error: 'parse: ' + e.message }; }
+}
+
+function getStatus() {
+  return { running: _running, lastRun: _lastRun, file: COIL_FILE };
+}
+
+module.exports = {
+  runScan: runScan,
+  scanTicker: scanTicker,
+  loadLast: loadLast,
+  getStatus: getStatus,
+  // Exposed for testing
+  stratNumber: stratNumber,
+  classifySequence: classifySequence,
+  detectCoilPattern: detectCoilPattern,
+  buildPlan: buildPlan,
+};

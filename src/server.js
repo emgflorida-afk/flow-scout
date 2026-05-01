@@ -223,6 +223,12 @@ var johnHistoryExtractor = null;
 try { johnHistoryExtractor = require('./johnHistoryExtractor'); console.log('[SERVER] johnHistoryExtractor loaded OK'); }
 catch(e) { console.log('[SERVER] johnHistoryExtractor not loaded:', e.message); }
 
+// DAILY COIL SCANNER — EOD Strat coil detector (1-3-1, double-inside, 3-1-1, etc.)
+// Cron at 4:00 PM ET weekdays; outputs to /data/coil_scan.json + Discord alert
+var dailyCoilScanner = null;
+try { dailyCoilScanner = require('./dailyCoilScanner'); console.log('[SERVER] dailyCoilScanner loaded OK'); }
+catch(e) { console.log('[SERVER] dailyCoilScanner not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -613,6 +619,28 @@ app.post('/api/john-extract/run', async function(req, res) {
     var out = await johnHistoryExtractor.runOnce({ incremental: incremental });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// DAILY COIL SCANNER — last cached scan + manual trigger + status
+app.get('/api/coil-scan', function(req, res) {
+  if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
+  var data = dailyCoilScanner.loadLast();
+  if (!data) return res.json({ ok: true, ready: [], watching: [], prep: [], note: 'no scan yet — POST /api/coil-scan/run' });
+  res.json(data);
+});
+
+app.post('/api/coil-scan/run', async function(req, res) {
+  if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
+  try {
+    var force = (req.body && req.body.force === true) || req.query.force === '1';
+    var out = await dailyCoilScanner.runScan({ force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/coil-scan/status', function(req, res) {
+  if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
+  res.json(Object.assign({ ok: true }, dailyCoilScanner.getStatus()));
 });
 
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
@@ -2998,6 +3026,23 @@ cron.schedule('30 16 * * 1-5', async function() {
                   ' dead=' + (out.dead || []).length);
     }
   } catch(e) { console.error('[MSS] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// DAILY COIL SCANNER -- 4:00 PM ET weekdays after RTH close.
+// Outputs /data/coil_scan.json with Strat coil patterns (1-3-1, double-inside, 3-1-1)
+// for tomorrow's overnight pre-position trades.
+cron.schedule('0 16 * * 1-5', async function() {
+  try {
+    if (!dailyCoilScanner) return;
+    console.log('[COIL] cron triggered — scanning for daily coil patterns');
+    var out = await dailyCoilScanner.runScan({});
+    if (out && out.ok) {
+      console.log('[COIL] cron complete · matched ' + out.matched +
+                  ' · ready=' + (out.ready || []).length +
+                  ' watching=' + (out.watching || []).length +
+                  ' prep=' + (out.prep || []).length);
+    }
+  } catch(e) { console.error('[COIL] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JOHN HISTORY EXTRACTOR -- every 15 min, 8AM-10PM ET, weekdays + weekends.
