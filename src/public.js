@@ -23,12 +23,47 @@ var fetch = (typeof globalThis.fetch === 'function') ? globalThis.fetch : requir
 var crypto = require('crypto');
 
 var BASE_URL = process.env.PUBLIC_API_BASE || 'https://api.public.com/userapigateway/trading';
+var AUTH_URL = process.env.PUBLIC_AUTH_URL || 'https://api.public.com/userapiauthservice/personal/access-tokens';
 
-function getAuth() {
-  var token = process.env.PUBLIC_API_KEY;
+// =============================================================================
+// AUTH FLOW (May 1 2026)
+// =============================================================================
+// Public uses a 2-step auth: API SECRET KEY exchanged for short-lived ACCESS
+// TOKEN at /userapiauthservice/personal/access-tokens. Token is then used as
+// Bearer in subsequent API calls. We cache the token in-memory and refresh
+// before expiry (default 1440 min validity, 5-min safety margin).
+// =============================================================================
+
+var _cachedToken = null;
+var _tokenExpiresAt = 0;
+var TOKEN_VALIDITY_MIN = parseInt(process.env.PUBLIC_TOKEN_VALIDITY || '1440');   // 24h
+var TOKEN_SAFETY_MS = 5 * 60 * 1000;   // refresh 5 min before expiry
+
+async function getAccessToken() {
+  if (_cachedToken && Date.now() < _tokenExpiresAt) return _cachedToken;
+  var secret = process.env.PUBLIC_API_KEY;
+  if (!secret) throw new Error('PUBLIC_API_KEY missing');
+  var r = await fetch(AUTH_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ secret: secret, validityInMinutes: TOKEN_VALIDITY_MIN }),
+  });
+  if (!r.ok) {
+    var t = '';
+    try { t = await r.text(); } catch(e) {}
+    throw new Error('public-auth-' + r.status + ' ' + t.slice(0, 200));
+  }
+  var data = await r.json();
+  if (!data || !data.accessToken) throw new Error('public-auth: no accessToken in response');
+  _cachedToken = data.accessToken;
+  _tokenExpiresAt = Date.now() + (TOKEN_VALIDITY_MIN * 60 * 1000) - TOKEN_SAFETY_MS;
+  return _cachedToken;
+}
+
+async function getAuth() {
   var accountId = process.env.PUBLIC_ACCOUNT_ID;
-  if (!token) throw new Error('PUBLIC_API_KEY missing');
   if (!accountId) throw new Error('PUBLIC_ACCOUNT_ID missing');
+  var token = await getAccessToken();
   return {
     headers: {
       'Authorization': 'Bearer ' + token,
@@ -71,7 +106,7 @@ function publicSymbolToTs(pubSymbol) {
 // ACCOUNT / PORTFOLIO
 // =============================================================================
 async function getAccount() {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/account', { headers: a.headers });
   if (!r.ok) {
     var t = '';
@@ -82,14 +117,14 @@ async function getAccount() {
 }
 
 async function getAccounts() {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/accounts', { headers: a.headers });
   if (!r.ok) throw new Error('public-getAccounts-' + r.status);
   return await r.json();
 }
 
 async function getPortfolio() {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/portfolio-v2?accountId=' + encodeURIComponent(a.accountId), { headers: a.headers });
   if (!r.ok) {
     var t = '';
@@ -104,7 +139,7 @@ async function getPortfolio() {
 // =============================================================================
 async function getQuotes(symbols) {
   if (!Array.isArray(symbols)) symbols = [symbols];
-  var a = getAuth();
+  var a = await getAuth();
   var body = {
     instruments: symbols.map(function(s) {
       // If symbol contains a space or has the OPRA pattern, treat as OPTION
@@ -127,7 +162,7 @@ async function getQuotes(symbols) {
 }
 
 async function getOptionExpirations(underlyingSymbol) {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/option-expirations', {
     method: 'POST',
     headers: a.headers,
@@ -140,7 +175,7 @@ async function getOptionExpirations(underlyingSymbol) {
 }
 
 async function getOptionChain(underlyingSymbol, expirationDate) {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/option-chain', {
     method: 'POST',
     headers: a.headers,
@@ -173,7 +208,7 @@ async function placeOrder(opts) {
   if (!opts.side)            throw new Error('placeOrder: side required (BUY/SELL)');
   if (!opts.quantity)        throw new Error('placeOrder: quantity required');
 
-  var a = getAuth();
+  var a = await getAuth();
   var symbol = tsSymbolToPublic(opts.symbol);
   var isOption = /\d{6}[CP]\d+/.test(symbol);
   var instrumentType = opts.instrumentType || (isOption ? 'OPTION' : 'EQUITY');
@@ -231,7 +266,7 @@ async function placeOrder(opts) {
 async function preflightOrder(opts) {
   // Same payload as placeOrder but uses the preflight-single-leg endpoint
   if (!opts || !opts.symbol) throw new Error('preflightOrder: symbol required');
-  var a = getAuth();
+  var a = await getAuth();
   var symbol = tsSymbolToPublic(opts.symbol);
   var isOption = /\d{6}[CP]\d+/.test(symbol);
   var instrumentType = opts.instrumentType || (isOption ? 'OPTION' : 'EQUITY');
@@ -262,7 +297,7 @@ async function preflightOrder(opts) {
 // =============================================================================
 async function cancelOrder(orderId) {
   if (!orderId) throw new Error('cancelOrder: orderId required');
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/orders/' + encodeURIComponent(orderId) + '?accountId=' + encodeURIComponent(a.accountId), {
     method: 'DELETE',
     headers: a.headers,
@@ -275,7 +310,7 @@ async function cancelOrder(orderId) {
 }
 
 async function getOrder(orderId) {
-  var a = getAuth();
+  var a = await getAuth();
   var r = await fetch(BASE_URL + '/orders/' + encodeURIComponent(orderId) + '?accountId=' + encodeURIComponent(a.accountId), {
     headers: a.headers,
   });
@@ -292,7 +327,7 @@ async function getOrder(orderId) {
 // =============================================================================
 async function ping() {
   try {
-    var a = getAuth();
+    var a = await getAuth();
     var data = await getAccount();
     return {
       ok: true,
