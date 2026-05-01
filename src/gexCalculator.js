@@ -91,7 +91,10 @@ async function getExpirations(ticker, token) {
 // FETCH CHAIN — SSE streaming, full strike range, both calls AND puts
 // =============================================================================
 async function fetchChainSide(ticker, expiry, optType, spot, token) {
-  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  // FORCE node-fetch for SSE — Node 24 native fetch returns Web ReadableStream
+  // (no .on('data') Node EventEmitter API). node-fetch returns Node-style streams
+  // matching contractResolver.js pattern.
+  var fetchLib = require('node-fetch');
   var url = 'https://api.tradestation.com/v3/marketdata/stream/options/chains/' + ticker
     + '?expiration=' + formatExpiry(expiry)
     + '&optionType=' + optType   // 'Call' or 'Put'
