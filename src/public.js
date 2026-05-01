@@ -90,9 +90,27 @@ function makeOrderId() {
 // Public format:      "AAPL251024C00110000"   (no space)
 // Both: OPRA spec — UNDERLYING + YYMMDD + C/P + 8-digit strike (×1000)
 
+// Auto-normalize shorthand option symbols to full OPRA.
+// Examples:
+//   "KO 260516C79"      → "KO260516C00079000"   (TS-style w/ space, short strike)
+//   "KO260516C79"       → "KO260516C00079000"   (no space, short strike)
+//   "AAPL 251024C00110000" → "AAPL251024C00110000" (full OPRA, just strip space)
+//   "KO"                → "KO"                  (equity, unchanged)
 function tsSymbolToPublic(tsSymbol) {
   if (!tsSymbol) return null;
-  return String(tsSymbol).replace(/\s+/g, '');
+  var s = String(tsSymbol).replace(/\s+/g, '');
+  // Match: TICKER + YYMMDD + C/P + STRIKE_DIGITS (any length 1-8)
+  var m = s.match(/^([A-Z]{1,6})(\d{6})([CP])(\d{1,8})(\.\d+)?$/);
+  if (!m) return s;   // not an option pattern — return as-is
+  var ticker = m[1], date = m[2], cp = m[3], strikeRaw = m[4];
+  var fraction = m[5] ? parseFloat('0' + m[5]) : 0;
+  // If the strike is already 8 digits, assume full OPRA (just normalize)
+  if (strikeRaw.length === 8) return ticker + date + cp + strikeRaw;
+  // Otherwise: treat strikeRaw as dollar strike; convert to OPRA strike (×1000) padded to 8 digits
+  var dollar = parseInt(strikeRaw, 10) + fraction;
+  var opraStrike = Math.round(dollar * 1000);
+  var padded = String(opraStrike).padStart(8, '0');
+  return ticker + date + cp + padded;
 }
 
 function publicSymbolToTs(pubSymbol) {
