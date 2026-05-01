@@ -177,6 +177,12 @@ var johnPatternMatcher = null;
 try { johnPatternMatcher = require('./johnPatternMatcher'); console.log('[SERVER] johnPatternMatcher loaded OK'); }
 catch(e) { console.log('[SERVER] johnPatternMatcher not loaded:', e.message); }
 
+// PUBLIC.COM broker (May 1 2026) — cash account, no PDT, used when AB needs
+// to day-trade and TS Titan margin would PDT-flag him.
+var publicBroker = null;
+try { publicBroker = require('./public'); console.log('[SERVER] public.js (broker) loaded OK'); }
+catch(e) { console.log('[SERVER] public.js not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -347,6 +353,61 @@ app.get('/api/john-precedent/:ticker', function(req, res) {
 app.get('/api/john-precedent', function(req, res) {
   if (!johnPatternMatcher) return res.status(500).json({ ok: false, error: 'johnPatternMatcher not loaded' });
   res.json(johnPatternMatcher.getStatus());
+});
+
+// =============================================================================
+// PUBLIC.COM BROKER ENDPOINTS (May 1) — cash account for day trades
+// =============================================================================
+app.get('/api/public/ping', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.ping()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/public/account', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.getAccount()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/public/portfolio', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.getPortfolio()); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/public/quotes', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try {
+    var symbols = (req.body && req.body.symbols) || [];
+    res.json(await publicBroker.getQuotes(symbols));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.post('/api/public/option-chain', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try {
+    var b = req.body || {};
+    res.json(await publicBroker.getOptionChain(b.symbol, b.expirationDate));
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+// Pre-flight (validate without placing) — returns financial impact estimate
+app.post('/api/public/order/preflight', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.preflightOrder(req.body || {})); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+// Place order — body: { symbol, side, quantity, orderType, limitPrice?, stopPrice?, timeInForce? }
+app.post('/api/public/order', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.placeOrder(req.body || {})); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.delete('/api/public/order/:id', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.cancelOrder(req.params.id)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
+});
+app.get('/api/public/order/:id', async function(req, res) {
+  if (!publicBroker) return res.status(500).json({ ok: false, error: 'public broker not loaded' });
+  try { res.json(await publicBroker.getOrder(req.params.id)); }
+  catch(e) { res.status(500).json({ error: e.message }); }
 });
 
 // Admin upload — POST raw JSON to /api/admin/john-data/:filename
