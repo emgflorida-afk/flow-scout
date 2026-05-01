@@ -234,6 +234,12 @@ var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
 catch(e) { console.log('[SERVER] overnightTradeManager not loaded:', e.message); }
 
+// WP SCANNER — 4HR EMA + hammer/pullback swing detector with risk-based sizing
+// Cron 4:30 PM ET; FOCUS MODE top-3 picks; discipline guards against size-up <7
+var wpSwingScanner = null;
+try { wpSwingScanner = require('./wpScanner'); console.log('[SERVER] wpScanner (WP) loaded OK'); }
+catch(e) { console.log('[SERVER] wpScanner not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -678,6 +684,42 @@ app.post('/api/overnight/exit-plan', async function(req, res) {
     var plan = await overnightTradeManager.runMondayExitPlan();
     res.json(plan);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// WP SCANNER — 4HR/EMA swing setups with risk-based sizing + discipline guards
+app.get('/api/wp-scan', function(req, res) {
+  if (!wpSwingScanner) return res.status(500).json({ ok: false, error: 'wp scanner not loaded' });
+  var data = wpSwingScanner.loadLast();
+  if (!data) return res.json({ ok: true, ready: [], trial: [], topPicks: [], note: 'no scan yet — POST /api/wp-scan/run' });
+  res.json(data);
+});
+
+app.post('/api/wp-scan/run', async function(req, res) {
+  if (!wpSwingScanner) return res.status(500).json({ ok: false, error: 'wp scanner not loaded' });
+  try {
+    var force = (req.body && req.body.force === true) || req.query.force === '1';
+    var out = await wpSwingScanner.runScan({ force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Risk-based sizing helper — UI calls this with conviction + premium to get
+// recommended contract count + tier + discipline guards
+app.post('/api/wp-scan/size', function(req, res) {
+  if (!wpSwingScanner) return res.status(500).json({ ok: false, error: 'wp scanner not loaded' });
+  try {
+    var b = req.body || {};
+    var conviction = parseInt(b.conviction || 0, 10);
+    var premium = parseFloat(b.premium || 0);
+    var turboOverride = b.turboOverride === true && b.overrideKeyword === 'YES_AAA';
+    var out = wpSwingScanner.suggestSize(conviction, premium, { turboOverride: turboOverride });
+    res.json({ ok: true, sizing: out });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/wp-scan/status', function(req, res) {
+  if (!wpSwingScanner) return res.status(500).json({ ok: false, error: 'wp scanner not loaded' });
+  res.json(Object.assign({ ok: true }, wpSwingScanner.getStatus()));
 });
 
 // HOLD-OVERNIGHT CHECKER — per-ticker safety analysis (SAFE/CAUTION/AVOID + reasons)
@@ -3108,6 +3150,24 @@ cron.schedule('25 9 * * 1', async function() {
       console.log('[OVERNIGHT] Monday exit plan · ' + plan.plan.length + ' positions');
     }
   } catch(e) { console.error('[OVERNIGHT] Monday cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// WP SWING SCANNER -- 4:30 PM ET weekdays (after coil scan + post-close).
+// Detects 4HR EMA + hammer/pullback swing setups. Conviction 7+ enables size-up.
+// Discipline guard: NO size-up below 7. TURBO requires explicit override keyword.
+// Output: /data/wp_scan.json + Discord push to #stratum-swing.
+cron.schedule('30 16 * * 1-5', async function() {
+  try {
+    if (!wpSwingScanner) return;
+    console.log('[WP] cron triggered (4:30 PM ET) — 4HR/EMA swing scan');
+    var out = await wpSwingScanner.runScan({ cron: true });
+    if (out && out.ok) {
+      console.log('[WP] cron complete · matched ' + out.matched +
+                  ' · ready ' + (out.ready || []).length +
+                  ' · trial ' + (out.trial || []).length +
+                  (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
+    }
+  } catch(e) { console.error('[WP] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // COIL SCANNER FINAL run -- 4:05 PM ET weekdays (after close).
