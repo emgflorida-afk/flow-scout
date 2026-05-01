@@ -34,7 +34,7 @@ var DEFAULT_TICKERS = (process.env.GEX_TICKERS || 'SPY,QQQ,IWM,DIA').split(',');
 
 // Strike range: ±N strikes from ATM (TS streaming endpoint optimal ~12-20)
 var STRIKE_PROXIMITY = parseInt(process.env.GEX_STRIKE_PROXIMITY || '20');
-var STREAM_TIMEOUT_MS = parseInt(process.env.GEX_STREAM_TIMEOUT_MS || '7000');
+var STREAM_TIMEOUT_MS = parseInt(process.env.GEX_STREAM_TIMEOUT_MS || '12000');  // bumped from 7s — small caps slower
 var MAX_CONTRACTS_PER_SIDE = parseInt(process.env.GEX_MAX_CONTRACTS || '40');
 
 // =============================================================================
