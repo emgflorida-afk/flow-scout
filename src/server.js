@@ -246,6 +246,11 @@ var gexCalculator = null;
 try { gexCalculator = require('./gexCalculator'); console.log('[SERVER] gexCalculator loaded OK'); }
 catch(e) { console.log('[SERVER] gexCalculator not loaded:', e.message); }
 
+// PANEL DATA — aggregator for the smart auto-updating TradingView floating panel
+var panelData = null;
+try { panelData = require('./panelData'); console.log('[SERVER] panelData loaded OK'); }
+catch(e) { console.log('[SERVER] panelData not loaded:', e.message); }
+
 var _lvlScanCache = { ts: 0, tfsKey: '', payload: null };
 
 app.get('/api/lvl-scan', async function(req, res) {
@@ -760,6 +765,30 @@ app.post('/api/gex/run', async function(req, res) {
 app.get('/api/gex/status/check', function(req, res) {
   if (!gexCalculator) return res.status(500).json({ ok: false, error: 'gex calculator not loaded' });
   res.json(Object.assign({ ok: true }, gexCalculator.getStatus()));
+});
+
+// SMART PANEL DATA endpoint — aggregator for any ticker, used by injected JS
+// in TradingView. CORS-enabled because the panel fetches across origins.
+app.get('/api/panel/:ticker', async function(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=60');  // browser cache 60s
+  if (!panelData) return res.status(500).json({ ok: false, error: 'panelData not loaded' });
+  try {
+    var data = await panelData.buildPanelData(req.params.ticker);
+    res.json(data);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Smart panel JS file — served from /panel.js for the CDP injector to fetch
+app.get('/panel.js', function(req, res) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');  // 5min cache
+  var fs2 = require('fs');
+  var path2 = require('path');
+  var jsPath = path2.join(__dirname, 'static', 'smart-panel.js');
+  if (!fs2.existsSync(jsPath)) return res.status(404).send('// panel.js not found');
+  res.send(fs2.readFileSync(jsPath, 'utf8'));
 });
 
 // HOOD CHECK — fresh real-time evaluator for AB's HOOD swing add decision.
