@@ -134,10 +134,32 @@ async function fetchChainSide(ticker, expiry, optType, spot, token) {
         try {
           var obj = JSON.parse(line);
           if (obj && typeof obj === 'object') {
-            var strikeObj = obj;
-            if (obj.Legs && obj.Legs[0]) strikeObj = Object.assign({}, obj.Legs[0], obj);
-            if (strikeObj.Strike !== undefined) {
-              contracts.push(strikeObj);
+            // TS SSE packet shape:
+            //   top-level: Delta, Gamma, Theta, DailyOpenInterest, Bid, Ask, Side
+            //               Strikes:["713"]   ← strike as array of strings
+            //   Legs[0]: { Symbol, StrikePrice, Expiration, OptionType }
+            // Extract strike from Strikes[0] OR Legs[0].StrikePrice
+            var strike = null;
+            if (Array.isArray(obj.Strikes) && obj.Strikes[0] !== undefined) {
+              strike = parseFloat(obj.Strikes[0]);
+            } else if (obj.Legs && obj.Legs[0] && obj.Legs[0].StrikePrice !== undefined) {
+              strike = parseFloat(obj.Legs[0].StrikePrice);
+            } else if (obj.Strike !== undefined) {
+              strike = parseFloat(obj.Strike);
+            }
+            if (strike && isFinite(strike)) {
+              // Build a flat normalized object the GEX math expects
+              contracts.push({
+                Strike: strike,
+                Gamma: parseFloat(obj.Gamma || obj.gamma || 0),
+                Delta: parseFloat(obj.Delta || obj.delta || 0),
+                OpenInterest: parseInt(obj.DailyOpenInterest || obj.OpenInterest || obj.openInterest || 0, 10),
+                ImpliedVolatility: parseFloat(obj.ImpliedVolatility || 0),
+                Bid: parseFloat(obj.Bid || 0),
+                Ask: parseFloat(obj.Ask || 0),
+                Volume: parseInt(obj.Volume || 0, 10),
+                Side: obj.Side || optType,
+              });
             }
           }
           if (contracts.length >= MAX_CONTRACTS_PER_SIDE) {
