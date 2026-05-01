@@ -308,14 +308,16 @@ app.get('/api/lvl-scan', async function(req, res) {
     // Filter: keep tickers with EITHER an active signal OR a triggered rawSignal
     // (rawSignal captures setups that fired earlier today even if currently in
     // STOP_HIT / TP_HIT state). Also keeps anything explicitly added via
-    // dynamic universe (LOTTO/SWING/SNIPER/STARRED) even with NONE/NONE — AB
-    // needs to see those tickers regardless so he can fire from the LVL card.
+    // dynamic universe (LOTTO/SWING/SNIPER/STARRED) even with NONE/NONE or
+    // errors — AB needs to see those tickers regardless so he can fire from
+    // the LVL card.
     var dynamicSet = {};
     dynamicTickers.forEach(function(t) { dynamicSet[String(t).toUpperCase()] = true; });
     var meaningful = results.filter(function(r) {
-      if (!r.tfs) return false;
       var sym = String(r.symbol || '').toUpperCase();
-      if (dynamicSet[sym]) return true;  // always keep dynamic-added tickers
+      // Dynamic tickers ALWAYS pass — even if they errored or have no tfs
+      if (dynamicSet[sym]) return true;
+      if (!r.tfs) return false;
       return Object.values(r.tfs).some(function(s) {
         if (!s || !s.ok) return false;
         var hasSig = s.signal && s.signal !== 'NONE';
