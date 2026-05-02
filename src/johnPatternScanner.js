@@ -102,17 +102,19 @@ function stratNumber(bar, prev) {
 }
 
 // Failed 2D: bar broke prior LOW (looked like 2D) but CLOSED back above prior LOW.
+// MUST stay below prior high (else it's an outside bar 3, not a failed-2D).
 // Bullish reversal — bear bait failed.
 function isFailed2D(bar, prev) {
   if (!bar || !prev) return false;
-  return bar.Low < prev.Low && bar.Close > prev.Low;
+  return bar.Low < prev.Low && bar.Close > prev.Low && bar.High <= prev.High;
 }
 
 // Failed 2U: bar broke prior HIGH (looked like 2U) but CLOSED back below prior HIGH.
+// MUST stay above prior low (else it's an outside bar 3, not a failed-2U).
 // Bearish reversal — bull bait failed.
 function isFailed2U(bar, prev) {
   if (!bar || !prev) return false;
-  return bar.High > prev.High && bar.Close < prev.High;
+  return bar.High > prev.High && bar.Close < prev.High && bar.Low >= prev.Low;
 }
 
 // =============================================================================
@@ -280,7 +282,23 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 5) Inside Week (Weekly TF only) — single inside bar at higher TF = compression
+  // 5) 3-1 prep: outside bar (3) followed by inside bar (1) = expansion then
+  // compression (YUM/CART pattern AB caught on 6HR). Direction inferred from
+  // the parent 3's close — bullish 3 = long bias, bearish 3 = short bias.
+  // Trigger fires when the next bar breaks the inside bar's high or low.
+  if (sLast === '1' && sPrev === '3') {
+    var dir31 = prev.Close > prev.Open ? 'long' : prev.Close < prev.Open ? 'short' : 'neutral';
+    if (dir31 !== 'neutral') {
+      return {
+        name: '3-1-prep',
+        direction: dir31,
+        conviction: 7,
+        thesis: 'Outside bar (3) closed ' + (dir31 === 'long' ? 'bullish' : 'bearish') + ', followed by inside bar (1) = expansion-then-compression. Fire on break of inside bar ' + (dir31 === 'long' ? 'HIGH' : 'LOW') + '.',
+      };
+    }
+  }
+
+  // 6) Inside Week (Weekly TF only) — single inside bar at higher TF = compression
   if (tf === 'Weekly' && sLast === '1') {
     var parent = stratNumber(prev, prev2);
     var dir = parent === '2U' ? 'long' : parent === '2D' ? 'short' : 'neutral';

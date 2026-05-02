@@ -780,6 +780,7 @@ const FILTERS_JS = [
   { id: "failed2u",   label: "Failed 2U",            test: r => r.pattern === "failed-2U" },
   { id: "rev2bar",    label: "2-bar Reversal",       test: r => r.pattern === "2D-2U" || r.pattern === "2U-2D" },
   { id: "pullback",   label: "🎯 Pullback Retest",   test: r => r.pattern === "pullback-retest" },
+  { id: "prep31",     label: "⏳ 3-1 Prep",          test: r => r.pattern === "3-1-prep" },
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
   { id: "safe",       label: "🟢 SAFE hold",         test: r => r.holdRating === "SAFE" },
@@ -3119,6 +3120,7 @@ const JS_PATTERN_INFO = {
   '2U-2D':           { icon: '🔃', desc: '2-bar reversal: up bar then down bar that broke prior bar low' },
   'inside-week':     { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
   'pullback-retest': { icon: '🎯', desc: 'NVDA-style: prior 3-1-2 already fired, current price retesting original trigger = second-chance entry on proven structure' },
+  '3-1-prep':        { icon: '⏳', desc: 'Outside bar (3) then inside bar (1) — YUM/CART setup. Expansion-then-compression. Fire on break of inside bar high/low.' },
 };
 
 function renderGridJS() {
