@@ -749,9 +749,11 @@ async function scanTicker(ticker, token, opts) {
         // Only interesting structures:
         // - Inside bar after directional/outside parent (3-1, 2U-1, 2D-1, 1-1)
         // - Or recent directional bar (might be early on a fire we missed)
-        var interestingStructure =
-          (sL === '1' && (sP === '3' || sP === '2U' || sP === '2D' || sP === '1')) ||
-          (sL === '2U' || sL === '2D');
+        // Any non-null current bar with a meaningful prior bar is interesting.
+        // Includes outside bars (3) which fire patterns on their own. Still
+        // skip null/undefined classifications.
+        var interestingStructure = sL && sP &&
+          (sL === '1' || sL === '2U' || sL === '2D' || sL === '3');
         if (interestingStructure) {
           // Direction: prefer body color, fallback to close position in range
           var bodyDir = watchLast.Close > watchLast.Open ? 'long'
