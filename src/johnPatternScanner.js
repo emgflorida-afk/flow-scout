@@ -284,16 +284,29 @@ function detectJSPattern(bars, tf) {
 
   // 5) 3-1 prep: outside bar (3) followed by inside bar (1) = expansion then
   // compression (YUM/CART pattern AB caught on 6HR). Direction inferred from
-  // the parent 3's close — bullish 3 = long bias, bearish 3 = short bias.
-  // Trigger fires when the next bar breaks the inside bar's high or low.
+  // the INSIDE BAR's close position within its own range — that's where
+  // buyers/sellers ended up parked at compression. Per AB validation: CART 6HR
+  // had bearish parent 3 but inside bar (small green doji) closed near top =
+  // LONG bias, matching Strat indicator's "3-1-2 ▲ Actionable" forecast.
   if (sLast === '1' && sPrev === '3') {
-    var dir31 = prev.Close > prev.Open ? 'long' : prev.Close < prev.Open ? 'short' : 'neutral';
+    var insideRange = last.High - last.Low;
+    var dir31 = 'neutral';
+    if (insideRange > 0) {
+      var closePos = (last.Close - last.Low) / insideRange; // 0=at low, 1=at high
+      if (closePos >= 0.6) dir31 = 'long';
+      else if (closePos <= 0.4) dir31 = 'short';
+      // 0.4-0.6 = middle = bidirectional, fall through to neutral
+    }
     if (dir31 !== 'neutral') {
+      var parentBias = prev.Close > prev.Open ? 'bullish' : prev.Close < prev.Open ? 'bearish' : 'doji';
       return {
         name: '3-1-prep',
         direction: dir31,
         conviction: 7,
-        thesis: 'Outside bar (3) closed ' + (dir31 === 'long' ? 'bullish' : 'bearish') + ', followed by inside bar (1) = expansion-then-compression. Fire on break of inside bar ' + (dir31 === 'long' ? 'HIGH' : 'LOW') + '.',
+        thesis: 'Outside bar (3, ' + parentBias + ') then inside bar (1) closing in ' +
+                (dir31 === 'long' ? 'upper' : 'lower') + ' third of range = ' +
+                (dir31 === 'long' ? 'bullish' : 'bearish') + ' bias. Fire on break of inside bar ' +
+                (dir31 === 'long' ? 'HIGH' : 'LOW') + '.',
       };
     }
   }
