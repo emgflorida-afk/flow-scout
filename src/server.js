@@ -670,6 +670,18 @@ app.get('/api/coil-scan/status', function(req, res) {
   res.json(Object.assign({ ok: true }, dailyCoilScanner.getStatus()));
 });
 
+// WEEKLY-SWING — same scanner, Weekly TF only. Sniper-style: "fire weekly
+// consolidation ready for a break + 15% return on trendline break."
+// Runs Friday EOD or Sunday PM to identify next-week swings.
+app.post('/api/weekly-swing/run', async function(req, res) {
+  if (!dailyCoilScanner) return res.status(500).json({ ok: false, error: 'coil scanner not loaded' });
+  try {
+    var force = (req.body && req.body.force === true) || req.query.force === '1';
+    var out = await dailyCoilScanner.runScan({ tfs: ['Weekly'], force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // BREAKOUT WATCHER -- manual trigger + status
 app.post('/api/breakout-watch/run', async function(req, res) {
   if (!breakoutWatcher) return res.status(500).json({ ok: false, error: 'breakout watcher not loaded' });
@@ -3329,6 +3341,37 @@ cron.schedule('50 15 * * 1-5', async function() {
                   (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
     }
   } catch(e) { console.error('[COIL] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// WEEKLY SWING SCANNER -- Friday 4:10 PM ET (right after weekly close) to capture
+// the just-closed weekly bar. Same patterns as coil but on Weekly TF — finds
+// "fire weekly consolidations" Sniper-style with the trendline trigger level.
+cron.schedule('10 16 * * 5', async function() {
+  try {
+    if (!dailyCoilScanner) return;
+    console.log('[WEEKLY-SWING] cron triggered (Fri 4:10 PM ET) — Weekly EOW scan');
+    var out = await dailyCoilScanner.runScan({ tfs: ['Weekly'], cron: true });
+    if (out && out.ok) {
+      console.log('[WEEKLY-SWING] cron complete · matched ' + out.matched +
+                  ' · ready=' + (out.ready || []).length +
+                  ' watching=' + (out.watching || []).length +
+                  (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
+    }
+  } catch(e) { console.error('[WEEKLY-SWING] Fri cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// WEEKLY SWING — Sunday 6 PM ET refresh (in case Fri scan failed or to layer
+// over weekend news). Same logic, fresh confidence into Monday open.
+cron.schedule('0 18 * * 0', async function() {
+  try {
+    if (!dailyCoilScanner) return;
+    console.log('[WEEKLY-SWING] cron triggered (Sun 6 PM ET) — pre-week refresh');
+    var out = await dailyCoilScanner.runScan({ tfs: ['Weekly'], cron: true });
+    if (out && out.ok) {
+      console.log('[WEEKLY-SWING] Sun complete · matched ' + out.matched +
+                  ' · ready=' + (out.ready || []).length);
+    }
+  } catch(e) { console.error('[WEEKLY-SWING] Sun cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // BREAKOUT WATCHER -- every 5 min 9:35 AM to 3:55 PM ET weekdays.

@@ -375,8 +375,9 @@ function buildUniverse() {
 // TIMEFRAME SPECS — Daily and 6HR (240 min × 1.5 = 360 min)
 // =============================================================================
 var TF_SPECS = {
-  'Daily': { unit: 'Daily',  interval: 1,   barsback: 5,  sessiontemplate: null,      label: 'Daily' },
-  '6HR':   { unit: 'Minute', interval: 360, barsback: 10, sessiontemplate: 'Default', label: '6HR' },
+  'Daily':  { unit: 'Daily',  interval: 1,   barsback: 5,  sessiontemplate: null,      label: 'Daily'  },
+  '6HR':    { unit: 'Minute', interval: 360, barsback: 10, sessiontemplate: 'Default', label: '6HR'    },
+  'Weekly': { unit: 'Weekly', interval: 1,   barsback: 12, sessiontemplate: null,      label: 'Weekly' },
 };
 
 // =============================================================================
@@ -609,7 +610,7 @@ async function pushToDiscord(payload) {
   if (ready.length) {
     Object.keys(readyByTF).forEach(function(tfKey) {
       var arr = readyByTF[tfKey];
-      var tfIcon = tfKey === '6HR' ? '⏱️' : '📅';
+      var tfIcon = tfKey === '6HR' ? '⏱️' : tfKey === 'Weekly' ? '📆' : '📅';
       lines.push('## 🔥 READY · ' + tfIcon + ' ' + tfKey + ' (' + arr.length + ')');
       arr.forEach(function(r) {
         var p = r.plan || {};
@@ -617,7 +618,12 @@ async function pushToDiscord(payload) {
         var dirIcon = r.direction === 'long' ? '🟢⬆️' : r.direction === 'short' ? '🔴⬇️' : '⚪';
         var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
         lines.push('**' + r.ticker + '** ' + dirIcon + ' ' + r.pattern + ' · conv ' + r.conviction + '/10 ' + holdIcon);
-        lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '` · RR `' + (p.rr1 || '?') + '×`');
+        // Compute % moves (Sniper-style "15% expected")
+        var trig = pp.trigger;
+        var tp1Pct = (trig && pp.tp1) ? round2(((pp.tp1 - trig) / trig) * 100 * (r.direction === 'short' ? -1 : 1)) : null;
+        var tp2Pct = (trig && pp.tp2) ? round2(((pp.tp2 - trig) / trig) * 100 * (r.direction === 'short' ? -1 : 1)) : null;
+        var pctTag = (tp2Pct != null) ? ' (+' + tp2Pct + '%)' : '';
+        lines.push('  Trigger `$' + (pp.trigger || '?') + '` · Stop `$' + (pp.stop || '?') + '` · TP1 `$' + (pp.tp1 || '?') + '` · TP2 `$' + (pp.tp2 || '?') + '`' + pctTag + ' · RR `' + (p.rr1 || '?') + '×`');
         // Volume confirmation rule (John): ≥1.5× avg on breakout candle = confirmed
         if (r.volumeContext) {
           var vc = r.volumeContext;
@@ -641,7 +647,7 @@ async function pushToDiscord(payload) {
   if (watching.length) {
     Object.keys(watchingByTF).forEach(function(tfKey) {
       var arr = watchingByTF[tfKey];
-      var tfIcon = tfKey === '6HR' ? '⏱️' : '📅';
+      var tfIcon = tfKey === '6HR' ? '⏱️' : tfKey === 'Weekly' ? '📆' : '📅';
       lines.push('## 🟡 WATCHING · ' + tfIcon + ' ' + tfKey + ' (' + arr.length + ')');
       arr.forEach(function(r) {
         var p = r.plan || {};
