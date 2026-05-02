@@ -405,32 +405,40 @@ function detectJSPattern(bars, tf) {
   }
 
   // 11) 3-1 prep: outside bar (3) followed by inside bar (1) = expansion then
-  // compression (YUM/CART pattern AB caught on 6HR). Direction inferred from
-  // the INSIDE BAR's close position within its own range — that's where
-  // buyers/sellers ended up parked at compression. Per AB validation: CART 6HR
-  // had bearish parent 3 but inside bar (small green doji) closed near top =
-  // LONG bias, matching Strat indicator's "3-1-2 ▲ Actionable" forecast.
+  // compression. ALWAYS output (matches Strat Teach indicator "3-1-2 ▲
+  // Actionable" behavior — it surfaces every 3-1 regardless of close position).
+  // Direction priority:
+  //   1. Inside bar body color (close > open = LONG bias, < = SHORT bias)
+  //   2. If exact doji: close position in range (>= midpoint = LONG)
+  //   3. Last resort: parent 3 close color
   if (sLast === '1' && sPrev === '3') {
     var insideRange = last.High - last.Low;
     var dir31 = 'neutral';
-    if (insideRange > 0) {
-      var closePos = (last.Close - last.Low) / insideRange; // 0=at low, 1=at high
-      if (closePos >= 0.6) dir31 = 'long';
-      else if (closePos <= 0.4) dir31 = 'short';
-      // 0.4-0.6 = middle = bidirectional, fall through to neutral
+    var convAdjust = 0;
+    if (last.Close > last.Open) {
+      dir31 = 'long';  // Body is green
+    } else if (last.Close < last.Open) {
+      dir31 = 'short'; // Body is red
+    } else if (insideRange > 0) {
+      // Exact doji — fall back to close position in range
+      var closePos = (last.Close - last.Low) / insideRange;
+      dir31 = closePos >= 0.5 ? 'long' : 'short';
+      convAdjust = -1; // Less conviction on doji
+    } else {
+      // Zero range bar — use parent close as last resort
+      dir31 = prev.Close > prev.Open ? 'long' : 'short';
+      convAdjust = -1;
     }
-    if (dir31 !== 'neutral') {
-      var parentBias = prev.Close > prev.Open ? 'bullish' : prev.Close < prev.Open ? 'bearish' : 'doji';
-      return {
-        name: '3-1-prep',
-        direction: dir31,
-        conviction: 7,
-        thesis: 'Outside bar (3, ' + parentBias + ') then inside bar (1) closing in ' +
-                (dir31 === 'long' ? 'upper' : 'lower') + ' third of range = ' +
-                (dir31 === 'long' ? 'bullish' : 'bearish') + ' bias. Fire on break of inside bar ' +
-                (dir31 === 'long' ? 'HIGH' : 'LOW') + '.',
-      };
-    }
+    var parentBias = prev.Close > prev.Open ? 'bullish' : prev.Close < prev.Open ? 'bearish' : 'doji';
+    return {
+      name: '3-1-prep',
+      direction: dir31,
+      conviction: 7 + convAdjust,
+      thesis: 'Outside bar (3, ' + parentBias + ') then inside bar (1, ' +
+              (last.Close > last.Open ? 'bullish' : last.Close < last.Open ? 'bearish' : 'doji') +
+              ' body) = expansion-then-compression. Fire on break of inside bar ' +
+              (dir31 === 'long' ? 'HIGH' : 'LOW') + '.',
+    };
   }
 
   // 6) Inside Week (Weekly TF only) — single inside bar at higher TF = compression
