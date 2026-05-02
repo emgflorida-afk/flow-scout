@@ -860,19 +860,31 @@ app.get('/api/js-scan/debug/:ticker', async function(req, res) {
     if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-' + r.status });
     var data = await r.json();
     var raw = (data.Bars || data.bars || []);
+    // FIX: stratNumber needs {High, Low, Open, Close} (Pascal case) — same as scanTicker
     var bars = raw.map(function(b) {
-      return { t: b.TimeStamp, O: parseFloat(b.Open), H: parseFloat(b.High), L: parseFloat(b.Low), C: parseFloat(b.Close), V: parseFloat(b.TotalVolume || 0) };
+      return { TimeStamp: b.TimeStamp, Open: parseFloat(b.Open), High: parseFloat(b.High), Low: parseFloat(b.Low), Close: parseFloat(b.Close), Volume: parseFloat(b.TotalVolume || 0) };
     });
     // Classify last 8 bars
     var sn = johnPatternScanner.stratNumber;
     var classified = [];
     for (var i = Math.max(1, bars.length - 8); i < bars.length; i++) {
       var s = sn(bars[i], bars[i-1]);
-      var color = bars[i].C > bars[i].O ? 'GREEN' : bars[i].C < bars[i].O ? 'RED' : 'DOJI';
-      classified.push({ idx: i, t: bars[i].t, O: bars[i].O, H: bars[i].H, L: bars[i].L, C: bars[i].C, strat: s, color: color });
+      var color = bars[i].Close > bars[i].Open ? 'GREEN' : bars[i].Close < bars[i].Open ? 'RED' : 'DOJI';
+      classified.push({ idx: i, t: bars[i].TimeStamp, O: bars[i].Open, H: bars[i].High, L: bars[i].Low, C: bars[i].Close, strat: s, color: color });
     }
+    var deltaSecs = bars.length >= 2 ? (new Date(bars[bars.length-1].TimeStamp).getTime() - new Date(bars[bars.length-2].TimeStamp).getTime()) / 1000 : null;
     var detected = johnPatternScanner.detectJSPattern(bars, tf);
-    res.json({ ok: true, ticker: ticker, tf: tf, totalBars: bars.length, classified: classified, detected: detected, url: url });
+    res.json({
+      ok: true,
+      ticker: ticker,
+      tf: tf,
+      totalBars: bars.length,
+      barIntervalSecs: deltaSecs,
+      barIntervalLabel: deltaSecs === 21600 ? '6HR ✓' : deltaSecs === 14400 ? '4HR' : deltaSecs === 3600 ? '1HR' : deltaSecs === 1800 ? '30min ⚠ NOT 6HR' : (deltaSecs/60) + ' min',
+      classified: classified,
+      detected: detected,
+      url: url,
+    });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
