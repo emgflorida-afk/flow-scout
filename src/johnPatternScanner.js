@@ -153,7 +153,8 @@ function isShooter(bar) {
 // =============================================================================
 function findRecentFiredTrigger(bars, maxLookback) {
   if (!bars || bars.length < 5) return null;
-  var maxBack = Math.min(maxLookback || 12, bars.length - 3);
+  // Widened default — NVDA-style retests can be 5-15 bars after fire
+  var maxBack = Math.min(maxLookback || 20, bars.length - 3);
   // Scan from most recent (excluding current bar) back maxBack bars.
   // For each candidate `i` representing the FIRE bar:
   //   bars[i-2] = the parent (3 outside or directional 2U/2D)
@@ -221,7 +222,7 @@ function findRecentFiredTrigger(bars, maxLookback) {
 // invalidate the thesis.
 function isInRetestZone(latestBar, fired) {
   if (!fired || !latestBar) return false;
-  var tolerance = 0.02;  // 2% retest zone width
+  var tolerance = 0.04;  // 4% retest zone — NVDA at $198 testing $195 = 1.5%, well within
   if (fired.direction === 'long') {
     var inZoneL = latestBar.Low <= fired.triggerPrice * (1 + tolerance);
     var stillAboveStructural = latestBar.Close > fired.structuralFloor;
@@ -249,8 +250,10 @@ function detectJSPattern(bars, tf) {
 
   // 0) Multi-bar structural memory: prior 3-1-2 fired + current bar in retest zone
   // (NVDA setup — AB's favorite). Higher conviction because the structure has
-  // already proved itself by firing once.
-  var fired = findRecentFiredTrigger(bars, 12);
+  // already proved itself by firing once. TF-aware lookback: more bars on
+  // Daily/Weekly so swings 2-3 weeks back can still trigger.
+  var lookback = tf === 'Daily' ? 20 : tf === 'Weekly' ? 16 : 14;
+  var fired = findRecentFiredTrigger(bars, lookback);
   if (fired && isInRetestZone(last, fired)) {
     var thesisL = 'Prior ' + fired.parentPattern + ' fired ' + fired.barsAgo + ' bars ago at $' +
       fired.triggerPrice + ' (' + (fired.direction === 'long' ? 'peaked $' + fired.peakReached : 'troughed $' + fired.troughReached) +
