@@ -240,6 +240,12 @@ var chartArchiver = null;
 try { chartArchiver = require('./chartArchiver'); console.log('[SERVER] chartArchiver loaded OK'); }
 catch(e) { console.log('[SERVER] chartArchiver not loaded:', e.message); }
 
+// METHODOLOGY MINER — regex-only rulebook extraction from John's Discord raw
+// JSON archives (3 channels; skips free-charts which is sniper feed).
+var methodologyMiner = null;
+try { methodologyMiner = require('./methodologyMiner'); console.log('[SERVER] methodologyMiner loaded OK'); }
+catch(e) { console.log('[SERVER] methodologyMiner not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -740,6 +746,60 @@ app.get('/api/charts/serve/:channel/:filename', function(req, res) {
 app.get('/api/charts/status', function(req, res) {
   if (!chartArchiver) return res.status(500).json({ ok: false, error: 'chart archiver not loaded' });
   res.json(Object.assign({ ok: true }, chartArchiver.getStatus()));
+});
+
+// METHODOLOGY MINER — regex-only extraction of John's rulebook (patterns,
+// entries, stops, targets, filters, time/catalyst, sizing) from the 3 raw
+// Discord channel archives. Output JSON is queryable so the system survives
+// the Discord subscription window.
+//   POST /api/methodology/mine                    — manual run; returns rulebook summary
+//   GET  /api/methodology/rulebook                — full rulebook JSON
+//   GET  /api/methodology/examples?pattern=...    — example snippets for a pattern
+//   GET  /api/methodology/status                  — last run + file timestamp
+app.post('/api/methodology/mine', async function(req, res) {
+  if (!methodologyMiner) return res.status(500).json({ ok: false, error: 'methodology miner not loaded' });
+  try {
+    var rb = await methodologyMiner.runMine({});
+    // Return a compact summary (full rulebook is huge); the file on disk has everything.
+    res.json({
+      ok: true,
+      generatedAt: rb.generatedAt,
+      durationMs: rb.durationMs,
+      totalMessagesScanned: rb.totalMessagesScanned,
+      totalSubstantiveBodies: rb.totalSubstantiveBodies,
+      patternsTracked: Object.keys(rb.patternFrequency || {}).length,
+      tickersTracked: Object.keys(((rb.tickerStats || {}).byTicker) || {}).length,
+      channelBreakdown: rb.channelBreakdown,
+      topPatterns: Object.entries(rb.patternFrequency || {})
+        .sort(function(a, b) { return b[1] - a[1]; }).slice(0, 10)
+        .map(function(e) { return { pattern: e[0], count: e[1] }; }),
+      topEntryTriggers: Object.entries(rb.entryTriggers || {})
+        .sort(function(a, b) { return b[1] - a[1]; }).slice(0, 5)
+        .map(function(e) { return { trigger: e[0], count: e[1] }; }),
+      _writeError: rb._writeError || null,
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/methodology/rulebook', function(req, res) {
+  if (!methodologyMiner) return res.status(500).json({ ok: false, error: 'methodology miner not loaded' });
+  var rb = methodologyMiner.loadRulebook();
+  if (!rb) return res.status(404).json({ ok: false, error: 'rulebook not yet generated — POST /api/methodology/mine first' });
+  res.json(Object.assign({ ok: true }, rb));
+});
+
+app.get('/api/methodology/examples', function(req, res) {
+  if (!methodologyMiner) return res.status(500).json({ ok: false, error: 'methodology miner not loaded' });
+  var pattern = req.query.pattern || '';
+  if (!pattern) return res.status(400).json({ ok: false, error: 'pattern query param required' });
+  var limit = parseInt(req.query.limit || '5', 10);
+  var examples = methodologyMiner.examplesFor(pattern, limit);
+  res.json({ ok: true, pattern: pattern, count: examples.length, examples: examples });
+});
+
+app.get('/api/methodology/status', function(req, res) {
+  if (!methodologyMiner) return res.status(500).json({ ok: false, error: 'methodology miner not loaded' });
+  res.json(Object.assign({ ok: true }, methodologyMiner.getStatus()));
 });
 
 // BREAKOUT-CONFIRM — uses shared dailyCoilScanner.checkBreakoutConfirm so the
@@ -3432,6 +3492,21 @@ cron.schedule('30 23 * * *', async function() {
                 ' skipped=' + out.skipped + ' errors=' + out.errors +
                 ' totalUrls=' + out.totalUrls);
   } catch(e) { console.error('[CHARTS] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// METHODOLOGY MINER -- weekly Monday 1:00 AM ET. Regex-mines John's 3 raw
+// archives into a structured rulebook (patterns, entries, stops, targets,
+// filters, time/catalyst, sizing). Output: {DATA_DIR}/methodology_rulebook.json.
+cron.schedule('0 1 * * 1', async function() {
+  try {
+    if (!methodologyMiner) return;
+    console.log('[METHODOLOGY] cron triggered (Mon 1:00 AM ET) — weekly mine');
+    var rb = await methodologyMiner.runMine({});
+    console.log('[METHODOLOGY] cron complete · scanned=' + rb.totalMessagesScanned +
+                ' substantive=' + rb.totalSubstantiveBodies +
+                ' patterns=' + Object.keys(rb.patternFrequency || {}).length +
+                ' tickers=' + Object.keys(((rb.tickerStats || {}).byTicker) || {}).length);
+  } catch(e) { console.error('[METHODOLOGY] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // BREAKOUT WATCHER -- every 5 min 9:35 AM to 3:55 PM ET weekdays.
