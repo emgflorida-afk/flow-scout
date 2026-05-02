@@ -234,6 +234,12 @@ var breakoutWatcher = null;
 try { breakoutWatcher = require('./breakoutWatcher'); console.log('[SERVER] breakoutWatcher loaded OK'); }
 catch(e) { console.log('[SERVER] breakoutWatcher not loaded:', e.message); }
 
+// CHART ARCHIVER — downloads chart attachments from Discord raw JSON archives
+// to /data/charts/ before Discord CDN URLs expire. Source = labeled training data.
+var chartArchiver = null;
+try { chartArchiver = require('./chartArchiver'); console.log('[SERVER] chartArchiver loaded OK'); }
+catch(e) { console.log('[SERVER] chartArchiver not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -695,6 +701,45 @@ app.post('/api/breakout-watch/run', async function(req, res) {
 app.get('/api/breakout-watch/status', function(req, res) {
   if (!breakoutWatcher) return res.status(500).json({ ok: false, error: 'breakout watcher not loaded' });
   res.json(Object.assign({ ok: true }, breakoutWatcher.getStatus()));
+});
+
+// CHART ARCHIVER — backfill local /data/charts/* from Discord URLs in the
+// raw history JSON. Idempotent: skips already-downloaded files.
+//   POST /api/charts/archive/run?limit=N    — manual trigger (limit caps total downloads)
+//   GET  /api/charts/list?ticker=X&channel=Y — list local charts (with sidecar metadata)
+//   GET  /api/charts/serve/:channel/:filename — serve actual image bytes
+//   GET  /api/charts/status                  — counts per channel
+app.post('/api/charts/archive/run', async function(req, res) {
+  if (!chartArchiver) return res.status(500).json({ ok: false, error: 'chart archiver not loaded' });
+  try {
+    var limit = parseInt(req.query.limit || '0', 10) || null;
+    var out = await chartArchiver.runArchive({ limit: limit });
+    res.json({ ok: true, limit: limit, totals: out });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/charts/list', function(req, res) {
+  if (!chartArchiver) return res.status(500).json({ ok: false, error: 'chart archiver not loaded' });
+  try {
+    var out = chartArchiver.listCharts({
+      ticker: req.query.ticker || null,
+      channel: req.query.channel || null,
+      limit: parseInt(req.query.limit || '100', 10),
+    });
+    res.json(Object.assign({ ok: true }, out));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/charts/serve/:channel/:filename', function(req, res) {
+  if (!chartArchiver) return res.status(500).json({ ok: false, error: 'chart archiver not loaded' });
+  var p = chartArchiver.getChartPath(req.params.channel, req.params.filename);
+  if (!p) return res.status(404).send('not found');
+  res.sendFile(p);
+});
+
+app.get('/api/charts/status', function(req, res) {
+  if (!chartArchiver) return res.status(500).json({ ok: false, error: 'chart archiver not loaded' });
+  res.json(Object.assign({ ok: true }, chartArchiver.getStatus()));
 });
 
 // BREAKOUT-CONFIRM — uses shared dailyCoilScanner.checkBreakoutConfirm so the
@@ -3372,6 +3417,21 @@ cron.schedule('0 18 * * 0', async function() {
                   ' · ready=' + (out.ready || []).length);
     }
   } catch(e) { console.error('[WEEKLY-SWING] Sun cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// CHART ARCHIVER -- nightly 11:30 PM ET. Walks raw history JSON, downloads
+// every chart attachment URL to /data/charts/* before Discord CDN URLs expire.
+// Idempotent: skips already-downloaded. Runs daily so each new pick gets
+// archived within 24h of posting.
+cron.schedule('30 23 * * *', async function() {
+  try {
+    if (!chartArchiver) return;
+    console.log('[CHARTS] cron triggered (11:30 PM ET) — nightly archive');
+    var out = await chartArchiver.runArchive({});
+    console.log('[CHARTS] cron complete · downloaded=' + out.downloaded +
+                ' skipped=' + out.skipped + ' errors=' + out.errors +
+                ' totalUrls=' + out.totalUrls);
+  } catch(e) { console.error('[CHARTS] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // BREAKOUT WATCHER -- every 5 min 9:35 AM to 3:55 PM ET weekdays.
