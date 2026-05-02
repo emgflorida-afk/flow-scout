@@ -116,6 +116,102 @@ function isFailed2U(bar, prev) {
 }
 
 // =============================================================================
+// MULTI-BAR STRUCTURAL MEMORY (Phase 2 — NVDA setup detector)
+// Scans the last N bars for a fired 3-1-2 pattern (the moment a prior 1-3-1
+// or 3-1 setup actually triggered into a 2U/2D break). Returns the fire
+// metadata: trigger price, structural floor, direction, peak/trough reached.
+//
+// This is the "structural memory" John uses on charts like NVDA where the
+// 3-1-2 Rev arrows are 5-7 bars in the past — our single-bar detector misses
+// it entirely without history.
+// =============================================================================
+function findRecentFiredTrigger(bars, maxLookback) {
+  if (!bars || bars.length < 5) return null;
+  var maxBack = Math.min(maxLookback || 12, bars.length - 3);
+  // Scan from most recent (excluding current bar) back maxBack bars.
+  // For each candidate `i` representing the FIRE bar:
+  //   bars[i-2] = the parent (3 outside or directional 2U/2D)
+  //   bars[i-1] = the inside bar (1)
+  //   bars[i]   = the fire (2U breaking inside high = long, or 2D breaking inside low = short)
+  for (var lookback = 1; lookback <= maxBack; lookback++) {
+    var fireIdx = bars.length - 1 - lookback;
+    if (fireIdx < 2) break;
+    var fireBar = bars[fireIdx];
+    var insideBar = bars[fireIdx - 1];
+    var parentBar = bars[fireIdx - 2];
+
+    var sParent = stratNumber(parentBar, fireIdx >= 3 ? bars[fireIdx - 3] : null);
+    var sInside = stratNumber(insideBar, parentBar);
+    var sFire = stratNumber(fireBar, insideBar);
+
+    // Need: inside bar (1) sandwiched, then fire bar broke that inside bar's range
+    if (sInside !== '1') continue;
+    if (sParent !== '3' && sParent !== '2U' && sParent !== '2D') continue;
+
+    if (sFire === '2U') {
+      // Long fire — broke inside bar's HIGH
+      var triggerPrice = round2(insideBar.High);
+      var structuralFloor = round2(insideBar.Low);
+      // Compute peak reached after fire (highest high in fireBar through bars[fireIdx + lookback - 1])
+      var peakHigh = fireBar.High;
+      for (var k = fireIdx + 1; k < bars.length - 1; k++) {
+        if (bars[k].High > peakHigh) peakHigh = bars[k].High;
+      }
+      return {
+        firedAtIdx: fireIdx,
+        barsAgo: lookback,
+        direction: 'long',
+        triggerPrice: triggerPrice,
+        structuralFloor: structuralFloor,
+        peakReached: round2(peakHigh),
+        parentPattern: sParent + '-1-2U',
+      };
+    }
+    if (sFire === '2D') {
+      // Short fire — broke inside bar's LOW
+      var triggerPrice2 = round2(insideBar.Low);
+      var structuralCeil = round2(insideBar.High);
+      var troughLow = fireBar.Low;
+      for (var m = fireIdx + 1; m < bars.length - 1; m++) {
+        if (bars[m].Low < troughLow) troughLow = bars[m].Low;
+      }
+      return {
+        firedAtIdx: fireIdx,
+        barsAgo: lookback,
+        direction: 'short',
+        triggerPrice: triggerPrice2,
+        structuralFloor: structuralCeil,  // For shorts this is the upper invalidation
+        troughReached: round2(troughLow),
+        parentPattern: sParent + '-1-2D',
+      };
+    }
+  }
+  return null;
+}
+
+// Check if current bar is in the "retest zone" of a fired trigger — meaning
+// price has pulled back to within tolerance of the original trigger but
+// hasn't broken the structural floor (long) / ceiling (short) that would
+// invalidate the thesis.
+function isInRetestZone(latestBar, fired) {
+  if (!fired || !latestBar) return false;
+  var tolerance = 0.02;  // 2% retest zone width
+  if (fired.direction === 'long') {
+    var inZoneL = latestBar.Low <= fired.triggerPrice * (1 + tolerance);
+    var stillAboveStructural = latestBar.Close > fired.structuralFloor;
+    var hasMoved = fired.peakReached > fired.triggerPrice * 1.03;  // Original fire actually went somewhere (>3%)
+    return inZoneL && stillAboveStructural && hasMoved;
+  }
+  if (fired.direction === 'short') {
+    var inZoneS = latestBar.High >= fired.triggerPrice * (1 - tolerance);
+    var stillBelowStructural = latestBar.Close < fired.structuralFloor;
+    var hasMoved2 = fired.troughReached < fired.triggerPrice * 0.97;
+    return inZoneS && stillBelowStructural && hasMoved2;
+  }
+  return false;
+}
+
+// =============================================================================
 // PATTERN DETECTION
 // Examines the last 1-2 bars in context for John's actual reversal patterns.
 // =============================================================================
@@ -124,6 +220,23 @@ function detectJSPattern(bars, tf) {
   var last = bars[bars.length - 1];
   var prev = bars[bars.length - 2];
   var prev2 = bars[bars.length - 3];
+
+  // 0) Multi-bar structural memory: prior 3-1-2 fired + current bar in retest zone
+  // (NVDA setup — AB's favorite). Higher conviction because the structure has
+  // already proved itself by firing once.
+  var fired = findRecentFiredTrigger(bars, 12);
+  if (fired && isInRetestZone(last, fired)) {
+    var thesisL = 'Prior ' + fired.parentPattern + ' fired ' + fired.barsAgo + ' bars ago at $' +
+      fired.triggerPrice + ' (' + (fired.direction === 'long' ? 'peaked $' + fired.peakReached : 'troughed $' + fired.troughReached) +
+      '). Current pullback retesting the trigger = second-chance entry at better price.';
+    return {
+      name: 'pullback-retest',
+      direction: fired.direction,
+      conviction: 9,
+      thesis: thesisL,
+      fired: fired,  // Pass to buildPlan for level-aware plan
+    };
+  }
 
   // 1) Failed 2D on most recent bar = bullish reversal (highest John-frequency)
   if (isFailed2D(last, prev)) {
@@ -197,16 +310,35 @@ function buildPlan(pattern, bars, lastClose) {
   var direction = pattern.direction;
   var trigger, stop, structural, tp1, tp2;
 
-  // Trigger = continuation break of latest bar in direction of pattern.
-  // Stop (structural) = the inverse extreme of the latest bar (the level
-  // that, if breached, invalidates the reversal thesis).
-  if (direction === 'long') {
-    trigger = round2(last.High);          // Break above current high = continuation
-    structural = round2(last.Low);         // Below current low = thesis broken
+  // Special case: pullback-retest pattern uses the ORIGINAL fired trigger's
+  // levels rather than the latest bar's range — we want to re-enter the
+  // proven structure, not trade the pullback bar itself.
+  if (pattern.name === 'pullback-retest' && pattern.fired) {
+    var f = pattern.fired;
+    if (direction === 'long') {
+      trigger = f.triggerPrice;            // Re-break original trigger
+      stop = f.structuralFloor;             // Below original inside-bar low
+      structural = f.structuralFloor;
+      var fireMove = f.peakReached - f.triggerPrice;
+      tp1 = round2(f.peakReached);          // First target = prior swing high
+      tp2 = round2(f.triggerPrice + fireMove * 1.5);  // Extension beyond peak
+    } else {
+      trigger = f.triggerPrice;
+      stop = f.structuralFloor;
+      structural = f.structuralFloor;
+      var fireMove2 = f.triggerPrice - f.troughReached;
+      tp1 = round2(f.troughReached);        // First target = prior swing low
+      tp2 = round2(f.triggerPrice - fireMove2 * 1.5);
+    }
+  }
+  // Standard case: single/double-bar reversal — use latest bar's range
+  else if (direction === 'long') {
+    trigger = round2(last.High);
+    structural = round2(last.Low);
     stop = structural;
     var moveSize = range > 0 ? range : (last.High * 0.01);
-    tp1 = round2(trigger + moveSize);      // 1× current bar range
-    tp2 = round2(trigger + moveSize * 2);  // 2× current bar range
+    tp1 = round2(trigger + moveSize);
+    tp2 = round2(trigger + moveSize * 2);
   } else if (direction === 'short') {
     trigger = round2(last.Low);
     structural = round2(last.High);
@@ -215,7 +347,7 @@ function buildPlan(pattern, bars, lastClose) {
     tp1 = round2(trigger - moveSize2);
     tp2 = round2(trigger - moveSize2 * 2);
   } else {
-    return null; // 'neutral' direction — no plan
+    return null;
   }
 
   var risk = direction === 'long' ? round2(trigger - stop) : round2(stop - trigger);

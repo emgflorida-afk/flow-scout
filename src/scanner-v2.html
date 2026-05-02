@@ -779,6 +779,7 @@ const FILTERS_JS = [
   { id: "failed2d",   label: "Failed 2D",            test: r => r.pattern === "failed-2D" },
   { id: "failed2u",   label: "Failed 2U",            test: r => r.pattern === "failed-2U" },
   { id: "rev2bar",    label: "2-bar Reversal",       test: r => r.pattern === "2D-2U" || r.pattern === "2U-2D" },
+  { id: "pullback",   label: "🎯 Pullback Retest",   test: r => r.pattern === "pullback-retest" },
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
   { id: "safe",       label: "🟢 SAFE hold",         test: r => r.holdRating === "SAFE" },
@@ -3112,11 +3113,12 @@ async function refreshJSScan() {
 window.refreshJSScan = refreshJSScan;
 
 const JS_PATTERN_INFO = {
-  'failed-2D':   { icon: '🔄', desc: 'Bar broke prior LOW then closed back above — bear bait failed = bullish reversal' },
-  'failed-2U':   { icon: '🔄', desc: 'Bar broke prior HIGH then closed back below — bull bait failed = bearish reversal' },
-  '2D-2U':       { icon: '🔃', desc: '2-bar reversal: down bar then up bar that broke prior bar high' },
-  '2U-2D':       { icon: '🔃', desc: '2-bar reversal: up bar then down bar that broke prior bar low' },
-  'inside-week': { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
+  'failed-2D':       { icon: '🔄', desc: 'Bar broke prior LOW then closed back above — bear bait failed = bullish reversal' },
+  'failed-2U':       { icon: '🔄', desc: 'Bar broke prior HIGH then closed back below — bull bait failed = bearish reversal' },
+  '2D-2U':           { icon: '🔃', desc: '2-bar reversal: down bar then up bar that broke prior bar high' },
+  '2U-2D':           { icon: '🔃', desc: '2-bar reversal: up bar then down bar that broke prior bar low' },
+  'inside-week':     { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
+  'pullback-retest': { icon: '🎯', desc: 'NVDA-style: prior 3-1-2 already fired, current price retesting original trigger = second-chance entry on proven structure' },
 };
 
 function renderGridJS() {
