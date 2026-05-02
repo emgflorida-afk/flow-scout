@@ -836,6 +836,142 @@ app.get('/api/js-scan/status', function(req, res) {
   res.json(Object.assign({ ok: true }, johnPatternScanner.getStatus()));
 });
 
+// SPREAD CHECK — Monday-morning ratio validator. Pulls broker quote into the
+// 5-tier verdict matrix. Works for any debit/credit spread, any underlying.
+//   GET /api/spread-check?debit=2.00&longStrike=715&shortStrike=705&direction=put
+//   GET /api/spread-check?credit=1.20&shortStrike=725&longStrike=735&direction=call (bear call credit spread)
+app.get('/api/spread-check', function(req, res) {
+  try {
+    var debit = parseFloat(req.query.debit);
+    var credit = parseFloat(req.query.credit);
+    var longStrike = parseFloat(req.query.longStrike);
+    var shortStrike = parseFloat(req.query.shortStrike);
+    var direction = String(req.query.direction || 'put').toLowerCase();
+    var ticker = (req.query.ticker || 'SPY').toUpperCase();
+    var expiry = req.query.expiry || null;
+
+    if (!isFinite(longStrike) || !isFinite(shortStrike)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'usage: ?debit=X (or ?credit=Y) &longStrike=L&shortStrike=S&direction=put|call',
+        examples: [
+          '/api/spread-check?debit=2.00&longStrike=715&shortStrike=705&direction=put (put DEBIT spread - bearish)',
+          '/api/spread-check?credit=1.20&shortStrike=725&longStrike=735&direction=call (bear CALL credit spread - neutral/bearish)',
+        ],
+      });
+    }
+
+    var width = Math.abs(longStrike - shortStrike);
+    var isCredit = isFinite(credit) && !isFinite(debit);
+    var cost = isCredit ? credit : debit;
+    if (!isFinite(cost)) {
+      return res.status(400).json({ ok: false, error: 'must specify ?debit= or ?credit=' });
+    }
+
+    var maxProfit, maxRisk, breakeven, structure;
+    if (isCredit) {
+      // Credit spread: collect premium upfront, max profit = credit, max loss = width - credit
+      maxProfit = cost;
+      maxRisk = width - cost;
+      // For bear call: breakeven = short_strike + credit
+      // For bull put: breakeven = short_strike - credit
+      breakeven = direction === 'call' ? shortStrike + cost : shortStrike - cost;
+      structure = direction === 'call' ? 'BEAR CALL CREDIT SPREAD' : 'BULL PUT CREDIT SPREAD';
+    } else {
+      // Debit spread: pay upfront, max profit = width - debit, max loss = debit
+      maxProfit = width - cost;
+      maxRisk = cost;
+      // For put debit (bearish): breakeven = long_strike - debit
+      // For call debit (bullish): breakeven = long_strike + debit
+      breakeven = direction === 'put' ? longStrike - cost : longStrike + cost;
+      structure = direction === 'put' ? 'PUT DEBIT SPREAD (bearish)' : 'CALL DEBIT SPREAD (bullish)';
+    }
+
+    var rrRatio = maxRisk > 0 ? maxProfit / maxRisk : 0;
+    var rrRatioPct = (rrRatio * 100).toFixed(0);
+
+    // Verdict matrix (debit spread oriented — for credit spread invert thinking)
+    var verdict, action, color, sizeRecommendation;
+    if (isCredit) {
+      // Credit spread verdict — based on % of width captured + R:R
+      var pctOfWidth = (cost / width) * 100;
+      if (pctOfWidth >= 33) {
+        verdict = '🟢 EXCELLENT'; color = 'green';
+        action = 'Strong premium capture (>=33% width). Fire 1-2ct.';
+        sizeRecommendation = 1;
+      } else if (pctOfWidth >= 25) {
+        verdict = '🟢 GOOD'; color = 'green';
+        action = 'Decent premium (25-33% width). Fire 1ct trial.';
+        sizeRecommendation = 1;
+      } else if (pctOfWidth >= 15) {
+        verdict = '🟡 OK';
+        action = 'Modest premium (15-25%). 1ct only — risk/reward thin.';
+        sizeRecommendation = 1;
+      } else {
+        verdict = '🔴 NO GO'; color = 'red';
+        action = 'Premium too thin (<15% width). Skip — IV too low to sell.';
+        sizeRecommendation = 0;
+      }
+    } else {
+      // Debit spread verdict — based on absolute debit cost
+      if (cost <= 1.5) {
+        verdict = '🟢 EXCELLENT'; color = 'green';
+        action = 'Cheap entry — fire 1-2ct (AAA setup OK at this cost).';
+        sizeRecommendation = 2;
+      } else if (cost <= 2.0) {
+        verdict = '🟢 GOOD'; color = 'green';
+        action = 'Fire 1ct trial — base case sweet spot.';
+        sizeRecommendation = 1;
+      } else if (cost <= 2.5) {
+        verdict = '🟡 OK BUT WATCH';
+        action = '1ct trial ONLY — IV elevated, monitor for IV crush after entry.';
+        sizeRecommendation = 1;
+      } else if (cost <= 3.0) {
+        verdict = '🟡 EDGE';
+        action = 'Probably skip — premium ate too much edge. Wait for IV crush or different setup.';
+        sizeRecommendation = 0;
+      } else {
+        verdict = '🔴 NO GO'; color = 'red';
+        action = 'IV crushed play. Switch to CREDIT spread to BENEFIT from elevated IV (sell premium instead of buy).';
+        sizeRecommendation = 0;
+      }
+    }
+
+    var round2 = function(v) { return Math.round(v * 100) / 100; };
+
+    res.json({
+      ok: true,
+      ticker: ticker,
+      expiry: expiry,
+      structure: structure,
+      direction: direction,
+      longStrike: longStrike,
+      shortStrike: shortStrike,
+      spreadWidth: round2(width),
+      cost: round2(cost),
+      costType: isCredit ? 'credit' : 'debit',
+      maxProfit: round2(maxProfit),
+      maxRisk: round2(maxRisk),
+      rrRatio: round2(rrRatio),
+      rrRatioPct: rrRatioPct + '%',
+      breakeven: round2(breakeven),
+      verdict: verdict,
+      action: action,
+      sizeRecommendation: sizeRecommendation,
+      sizingTable: [
+        { contracts: 1, cost: '$' + Math.round(cost * 100), maxProfit: '$' + Math.round(maxProfit * 100), maxLoss: '$' + Math.round(maxRisk * 100) },
+        { contracts: 2, cost: '$' + Math.round(cost * 200), maxProfit: '$' + Math.round(maxProfit * 200), maxLoss: '$' + Math.round(maxRisk * 200) },
+        { contracts: 3, cost: '$' + Math.round(cost * 300), maxProfit: '$' + Math.round(maxProfit * 300), maxLoss: '$' + Math.round(maxRisk * 300) },
+      ],
+      thresholds: isCredit
+        ? { excellent: '>=33% width', good: '25-33%', ok: '15-25%', skip: '<15%' }
+        : { excellent: '<=$1.50', good: '$1.50-$2.00', ok: '$2.00-$2.50', edge: '$2.50-$3.00', skip: '>$3.00' },
+    });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // DIAGNOSTIC — dumps last N bars + Strat classification for a single ticker.
 // Use to compare TS data vs TV chart when scanner misses a setup.
 //   GET /api/js-scan/debug/:ticker?tf=6HR
