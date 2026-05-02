@@ -733,6 +733,47 @@ async function scanTicker(ticker, token, opts) {
     }).filter(function (b) { return isFinite(b.High) && isFinite(b.Low); });
 
     var pattern = detectJSPattern(bars, tf);
+
+    // WATCH-ONLY FALLBACK: when no concrete pattern fires but the structure
+    // is forming an interesting setup (Strat Teach "Actionable" equivalent),
+    // surface as low-conviction watch entry. Mirrors how the indicator shows
+    // "3-1-2 ▲ Actionable" even when no clean pattern has fired yet.
+    // Catches NVDA/CART-style setups our concrete detectors miss.
+    if (!pattern || pattern.direction === 'neutral') {
+      if (bars.length >= 3) {
+        var watchLast = bars[bars.length - 1];
+        var watchPrev = bars[bars.length - 2];
+        var watchPrev2 = bars[bars.length - 3];
+        var sL = stratNumber(watchLast, watchPrev);
+        var sP = stratNumber(watchPrev, watchPrev2);
+        // Only interesting structures:
+        // - Inside bar after directional/outside parent (3-1, 2U-1, 2D-1, 1-1)
+        // - Or recent directional bar (might be early on a fire we missed)
+        var interestingStructure =
+          (sL === '1' && (sP === '3' || sP === '2U' || sP === '2D' || sP === '1')) ||
+          (sL === '2U' || sL === '2D');
+        if (interestingStructure) {
+          // Direction: prefer body color, fallback to close position in range
+          var bodyDir = watchLast.Close > watchLast.Open ? 'long'
+                       : watchLast.Close < watchLast.Open ? 'short' : null;
+          if (!bodyDir && watchLast.High > watchLast.Low) {
+            var pos = (watchLast.Close - watchLast.Low) / (watchLast.High - watchLast.Low);
+            bodyDir = pos >= 0.5 ? 'long' : 'short';
+          }
+          if (bodyDir) {
+            pattern = {
+              name: 'watch-actionable',
+              direction: bodyDir,
+              conviction: 4,
+              thesis: 'Structure forming (' + (sP || '?') + '-' + (sL || '?') + '). No concrete pattern fired, but ' +
+                      (bodyDir === 'long' ? 'bullish' : 'bearish') + ' bias on inside bar body — watch break of ' +
+                      (bodyDir === 'long' ? 'HIGH for long fire' : 'LOW for short fire') + '.',
+            };
+          }
+        }
+      }
+    }
+
     if (!pattern || pattern.direction === 'neutral') {
       return { ticker: ticker, tf: tf, pattern: null };
     }

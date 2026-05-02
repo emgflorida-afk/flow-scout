@@ -784,6 +784,7 @@ const FILTERS_JS = [
   { id: "candle",     label: "🔨 Hammer/Shooter",    test: r => r.pattern === "hammer" || r.pattern === "shooter" },
   { id: "pullback",   label: "🎯 Pullback Retest",   test: r => r.pattern === "pullback-retest" },
   { id: "prep31",     label: "⏳ 3-1 Prep",          test: r => r.pattern === "3-1-prep" },
+  { id: "watch",      label: "🎰 Actionable Watch",  test: r => r.pattern === "watch-actionable" },
   { id: "tf6hr",      label: "⏱️ 6HR (best WR)",     test: r => r.tf === "6HR" },
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
@@ -3131,6 +3132,7 @@ const JS_PATTERN_INFO = {
   'inside-week':     { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
   'pullback-retest': { icon: '🎯', desc: 'NVDA-style: prior 3-1-2 already fired, current price retesting original trigger = second-chance entry on proven structure' },
   '3-1-prep':        { icon: '⏳', desc: 'Outside bar (3) then inside bar (1) — YUM/CART setup. Expansion-then-compression. Fire on break of inside bar high/low.' },
+  'watch-actionable': { icon: '🎰', desc: 'Strat Teach "Actionable" equivalent — structure forming, no fired pattern yet but bias is set. Watch the break.' },
 };
 
 function renderGridJS() {
