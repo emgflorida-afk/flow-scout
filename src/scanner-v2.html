@@ -688,6 +688,7 @@ const TABS = [
   { id: "swings",   label: "🚀 SWINGS",      modeDefault: "SWING/LEAP" },
   { id: "coil",     label: "🌀 COIL",        modeDefault: "EOD PRE-POS" },
   { id: "wp",       label: "🌊 WP",          modeDefault: "4HR SWING" },
+  { id: "js",       label: "🎯 JS",          modeDefault: "REVERSAL" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -766,6 +767,21 @@ const FILTERS_WP = [
   { id: "ftfc",      label: "Daily aligned",  test: r => r.dailyAligned === true },
   { id: "coilstack", label: "Coil + WP",      test: r => r.coilAligned === true },
   { id: "safe",      label: "🟢 SAFE hold",   test: r => r.holdRating === "SAFE" },
+];
+
+// JS tab: John Pattern Scanner — failed-2D / failed-2U / 2D-2U / 2U-2D / inside-week
+const FILTERS_JS = [
+  { id: "all",        label: "All",                  test: r => true },
+  { id: "ready",      label: "🔥 Ready (7+)",        test: r => (r.conviction||0) >= 7 },
+  { id: "watching",   label: "🟡 Watching (6)",      test: r => (r.conviction||0) === 6 },
+  { id: "long",       label: "Long bias",            test: r => r.direction === "long" },
+  { id: "short",      label: "Short bias",           test: r => r.direction === "short" },
+  { id: "failed2d",   label: "Failed 2D",            test: r => r.pattern === "failed-2D" },
+  { id: "failed2u",   label: "Failed 2U",            test: r => r.pattern === "failed-2U" },
+  { id: "rev2bar",    label: "2-bar Reversal",       test: r => r.pattern === "2D-2U" || r.pattern === "2U-2D" },
+  { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
+  { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
+  { id: "safe",       label: "🟢 SAFE hold",         test: r => r.holdRating === "SAFE" },
 ];
 
 // COIL tab: daily 1-3-1 / double-inside / 3-1-1 coil patterns from dailyCoilScanner
@@ -988,6 +1004,7 @@ function renderFilters() {
   else if (activeTab === "swings")   dataSource = (swingLeapData && swingLeapData.posts) || [];
   else if (activeTab === "coil")     dataSource = (coilData && [].concat(coilData.ready||[], coilData.watching||[], coilData.prep||[])) || [];
   else if (activeTab === "wp")       dataSource = (wpData && [].concat(wpData.ready||[], wpData.trial||[])) || [];
+  else if (activeTab === "js")       dataSource = (jsData && [].concat(jsData.ready||[], jsData.watching||[], jsData.prep||[])) || [];
   else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
 
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
@@ -1010,6 +1027,7 @@ function renderFilters() {
       else if (activeTab === "swings")   renderGridSwingLeap();
       else if (activeTab === "coil")     renderGridCoil();
       else if (activeTab === "wp")       renderGridWP();
+      else if (activeTab === "js")       renderGridJS();
       else if (activeTab === "starred")  renderGridStarred();
     });
   });
@@ -2146,6 +2164,7 @@ function renderTabs() {
               : activeTab === "swings"   ? FILTERS_SWINGS
               : activeTab === "coil"     ? FILTERS_COIL
               : activeTab === "wp"       ? FILTERS_WP
+              : activeTab === "js"       ? FILTERS_JS
               : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
       renderTabs();
@@ -2191,6 +2210,7 @@ async function loadActiveTab() {
   if (activeTab === "swings")   return loadSwingLeapData();
   if (activeTab === "coil")     return loadCoilData();
   if (activeTab === "wp")       return loadWPData();
+  if (activeTab === "js")       return loadJSData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -3024,6 +3044,194 @@ function renderGridWP() {
     }).join("");
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">WP render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+
+// =============================================================================
+// 🎯 JS tab — John Pattern Scanner (failed-2D / failed-2U / 2D-2U / 2U-2D / inside-week)
+// AB's edge: custom 3-layer stops + multi-candle confirm before fire.
+// =============================================================================
+let jsData = null;
+
+async function loadJSData() {
+  FILTERS = FILTERS_JS;
+  if (!FILTERS_JS.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!jsData) document.getElementById("grid").innerHTML = `<div class="empty">Loading JS scan... reversal patterns John actually uses.<br><span style="font-size:11px;">Failed-2D · Failed-2U · 2D-2U · 2U-2D · Inside-week</span></div>`;
+    const r = await fetch("/api/js-scan", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    jsData = await r.json();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Could not load JS scan: <code>${e.message}</code></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
+  document.getElementById("scan-date").textContent = "JS Pattern Scan · " + new Date(jsData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${all.length} patterns · ${jsData.scanned || 0} scanned · ${Object.keys(jsData.byPattern || {}).length} pattern types`;
+  renderStatsJS();
+  renderFilters();
+  renderTabs();
+  renderGridJS();
+}
+
+function renderStatsJS() {
+  const ready = jsData.ready || [];
+  const watching = jsData.watching || [];
+  const byP = jsData.byPattern || {};
+  const stats = [
+    { k: "🔥 Ready",       v: ready.length,                                           cls: "green" },
+    { k: "🟡 Watching",    v: watching.length,                                        cls: "" },
+    { k: "Failed 2D",      v: byP["failed-2D"] || 0,                                  cls: "green" },
+    { k: "Failed 2U",      v: byP["failed-2U"] || 0,                                  cls: "red" },
+    { k: "2D-2U Rev",      v: byP["2D-2U"] || 0,                                      cls: "green" },
+    { k: "2U-2D Rev",      v: byP["2U-2D"] || 0,                                      cls: "red" },
+    { k: "Inside Wk",      v: byP["inside-week"] || 0,                                cls: "" },
+    { k: "Long",           v: [...ready, ...watching].filter(r => r.direction === "long").length,  cls: "green" },
+    { k: "Short",          v: [...ready, ...watching].filter(r => r.direction === "short").length, cls: "red" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+async function refreshJSScan() {
+  const btn = document.getElementById("js-refresh-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "🎯 Scanning..."; }
+  try {
+    const r = await fetch("/api/js-scan/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    const data = await r.json();
+    if (data.skipped) { alert("Scan already running, please wait."); return; }
+    jsData = data;
+    renderStatsJS();
+    renderGridJS();
+  } catch (e) { alert("Refresh failed: " + e.message); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = "🎯 Re-scan"; } }
+}
+window.refreshJSScan = refreshJSScan;
+
+const JS_PATTERN_INFO = {
+  'failed-2D':   { icon: '🔄', desc: 'Bar broke prior LOW then closed back above — bear bait failed = bullish reversal' },
+  'failed-2U':   { icon: '🔄', desc: 'Bar broke prior HIGH then closed back below — bull bait failed = bearish reversal' },
+  '2D-2U':       { icon: '🔃', desc: '2-bar reversal: down bar then up bar that broke prior bar high' },
+  '2U-2D':       { icon: '🔃', desc: '2-bar reversal: up bar then down bar that broke prior bar low' },
+  'inside-week': { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
+};
+
+function renderGridJS() {
+  try {
+    FILTERS = FILTERS_JS;
+    const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = all.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `
+        <div class="empty">
+          No JS patterns match "${filter.label}".<br>
+          <button id="js-refresh-btn" onclick="refreshJSScan()" class="btn btn-primary" style="margin-top:12px;">🎯 Re-scan now</button>
+        </div>`;
+      return;
+    }
+
+    const refreshBtn = `<div style="margin-bottom:12px; text-align:right;"><button id="js-refresh-btn" onclick="refreshJSScan()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">🎯 Re-scan</button></div>`;
+
+    const focusBanner = `
+      <div style="margin-bottom:12px; padding:10px; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.3); border-radius:8px; font-size:12px; color:var(--txt-2);">
+        <strong style="color:#fbbf24;">🛡️ AB DISCIPLINE RULES</strong> · Wait for 2 candle closes past trigger before firing · Custom 3-layer stops enforced · No averaging down (John can, you can't)
+      </div>`;
+
+    document.getElementById("grid").innerHTML = refreshBtn + focusBanner + filtered.map(r => {
+      const info = JS_PATTERN_INFO[r.pattern] || { icon: '🎯', desc: r.pattern };
+      const dirColor = r.direction === 'long' ? '#16e39d' : r.direction === 'short' ? '#ff6b6b' : '#ffc107';
+      const convColor = r.conviction >= 9 ? '#16e39d' : r.conviction >= 7 ? '#ffc107' : '#ff6b6b';
+      const tier = r.conviction >= 9 ? '🚀 MAX' : r.conviction >= 7 ? '🔥 STANDARD' : r.conviction >= 5 ? '🟡 TRIAL' : '⛔ SKIP';
+      const tierColor = r.conviction >= 9 ? '#16e39d' : r.conviction >= 7 ? '#46b4ff' : '#ffc107';
+      const allowSizeUp = r.conviction >= 7;
+      const starred = isStarred(r.ticker);
+      const plan = r.plan || {};
+      const pp = plan.primary || {};
+      const cs = plan.customStops || {};
+
+      let holdPillHtml = '';
+      if (r.holdRating === 'SAFE') holdPillHtml = `<span class="tag" style="background:rgba(22,227,157,0.18); color:#16e39d; font-size:10px;">🟢 SAFE</span>`;
+      else if (r.holdRating === 'CAUTION') holdPillHtml = `<span class="tag" style="background:rgba(255,193,7,0.18); color:#ffc107; font-size:10px;">🟡 CAUTION</span>`;
+      else if (r.holdRating === 'AVOID') holdPillHtml = `<span class="tag" style="background:rgba(255,107,107,0.18); color:#ff6b6b; font-size:10px;">🔴 AVOID</span>`;
+
+      const tfPill = r.tf === "Weekly" ? `<span class="tag" style="background:rgba(180,70,255,0.22); color:#d090ff; font-size:10px; font-weight:700;">📆 WEEKLY</span>`
+        : r.tf === "Daily" ? `<span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">📅 DAILY</span>`
+        : `<span class="tag" style="background:rgba(255,255,255,0.10); color:#aaa; font-size:10px;">⏱️ ${r.tf}</span>`;
+
+      const optDir = r.direction === 'long' ? 'CALL' : 'PUT';
+
+      return `
+        <div class="card" data-js-ticker="${r.ticker}">
+          <div class="card-head">
+            <div style="flex:1;">
+              <div class="ticker mono">${r.ticker} ${info.icon}</div>
+              <div style="font-size:11px; color:var(--txt-3); margin-top:4px;">
+                <span style="color:#fbbf24;">${r.pattern}</span> · ${r.tf} · close $${r.lastClose}
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              <span class="tag" style="background:${tierColor}22; color:${tierColor}; font-weight:700; font-size:11px;">${tier}</span>
+              <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              <button onclick="event.stopPropagation();toggleStar('${r.ticker}','js')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
+            </div>
+          </div>
+
+          <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
+
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>
+
+          ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
+
+          <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:#46b4ff; font-weight:700;">🎯 JS PATTERN PLAN</span>
+              <span style="color:${dirColor}; font-weight:700; text-transform:uppercase;">${r.direction}</span>
+            </div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
+              <div><span style="color:var(--txt-3);">Trigger:</span> <span class="mono" style="color:#fbbf24;">$${pp.trigger || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Hard Stop:</span> <span class="mono" style="color:#ff6b6b;">$${pp.stop || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP1:</span> <span class="mono" style="color:#16e39d;">$${pp.tp1 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">TP2:</span> <span class="mono" style="color:#16e39d;">$${pp.tp2 || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Risk:</span> <span class="mono">$${pp.risk || '—'}</span></div>
+              <div><span style="color:var(--txt-3);">RR1:</span> <span class="mono" style="color:${plan.rr1 >= 1.5 ? '#16e39d' : '#ffc107'};">${plan.rr1 || '—'}×</span></div>
+            </div>
+          </div>
+
+          <div style="margin-top:10px; padding:10px; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.30); border-radius:8px; font-size:10px;">
+            <div style="color:#fbbf24; font-weight:700; margin-bottom:6px;">🛡️ AB CUSTOM STOPS (3-layer)</div>
+            <div style="color:var(--txt-2); line-height:1.6;">
+              <strong>Hard:</strong> <span class="mono" style="color:#ff6b6b;">$${cs.hardStop || pp.stop}</span> ${cs.hardStopReason ? '— ' + cs.hardStopReason : ''}<br>
+              <strong>Premium:</strong> -${cs.premiumStopPct || 25}% on the option contract<br>
+              <strong>Time:</strong> halve position if not in profit by <strong>${cs.timeStopBars || 2} candle closes</strong><br>
+              <strong>Breakeven:</strong> move stop to entry once TP1 hits
+            </div>
+          </div>
+
+          <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.03); border-radius:6px; font-size:10px; color:var(--txt-3); line-height:1.5;">
+            <strong style="color:var(--txt-2);">Multi-candle rule:</strong> wait <strong>${r.confirmRequired || 2}</strong> closes past trigger before firing<br>
+            <strong style="color:var(--txt-2);">Sizing tier:</strong> ${tier} (${r.conviction}/10)
+          </div>
+
+          <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            ${allowSizeUp ? `
+              <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0}},this)" title="Public 1ct trial">📱 Public 1ct</button>
+              <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0},stop:${pp.stop||0},tp1:${pp.tp1||0},tp2:${pp.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'JS',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct bracket">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
+            ` : `
+              <button class="btn btn-primary" style="background:rgba(255,193,7,0.2); color:#ffc107; padding:5px 10px; font-size:11px; border:1px dashed #ffc107;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0}},this)" title="TRIAL only — 1ct Public">🟡 Public 1ct (trial)</button>
+              <span style="padding:5px 10px; font-size:10px; color:var(--txt-3); font-style:italic;">⚠️ Conviction <7 — system blocks size-up</span>
+            `}
+          </div>
+        </div>
+      `;
+    }).join("");
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">JS render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
 

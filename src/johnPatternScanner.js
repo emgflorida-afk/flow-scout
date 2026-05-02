@@ -1,0 +1,614 @@
+// =============================================================================
+// JOHN PATTERN SCANNER (JS) — detects single/double-bar Strat reversal patterns
+// that are John's actual most-used vocabulary (per the methodology miner data):
+//
+//   - Failed 2D    (68 hits in his archive — bullish reversal)
+//   - Failed 2U    (27 hits — bearish reversal)
+//   - 2D-2U        (26 hits — bullish 2-bar reversal combo)
+//   - 2U-2D        (bearish 2-bar reversal combo)
+//   - Inside Week  (31 hits on Weekly — single inside bar at higher TF)
+//
+// CRITICAL DIFFERENCE FROM `dailyCoilScanner` (which is multi-bar coil setups):
+// these are single/double-bar REVERSAL patterns. Different category, different
+// trade thesis. Coil = compression awaiting break; reversal = trend flip.
+//
+// AB's UNIQUE EDGE — custom 3-layer stop framework on every plan:
+//   1. Hard stop  = MAX(-25% premium loss, structural invalidation level)
+//   2. Time stop  = halve position if not in profit by 2 candle closes
+//   3. Breakeven  = move stop to entry once TP1 hits
+//
+// John can survive averaging down with a big port. AB can't. Custom stops
+// enforce discipline AB needs that John doesn't.
+//
+// MULTI-CANDLE CONFIRM (also AB-specific): require 2 consecutive candle closes
+// past trigger before signaling to fire. John fires on first trigger; AB
+// needs the extra confirmation given smaller account.
+// =============================================================================
+
+var fs = require('fs');
+var path = require('path');
+
+var ts = null;
+try { ts = require('./tradestation'); }
+catch (e) { console.log('[JS] tradestation not loaded:', e.message); }
+
+var holdOvernightChecker = null;
+try { holdOvernightChecker = require('./holdOvernightChecker'); }
+catch (e) { /* optional */ }
+
+var lottoFeed = null;
+try { lottoFeed = require('./lottoFeed'); } catch (e) {}
+var swingLeapFeed = null;
+try { swingLeapFeed = require('./swingLeapFeed'); } catch (e) {}
+var sniperFeed = null;
+try { sniperFeed = require('./sniperFeed'); } catch (e) {}
+
+var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+var JS_FILE = path.join(DATA_ROOT, 'js_scan.json');
+var CONFIRM_FILE = path.join(DATA_ROOT, 'js_confirm_state.json');
+
+// Hardcoded fallback to #stratum-swing webhook (matches coil/wp pattern).
+var DISCORD_WEBHOOK = process.env.DISCORD_JS_WEBHOOK
+  || process.env.DISCORD_COIL_WEBHOOK
+  || process.env.DISCORD_STRAT_SWING_WEBHOOK
+  || 'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+
+// =============================================================================
+// MID-CAP UNIVERSE EXPANSION (Phase 4) — S&P 400 + active mid-caps John trades
+// =============================================================================
+// Curated list. Not the full S&P 400 (would be 400 names), just the most
+// liquid + actively-traded names AB sees John reference. Covers ~120 names.
+var MID_CAP_TICKERS = [
+  // Consumer / Retail
+  'YUM','CMG','DPZ','MCD','SBUX','LULU','NKE','RL','VFC','UAA','HD','LOW','TGT','COST','WMT','KR','GIS','K','HSY','MDLZ',
+  // Tech mid/large
+  'CRM','SHOP','SQ','PYPL','HOOD','COIN','ROKU','PINS','SNAP','TWLO','CRWD','PANW','ZS','OKTA','DDOG','MDB','SNOW','U','PLTR','PATH','AI','NET','UBER','LYFT','ABNB','DASH','CART','SOFI',
+  // Semis (mid)
+  'AVGO','QCOM','MU','LRCX','KLAC','AMAT','TSM','ASML','MRVL','ARM','SMCI','ALAB','ON','SWKS','MPWR','MCHP',
+  // EV / Auto
+  'TSLA','RIVN','LCID','F','GM','NIO','XPEV','LI',
+  // Energy (small/mid)
+  'OXY','DVN','CHRD','MRO','APA','HAL','SLB','OKE','ET','KMI','EOG','XOM','CVX',
+  // Healthcare (mid)
+  'JNJ','LLY','UNH','ABBV','PFE','MRK','BMY','GILD','BIIB','VRTX','REGN','MRNA','BNTX','HCA','CI','HUM',
+  // Financials (mid)
+  'SCHW','BAC','C','WFC','USB','MS','GS','JPM','PNC','TFC','COF','AXP','V','MA',
+  // Industrials / Defense
+  'BA','RTX','LMT','GD','NOC','LHX','GE','HON','CAT','DE','MMM','FDX','UPS','UNP','CSX','LUV','DAL','UAL','AAL',
+  // Small-cap clean tech / specialty (John's playground)
+  'FCEL','PLUG','OPEN','BBAI','SOUN','ASTS','RKLB','LUNR','SPCE','RGTI','IONQ','QBTS','QS','CHPT','BLNK','WBD','SIRI',
+  // ETFs / Indices
+  'SPY','QQQ','IWM','DIA','XLK','XLF','XLE','XLY','XLP','XLI','XLV','XLB','XLU','XLRE','XLC',
+  // Major media / comms
+  'META','GOOGL','GOOG','AMZN','AAPL','MSFT','NVDA','NFLX','DIS','CMCSA','VZ','T','TMUS',
+];
+
+// =============================================================================
+// BAR CLASSIFIERS
+// =============================================================================
+function stratNumber(bar, prev) {
+  if (!bar || !prev) return null;
+  var insideHigh = bar.High <= prev.High;
+  var insideLow = bar.Low >= prev.Low;
+  var outsideHigh = bar.High > prev.High;
+  var outsideLow = bar.Low < prev.Low;
+  if (insideHigh && insideLow) return '1';
+  if (outsideHigh && outsideLow) return '3';
+  if (outsideHigh && insideLow) return '2U';
+  if (insideHigh && outsideLow) return '2D';
+  if (bar.High > prev.High) return '2U';
+  if (bar.Low < prev.Low) return '2D';
+  return '1';
+}
+
+// Failed 2D: bar broke prior LOW (looked like 2D) but CLOSED back above prior LOW.
+// Bullish reversal — bear bait failed.
+function isFailed2D(bar, prev) {
+  if (!bar || !prev) return false;
+  return bar.Low < prev.Low && bar.Close > prev.Low;
+}
+
+// Failed 2U: bar broke prior HIGH (looked like 2U) but CLOSED back below prior HIGH.
+// Bearish reversal — bull bait failed.
+function isFailed2U(bar, prev) {
+  if (!bar || !prev) return false;
+  return bar.High > prev.High && bar.Close < prev.High;
+}
+
+// =============================================================================
+// PATTERN DETECTION
+// Examines the last 1-2 bars in context for John's actual reversal patterns.
+// =============================================================================
+function detectJSPattern(bars, tf) {
+  if (!bars || bars.length < 3) return null;
+  var last = bars[bars.length - 1];
+  var prev = bars[bars.length - 2];
+  var prev2 = bars[bars.length - 3];
+
+  // 1) Failed 2D on most recent bar = bullish reversal (highest John-frequency)
+  if (isFailed2D(last, prev)) {
+    return {
+      name: 'failed-2D',
+      direction: 'long',
+      conviction: 8,
+      thesis: 'Bar broke prior low (' + round2(prev.Low) + ') then closed back above. Bear bait failed = bullish reversal.',
+    };
+  }
+
+  // 2) Failed 2U on most recent bar = bearish reversal
+  if (isFailed2U(last, prev)) {
+    return {
+      name: 'failed-2U',
+      direction: 'short',
+      conviction: 8,
+      thesis: 'Bar broke prior high (' + round2(prev.High) + ') then closed back below. Bull bait failed = bearish reversal.',
+    };
+  }
+
+  // 3) 2D-2U combo: prev bar 2D, current bar 2U = bullish 2-bar reversal
+  var sLast = stratNumber(last, prev);
+  var sPrev = stratNumber(prev, prev2);
+  if (sPrev === '2D' && sLast === '2U') {
+    return {
+      name: '2D-2U',
+      direction: 'long',
+      conviction: 7,
+      thesis: 'Down bar then up bar that broke prior bar high = 2-bar bullish reversal.',
+    };
+  }
+
+  // 4) 2U-2D combo: prev bar 2U, current bar 2D = bearish 2-bar reversal
+  if (sPrev === '2U' && sLast === '2D') {
+    return {
+      name: '2U-2D',
+      direction: 'short',
+      conviction: 7,
+      thesis: 'Up bar then down bar that broke prior bar low = 2-bar bearish reversal.',
+    };
+  }
+
+  // 5) Inside Week (Weekly TF only) — single inside bar at higher TF = compression
+  if (tf === 'Weekly' && sLast === '1') {
+    var parent = stratNumber(prev, prev2);
+    var dir = parent === '2U' ? 'long' : parent === '2D' ? 'short' : 'neutral';
+    return {
+      name: 'inside-week',
+      direction: dir,
+      conviction: 6,
+      thesis: 'Inside week after directional ' + parent + ' = compression awaiting break of inside bar high/low.',
+    };
+  }
+
+  return null;
+}
+
+function round2(v) { return Math.round(v * 100) / 100; }
+
+// =============================================================================
+// PLAN BUILDER — with AB's custom 3-layer stop framework
+// =============================================================================
+function buildPlan(pattern, bars, lastClose) {
+  if (!bars || bars.length < 2) return null;
+  var last = bars[bars.length - 1];
+  var prev = bars[bars.length - 2];
+  var range = last.High - last.Low;
+  if (range <= 0) return null;
+
+  var direction = pattern.direction;
+  var trigger, stop, structural, tp1, tp2;
+
+  // Trigger = continuation break of latest bar in direction of pattern.
+  // Stop (structural) = the inverse extreme of the latest bar (the level
+  // that, if breached, invalidates the reversal thesis).
+  if (direction === 'long') {
+    trigger = round2(last.High);          // Break above current high = continuation
+    structural = round2(last.Low);         // Below current low = thesis broken
+    stop = structural;
+    var moveSize = range > 0 ? range : (last.High * 0.01);
+    tp1 = round2(trigger + moveSize);      // 1× current bar range
+    tp2 = round2(trigger + moveSize * 2);  // 2× current bar range
+  } else if (direction === 'short') {
+    trigger = round2(last.Low);
+    structural = round2(last.High);
+    stop = structural;
+    var moveSize2 = range > 0 ? range : (last.Low * 0.01);
+    tp1 = round2(trigger - moveSize2);
+    tp2 = round2(trigger - moveSize2 * 2);
+  } else {
+    return null; // 'neutral' direction — no plan
+  }
+
+  var risk = direction === 'long' ? round2(trigger - stop) : round2(stop - trigger);
+  var reward1 = direction === 'long' ? round2(tp1 - trigger) : round2(trigger - tp1);
+  var reward2 = direction === 'long' ? round2(tp2 - trigger) : round2(trigger - tp2);
+
+  // === AB's CUSTOM 3-LAYER STOP FRAMEWORK ===
+  // Replaces John's flat % stops with a tighter, capital-aware framework.
+  var customStops = {
+    // Layer 1: Hard stop = the structural level (above) — same as standard `stop`
+    hardStop: stop,
+    hardStopReason: 'Structural invalidation: close ' + (direction === 'long' ? 'below' : 'above') + ' $' + structural + ' = pattern broken',
+    // Layer 2: Premium hard cap (-25% on the option) — separate from price-structure
+    premiumStopPct: 25,
+    // Layer 3: Time stop — if not in profit after 2 candle closes, cut size in half
+    timeStopBars: 2,
+    timeStopAction: 'Halve position if not in profit by 2 candle closes',
+    // Layer 4: Breakeven move at TP1
+    breakevenAtTP1: true,
+    breakevenAction: 'Move stop to entry once TP1 hits — never give back winners',
+  };
+
+  return {
+    direction: direction,
+    primary: {
+      trigger: trigger, stop: stop, tp1: tp1, tp2: tp2,
+      risk: risk, reward1: reward1, reward2: reward2,
+    },
+    structuralLevel: structural,
+    rangeUsed: round2(range),
+    rr1: risk > 0 ? round2(reward1 / risk) : null,
+    rr2: risk > 0 ? round2(reward2 / risk) : null,
+    customStops: customStops,
+  };
+}
+
+// =============================================================================
+// CONVICTION SCORING — TF-aware bump same as coil scanner
+// =============================================================================
+function adjustConviction(base, ticker, bars, holdRating, tf) {
+  var conv = base;
+  if (tf === 'Weekly') conv += 2;
+  else if (tf === 'Daily') conv += 1;
+  if (holdRating === 'AVOID') conv -= 3;
+  if (holdRating === 'CAUTION') conv -= 1;
+  if (holdRating === 'SAFE') conv += 1;
+  // Tight reversal bar (range < 1.5% of price) = high conviction
+  if (bars && bars.length >= 1) {
+    var lastBar = bars[bars.length - 1];
+    var rangePct = lastBar.High > 0 ? ((lastBar.High - lastBar.Low) / lastBar.High) * 100 : 99;
+    if (rangePct < 1.5) conv += 1;
+    if (rangePct < 1.0) conv += 1;
+  }
+  return Math.max(1, Math.min(10, conv));
+}
+
+// =============================================================================
+// VOLUME CONTEXT — same logic as coil scanner (John volume rule applies)
+// =============================================================================
+function computeVolumeContext(bars) {
+  if (!bars || bars.length < 4) return null;
+  var lookback = Math.min(20, bars.length - 1);
+  var ref = bars.slice(-1 - lookback, -1);
+  var sum = 0, n = 0;
+  for (var i = 0; i < ref.length; i++) {
+    if (isFinite(ref[i].Volume) && ref[i].Volume > 0) { sum += ref[i].Volume; n++; }
+  }
+  if (n < 3) return null;
+  var avg = sum / n;
+  var bar0Vol = bars[bars.length - 1].Volume || 0;
+  return {
+    avgN: n,
+    avgVolume: Math.round(avg),
+    barVolume: Math.round(bar0Vol),
+    barRatio: avg > 0 ? round2(bar0Vol / avg) : null,
+    breakoutTarget: Math.round(avg * 1.5),
+  };
+}
+
+// =============================================================================
+// MULTI-CANDLE CONFIRM TRACKING
+// AB's discipline rule: don't fire to Discord until 2 consecutive candle closes
+// confirm the trigger. State persists in /data/js_confirm_state.json.
+// =============================================================================
+function loadConfirmState() {
+  try { return JSON.parse(fs.readFileSync(CONFIRM_FILE, 'utf8')); }
+  catch (e) { return {}; }
+}
+function saveConfirmState(state) {
+  try { fs.writeFileSync(CONFIRM_FILE, JSON.stringify(state, null, 2)); }
+  catch (e) { /* non-fatal */ }
+}
+function todayKey() {
+  var et = new Date(Date.now() - 4 * 3600 * 1000);
+  return et.toISOString().slice(0, 10);
+}
+
+// =============================================================================
+// UNIVERSE BUILDER — merges static MID_CAP list + dynamic feeds
+// =============================================================================
+function buildUniverse() {
+  var dynamic = [];
+  try {
+    if (lottoFeed) {
+      var lf = lottoFeed.loadFeed({ limit: 50 });
+      (lf.picks || []).forEach(function (p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+    if (swingLeapFeed) {
+      var sf = swingLeapFeed.loadFeed({ limit: 30 });
+      (sf.posts || []).forEach(function (p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+    if (sniperFeed) {
+      var snf = sniperFeed.loadFeed({ limit: 30 });
+      (snf.posts || []).forEach(function (p) { if (p.ticker) dynamic.push(p.ticker); });
+    }
+  } catch (e) { /* dynamic optional */ }
+
+  var seen = {};
+  var universe = [];
+  MID_CAP_TICKERS.concat(dynamic).forEach(function (t) {
+    var u = String(t).toUpperCase();
+    if (!seen[u]) { seen[u] = true; universe.push(u); }
+  });
+  return universe;
+}
+
+// =============================================================================
+// TIMEFRAME SPECS — same shape as coil scanner
+// =============================================================================
+var TF_SPECS = {
+  'Daily':  { unit: 'Daily',  interval: 1,   barsback: 25, sessiontemplate: null,      label: 'Daily' },
+  '6HR':    { unit: 'Minute', interval: 360, barsback: 30, sessiontemplate: 'Default', label: '6HR' },
+  'Weekly': { unit: 'Weekly', interval: 1,   barsback: 12, sessiontemplate: null,      label: 'Weekly' },
+};
+
+// =============================================================================
+// SCAN ONE TICKER
+// =============================================================================
+async function scanTicker(ticker, token, opts) {
+  opts = opts || {};
+  var tf = opts.tf || 'Daily';
+  var spec = TF_SPECS[tf];
+  if (!spec) return { ticker: ticker, tf: tf, error: 'unknown-tf-' + tf };
+
+  try {
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?unit=' + spec.unit + '&interval=' + spec.interval + '&barsback=' + spec.barsback;
+    if (spec.sessiontemplate) url += '&sessiontemplate=' + spec.sessiontemplate;
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return { ticker: ticker, tf: tf, error: 'TS-bars-' + r.status };
+    var data = await r.json();
+    var raw = (data && (data.Bars || data.bars)) || [];
+    if (raw.length < 4) return { ticker: ticker, tf: tf, error: 'not-enough-bars-' + raw.length };
+
+    var bars = raw.map(function (b) {
+      return {
+        High: parseFloat(b.High), Low: parseFloat(b.Low),
+        Open: parseFloat(b.Open), Close: parseFloat(b.Close),
+        Volume: parseFloat(b.TotalVolume || b.Volume || 0),
+        TimeStamp: b.TimeStamp,
+      };
+    }).filter(function (b) { return isFinite(b.High) && isFinite(b.Low); });
+
+    var pattern = detectJSPattern(bars, tf);
+    if (!pattern || pattern.direction === 'neutral') {
+      return { ticker: ticker, tf: tf, pattern: null };
+    }
+
+    var lastClose = bars[bars.length - 1].Close;
+    var plan = buildPlan(pattern, bars, lastClose);
+    if (!plan) return { ticker: ticker, tf: tf, pattern: pattern.name, error: 'no-plan' };
+
+    var holdRating = null;
+    if (holdOvernightChecker) {
+      try {
+        var dir = pattern.direction === 'long' ? 'LONG' : 'SHORT';
+        var hr = await holdOvernightChecker.checkTicker(ticker, { direction: dir });
+        holdRating = hr && hr.rating;
+      } catch (e) { /* optional */ }
+    }
+    var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating, tf);
+    var volumeContext = computeVolumeContext(bars);
+
+    return {
+      ticker: ticker,
+      tf: tf,
+      pattern: pattern.name,
+      direction: pattern.direction,
+      thesis: pattern.thesis,
+      conviction: conviction,
+      lastClose: round2(lastClose),
+      plan: plan,
+      holdRating: holdRating || null,
+      volumeContext: volumeContext,
+      bars: bars.length,
+      // Multi-candle confirm flag — UI uses this to show CONFIRMED vs PENDING
+      confirmRequired: 2,
+    };
+  } catch (e) {
+    return { ticker: ticker, tf: tf, error: e.message };
+  }
+}
+
+// =============================================================================
+// MAIN SCAN
+// =============================================================================
+var _lastRun = null;
+var _running = false;
+
+async function runScan(opts) {
+  opts = opts || {};
+  if (_running && !opts.force) return { skipped: true, reason: 'already-running' };
+  _running = true;
+  var start = Date.now();
+  try {
+    var token = opts.token;
+    if (!token && ts && ts.getAccessToken) {
+      try { token = await ts.getAccessToken(); }
+      catch (e) { return { error: 'TS auth: ' + e.message }; }
+    }
+    if (!token) return { error: 'no-token' };
+
+    var universe = opts.tickers || buildUniverse();
+    if (!universe.length) return { error: 'empty-universe' };
+
+    var tfs = opts.tfs || ['Daily', '6HR'];
+    if (typeof tfs === 'string') tfs = [tfs];
+
+    console.log('[JS] scanning', universe.length, 'tickers across TFs:', tfs.join(','));
+
+    var CONCURRENCY = 5;
+    var results = [];
+
+    for (var tfIdx = 0; tfIdx < tfs.length; tfIdx++) {
+      var tf = tfs[tfIdx];
+      var queue = universe.slice();
+      var tfResults = [];
+      while (queue.length) {
+        var batch = queue.splice(0, CONCURRENCY);
+        var batchResults = await Promise.all(batch.map(function (t) { return scanTicker(t, token, { tf: tf }); }));
+        tfResults = tfResults.concat(batchResults);
+      }
+      results = results.concat(tfResults);
+    }
+
+    var matches = results.filter(function (r) { return r.pattern && !r.error; });
+    var ready = matches.filter(function (r) { return r.conviction >= 7; });
+    var watching = matches.filter(function (r) { return r.conviction === 6; });
+    var prep = matches.filter(function (r) { return r.conviction >= 4 && r.conviction < 6; });
+
+    // Sort by conviction desc, then by R:R desc
+    var sortFn = function (a, b) {
+      if (b.conviction !== a.conviction) return b.conviction - a.conviction;
+      var rrA = (a.plan && a.plan.rr1) || 0;
+      var rrB = (b.plan && b.plan.rr1) || 0;
+      return rrB - rrA;
+    };
+    ready.sort(sortFn); watching.sort(sortFn); prep.sort(sortFn);
+
+    var byTF = {};
+    var byPattern = {};
+    matches.forEach(function (r) {
+      byTF[r.tf] = (byTF[r.tf] || 0) + 1;
+      byPattern[r.pattern] = (byPattern[r.pattern] || 0) + 1;
+    });
+
+    var payload = {
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      tookMs: Date.now() - start,
+      timeframes: tfs,
+      scanned: universe.length,
+      matched: matches.length,
+      byTF: byTF,
+      byPattern: byPattern,
+      ready: ready,
+      watching: watching,
+      prep: prep,
+      universeSize: universe.length,
+    };
+
+    try { fs.writeFileSync(JS_FILE, JSON.stringify(payload, null, 2)); } catch (e) {}
+    _lastRun = { startedAt: new Date(start).toISOString(), tookMs: payload.tookMs, matched: matches.length };
+
+    if (opts.cron && (ready.length || watching.length)) {
+      try {
+        var pushResult = await pushToDiscord(payload);
+        payload.discordPush = pushResult;
+      } catch (e) {
+        payload.discordPush = { error: e.message };
+      }
+    }
+
+    return payload;
+  } finally {
+    _running = false;
+  }
+}
+
+// =============================================================================
+// PERSISTENCE
+// =============================================================================
+function loadLast() {
+  try {
+    if (!fs.existsSync(JS_FILE)) return null;
+    return JSON.parse(fs.readFileSync(JS_FILE, 'utf8'));
+  } catch (e) { return null; }
+}
+function getStatus() {
+  return { running: _running, lastRun: _lastRun, file: JS_FILE };
+}
+
+// =============================================================================
+// DISCORD PUSH
+// =============================================================================
+async function pushToDiscord(payload) {
+  if (!DISCORD_WEBHOOK) {
+    console.log('[JS] no DISCORD_JS_WEBHOOK set — skipping push');
+    return { skipped: 'no webhook' };
+  }
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var ready = (payload.ready || []).slice(0, 4);
+  var watching = (payload.watching || []).slice(0, 3);
+  if (!ready.length && !watching.length) {
+    return { skipped: 'nothing actionable' };
+  }
+
+  var lines = [];
+  var tfTag = (payload.timeframes || ['Daily']).join('+');
+  lines.push('# 🎯 JS PATTERN SCAN — ' + tfTag);
+  lines.push('_' + new Date(payload.generatedAt).toLocaleString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' }) + ' ET · ' + payload.matched + ' patterns across ' + payload.scanned + '_');
+  lines.push('_John\'s actual most-used patterns: failed-2D / failed-2U / 2D-2U / 2U-2D / inside-week_');
+  lines.push('');
+
+  if (ready.length) {
+    lines.push('## 🔥 READY (conv ≥ 7)');
+    ready.forEach(function (r) {
+      var p = r.plan || {}; var pp = p.primary || {};
+      var dirIcon = r.direction === 'long' ? '🟢⬆️' : '🔴⬇️';
+      var holdIcon = r.holdRating === 'SAFE' ? '✅' : r.holdRating === 'CAUTION' ? '⚠️' : r.holdRating === 'AVOID' ? '🛑' : '';
+      lines.push('**' + r.ticker + '** ' + dirIcon + ' `' + r.pattern + '` · ' + r.tf + ' · conv ' + r.conviction + '/10 ' + holdIcon);
+      lines.push('  Trigger `$' + pp.trigger + '` · Stop `$' + pp.stop + '` · TP1 `$' + pp.tp1 + '` · TP2 `$' + pp.tp2 + '` · RR `' + (p.rr1 || '?') + '×`');
+      lines.push('  ⚙️ AB stops: hard `$' + p.customStops.hardStop + '` · premium -25% · time `' + p.customStops.timeStopBars + ' bars` · BE@TP1');
+      lines.push('  📋 *' + r.thesis + '*');
+      lines.push('');
+    });
+  }
+  if (watching.length) {
+    lines.push('## 🟡 WATCHING (conv 6)');
+    watching.forEach(function (r) {
+      var pp = (r.plan && r.plan.primary) || {};
+      var dirIcon = r.direction === 'long' ? '⬆️' : '⬇️';
+      lines.push('**' + r.ticker + '** ' + dirIcon + ' `' + r.pattern + '` · ' + r.tf + ' · trig `$' + pp.trigger + '` · RR `' + (r.plan.rr1 || '?') + '×`');
+    });
+    lines.push('');
+  }
+  lines.push('---');
+  lines.push('🛡️ Multi-candle rule: wait for 2 closes past trigger before firing · Custom stops enforced');
+
+  var content = lines.join('\n');
+  if (content.length > 1900) content = content.slice(0, 1880) + '\n…(truncated)';
+
+  try {
+    var r = await fetchLib(DISCORD_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: content, username: 'JS Pattern Bot' }),
+    });
+    if (!r.ok) {
+      var t = await r.text();
+      console.warn('[JS] discord push failed:', r.status, t.slice(0, 200));
+      return { error: 'discord-' + r.status };
+    }
+    console.log('[JS] discord push OK · ready=' + ready.length + ' watching=' + watching.length);
+    return { posted: true, readyCount: ready.length, watchingCount: watching.length };
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+module.exports = {
+  runScan: runScan,
+  scanTicker: scanTicker,
+  loadLast: loadLast,
+  getStatus: getStatus,
+  pushToDiscord: pushToDiscord,
+  buildUniverse: buildUniverse,
+  // Exposed for testing
+  detectJSPattern: detectJSPattern,
+  isFailed2D: isFailed2D,
+  isFailed2U: isFailed2U,
+  stratNumber: stratNumber,
+  buildPlan: buildPlan,
+  MID_CAP_TICKERS: MID_CAP_TICKERS,
+};

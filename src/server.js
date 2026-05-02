@@ -246,6 +246,13 @@ var methodologyMiner = null;
 try { methodologyMiner = require('./methodologyMiner'); console.log('[SERVER] methodologyMiner loaded OK'); }
 catch(e) { console.log('[SERVER] methodologyMiner not loaded:', e.message); }
 
+// JOHN PATTERN SCANNER (JS) — failed-2D/2U + 2D-2U/2U-2D + inside-week reversal
+// patterns (John's actual most-used vocabulary). Custom 3-layer stops + multi-
+// candle confirm baked into every plan. Mid-cap universe (~120 names).
+var johnPatternScanner = null;
+try { johnPatternScanner = require('./johnPatternScanner'); console.log('[SERVER] johnPatternScanner loaded OK'); }
+catch(e) { console.log('[SERVER] johnPatternScanner not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -800,6 +807,33 @@ app.get('/api/methodology/examples', function(req, res) {
 app.get('/api/methodology/status', function(req, res) {
   if (!methodologyMiner) return res.status(500).json({ ok: false, error: 'methodology miner not loaded' });
   res.json(Object.assign({ ok: true }, methodologyMiner.getStatus()));
+});
+
+// JOHN PATTERN SCANNER (JS) — failed-2D/2U + 2D-2U/2U-2D + inside-week reversal
+// detection. Mid-cap universe + AB custom 3-layer stops + multi-candle confirm.
+//   GET  /api/js-scan                — load last persisted scan
+//   POST /api/js-scan/run             — manual trigger (force=1 to override running lock)
+//   GET  /api/js-scan/status          — last run + running flag
+app.get('/api/js-scan', function(req, res) {
+  if (!johnPatternScanner) return res.status(500).json({ ok: false, error: 'JS scanner not loaded' });
+  var data = johnPatternScanner.loadLast();
+  if (!data) return res.json({ ok: true, ready: [], watching: [], prep: [], note: 'no scan yet — POST /api/js-scan/run' });
+  res.json(data);
+});
+
+app.post('/api/js-scan/run', async function(req, res) {
+  if (!johnPatternScanner) return res.status(500).json({ ok: false, error: 'JS scanner not loaded' });
+  try {
+    var force = (req.body && req.body.force === true) || req.query.force === '1';
+    var tfs = (req.body && req.body.tfs) || (req.query.tfs ? String(req.query.tfs).split(',') : null);
+    var out = await johnPatternScanner.runScan({ force: force, tfs: tfs });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/js-scan/status', function(req, res) {
+  if (!johnPatternScanner) return res.status(500).json({ ok: false, error: 'JS scanner not loaded' });
+  res.json(Object.assign({ ok: true }, johnPatternScanner.getStatus()));
 });
 
 // BREAKOUT-CONFIRM — uses shared dailyCoilScanner.checkBreakoutConfirm so the
@@ -3477,6 +3511,24 @@ cron.schedule('0 18 * * 0', async function() {
                   ' · ready=' + (out.ready || []).length);
     }
   } catch(e) { console.error('[WEEKLY-SWING] Sun cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
+// reversal patterns (failed-2D, failed-2U, 2D-2U, 2U-2D, inside-week) right
+// after Daily close so AB sees John-style reversal candidates before evening
+// trade-idea drop time. Pushes Discord with custom AB stops + multi-candle rule.
+cron.schedule('15 16 * * 1-5', async function() {
+  try {
+    if (!johnPatternScanner) return;
+    console.log('[JS] cron triggered (4:15 PM ET) — daily reversal pattern scan');
+    var out = await johnPatternScanner.runScan({ tfs: ['Daily', '6HR'], cron: true });
+    if (out && out.ok) {
+      console.log('[JS] cron complete · matched ' + out.matched +
+                  ' · ready=' + (out.ready || []).length +
+                  ' watching=' + (out.watching || []).length +
+                  (out.discordPush && out.discordPush.posted ? ' · Discord posted' : ''));
+    }
+  } catch(e) { console.error('[JS] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // CHART ARCHIVER -- nightly 11:30 PM ET. Walks raw history JSON, downloads
