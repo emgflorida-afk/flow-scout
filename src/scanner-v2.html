@@ -779,8 +779,12 @@ const FILTERS_JS = [
   { id: "failed2d",   label: "Failed 2D",            test: r => r.pattern === "failed-2D" },
   { id: "failed2u",   label: "Failed 2U",            test: r => r.pattern === "failed-2U" },
   { id: "rev2bar",    label: "2-bar Reversal",       test: r => r.pattern === "2D-2U" || r.pattern === "2U-2D" },
+  { id: "rev3bar",    label: "🔁 3-bar Reversal",    test: r => ["2-1-2-Rev","3-2-2-Rev","1-2-2-Rev"].indexOf(r.pattern) >= 0 },
+  { id: "212cont",    label: "➡️ 2-1-2 Cont",        test: r => r.pattern === "2-1-2-Cont" },
+  { id: "candle",     label: "🔨 Hammer/Shooter",    test: r => r.pattern === "hammer" || r.pattern === "shooter" },
   { id: "pullback",   label: "🎯 Pullback Retest",   test: r => r.pattern === "pullback-retest" },
   { id: "prep31",     label: "⏳ 3-1 Prep",          test: r => r.pattern === "3-1-prep" },
+  { id: "tf6hr",      label: "⏱️ 6HR (best WR)",     test: r => r.tf === "6HR" },
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
   { id: "safe",       label: "🟢 SAFE hold",         test: r => r.holdRating === "SAFE" },
@@ -3114,10 +3118,16 @@ async function refreshJSScan() {
 window.refreshJSScan = refreshJSScan;
 
 const JS_PATTERN_INFO = {
+  '2-1-2-Rev':       { icon: '🔁', desc: '3-bar Strat reversal: directional, inside, opposite directional. Single most-used 3-bar pattern.' },
+  '2-1-2-Cont':      { icon: '➡️', desc: '3-bar trend continuation: directional, inside pause, same-direction continuation' },
+  '3-2-2-Rev':       { icon: '💥', desc: 'Reversal from volatility expansion: outside bar, then 2 directional, then 2 opposite' },
+  '1-2-2-Rev':       { icon: '🌀', desc: 'RevStrat: inside compression, then 2 directional, then 2 opposite = clean reversal' },
   'failed-2D':       { icon: '🔄', desc: 'Bar broke prior LOW then closed back above — bear bait failed = bullish reversal' },
   'failed-2U':       { icon: '🔄', desc: 'Bar broke prior HIGH then closed back below — bull bait failed = bearish reversal' },
   '2D-2U':           { icon: '🔃', desc: '2-bar reversal: down bar then up bar that broke prior bar high' },
   '2U-2D':           { icon: '🔃', desc: '2-bar reversal: up bar then down bar that broke prior bar low' },
+  'hammer':          { icon: '🔨', desc: 'Hammer reversal candle — long lower wick, close near high. Buyers defended.' },
+  'shooter':         { icon: '⭐', desc: 'Shooting star — long upper wick, close near low. Sellers rejected.' },
   'inside-week':     { icon: '📦', desc: 'Inside week — compression awaiting break of inside bar high/low' },
   'pullback-retest': { icon: '🎯', desc: 'NVDA-style: prior 3-1-2 already fired, current price retesting original trigger = second-chance entry on proven structure' },
   '3-1-prep':        { icon: '⏳', desc: 'Outside bar (3) then inside bar (1) — YUM/CART setup. Expansion-then-compression. Fire on break of inside bar high/low.' },
@@ -3190,6 +3200,17 @@ function renderGridJS() {
           <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
+
+          ${r.actionableForecast ? `
+          <div style="margin-top:10px; padding:8px 10px; background:rgba(180,70,255,0.08); border:1px solid rgba(180,70,255,0.30); border-radius:8px; font-size:10px; color:var(--txt-2);">
+            <div style="color:#d090ff; font-weight:700; margin-bottom:4px;">🎰 ACTIONABLE FORECAST <span style="color:var(--txt-3); font-weight:400; font-size:9px;">(Strat Teach indicator equivalent)</span></div>
+            <div style="line-height:1.6;">
+              Current: <span class="mono" style="color:#fff;">${r.actionableForecast.currentStrat}</span> after parent <span class="mono" style="color:#fff;">${r.actionableForecast.parentStrat || '?'}</span><br>
+              ${r.actionableForecast.longPattern ? `<span style="color:#16e39d;">▲ Long fire</span> @ <span class="mono" style="color:#16e39d;">$${r.actionableForecast.longTrigger}</span> → <em>${r.actionableForecast.longPattern}</em><br>` : ''}
+              ${r.actionableForecast.shortPattern ? `<span style="color:#ff6b6b;">▼ Short fire</span> @ <span class="mono" style="color:#ff6b6b;">$${r.actionableForecast.shortTrigger}</span> → <em>${r.actionableForecast.shortPattern}</em>` : ''}
+            </div>
+          </div>
+          ` : ''}
 
           <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">

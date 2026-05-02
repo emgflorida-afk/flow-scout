@@ -117,6 +117,30 @@ function isFailed2U(bar, prev) {
   return bar.High > prev.High && bar.Close < prev.High && bar.Low >= prev.Low;
 }
 
+// Hammer: bullish reversal candle. Long lower wick (>= 2x body), close in
+// upper third of range. Often appears at swing lows / support tests.
+function isHammer(bar) {
+  if (!bar) return false;
+  var body = Math.abs(bar.Close - bar.Open);
+  var range = bar.High - bar.Low;
+  if (range <= 0) return false;
+  var lowerWick = Math.min(bar.Close, bar.Open) - bar.Low;
+  var closePos = (bar.Close - bar.Low) / range;
+  return lowerWick >= 2 * body && closePos >= 0.6 && body / range <= 0.4;
+}
+
+// Shooter (Shooting Star): bearish reversal candle. Long upper wick (>= 2x
+// body), close in lower third of range. Often appears at swing highs / resistance tests.
+function isShooter(bar) {
+  if (!bar) return false;
+  var body = Math.abs(bar.Close - bar.Open);
+  var range = bar.High - bar.Low;
+  if (range <= 0) return false;
+  var upperWick = bar.High - Math.max(bar.Close, bar.Open);
+  var closePos = (bar.High - bar.Close) / range;
+  return upperWick >= 2 * body && closePos >= 0.6 && body / range <= 0.4;
+}
+
 // =============================================================================
 // MULTI-BAR STRUCTURAL MEMORY (Phase 2 — NVDA setup detector)
 // Scans the last N bars for a fired 3-1-2 pattern (the moment a prior 1-3-1
@@ -240,7 +264,87 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 1) Failed 2D on most recent bar = bullish reversal (highest John-frequency)
+  var sLast = stratNumber(last, prev);
+  var sPrev = stratNumber(prev, prev2);
+  var sPrev2 = bars.length >= 4 ? stratNumber(prev2, bars[bars.length - 4]) : null;
+
+  // 1) 2-1-2 Reversal — directional, inside, OPPOSITE directional. Single most
+  // common Strat 3-bar pattern (26 hits in John archive). Highest conviction.
+  if (sPrev2 === '2D' && sPrev === '1' && sLast === '2U') {
+    return {
+      name: '2-1-2-Rev',
+      direction: 'long',
+      conviction: 9,
+      thesis: 'Down bar, then inside compression, then up bar that broke inside high = bullish 3-bar Strat reversal.',
+    };
+  }
+  if (sPrev2 === '2U' && sPrev === '1' && sLast === '2D') {
+    return {
+      name: '2-1-2-Rev',
+      direction: 'short',
+      conviction: 9,
+      thesis: 'Up bar, then inside compression, then down bar that broke inside low = bearish 3-bar Strat reversal.',
+    };
+  }
+
+  // 2) 2-1-2 Continuation — same-direction trend continuation through inside bar
+  if (sPrev2 === '2U' && sPrev === '1' && sLast === '2U') {
+    return {
+      name: '2-1-2-Cont',
+      direction: 'long',
+      conviction: 8,
+      thesis: 'Up bar, inside pause, up bar broke inside high = bullish trend continuation.',
+    };
+  }
+  if (sPrev2 === '2D' && sPrev === '1' && sLast === '2D') {
+    return {
+      name: '2-1-2-Cont',
+      direction: 'short',
+      conviction: 8,
+      thesis: 'Down bar, inside pause, down bar broke inside low = bearish trend continuation.',
+    };
+  }
+
+  // 3) 3-2-2 Rev — outside bar, then 2 directional, then 2 opposite = reversal
+  // out of expansion. Strong because it confirms the bigger structure change.
+  if (sPrev2 === '3' && sPrev === '2D' && sLast === '2U') {
+    return {
+      name: '3-2-2-Rev',
+      direction: 'long',
+      conviction: 9,
+      thesis: 'Outside bar, then down bar, then up bar that took out inside-bar high = bullish reversal from volatility expansion.',
+    };
+  }
+  if (sPrev2 === '3' && sPrev === '2U' && sLast === '2D') {
+    return {
+      name: '3-2-2-Rev',
+      direction: 'short',
+      conviction: 9,
+      thesis: 'Outside bar, then up bar, then down bar = bearish reversal from volatility expansion.',
+    };
+  }
+
+  // 4) 1-2-2 RevStrat Rev — inside bar, then 2 directional, then 2 opposite
+  // = reversal originating from compression. The "RevStrat" label is from
+  // the Strat Teach indicator — this is a clean structural reversal pattern.
+  if (sPrev2 === '1' && sPrev === '2D' && sLast === '2U') {
+    return {
+      name: '1-2-2-Rev',
+      direction: 'long',
+      conviction: 8,
+      thesis: 'Inside compression, then down move that failed and reversed = bullish RevStrat.',
+    };
+  }
+  if (sPrev2 === '1' && sPrev === '2U' && sLast === '2D') {
+    return {
+      name: '1-2-2-Rev',
+      direction: 'short',
+      conviction: 8,
+      thesis: 'Inside compression, then up move that failed and reversed = bearish RevStrat.',
+    };
+  }
+
+  // 5) Failed 2D on most recent bar = single-bar bullish reversal
   if (isFailed2D(last, prev)) {
     return {
       name: 'failed-2D',
@@ -250,7 +354,7 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 2) Failed 2U on most recent bar = bearish reversal
+  // 6) Failed 2U on most recent bar = single-bar bearish reversal
   if (isFailed2U(last, prev)) {
     return {
       name: 'failed-2U',
@@ -260,9 +364,7 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 3) 2D-2U combo: prev bar 2D, current bar 2U = bullish 2-bar reversal
-  var sLast = stratNumber(last, prev);
-  var sPrev = stratNumber(prev, prev2);
+  // 7) 2D-2U combo: prev bar 2D, current bar 2U = bullish 2-bar reversal
   if (sPrev === '2D' && sLast === '2U') {
     return {
       name: '2D-2U',
@@ -272,7 +374,7 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 4) 2U-2D combo: prev bar 2U, current bar 2D = bearish 2-bar reversal
+  // 8) 2U-2D combo: prev bar 2U, current bar 2D = bearish 2-bar reversal
   if (sPrev === '2U' && sLast === '2D') {
     return {
       name: '2U-2D',
@@ -282,7 +384,27 @@ function detectJSPattern(bars, tf) {
     };
   }
 
-  // 5) 3-1 prep: outside bar (3) followed by inside bar (1) = expansion then
+  // 9) Hammer (single-bar bullish reversal candle) — long lower wick, close in upper third
+  if (isHammer(last)) {
+    return {
+      name: 'hammer',
+      direction: 'long',
+      conviction: 7,
+      thesis: 'Hammer reversal candle — long lower wick rejected, close near high. Buyers stepped in.',
+    };
+  }
+
+  // 10) Shooter (Shooting Star) — long upper wick, close in lower third
+  if (isShooter(last)) {
+    return {
+      name: 'shooter',
+      direction: 'short',
+      conviction: 7,
+      thesis: 'Shooter reversal candle — long upper wick rejected, close near low. Sellers stepped in.',
+    };
+  }
+
+  // 11) 3-1 prep: outside bar (3) followed by inside bar (1) = expansion then
   // compression (YUM/CART pattern AB caught on 6HR). Direction inferred from
   // the INSIDE BAR's close position within its own range — that's where
   // buyers/sellers ended up parked at compression. Per AB validation: CART 6HR
@@ -420,8 +542,11 @@ function buildPlan(pattern, bars, lastClose) {
 // =============================================================================
 function adjustConviction(base, ticker, bars, holdRating, tf) {
   var conv = base;
-  if (tf === 'Weekly') conv += 2;
-  else if (tf === 'Daily') conv += 1;
+  // TF tiers: Weekly is biggest structure (rarest); 6HR has best historical
+  // win rate per AB live trading (the John sweet spot); Daily is baseline.
+  if (tf === 'Weekly')      conv += 2;
+  else if (tf === '6HR')    conv += 1;
+  // Daily: no bump (baseline)
   if (holdRating === 'AVOID') conv -= 3;
   if (holdRating === 'CAUTION') conv -= 1;
   if (holdRating === 'SAFE') conv += 1;
@@ -433,6 +558,59 @@ function adjustConviction(base, ticker, bars, holdRating, tf) {
     if (rangePct < 1.0) conv += 1;
   }
   return Math.max(1, Math.min(10, conv));
+}
+
+// =============================================================================
+// ACTIONABLE FORECAST — replicates the Strat Teach indicator's "Actionable?"
+// label. Given the last 1-2 bars, predicts what the NEXT bar would fire as
+// if it breaks current bar's high (long fire) or low (short fire). This is
+// the "3-1-2 ▲" / "2-1-2 ▼" output AB sees on his charts.
+// =============================================================================
+function buildActionableForecast(bars) {
+  if (!bars || bars.length < 3) return null;
+  var last = bars[bars.length - 1];
+  var prev = bars[bars.length - 2];
+  var prev2 = bars[bars.length - 3];
+  var sLast = stratNumber(last, prev);
+  var sPrev = stratNumber(prev, prev2);
+
+  var longTrigger = round2(last.High);
+  var shortTrigger = round2(last.Low);
+  var longPattern = null;
+  var shortPattern = null;
+
+  if (sLast === '1') {
+    // Inside bar — next bar fire would complete an X-1-2 pattern
+    if (sPrev === '3') {
+      longPattern = '3-1-2 (Long Fire from outside)';
+      shortPattern = '3-1-2 (Short Fire from outside)';
+    } else if (sPrev === '2U') {
+      longPattern = '2-1-2 Cont (bullish trend continuation)';
+      shortPattern = '2-1-2 Rev (bullish-to-bearish reversal)';
+    } else if (sPrev === '2D') {
+      longPattern = '2-1-2 Rev (bearish-to-bullish reversal)';
+      shortPattern = '2-1-2 Cont (bearish trend continuation)';
+    } else if (sPrev === '1') {
+      longPattern = '1-1-2 (double-inside fire long)';
+      shortPattern = '1-1-2 (double-inside fire short)';
+    }
+  } else if (sLast === '2U' || sLast === '2D' || sLast === '3') {
+    // Bar already directional — next bar would extend or reverse
+    longPattern = sLast === '2D' ? 'Pivot Reversal Long' : 'Continuation Long';
+    shortPattern = sLast === '2U' ? 'Pivot Reversal Short' : 'Continuation Short';
+  }
+
+  return {
+    longTrigger: longTrigger,
+    shortTrigger: shortTrigger,
+    longPattern: longPattern,
+    shortPattern: shortPattern,
+    currentStrat: sLast,
+    parentStrat: sPrev,
+    triangleHint: longPattern && shortPattern ? '▲▼ both directions actionable on break' :
+                   longPattern ? '▲ long fire potential' :
+                   shortPattern ? '▼ short fire potential' : 'No clean fire forecast',
+  };
 }
 
 // =============================================================================
@@ -562,6 +740,7 @@ async function scanTicker(ticker, token, opts) {
     }
     var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating, tf);
     var volumeContext = computeVolumeContext(bars);
+    var actionableForecast = buildActionableForecast(bars);
 
     return {
       ticker: ticker,
@@ -574,8 +753,8 @@ async function scanTicker(ticker, token, opts) {
       plan: plan,
       holdRating: holdRating || null,
       volumeContext: volumeContext,
+      actionableForecast: actionableForecast,
       bars: bars.length,
-      // Multi-candle confirm flag — UI uses this to show CONFIRMED vs PENDING
       confirmRequired: 2,
     };
   } catch (e) {
