@@ -45,6 +45,11 @@ try { swingLeapFeed = require('./swingLeapFeed'); } catch (e) {}
 var sniperFeed = null;
 try { sniperFeed = require('./sniperFeed'); } catch (e) {}
 
+// Reuse 6HR aggregation helper from johnPatternScanner (same TS API limitation:
+// interval=360 not supported, must aggregate from interval=60).
+var johnPatternScannerLib = null;
+try { johnPatternScannerLib = require('./johnPatternScanner'); } catch (e) {}
+
 var holdOvernightChecker = null;
 try { holdOvernightChecker = require('./holdOvernightChecker'); } catch (e) {}
 
@@ -379,10 +384,13 @@ function buildUniverse() {
 // =============================================================================
 // TIMEFRAME SPECS — Daily and 6HR (240 min × 1.5 = 360 min)
 // =============================================================================
+// CRITICAL: TS API Minute unit only supports interval values 1/5/15/30/60.
+// interval=360 silently falls back to 30-min RTH-pair bars. Pull hourly
+// (interval=60) and aggregate 6-at-a-time into real 6HR buckets.
 var TF_SPECS = {
-  'Daily':  { unit: 'Daily',  interval: 1,   barsback: 5,  sessiontemplate: null,      label: 'Daily'  },
-  '6HR':    { unit: 'Minute', interval: 360, barsback: 10, sessiontemplate: 'Default', label: '6HR'    },
-  'Weekly': { unit: 'Weekly', interval: 1,   barsback: 12, sessiontemplate: null,      label: 'Weekly' },
+  'Daily':  { unit: 'Daily',  interval: 1,  barsback: 5,  sessiontemplate: null,      label: 'Daily',  aggregateFactor: 1 },
+  '6HR':    { unit: 'Minute', interval: 60, barsback: 80, sessiontemplate: 'Default', label: '6HR',    aggregateFactor: 6 },
+  'Weekly': { unit: 'Weekly', interval: 1,  barsback: 12, sessiontemplate: null,      label: 'Weekly', aggregateFactor: 1 },
 };
 
 // =============================================================================
@@ -406,7 +414,7 @@ async function scanTicker(ticker, token, opts) {
     var raw = (data && (data.Bars || data.bars)) || [];
     if (raw.length < 3) return { ticker: ticker, tf: tf, error: 'not-enough-bars-' + raw.length };
 
-    var bars = raw.map(function(b) {
+    var rawBars = raw.map(function(b) {
       return {
         High: parseFloat(b.High), Low: parseFloat(b.Low),
         Open: parseFloat(b.Open), Close: parseFloat(b.Close),
@@ -414,6 +422,11 @@ async function scanTicker(ticker, token, opts) {
         TimeStamp: b.TimeStamp,
       };
     }).filter(function(b) { return isFinite(b.High) && isFinite(b.Low); });
+
+    // Aggregate hourly bars to true 6HR (TS API doesnt support 6HR natively)
+    var bars = (spec.aggregateFactor && spec.aggregateFactor > 1 && johnPatternScannerLib && johnPatternScannerLib.aggregateBars)
+      ? johnPatternScannerLib.aggregateBars(rawBars, spec.aggregateFactor)
+      : rawBars;
 
     var seq = classifySequence(bars);
     var pattern = detectCoilPattern(seq, bars);
