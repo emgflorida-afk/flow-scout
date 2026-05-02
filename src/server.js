@@ -836,6 +836,46 @@ app.get('/api/js-scan/status', function(req, res) {
   res.json(Object.assign({ ok: true }, johnPatternScanner.getStatus()));
 });
 
+// DIAGNOSTIC — dumps last N bars + Strat classification for a single ticker.
+// Use to compare TS data vs TV chart when scanner misses a setup.
+//   GET /api/js-scan/debug/:ticker?tf=6HR
+app.get('/api/js-scan/debug/:ticker', async function(req, res) {
+  if (!johnPatternScanner) return res.status(500).json({ ok: false, error: 'JS scanner not loaded' });
+  try {
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    var tf = req.query.tf || '6HR';
+    var specs = { '6HR': { unit: 'Minute', interval: 360, barsback: 30, sessiontemplate: 'Default' },
+                  'Daily': { unit: 'Daily', interval: 1, barsback: 25, sessiontemplate: null },
+                  'Weekly': { unit: 'Weekly', interval: 1, barsback: 12, sessiontemplate: null } };
+    var spec = specs[tf];
+    if (!spec) return res.status(400).json({ ok: false, error: 'bad tf' });
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?unit=' + spec.unit + '&interval=' + spec.interval + '&barsback=' + spec.barsback;
+    if (spec.sessiontemplate) url += '&sessiontemplate=' + spec.sessiontemplate;
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-' + r.status });
+    var data = await r.json();
+    var raw = (data.Bars || data.bars || []);
+    var bars = raw.map(function(b) {
+      return { t: b.TimeStamp, O: parseFloat(b.Open), H: parseFloat(b.High), L: parseFloat(b.Low), C: parseFloat(b.Close), V: parseFloat(b.TotalVolume || 0) };
+    });
+    // Classify last 8 bars
+    var sn = johnPatternScanner.stratNumber;
+    var classified = [];
+    for (var i = Math.max(1, bars.length - 8); i < bars.length; i++) {
+      var s = sn(bars[i], bars[i-1]);
+      var color = bars[i].C > bars[i].O ? 'GREEN' : bars[i].C < bars[i].O ? 'RED' : 'DOJI';
+      classified.push({ idx: i, t: bars[i].t, O: bars[i].O, H: bars[i].H, L: bars[i].L, C: bars[i].C, strat: s, color: color });
+    }
+    var detected = johnPatternScanner.detectJSPattern(bars, tf);
+    res.json({ ok: true, ticker: ticker, tf: tf, totalBars: bars.length, classified: classified, detected: detected, url: url });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // BREAKOUT-CONFIRM — uses shared dailyCoilScanner.checkBreakoutConfirm so the
 // watcher cron and this endpoint share identical logic.
 // Usage: GET /api/coil/breakout-confirm/XLY?trigger=119.01&direction=long
