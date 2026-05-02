@@ -847,9 +847,9 @@ app.get('/api/js-scan/debug/:ticker', async function(req, res) {
     if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
     var ticker = String(req.params.ticker || '').toUpperCase();
     var tf = req.query.tf || '6HR';
-    var specs = { '6HR': { unit: 'Minute', interval: 360, barsback: 30, sessiontemplate: 'Default' },
-                  'Daily': { unit: 'Daily', interval: 1, barsback: 25, sessiontemplate: null },
-                  'Weekly': { unit: 'Weekly', interval: 1, barsback: 12, sessiontemplate: null } };
+    var specs = { '6HR': { unit: 'Minute', interval: 60, barsback: 80, sessiontemplate: 'Default', aggregateFactor: 6 },
+                  'Daily': { unit: 'Daily', interval: 1, barsback: 25, sessiontemplate: null, aggregateFactor: 1 },
+                  'Weekly': { unit: 'Weekly', interval: 1, barsback: 12, sessiontemplate: null, aggregateFactor: 1 } };
     var spec = specs[tf];
     if (!spec) return res.status(400).json({ ok: false, error: 'bad tf' });
     var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
@@ -860,10 +860,13 @@ app.get('/api/js-scan/debug/:ticker', async function(req, res) {
     if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-' + r.status });
     var data = await r.json();
     var raw = (data.Bars || data.bars || []);
-    // FIX: stratNumber needs {High, Low, Open, Close} (Pascal case) — same as scanTicker
-    var bars = raw.map(function(b) {
+    var rawBars = raw.map(function(b) {
       return { TimeStamp: b.TimeStamp, Open: parseFloat(b.Open), High: parseFloat(b.High), Low: parseFloat(b.Low), Close: parseFloat(b.Close), Volume: parseFloat(b.TotalVolume || 0) };
     });
+    // Same aggregation used by scanTicker (matches what TV chart shows for true 6HR)
+    var bars = (spec.aggregateFactor && spec.aggregateFactor > 1 && johnPatternScanner.aggregateBars)
+      ? johnPatternScanner.aggregateBars(rawBars, spec.aggregateFactor)
+      : rawBars;
     // Classify last 8 bars
     var sn = johnPatternScanner.stratNumber;
     var classified = [];

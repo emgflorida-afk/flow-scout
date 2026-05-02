@@ -697,11 +697,42 @@ function buildUniverse() {
 // =============================================================================
 // TIMEFRAME SPECS — same shape as coil scanner
 // =============================================================================
+// CRITICAL: TS API Minute unit only supports interval values 1/5/15/30/60.
+// interval=360 silently falls back to 30-min bars. Solution: pull hourly bars
+// (interval=60) and aggregate 6-at-a-time into real 6HR buckets in code.
+// barsback=70 gives us ~10 trading days × 7 RTH hours = enough for 12 6HR bars.
 var TF_SPECS = {
-  'Daily':  { unit: 'Daily',  interval: 1,   barsback: 25, sessiontemplate: null,      label: 'Daily' },
-  '6HR':    { unit: 'Minute', interval: 360, barsback: 30, sessiontemplate: 'Default', label: '6HR' },
-  'Weekly': { unit: 'Weekly', interval: 1,   barsback: 12, sessiontemplate: null,      label: 'Weekly' },
+  'Daily':  { unit: 'Daily',  interval: 1,  barsback: 25, sessiontemplate: null,      label: 'Daily',  aggregateFactor: 1 },
+  '6HR':    { unit: 'Minute', interval: 60, barsback: 80, sessiontemplate: 'Default', label: '6HR',    aggregateFactor: 6 },
+  'Weekly': { unit: 'Weekly', interval: 1,  barsback: 12, sessiontemplate: null,      label: 'Weekly', aggregateFactor: 1 },
 };
+
+// Aggregate hourly bars into N-hour buckets aligned to bar list (most recent
+// bucket may be partial — we drop it to avoid inside-bar false positives).
+function aggregateBars(bars, factor) {
+  if (!bars || factor <= 1) return bars || [];
+  // Walk from start, group every `factor` bars
+  var out = [];
+  for (var i = 0; i < bars.length; i += factor) {
+    var slice = bars.slice(i, i + factor);
+    if (slice.length < factor) break;  // skip incomplete trailing bucket
+    var hi = slice[0].High, lo = slice[0].Low, vol = 0;
+    for (var k = 0; k < slice.length; k++) {
+      if (slice[k].High > hi) hi = slice[k].High;
+      if (slice[k].Low < lo) lo = slice[k].Low;
+      vol += slice[k].Volume || 0;
+    }
+    out.push({
+      Open: slice[0].Open,
+      High: hi,
+      Low: lo,
+      Close: slice[slice.length - 1].Close,
+      Volume: vol,
+      TimeStamp: slice[0].TimeStamp,
+    });
+  }
+  return out;
+}
 
 // =============================================================================
 // SCAN ONE TICKER
@@ -723,7 +754,7 @@ async function scanTicker(ticker, token, opts) {
     var raw = (data && (data.Bars || data.bars)) || [];
     if (raw.length < 4) return { ticker: ticker, tf: tf, error: 'not-enough-bars-' + raw.length };
 
-    var bars = raw.map(function (b) {
+    var rawBars = raw.map(function (b) {
       return {
         High: parseFloat(b.High), Low: parseFloat(b.Low),
         Open: parseFloat(b.Open), Close: parseFloat(b.Close),
@@ -731,6 +762,11 @@ async function scanTicker(ticker, token, opts) {
         TimeStamp: b.TimeStamp,
       };
     }).filter(function (b) { return isFinite(b.High) && isFinite(b.Low); });
+
+    // Aggregate hourly bars to 6HR buckets when needed (TS API doesnt natively support 6HR)
+    var bars = (spec.aggregateFactor && spec.aggregateFactor > 1)
+      ? aggregateBars(rawBars, spec.aggregateFactor)
+      : rawBars;
 
     var pattern = detectJSPattern(bars, tf);
 
@@ -1006,5 +1042,6 @@ module.exports = {
   isFailed2U: isFailed2U,
   stratNumber: stratNumber,
   buildPlan: buildPlan,
+  aggregateBars: aggregateBars,
   MID_CAP_TICKERS: MID_CAP_TICKERS,
 };
