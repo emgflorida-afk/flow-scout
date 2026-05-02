@@ -2988,8 +2988,13 @@ function renderGridWP() {
               <div><span style="color:var(--txt-3);">TP2:</span> <span class="mono" style="color:#16e39d;">$${plan.tp2 || '—'}</span></div>
               <div><span style="color:var(--txt-3);">Risk:</span> <span class="mono">$${plan.risk || '—'}</span></div>
               <div><span style="color:var(--txt-3);">RR1:</span> <span class="mono" style="color:${plan.rr1 >= 1.5 ? '#16e39d' : '#ffc107'};">${plan.rr1 || '—'}×</span></div>
+              ${r.isWeekly ? `
+              <div><span style="color:var(--txt-3);">Coil Vol:</span> <span class="mono" style="color:${(r.volumeContext && r.volumeContext.insideBarRatio < 1) ? '#16e39d' : '#ffc107'};">${(r.volumeContext && r.volumeContext.insideBarRatio != null) ? r.volumeContext.insideBarRatio + '×' : '—'}</span></div>
+              <div><span style="color:var(--txt-3);">Vol Target:</span> <span class="mono">${(r.volumeContext && r.volumeContext.breakoutTarget) ? Math.round(r.volumeContext.breakoutTarget / 1000) + 'k' : '—'}</span></div>
+              ` : `
               <div><span style="color:var(--txt-3);">9 EMA:</span> <span class="mono">$${r.ema9 || '—'}</span></div>
               <div><span style="color:var(--txt-3);">21 EMA:</span> <span class="mono">$${r.ema21 || '—'}</span></div>
+              `}
             </div>
           </div>
 
