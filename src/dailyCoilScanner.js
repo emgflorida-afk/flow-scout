@@ -319,10 +319,15 @@ function computeVolumeContext(bars) {
 // =============================================================================
 // CONVICTION SCORING — refines the base pattern conviction with extra factors
 // =============================================================================
-function adjustConviction(base, ticker, bars, holdRating) {
+function adjustConviction(base, ticker, bars, holdRating, tf) {
   var conv = base;
-  // Liquidity bonus: avg volume — but we don't have volume in fetchBars output
-  // (skip for now, can add)
+
+  // TF weight: Weekly setups are structurally rarer and carry more meaning
+  // than the same pattern on intraday TFs. Sniper-style "fire weekly
+  // consolidations" deserve a baseline bump.
+  if (tf === 'Weekly')      conv += 2;
+  else if (tf === 'Daily')  conv += 1;
+  // 6HR: no bump (this was the original calibration baseline)
 
   // Hold-overnight rating
   if (holdRating === 'AVOID')   conv -= 3;
@@ -429,7 +434,7 @@ async function scanTicker(ticker, token, opts) {
       } catch(e) {}
     }
 
-    var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating);
+    var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating, tf);
     var volumeContext = computeVolumeContext(bars);
 
     return {

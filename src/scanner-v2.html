@@ -2775,6 +2775,59 @@ async function loadWPData() {
     document.getElementById("filters").innerHTML = "";
     return;
   }
+
+  // ALSO pull weekly coil setups and merge them into the WP grid (Sniper-style
+  // "fire weekly consolidation" picks). Cards get isWeekly:true flag so the
+  // renderer can show the TF badge + daily-break-required line.
+  try {
+    const wr = await fetch("/api/coil-scan", { cache: "no-store" });
+    if (wr.ok) {
+      const coilData = await wr.json();
+      const weeklyPool = [].concat(coilData.ready || [], coilData.watching || [], coilData.prep || []);
+      const weeklySetups = weeklyPool.filter(s => s.tf === "Weekly" && s.plan && s.plan.primary);
+      // Map weekly coil shape -> WP card shape
+      const mapped = weeklySetups.map(s => {
+        const pp = (s.plan && s.plan.primary) || {};
+        const trig = pp.trigger;
+        const tp2Pct = (trig && pp.tp2) ? Math.round(((pp.tp2 - trig) / trig * 100) * (s.direction === "short" ? -1 : 1) * 10) / 10 : null;
+        return {
+          ticker: s.ticker,
+          isWeekly: true,
+          weeklyPattern: s.pattern,
+          weeklySequence: s.sequence,
+          dailyBreakRequired: trig,
+          measuredMovePct: tp2Pct,
+          signal: s.direction === "long" ? "weekly-coil-long" : "weekly-coil-short",
+          direction: s.direction,
+          conviction: s.conviction,
+          lastClose: s.lastClose,
+          holdRating: s.holdRating,
+          plan: {
+            entry: trig,
+            stop: pp.stop,
+            tp1: pp.tp1,
+            tp2: pp.tp2,
+            risk: pp.risk,
+            rr1: s.plan.rr1,
+            rr2: s.plan.rr2,
+          },
+          coilAligned: false,
+          dailyAligned: false,
+          counterTrendDaily: false,
+          johnPrecedent: 0,
+          ema9: null,
+          ema21: null,
+          volumeContext: s.volumeContext,
+        };
+      });
+      // Bucket by conviction same as wpScanner: >=7 ready, 5-6 trial, <5 dropped
+      mapped.forEach(m => {
+        if (m.conviction >= 7) (wpData.ready = wpData.ready || []).push(m);
+        else if (m.conviction >= 5) (wpData.trial = wpData.trial || []).push(m);
+      });
+    }
+  } catch (e) { /* coil merge optional — don't block WP if it fails */ }
+
   const ready = wpData.ready || [];
   const trial = wpData.trial || [];
   document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -2838,6 +2891,8 @@ const WP_SIGNAL_INFO = {
   'star-short':               { icon: '⭐', desc: 'Shooting star at 4HR resistance — bearish reversal' },
   'pullback-9ema-short':      { icon: '📉', desc: 'Pullback to 9 EMA + reject — short trend continuation' },
   'inside-after-down-short':  { icon: '🔴', desc: 'Inside bar after directional down — coil prep' },
+  'weekly-coil-long':         { icon: '📆', desc: 'Weekly consolidation (Sniper-style) — needs Daily break above trigger' },
+  'weekly-coil-short':        { icon: '📆', desc: 'Weekly consolidation breakdown — needs Daily break below trigger' },
 };
 
 function renderGridWP() {
@@ -2881,11 +2936,20 @@ function renderGridWP() {
 
       // Confluence pills
       const confluencePills = [
+        r.isWeekly ? `<span class="tag" style="background:rgba(180,70,255,0.22); color:#d090ff; font-size:10px; font-weight:700;">📆 WEEKLY</span>` : '',
         r.dailyAligned ? `<span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">FTFC ✅</span>` : '',
         r.coilAligned ? `<span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">COIL ✅</span>` : '',
         r.counterTrendDaily ? `<span class="tag" style="background:rgba(255,107,107,0.15); color:#ff6b6b; font-size:10px;">⚠ COUNTER-TREND</span>` : '',
         r.johnPrecedent > 0 ? `<span class="tag" style="background:rgba(255,193,7,0.18); color:#ffc107; font-size:10px;">JOHN ${r.johnPrecedent}×</span>` : '',
       ].filter(Boolean).join(' ');
+
+      // Weekly setups need a Daily break to fire — surface that prominently
+      const dailyBreakLine = r.isWeekly ? `
+        <div style="margin-top:10px; padding:8px 10px; background:rgba(251,191,36,0.10); border:1px solid rgba(251,191,36,0.4); border-radius:8px; font-size:11px;">
+          <div style="color:#fbbf24; font-weight:700; margin-bottom:4px;">🎯 DAILY BREAK REQUIRED</div>
+          <div style="color:var(--txt-2);">Daily must close <strong style="color:${dirColor};">${r.direction === "long" ? "above" : "below"}</strong> <span class="mono" style="color:#fff;">$${r.dailyBreakRequired}</span> with vol ≥ <strong>1.5×</strong> avg to fire entry. Watcher cron polls every 5 min during RTH.</div>
+          ${r.measuredMovePct != null ? `<div style="color:var(--txt-3); margin-top:4px; font-size:10px;">Measured move target: <strong style="color:#16e39d;">+${r.measuredMovePct}%</strong> to TP2</div>` : ''}
+        </div>` : '';
 
       const optDir = r.direction === 'long' ? 'CALL' : 'PUT';
       const sizeUpDisabled = !allowSizeUp;
@@ -2896,7 +2960,7 @@ function renderGridWP() {
             <div style="flex:1;">
               <div class="ticker mono">${r.ticker} ${info.icon}</div>
               <div style="font-size:11px; color:var(--txt-3); margin-top:4px;">
-                ${r.signal} · 4HR · close $${r.lastClose}
+                ${r.signal} · ${r.isWeekly ? "📆 Weekly" : "4HR"} · close $${r.lastClose}${r.isWeekly && r.weeklyPattern ? ` · <span style="color:#b446ff;">${r.weeklyPattern}</span>` : ""}
               </div>
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
@@ -2910,9 +2974,11 @@ function renderGridWP() {
 
           ${confluencePills ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>` : (holdPillHtml ? `<div style="margin-top:8px;">${holdPillHtml}</div>` : '')}
 
+          ${dailyBreakLine}
+
           <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
-              <span style="color:#46b4ff; font-weight:700;">📋 WP SWING PLAN</span>
+              <span style="color:#46b4ff; font-weight:700;">${r.isWeekly ? "📆 WEEKLY SWING PLAN" : "📋 WP SWING PLAN"}</span>
               <span style="color:${dirColor}; font-weight:700; text-transform:uppercase;">${r.direction}</span>
             </div>
             <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px;">
