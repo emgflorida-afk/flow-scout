@@ -266,6 +266,12 @@ var targetPrice = null;
 try { targetPrice = require('./targetPrice'); console.log('[SERVER] targetPrice loaded OK'); }
 catch(e) { console.log('[SERVER] targetPrice not loaded:', e.message); }
 
+// ZIG ZAG CLUSTERS — find S/R zones where multiple swing reversals stack.
+// Per Barchart Zig Zag video: clusters of swings = high-probability levels.
+var zigZagClusters = null;
+try { zigZagClusters = require('./zigZagClusters'); console.log('[SERVER] zigZagClusters loaded OK'); }
+catch(e) { console.log('[SERVER] zigZagClusters not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -869,6 +875,20 @@ app.get('/api/target-price/:ticker', async function(req, res) {
     var ticker = String(req.params.ticker || '').toUpperCase();
     if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/target-price/SPY' });
     var out = await targetPrice.targetFor(ticker);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ZIG ZAG CLUSTERS — multi-swing S/R zones (60-day daily bars)
+//   GET /api/clusters/SPY?deviationPct=2&tolerancePct=1
+app.get('/api/clusters/:ticker', async function(req, res) {
+  if (!zigZagClusters) return res.status(500).json({ ok: false, error: 'zigZagClusters not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/clusters/SPY' });
+    var deviationPct = parseFloat(req.query.deviationPct) || 2.0;
+    var tolerancePct = parseFloat(req.query.tolerancePct) || 1.0;
+    var out = await zigZagClusters.clustersFor(ticker, { deviationPct: deviationPct, tolerancePct: tolerancePct });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
