@@ -1,0 +1,130 @@
+# SUV Lease Comparison — Miami (33169)
+
+**Shopper profile:** Tier 1 credit · 36 mo / 12k mi · target ≤ **$600/mo tax-in** · current Audi SQ5 lessee (5 payments left, lease ends Sept 2026 — qualifies for AFS pull-ahead, 3 payments waived if going Audi → Audi; cross-brand conquest cash applies elsewhere) · needs midsize for car seat + luggage trips · gas mileage matters.
+
+**FL tax:** 7% on each lease payment (33169 = Miami-Dade). All "tax-in" numbers below include this.
+
+**Last updated:** 2026-05-03
+
+---
+
+## Quick comparison
+
+| # | Vehicle | MSRP | MPG (city/hwy/comb) | Annual fuel @ 12k mi, $3.30/gal | Cargo (cu ft) | 3rd row | Drive | Tow (lbs) | Est. lease tax-in 36/12k $0 DAS | Dealer |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 2026 Jeep Grand Cherokee Laredo X | $40,910 | 19 / 26 / 22 | $1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$430–470/mo** ✅ | Aventura CDJR |
+| 2 | 2026 Jeep Grand Cherokee Limited | ~$46,500 (confirm w/ dealer) | 19 / 26 / 22 *(V6)* — or 21 / 28 / 24 *(2.0T)* | $1,650–$1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
+| 3 | 2026 Jeep Grand Cherokee L Limited | ~$50,000 (confirm w/ dealer) | 19 / 26 / 21 | $1,886 | 17.2 / ~46 / 84.6 max | Yes (6–7 seat) | RWD (4x2) | 6,200 | **~$570–620/mo** ⚠️ tight to budget | Aventura CDJR |
+
+**Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
+
+---
+
+## Detail cards
+
+### 1) 2026 Jeep Grand Cherokee Laredo X 4x2 — $40,910 MSRP ✅
+
+- **Stock / VIN:** 1C4RJGAG3TC275700
+- **Dealer:** Aventura Chrysler Jeep Dodge Ram
+- **Listing:** https://www.aventurachryslerjeepdodgeram.com/inventory/new-2026-jeep-grand-cherokee-laredo-x-4x2-sport-utility-1c4rjgag3tc275700/
+- **Engine / drivetrain:** 3.6L Pentastar V6, 293 hp / 260 lb-ft, 8-speed auto, RWD
+- **Fuel economy:** 19 city / 26 hwy / 22 combined → **~$1,800/yr** in fuel at 12k mi @ $3.30/gal
+- **Seating:** 5 (no 3rd row)
+- **Cargo:** 37.7 cu ft behind rear seat · 70.8 cu ft max with seats folded — *plenty for car seat + luggage*
+- **Towing:** 6,200 lbs
+- **Dimensions:** 193.5" L × 70.8" H
+- **Standard features (Laredo X adds vs base Laredo):**
+  - 12.3" Uconnect 5 NAV touchscreen
+  - Wireless Apple CarPlay & Android Auto
+  - Sunroof
+  - Heated front seats + heated steering wheel
+  - Power liftgate
+  - Wireless charging pad
+  - Remote start
+  - Rain-sensing wipers
+  - 115V power outlet
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$430–470/mo tax-in
+  - Stellantis runs heavy lease cash. Push for ≥ 8% off MSRP and confirm "Lease Conquest Bonus Cash" applies (you qualify as current Audi lessee).
+- **Watch-outs:** RWD-only (4x2). MF on Stellantis is often padded — ask for buy-rate. Residual ~64% on Laredo trims at 36 mo.
+
+---
+
+### 2) 2026 Jeep Grand Cherokee Limited 4x2 (2-row) — ~$46,500 MSRP ⚠️
+
+- **Stock / VIN:** 1C4RJGBR9TC279332
+- **Dealer:** Aventura Chrysler Jeep Dodge Ram
+- **Listing:** https://www.aventurachryslerjeepdodgeram.com/inventory/new-2026-jeep-grand-cherokee-limited-4x2-sport-utility-1c4rjgbr9tc279332/
+- **Engine / drivetrain:** Two engine options — confirm which one this stock unit has:
+  - 3.6L Pentastar V6: 293 hp / 260 lb-ft (standard)
+  - 2.0L Turbo I4: 324 hp / 332 lb-ft (available Laredo Altitude and up — better gas mileage, more torque)
+  - 8-speed auto, RWD
+- **Fuel economy:** V6: 19/26/22 → ~$1,800/yr · 2.0T: 21/28/24 → ~$1,650/yr at 12k mi
+- **Seating:** 5 (no 3rd row)
+- **Cargo:** 37.7 cu ft behind rear seat · 70.8 cu ft max
+- **Towing:** 6,200 lbs (V6) / 6,000 lbs (2.0T)
+- **Standard features (Limited adds vs Laredo X):**
+  - Leather-trimmed seating
+  - Adaptive cruise control with stop-and-go
+  - Automatic emergency braking with pedestrian/bicyclist detection
+  - Lane departure warning + lane-keep assist
+  - Blind-spot monitor + rear cross-traffic alert
+  - Rear parking sensors with auto reverse braking
+  - Forward collision warning
+  - Automatic high-beams
+  - 12.3" Uconnect 5 NAV + wireless CarPlay/AA
+  - Power liftgate, sunroof, heated front seats, heated steering wheel, remote start, wireless charging
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$510–560/mo tax-in
+  - Limited residual ~58–61% (weaker than Laredo's ~64%) on Stellantis MF ~0.00347. Push for ≥ 8% off MSRP and confirm Lease Conquest Bonus from current Audi lease.
+- **Watch-outs:**
+  - Same engine MSRP delta — 2.0T is usually a $1k–$2k option but lower fuel cost over the lease.
+  - RWD-only (4x2). Same cargo footprint as Laredo X but more luxury/safety content for ~$5,500 more sticker.
+
+---
+
+### 3) 2026 Jeep Grand Cherokee L Limited 4x2 — ~$50,000 MSRP ⚠️
+
+- **Stock / VIN:** 1C4RJJBR5T8578896
+- **Dealer:** Aventura Chrysler Jeep Dodge Ram
+- **Listing:** https://www.aventurachryslerjeepdodgeram.com/inventory/new-2026-jeep-grand-cherokee-l-limited-4x2-sport-utility-1c4rjjbr5t8578896/
+- **Engine / drivetrain:** 3.6L Pentastar V6, 293 hp / 260 lb-ft, 8-speed auto, RWD
+- **Fuel economy:** 19 city / 26 hwy / ~21 combined → **~$1,886/yr** in fuel at 12k mi
+- **Seating:** 6 or 7 (captain's chairs standard, bench optional)
+- **Cargo:** 17.2 cu ft behind 3rd row · ~46 cu ft behind 2nd row · 84.6 cu ft max — 3rd row up = small trunk (smaller than Telluride/Pilot)
+- **Towing:** 6,200 lbs
+- **Standard features (Limited trim):**
+  - 12.3" Uconnect 5 NAV touchscreen
+  - Wireless Apple CarPlay & Android Auto
+  - Adaptive cruise control with stop-and-go
+  - Automatic emergency braking
+  - Blind-spot monitor + rear cross-traffic alert
+  - Lane-keep assist
+  - Rear parking sensors with auto reverse braking
+  - Hands-Free Active Driving Assist *available* (option, not always standard)
+  - Power liftgate
+  - Leather-trimmed seating (typical for Limited)
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$570–620/mo tax-in
+  - **At the upper edge of your $600 cap.** Limited trim has weaker residual (~58–61%) and same Stellantis MF (~0.00347 ≈ 8.3% APR). Need a strong discount + every available incentive to land under $600.
+- **Watch-outs:**
+  - Confirm exact MSRP from dealer — "Limited" pricing varies by package (Convenience, Luxury Tech, etc.).
+  - Cargo behind 3rd row (17.2 cu ft) is *less* than 2-row Grand Cherokee (37.7) — odd quirk.
+  - RWD-only (4x2).
+
+---
+
+## Notes & methodology
+
+- **Lease estimates** assume: 36 mo / 12k mi · Tier 1 buy-rate MF · $0 due at signing (DAS rolled into monthly) · 7% FL sales tax · realistic 6–8% pre-incentive discount off MSRP · all stackable incentives applied (lease cash + Audi-lessee conquest cash where offered).
+- **Annual fuel cost** = (12,000 mi ÷ combined MPG) × $3.30/gal. Update gas price assumption as needed.
+- **Direct dealer scrapes are blocked** by Cloudflare/DataDome anti-bot on every Miami-area dealer site. Dealer-page data here is reconstructed from URL slugs (trim, VIN), VIN decoder logic, and manufacturer/Edmunds spec sheets. Sale price and stock-specific lease offers must be confirmed via email/phone with each dealer.
+- **Email template to send each dealer:**
+  > Hi — I'm interested in stock #[XXX] (VIN [XXX]). I'm a current Audi Financial Services lessee with 5 payments remaining (lease ends Sept 2026), Tier 1 credit. Please send a written lease quote: **36 months, 12,000 miles/year, $0 due at signing, all taxes/tags/fees in monthly**. Itemize MSRP, selling price (pre-incentive), every applied incentive, money factor, residual %, acquisition fee, dealer fee, final tax-in monthly. Confirm whether competitive lease conquest cash (current non-[brand] lessee) is available this month.
+
+## Sources
+
+- [Jeep — 2026 Grand Cherokee specs](https://www.jeep.com/2026/grand-cherokee/specs.html)
+- [Jeep — 2026 Grand Cherokee Laredo X trim](https://www.jeep.com/2026/grand-cherokee/specs.laredo-x.html)
+- [Jeep — 2026 Grand Cherokee Limited trim](https://www.jeep.com/grand-cherokee/specs.limited.html)
+- [Edmunds — 2026 Grand Cherokee](https://www.edmunds.com/jeep/grand-cherokee/2026/)
+- [Edmunds — 2026 Grand Cherokee L](https://www.edmunds.com/jeep/grand-cherokee-l/2026/)
+- [KBB — 2026 Grand Cherokee L Limited](https://www.kbb.com/jeep/grand-cherokee-l/2026/limited/)
+- [Cars.com — 2026 Grand Cherokee research](https://www.cars.com/research/jeep-grand_cherokee-2026/)
