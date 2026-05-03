@@ -8,6 +8,91 @@
 
 ---
 
+## 📋 Quotes received (for leverage when negotiating)
+
+### Quote A: Gunther Kia (Ft. Lauderdale) — 2027 Telluride **X-Pro SX-Prestige** AWD 🚩 marked up
+
+- **Dealer:** Gunther Kia | Salesperson: Cahile Donovan | Sales: (954) 797-1680
+- **Vehicle:** 2027 Kia Telluride X-Pro SX-Prestige AWD · VIN 5XYPLES11VG028464 · Stock K65666 · Terrain Brown Matte · 13 mi
+- **Engine:** 2.5L I4 Turbo DGI, 274 hp
+- **MSRP:** $60,135 *(top gas trim — explains the price)*
+- **Quote dated:** Sat May 2, 2026, 2:49 PM
+- **Lease structure (36 mo, 12k mi):**
+
+| DAS | Monthly | Effective $0-DAS pre-tax | Effective tax-in $0-DAS |
+|---|---|---|---|
+| $1,249 | $1,019.53 | ~$960 | ~$1,028 |
+| $2,249 | $986.82 | ~$960 | ~$1,027 |
+| $3,249 | $954.77 | ~$960 | ~$1,026 |
+
+(All structures land at the same effective $0-DAS — they're just shifting money around. Don't let "less down" trick you.)
+
+- **Their numbers:** Money Factor **0.00288** · Residual 67% ($40,290.45) · $0.25/mi over 12k
+
+**🚩 Markups identified:**
+1. **MF marked up.** KMF buy-rate for X-Pro SX-Prestige class in May 2026 is ~0.00194–0.00253. They added 0.00035–0.00094 of dealer reserve = **~$17–47/mo extra in your pocket if you push for buy-rate.**
+2. **Selling price hidden.** No discount line on the worksheet. Reverse-engineering: implied cap cost ≈ **$63,800** vs. $60,135 MSRP = **$3,665 over MSRP**. They're padding with dealer fees / market adjustment.
+3. **No conquest cash visible.** Audi-lessee competitive cash typically $500–$1,000 from Kia — none applied here.
+4. **Wrong trim for your budget.** X-Pro SX-Prestige is the absolute top gas trim. Even with all markups removed, this trim won't hit $600 tax-in.
+
+**Action:** Reply: *"Please re-quote on a Telluride EX FWD or X-Line EX FWD instead, with buy-rate money factor (no dealer reserve markup), all current Kia lease cash, and Audi-lessee competitive lease bonus applied. I want to see the discount off MSRP itemized."*
+
+---
+
+### Quote B: Ed Morse Sawgrass Automall — 2026 Chevy **Traverse** 🚩 weak discount + marked-up MF
+
+- **Dealer:** Ed Morse Sawgrass Automall (Chevy/Buick/GMC/Cadillac) | Salesperson: Patrick Laurenceau
+- **Vehicle:** 2026 Chevrolet Traverse · Sandstone Gray · VIN 1GNEVJKS8TJ300533 · 5 mi
+- **MSRP:** $56,654 *(top RS or High Country trim — same top-trim trap as Quote A)*
+- **Quote dated:** May 2, 2026, 4:23 PM
+- **Worksheet breakdown:**
+
+| Line | Amount |
+|---|---|
+| MSRP | $56,654 |
+| Discount | –$2,424 (**4.3% only — should be 8–10%**) |
+| Selling Price | $54,230 |
+| Rebate | –$1,000 |
+| Government Fee | $841.25 |
+| **Proc/Doc Fee** | **$999** 🚩 (typical FL is $399–$799) |
+| Gross Cap Cost | $55,870.50 |
+| Adjusted Cap Cost | $55,870.50 |
+
+- **Lease structure (36 mo):**
+
+| DAS | Monthly | Tax-in effective $0-DAS |
+|---|---|---|
+| $0 | $973–998 | ~$985 |
+| $1,500 | $931–956 | ~$985 |
+| $2,500 | $899–924 | ~$985 |
+
+(All three structures land at the same effective monthly — same "shift the money around" trick.)
+
+- **Their numbers:** MF **0.00304** (~7.3% APR) · Residual 58% ($32,859)
+
+**🚩 Markups identified:**
+1. **Discount is anemic.** $2,424 = 4.3% off MSRP. GM Financial heavily subvents Traverse — typical dealer discount in May 2026 is 8–10% (~$4,500–$5,700). They left ~$2,000 on the table.
+2. **MF marked up by 0.00084.** GMF buy-rate is ~0.00220 in May 2026; they're at 0.00304. That's **~$42/mo of pure dealer profit** baked into the rent charge.
+3. **Doc fee bloated.** $999 is at the upper end of FL legal — competitive dealers charge $399–$799. Negotiate this down or walk.
+4. **No competitive lease cash.** GM offers Conquest Bonus Cash to current non-GM lessees — Audi qualifies. Not applied here.
+5. **Same top-trim trap.** Traverse high trims always lease badly because GM doesn't put money on them; the deals are on LT and RS, not High Country.
+
+**Action:** Reply: *"Please requote on a Traverse LT FWD instead, show me the buy-rate money factor (no markup), apply all current GM lease cash plus Conquest Bonus Cash for my current Audi lease, drop the doc fee to standard ($799 max), and itemize the discount as a percentage of MSRP. I'm also collecting quotes on Atlas, Telluride, Palisade, and Highlander — please be your most competitive."*
+
+---
+
+## 🎯 Pattern across both quotes (use this when you call/email all dealers)
+
+Both dealers used the **same five tactics** to inflate the lease:
+
+1. **Quoted you the top trim** (X-Pro SX-Prestige, RS/High Country) — dealers do this because top trims have the worst lease economics, so high-margin add-ons get lost in the noise. **Always specify trim by name** (e.g., "Telluride EX FWD," "Traverse LT FWD") in your email.
+2. **Marked up the money factor** by 0.00035–0.00094. Each 0.00001 of markup = ~$0.50/mo. **Demand "buy-rate MF, no markup"** in writing.
+3. **Padded the cap cost** with dealer fees, addendums, or hidden markup. **Demand the discount as a percentage of MSRP** — should be 8–10% on most non-luxury at this price tier.
+4. **Showed multiple "down payment" structures that all land at the same effective $0-DAS payment.** This is the oldest trick in the book. **Always evaluate at $0 DAS.**
+5. **Failed to apply Audi-lessee competitive lease conquest cash.** Every brand in your shopping list has one ($500–$2,000). You qualify; demand it explicitly.
+
+---
+
 ## TL;DR — recommended shortlist (test-drive these 4)
 
 Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
