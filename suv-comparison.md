@@ -146,6 +146,8 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | **11b** | **2026 Mazda CX-90 3.3 Turbo Preferred AWD** | **$42,950** | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$420–460/mo** ✅ **best lease economics** | Mazda dealers |
 | 11b-stock | 2026 CX-90 Turbo Preferred AWD *(specific stock VIN …383820)* | $42,950 | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$420–460/mo** ✅ | Mazda of North Miami |
 | 11c | 2026 Mazda CX-90 PHEV Preferred | ~$50,000 | ~25 combined gas + **26-mi EV range** | ~$1,000 (combined) | similar to 11a | **Yes (7-seat)** | AWD std | 3,500 | **~$500–550/mo** ⚠️ but EV miles cut fuel cost | Mazda dealers |
+| 12a | 2026 Acura MDX SH-AWD *(Base)* | $54,000 | 19 / 25 / 21 | ~$1,886 | 16.3 / 39.1 / 71.4 max | **Yes (7-seat)** | SH-AWD | 5,000 | **~$700–760/mo** ❌ over budget | Miami Acura |
+| 12b | 2026 Acura MDX Technology SH-AWD ⬅ best Acura value | $59,400 | 19 / 25 / 21 | ~$1,886 | 16.3 / 39.1 / 71.4 max | **Yes (7-seat)** | SH-AWD | 5,000 | **~$720–770/mo** ❌ over budget *(was $569/mo advertised w/ $5k DAS)* | Miami Acura |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -842,6 +844,80 @@ The Preferred at ~$420–460/mo gives you:
 3. **Ocean Mazda West Kendall**
 4. **Gunther Mazda** (Fort Lauderdale) — large volume, often most aggressive
 5. **Wesley Chapel Mazda** if you're willing to dealer-trade
+
+---
+
+### 12) 2026 Acura MDX — Miami Acura ❌ over budget *(luxury 3-row tier, similar to QX60/Q5)*
+
+- **Listing:** https://www.miamiacura.com/new-vehicles/?_dFR%5Bmodel%5D%5B0%5D=MDX&_dFR%5Btype%5D%5B0%5D=New
+- **Dealer:** Miami Acura (north Miami area)
+- **Why this is interesting:** The MDX is the closest "luxury 3-row" to your SQ5 in feel — Acura's flagship, refined V6, SH-AWD, premium materials. Same tier as the QX60 and Audi Q5 (#10). But same problem: lease economics push it $100–$170 over budget.
+
+**Powertrains:**
+- **3.5L V6** — 290 hp / 267 lb-ft, 10-speed auto (Base, Tech, A-Spec, Advance, A-Spec Advance)
+- **3.0L Turbo V6 (Type S)** — 355 hp / 354 lb-ft, 10-speed auto (premium-fuel required)
+
+**Trim ladder + MSRP:**
+| Trim | FWD | SH-AWD |
+|---|---|---|
+| Base | $51,800 | $54,000 |
+| Technology Package | $57,200 | $59,400 |
+| A-Spec® | — | ~$62,000 |
+| Advance | — | ~$66,500 |
+| A-Spec Advance | — | $68,900 |
+| Type S Advance | — | ~$73,000 |
+
+**Fuel economy:**
+- V6 FWD: 19 / 26 / **22** combined → ~$1,800/yr
+- V6 SH-AWD: 19 / 25 / **21** combined → ~$1,886/yr
+- Type S: 17 / 21 / **19** + premium fuel → ~$2,200/yr
+
+**Cargo:** 16.3 cu ft behind 3rd row · 39.1 cu ft behind 2nd · 71.4 cu ft max — *similar to Highlander, smaller than Atlas (96.6) or Telluride (87)*
+
+**Towing:** 5,000 lbs (V6 SH-AWD), 3,500 lbs (FWD)
+
+**Standard features (every MDX gets):**
+- **Google Built-in** (Maps, Assistant, Play Store native — your SQ5 doesn't have this; it's actually more modern)
+- **AcuraWatch™ safety suite** — adaptive cruise, AEB, lane-keep, blind-spot, traffic sign recognition, head-up display *(Tech+)*
+- 12.3" digital cluster
+- 9" infotainment + wireless Apple CarPlay/Android Auto
+- Heated front seats
+- 3-zone climate
+- Power moonroof (Tech+ has panoramic)
+- Memory driver's seat (Tech+)
+- ELS Studio audio (Advance+ has 25-speaker system)
+
+**Lease numbers (Acura Financial Services May 2026):**
+- MF ~0.00191 (≈ 4.6% APR — pretty good for luxury)
+- Residual: 54–58% (mediocre — Acura residuals are weaker than Lexus/Infiniti)
+- $1,900 dealer cash on Tech and Advance trims sometimes
+- April advertised: $569/mo, 36 mo, **$4,999 DAS** for SH-AWD (Tech) — that's ~$697 effective $0 DAS pre-tax, ~$745 tax-in
+- May offers may be similar — confirm
+
+**Lease estimates (36/12k, Tier 1, FL, $0 DAS, with conquest):**
+- **Base SH-AWD:** ~$700–760/mo tax-in ❌
+- **Tech SH-AWD:** ~$720–770/mo tax-in ❌ (best Acura value w/ $1,900 dealer cash)
+- **A-Spec / Advance:** ~$800–880/mo ❌
+- **Type S:** $1,000+/mo ❌
+
+**The "$569/mo headline" reality check** (same trick as Gunther Kia):
+| Step | $$ |
+|---|---|
+| Advertised payment | $569/mo |
+| + Roll $4,999 DAS into 36 monthly payments | +$128/mo |
+| **Pre-tax effective at $0 DAS** | **$697/mo** |
+| + FL 7% tax | +$49/mo |
+| **Real tax-in monthly** | **~$745/mo** ❌ |
+
+**Watch-outs:**
+- **Audi conquest:** Acura sometimes runs a competitive lease bonus ($750–$1,500). Not always. Ask explicitly when calling Miami Acura.
+- **MDX residuals (54–58%) are the weakest in the luxury tier here** (vs QX60 ~60%, Q5 ~58%, Lexus 60–62%). That's why the lease feels expensive despite a decent MF.
+- **SH-AWD adds $2,200 to MSRP** but only ~$25/mo to lease. In FL, AWD is unnecessary — go FWD if available, save the money.
+- **Type S** is gorgeous but premium fuel + 19 mpg combined + $73k MSRP = $1,200+/mo all-in. Hard pass at your budget.
+- **Cargo is 16.3 cu ft behind 3rd row** — same as Highlander, not great. Stroller + 3rd row up will be tight.
+- **Reliability:** MDX is generally reliable (Honda mechanicals), but the new ZDX/MDX infotainment has had software glitches. Ask about any TSBs at the test drive.
+
+**Decision frame:** If you're already over budget anyway, the MDX is similar money to the QX60 (#6, ~$650–720/mo) but with a more refined drivetrain, better safety suite, more modern infotainment, and better materials than the QX60 Pure. **If luxury 3-row is the priority and budget flex is OK, MDX > QX60.** But for hitting $600 — neither works.
 
 ---
 
