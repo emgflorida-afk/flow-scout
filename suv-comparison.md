@@ -8,6 +8,33 @@
 
 ---
 
+## TL;DR — recommended shortlist (test-drive these 4)
+
+Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
+
+| Rank | Vehicle | Lease | + Gas/mo | **Real monthly** | Why |
+|---|---|---|---|---|---|
+| 🥇 | **VW Atlas SE w/Tech FWD** (#4) | $400 | $150 | **$550** | 3-row · 96.6 cu ft cargo (biggest in file) · power liftgate · 22 mpg · best-MF in this list |
+| 🥈 | **Toyota Highlander XLE Hybrid** (#9b) | $572 | $94 | **$666** | Bulletproof reliability · 35 mpg · Toyota residual tier · BUT smallest 3rd-row cargo (16 cu ft) |
+| 🥉 | **Kia Telluride EX FWD Hybrid** (#8b) | $615 | $94 | **$709** | New redesign · 35 mpg · best-in-class safety · 22.3 cu ft behind 3rd row · dual 12.3" displays |
+| 4 | **Hyundai Palisade SEL Premium FWD** (#7) | $560 | $157 | **$717** | Most luxury content per dollar (ventilated 2nd-row seats, 360 cam, digital key) · 86.7 cu ft cargo |
+
+**Skip these** (in budget but compromised, or over budget):
+- VW Atlas SE FWD base (#5) — cheapest but no power liftgate is a real problem with a toddler
+- GC L Limited (#3) — small 3rd-row cargo (17.2 cu ft), weak residual, high MF — bad lease economics
+- QX60 Pure (#6) — over budget, smallest cargo, first-year VC-Turbo gamble
+- Audi Q5 (#10) — over budget even with pull-ahead, 2-row only (no 3rd row option for in-laws/friends)
+
+**The ~$92/mo question on Audi pull-ahead:** Walking from Audi forfeits ~$3,300 (~$92/mo). The VW Atlas SE w/Tech beats the Q5 by ~$220/mo even after losing pull-ahead — net savings ~$130/mo / ~$4,700 over the 36-month lease. Money's clearly better non-Audi. **Stay with Audi only if badge/feel is worth $90+/mo to you.**
+
+**Action items:**
+1. Email all 4 dealers today using the template in the Notes section. Push for $0 DAS, tax-in monthly.
+2. Mention Audi-lessee status — Hyundai/Kia/VW all have $500–$1,000 conquest cash you'll qualify for.
+3. Test-drive in this order: Atlas (the value play), Highlander Hybrid (the reliability play), Telluride Hybrid (the new-tech play), Palisade (the luxury-feel-without-luxury-badge play).
+4. Whichever wins the test drive, send me the written quote and I'll spot any markup in MF, fees, or hidden cap-cost padding.
+
+---
+
 ## Quick comparison
 
 | # | Vehicle | MSRP | MPG (city/hwy/comb) | Annual fuel @ 12k mi, $3.30/gal | Cargo (cu ft) | 3rd row | Drive | Tow (lbs) | Est. lease tax-in 36/12k $0 DAS | Dealer |
@@ -28,6 +55,7 @@
 | 9a | 2026 Toyota Highlander XLE *(gas 2.4T)* | $41,815 | ~22 / 29 / 24 | ~$1,650 | 16.0 / 48.4 / 84.3 max | **Yes (7-8 seat)** | FWD | 5,000 | **~$560–605/mo** ⚠️ tight | Toyota of N. Miami |
 | 9b | 2026 Toyota Highlander XLE Hybrid ⚡ | ~$43,515 (+$1,700 over gas) | **35 combined** | **~$1,131** | 16.0 / 48.4 / 84.3 max | **Yes (7-8 seat)** | FWD | 3,500 | **~$556–588/mo** ✅ best total cost so far | Toyota of N. Miami |
 | 9c | 2026 Toyota Highlander Limited Hybrid | $48,315 | ~35 combined | ~$1,131 | 16.0 / 48.4 / 84.3 max | **Yes (7-seat)** | FWD | 3,500 | **~$590–630/mo** ⚠️ tight | Toyota of N. Miami |
+| 10 | 2026 Audi Q5 Premium *(stay-with-Audi play)* | $54,095 | 21 / 29 / 24 | ~$1,650 | 27.6 / 56.9 max | **No (5-seat, 2-row)** | quattro AWD | 4,400 | **~$620–680/mo** ❌ over budget *(even w/ pull-ahead)* | Audi Pembroke Pines |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -499,6 +527,83 @@ The hybrid is **~$44/mo cheaper to own** once you bake gas in — and you're get
 - Toyota of North Miami sometimes adds dealer accessories ($1,000–$2,000 in protection packages, paint sealant, etc.) — refuse them.
 - Highlander reliability is excellent (one of the strongest in the segment). 10 yr / 150k mi hybrid battery warranty.
 - Toyota does **not** have a competitive lease conquest program currently — coming from Audi gets you nothing extra. Confirms why Hyundai/Kia/VW are typically better total deals for someone in your situation.
+
+---
+
+### 10) 2026 Audi Q5 — Audi Pembroke Pines ❌ over budget *(but worth understanding)*
+
+- **Stock / VIN:** WA1LCBF75TD005576 (likely Premium or Premium Plus — confirm with dealer)
+- **Dealer:** Audi Pembroke Pines
+- **Listing:** https://www.audipembrokepines.com/en/inventory/vehicle/?isdealer&market=us&vehicleId=WA1LCBF75TD005576
+- **Why this matters:** This is your **stay-with-Audi** option. Going Audi → Audi triggers the **Audi Financial Services pull-ahead program** — *up to 3 final payments waived on your current SQ5*. At your $1,100/mo, that's **~$3,300 of value** that no other brand can match.
+
+**2026 Q5 redesign — what's new:**
+- Brand-new 3rd-generation Q5 (debuted late in 2025 model year, 2026 is first full year)
+- New 2.0L TFSI mild-hybrid I4, 268 hp
+- New interior with curved dual-display dash (Audi's MMI system)
+- Significantly larger cargo than outgoing Q5 / your SQ5 (27.6 cu ft behind 2nd row vs ~25.1 outgoing)
+- Quattro AWD standard
+
+**Trim ladder + MSRP:**
+| Trim | MSRP | Notes |
+|---|---|---|
+| Premium | $54,095 | Pano roof, leather, heated seats, 18" wheels, AEB, BSM, lane departure |
+| Premium Plus | ~$58,000 | Adds 19" wheels, S-Line exterior, top-view camera, adaptive cruise w/ traffic jam assist |
+| Prestige | ~$64,000 | Adds B&O 19-speaker, Matrix LED headlights, ventilated front seats, head-up display |
+
+**Engine / drivetrain:** 2.0L Turbo I4 with 48V mild hybrid, 268 hp, 7-speed dual-clutch auto, **quattro AWD standard**
+
+**Fuel economy:** 21 city / 29 hwy / 24 combined → **~$1,650/yr** at 12k mi @ $3.30/gal
+
+**Cargo:** 27.6 cu ft behind 2nd row · 56.9 cu ft max — *more cargo than outgoing SQ5*, but only 5 seats, no 3rd row
+
+**Towing:** 4,400 lbs (with optional tow package)
+
+**Standard features (Premium):**
+- Panoramic moonroof
+- Leather seating
+- Heated front seats
+- Power tilt/telescoping steering column
+- Curved digital cluster + infotainment with navigation
+- LED headlights and taillights
+- 18" alloy wheels
+- Forward + reverse AEB
+- Forward + reverse collision warning
+- Blind-spot monitoring
+- Evasive steering assist
+- Lane departure warning
+- Driver attention monitor
+- Parking sensors
+
+**Lease numbers (Audi Financial Services May 2026):**
+- National advertised offer: 2026 Q5 Premium Plus, **$659/mo for 36 months** (typical $4,995 DAS on Audi ads)
+- Effective at $0 DAS, pre-tax: ~$779/mo
+- **Tax-in (7% FL):** ~$834/mo on the advertised structure
+
+**Stacking the Audi loyalty/pull-ahead math:**
+| Item | Value |
+|---|---|
+| Headline lease, $0 DAS, tax-in | $834/mo |
+| – AFS Loyalty Cash (~$1,500) over 36 mo | –$42/mo |
+| – Pull-Ahead: 3 final SQ5 payments waived (~$3,300) | –$92/mo *effective* |
+| – Aggressive negotiation (~7% off MSRP, currently dealers ~6% off avg) | –$30–60/mo |
+| **Best-case Q5 Premium Plus tax-in** | **~$640–670/mo** |
+| **Q5 Premium (base) best-case** | **~$620–650/mo** |
+
+**Bottom line:** Even with **every Audi incentive stacked perfectly**, the Q5 lands ~$20–80/mo over your $600 budget. Your current SQ5 at $1,100/mo to a Q5 at ~$640/mo is still a **~$460/mo savings** — that's real money. But it's not as cheap as the non-luxury options.
+
+**Watch-outs:**
+- The **$3,300 pull-ahead value only applies if you go Audi → Audi.** Going to any other brand forfeits it. So the question becomes: *"Is staying in Audi worth $80–120/mo more than the next-best option?"*
+- Q5 is **2-row only** (5 seats). If you ever wanted a 3rd row for in-laws, schlepping kids' friends, etc., this is a downgrade vs Telluride/Palisade/Atlas.
+- Pre-tax cargo is good (27.6 cu ft) — actually *more* than your outgoing SQ5. Plenty for car seat + luggage.
+- Coming from an SQ5 (V6, 349 hp) to a Q5 (I4, 268 hp), you'll feel the power loss. The SQ5 redesign exists ($66k+) but is even more over budget.
+- AWD standard (FL doesn't need it, but Audi's quattro is excellent).
+- **First-year of redesign** — same caveat as Telluride and Palisade entries. Audi has decent first-year reliability historically but not Toyota-tier.
+
+**Decision frame for staying with Audi:**
+- If you'd pay a $80–120/mo premium for: badge, build quality, quattro AWD, new dual-display interior — Q5 wins.
+- If you only care about price + features + family practicality — Palisade SEL Premium (#7) or Telluride EX Hybrid (#8b) is a better deal at ~$580–615/mo tax-in with more cabin tech.
+- The Audi pull-ahead is **valuable but not infinite**. ~$3,300 over 36 months = $92/mo. If a non-Audi deal beats the Q5 by more than $90/mo, you're net ahead even after losing pull-ahead.
 
 ---
 
