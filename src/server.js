@@ -253,6 +253,13 @@ var johnPatternScanner = null;
 try { johnPatternScanner = require('./johnPatternScanner'); console.log('[SERVER] johnPatternScanner loaded OK'); }
 catch(e) { console.log('[SERVER] johnPatternScanner not loaded:', e.message); }
 
+// FLOOR TRADER PIVOTS — universal trader-watched S/R levels per Barchart Day
+// of Action methodology. Pivot point = bullish/bearish fulcrum. Confluence with
+// our pattern setups = highest-probability inflection zones.
+var floorPivots = null;
+try { floorPivots = require('./floorPivots'); console.log('[SERVER] floorPivots loaded OK'); }
+catch(e) { console.log('[SERVER] floorPivots not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -834,6 +841,18 @@ app.post('/api/js-scan/run', async function(req, res) {
 app.get('/api/js-scan/status', function(req, res) {
   if (!johnPatternScanner) return res.status(500).json({ ok: false, error: 'JS scanner not loaded' });
   res.json(Object.assign({ ok: true }, johnPatternScanner.getStatus()));
+});
+
+// FLOOR PIVOTS — daily floor trader pivots from prior day H/L/C
+//   GET /api/pivots/SPY
+app.get('/api/pivots/:ticker', async function(req, res) {
+  if (!floorPivots) return res.status(500).json({ ok: false, error: 'floorPivots not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/pivots/SPY' });
+    var out = await floorPivots.pivotsFor(ticker);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // SPREAD CHECK — Monday-morning ratio validator. Pulls broker quote into the

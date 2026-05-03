@@ -32,6 +32,10 @@ var ts = null;
 try { ts = require('./tradestation'); }
 catch (e) { console.log('[JS] tradestation not loaded:', e.message); }
 
+var floorPivots = null;
+try { floorPivots = require('./floorPivots'); }
+catch (e) { /* optional */ }
+
 var holdOvernightChecker = null;
 try { holdOvernightChecker = require('./holdOvernightChecker'); }
 catch (e) { /* optional */ }
@@ -514,17 +518,34 @@ function buildPlan(pattern, bars, lastClose) {
     return null;
   }
 
+  // ANTI-STOP-HUNT OFFSET (per Wallstreet Trapper insight): market deliberately
+  // runs through obvious S/R levels to take liquidity, then reverses. Offset
+  // the structural stop by 0.25 ATR to avoid getting hunted out.
+  var atr = floorPivots && floorPivots.computeATR ? floorPivots.computeATR(bars, 14) : null;
+  var stopHuntOffset = atr ? round2(atr * 0.25) : 0;
+  var stopOriginal = stop;
+  if (atr && stopHuntOffset > 0) {
+    stop = direction === 'long'
+      ? round2(stop - stopHuntOffset)
+      : round2(stop + stopHuntOffset);
+  }
+
   var risk = direction === 'long' ? round2(trigger - stop) : round2(stop - trigger);
   var reward1 = direction === 'long' ? round2(tp1 - trigger) : round2(trigger - tp1);
   var reward2 = direction === 'long' ? round2(tp2 - trigger) : round2(trigger - tp2);
 
   // === AB's CUSTOM 3-LAYER STOP FRAMEWORK ===
   // Replaces John's flat % stops with a tighter, capital-aware framework.
+  // Now with anti-stop-hunt offset applied to structural stop.
   var customStops = {
-    // Layer 1: Hard stop = the structural level (above) — same as standard `stop`
+    // Layer 1: Hard stop = structural level + 0.25 ATR offset (anti-stop-hunt)
     hardStop: stop,
-    hardStopReason: 'Structural invalidation: close ' + (direction === 'long' ? 'below' : 'above') + ' $' + structural + ' = pattern broken',
-    // Layer 2: Premium hard cap (-25% on the option) — separate from price-structure
+    structuralLevel: stopOriginal,
+    stopHuntOffset: stopHuntOffset,
+    atr: atr,
+    hardStopReason: 'Structural invalidation: close ' + (direction === 'long' ? 'below' : 'above') + ' $' + structural +
+                    (stopHuntOffset > 0 ? ' (offset by 0.25 ATR = $' + stopHuntOffset + ' to avoid stop hunts)' : ''),
+    // Layer 2: Premium hard cap (-25% on the option)
     premiumStopPct: 25,
     // Layer 3: Time stop — if not in profit after 2 candle closes, cut size in half
     timeStopBars: 2,
