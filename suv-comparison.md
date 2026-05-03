@@ -25,6 +25,9 @@
 | 8c | 2027 Kia Telluride EX FWD *(ICE)* | ~$45,000 | 22 / 28 / 24 *(est.)* | ~$1,650 | similar to 8a | **Yes (7-seat)** | FWD | 5,500 | **~$590–640/mo** ⚠️ tight | Rick Case Kia Sunrise |
 | 8d | 2027 Kia Telluride S **AWD** *(specific stock)* | ~$44,000 (confirm) | ~21 / 26 / 23 *(AWD est.)* | ~$1,720 | 22.3 / 46 / 87 max | **Yes (7-seat)** | AWD | 5,500 | **~$590–620/mo** ⚠️ tight | Hollywood Kia |
 | 8e | 2027 Kia Telluride S **FWD** *(specific stock)* | ~$42,000 (confirm) | 22 / 28 / 24 *(est.)* | ~$1,650 | 22.3 / 46 / 87 max | **Yes (7-seat)** | FWD | 5,500 | **~$560–590/mo** ✅ at budget | Hollywood Kia |
+| 9a | 2026 Toyota Highlander XLE *(gas 2.4T)* | $41,815 | ~22 / 29 / 24 | ~$1,650 | 16.0 / 48.4 / 84.3 max | **Yes (7-8 seat)** | FWD | 5,000 | **~$560–605/mo** ⚠️ tight | Toyota of N. Miami |
+| 9b | 2026 Toyota Highlander XLE Hybrid ⚡ | ~$43,515 (+$1,700 over gas) | **35 combined** | **~$1,131** | 16.0 / 48.4 / 84.3 max | **Yes (7-8 seat)** | FWD | 3,500 | **~$556–588/mo** ✅ best total cost so far | Toyota of N. Miami |
+| 9c | 2026 Toyota Highlander Limited Hybrid | $48,315 | ~35 combined | ~$1,131 | 16.0 / 48.4 / 84.3 max | **Yes (7-seat)** | FWD | 3,500 | **~$590–630/mo** ⚠️ tight | Toyota of N. Miami |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -422,6 +425,80 @@ The hybrid is **~$44/mo cheaper to own** once you bake gas in — and you're get
 - **Watch-outs:**
   - Confirm the dealer doesn't have any "market adjustment" or addendum sticker on this stock unit. Telluride redesign launch demand is high; some Florida Kia dealers add $1,500–$3,000 over MSRP on hot trims. If they do, walk to Rick Case.
   - First-year-of-redesign reliability gamble.
+
+---
+
+### 9) 2026 Toyota Highlander — Toyota of North Miami ✅/⚠️ **Hybrid is the play**
+
+- **Listing (model page, not single VIN):** https://www.toyotaofnorthmiami.com/new/Toyota/2026-Toyota-Highlander-974a1df7ac182d59c0f767e2abb26a3c.htm
+- **Dealer:** Toyota of North Miami
+- **Note:** Generic listing — drop a specific VIN if you want exact pricing on a stock unit.
+
+**Powertrains (2026):**
+- **Gas:** 2.4L Turbo I4, 265 hp / 310 lb-ft, 8-speed auto
+- **Hybrid:** 2.5L hybrid, 243 combined hp, eCVT, **35 mpg combined**
+
+**Trim ladder + MSRP (without destination ~$1,495):**
+| Trim | Powertrain | MSRP | EPA combined |
+|---|---|---|---|
+| XLE | Gas 2.4T | $41,815 | ~24 |
+| XLE Hybrid | HEV | ~$43,515 | **35** ⚡ |
+| XSE | Gas 2.4T | $44,965 | ~24 |
+| XSE Sport | Gas 2.4T | $48,635 | ~24 |
+| Limited | Gas 2.4T | $49,070 | ~24 |
+| Limited Hybrid | HEV | $48,315 *(possibly mistitled — Limited Hybrid usually higher; confirm)* | 35 |
+| Platinum | Gas 2.4T | $54,220 | ~24 |
+| Platinum Hybrid | HEV | $55,970 | 35 |
+
+*(Hybrid upcharge is generally ~$1,700 over equivalent gas trim.)*
+
+**Cargo:** 16.0 cu ft behind 3rd row · 48.4 cu ft behind 2nd · 84.3 cu ft max — **smallest 3rd-row cargo in the file (16.0 vs Atlas 20.6, Telluride 22.3, Palisade 19.1)**
+
+**Towing:**
+- Gas: 5,000 lbs
+- **Hybrid only 3,500 lbs** (significantly less)
+
+**Standard on every trim:**
+- Toyota Safety Sense 2.5+ (adaptive cruise, AEB w/ pedestrian, lane-keep, lane-trace assist, road sign assist, auto high beams)
+- Wireless Apple CarPlay & Android Auto
+- Wireless phone charger
+- LED headlights and taillights
+- Multiple USB-C ports
+- 8" infotainment standard, 12.3" available on Limited+
+
+**Lease numbers (Toyota Financial Services May 2026):**
+- MF ~0.00259 (≈ 6.2% APR) — *the highest MF in this comparison*
+- Residual: 63–65% gas, **67–73% hybrid** (hybrids retain value much better)
+- No significant lease cash from Toyota — they don't subvent Highlanders heavily because they sell themselves
+
+**Lease estimates (36/12k, Tier 1, FL, $0 DAS):**
+- **XLE Gas:** ~$560–605/mo tax-in ⚠️ tight
+- **XLE Hybrid:** ~$556–588/mo tax-in ✅ — *the best total-cost-of-ownership entry yet*
+- **Limited Hybrid:** ~$590–630/mo ⚠️
+- **Platinum Hybrid:** ~$680–720/mo ❌
+
+**Why the XLE Hybrid quietly wins the comparison so far:**
+
+| Vehicle | Lease tax-in | Annual fuel | Effective monthly (lease + fuel/12) |
+|---|---|---|---|
+| Atlas SE FWD (#5) | $342 | $1,800 | $492 |
+| Atlas SE w/Tech (#4) | $400 | $1,800 | $550 |
+| **Highlander XLE Hybrid (#9b)** | **$572** | **$1,131** | **$666** |
+| Palisade SEL Premium (#7) | $560 | $1,886 | $717 |
+| Telluride S FWD (#8a/8e) | $575 | $1,650 | $712 |
+| Telluride EX Hybrid (#8b) | $615 | $1,131 | $709 |
+| GC L Limited (#3) | $595 | $1,886 | $752 |
+| QX60 Pure (#6) | $685 | $1,650 | $823 |
+
+**Highlander Hybrid is the cheapest mid-tier 3-row by total monthly cost when you include gas**, beating the Palisade SEL Premium by ~$50/mo even though it has less luxury content. Trade-off: you give up ventilated seats, 360 cam, panoramic roof, and the 8th seat.
+
+**Watch-outs:**
+- Toyota's MF is ~25% more expensive than Hyundai/Kia's (.00259 vs .00194-.00224). Not negotiable — that's just where Toyota Financial sits.
+- Hybrid towing drops to 3,500 lbs (vs 5,000 gas). Doesn't matter unless you tow.
+- Smallest 3rd-row cargo in the file. With car seat in middle row + 3rd-row up + luggage = will be tight.
+- Toyota of North Miami sometimes adds dealer accessories ($1,000–$2,000 in protection packages, paint sealant, etc.) — refuse them.
+- Highlander reliability is excellent (one of the strongest in the segment). 10 yr / 150k mi hybrid battery warranty.
+- Toyota does **not** have a competitive lease conquest program currently — coming from Audi gets you nothing extra. Confirms why Hyundai/Kia/VW are typically better total deals for someone in your situation.
 
 ---
 
