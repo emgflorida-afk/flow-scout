@@ -914,17 +914,18 @@ app.get('/api/spread-check', function(req, res) {
     if (isCredit) {
       // Credit spread verdict — based on % of width captured + R:R
       var pctOfWidth = (cost / width) * 100;
+      var creditExitNote = ' EXIT RULE: close at 80% of max profit (industry standard, validated by Barchart NVDA bear call video). Cost drops to ~20% of credit collected = take it.';
       if (pctOfWidth >= 33) {
         verdict = '🟢 EXCELLENT'; color = 'green';
-        action = 'Strong premium capture (>=33% width). Fire 1-2ct.';
+        action = 'Strong premium capture (>=33% width). Fire 1-2ct.' + creditExitNote;
         sizeRecommendation = 1;
       } else if (pctOfWidth >= 25) {
         verdict = '🟢 GOOD'; color = 'green';
-        action = 'Decent premium (25-33% width). Fire 1ct trial.';
+        action = 'Decent premium (25-33% width). Fire 1ct trial.' + creditExitNote;
         sizeRecommendation = 1;
       } else if (pctOfWidth >= 15) {
         verdict = '🟡 OK';
-        action = 'Modest premium (15-25%). 1ct only — risk/reward thin.';
+        action = 'Modest premium (15-25%). 1ct only — risk/reward thin.' + creditExitNote;
         sizeRecommendation = 1;
       } else {
         verdict = '🔴 NO GO'; color = 'red';
