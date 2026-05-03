@@ -16,6 +16,7 @@
 | 2 | 2026 Jeep Grand Cherokee Limited *(VIN …279332)* | ~$46,500 | 19 / 26 / 22 *(V6)* — or 21 / 28 / 24 *(2.0T)* | $1,650–$1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
 | 2b | 2026 Jeep Grand Cherokee Limited *(alt stock VIN …594138)* | ~$46,500 | same as #2 | same as #2 | same as #2 | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
 | 3 | 2026 Jeep Grand Cherokee L Limited | ~$50,000 (confirm w/ dealer) | 19 / 26 / 21 | $1,886 | 17.2 / ~46 / 84.6 max | Yes (6–7 seat) | RWD (4x2) | 6,200 | **~$570–620/mo** ⚠️ tight to budget | Aventura CDJR |
+| 4 | 2026 VW Atlas 2.0T SE w/Technology FWD | ~$43,000 (confirm w/ dealer) | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 (FWD, no tow pkg) | **~$380–420/mo** ✅ | Palmetto 57 VW |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -121,6 +122,43 @@
   - Confirm exact MSRP from dealer — "Limited" pricing varies by package (Convenience, Luxury Tech, etc.).
   - Cargo behind 3rd row (17.2 cu ft) is *less* than 2-row Grand Cherokee (37.7) — odd quirk.
   - RWD-only (4x2).
+
+---
+
+### 4) 2026 VW Atlas 2.0T SE w/Technology FWD — ~$43,000 MSRP ✅
+
+- **Stock / VIN:** 1V2JN2CA9TC541524
+- **Dealer:** Palmetto 57 VW (different dealer than VW of South Miami — get quotes from both)
+- **Listing:** https://www.palmetto57vw.com/inventory/new-2026-volkswagen-atlas-2-0t-se-wtechnology-fwd-4d-sport-utility-1v2jn2ca9tc541524/
+- **Engine / drivetrain:** 2.0L Turbo I4, 269 hp / 273 lb-ft, 8-speed auto, **FWD only** (front-wheel drive)
+- **Fuel economy:** 20 city / 26 hwy / 22 combined → **~$1,800/yr** in fuel at 12k mi
+- **Seating:** 7 (3 rows: 2 + 3 + 2 bench, or 2 + 2 captains + 2 if optioned)
+- **Cargo:** 20.6 cu ft behind 3rd row · 55.5 cu ft behind 2nd · **96.6 cu ft max** — *significantly more cargo than GC L (84.6 max)*
+- **Towing:** ~2,000 lbs FWD without tow package; ~5,000 lbs available with 4Motion + tow package (this stock unit is FWD)
+- **Standard features (SE w/Technology adds vs base SE):**
+  - 20" wheels
+  - Full-width LED light bars front & rear
+  - Illuminated VW logos
+  - Trailer hitch (factory-installed)
+  - Power liftgate
+  - Remote start
+  - Front + rear parking sensors
+  - Additional USB-C ports (6 total)
+  - 12" infotainment with wireless CarPlay/AA
+  - Digital cockpit (configurable instrument cluster)
+  - Wireless phone charging
+  - Heated front seats + heated steering wheel
+  - Leatherette seating (vinyl)
+  - Adaptive cruise + Travel Assist (semi-autonomous lane centering)
+  - Blind-spot monitor + rear cross-traffic + lane-keep assist
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$380–420/mo tax-in
+  - VW Credit MF is the best in this list (~0.00213 ≈ 5.1% APR). Residual ~63% at 36/12k. SE w/Tech often has $1,500–$2,500 in trim-specific lease cash.
+  - **Best value play in the file so far.** ~$190/mo cheaper than the GC L Limited (#3) and you get more cargo and a 3rd row.
+- **Watch-outs:**
+  - **FWD only** — fine for FL daily driving, but no AWD if you ever drive in rain on slick roads or take it up north.
+  - 2.0T 4-cyl is peppy but turbo lag exists; not as smooth as the GC's V6.
+  - VW reliability has been mixed historically — confirm warranty (6 yr / 72k mi bumper-to-bumper is standard new-VW promotion in 2026).
+  - Trim is "SE w/Technology" — *not* the base "SE" advertised at $279/mo around town. Often has its own lease ad — ask Palmetto 57 specifically what their May 2026 SE w/Tech FWD lease offer is.
 
 ---
 
