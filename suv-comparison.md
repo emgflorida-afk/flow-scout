@@ -20,6 +20,10 @@
 | 5 | 2026 VW Atlas 2.0T SE FWD *(base SE)* | $39,310 | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 | **~$320–365/mo** ✅ **cheapest 3-row** | Palmetto 57 VW |
 | 6 | 2027 Infiniti QX60 Pure FWD | ~$50,000 (confirm) | ~24 combined *(VC-Turbo)* | ~$1,650 | 14.5 / 41.6 / 75.4 max | **Yes (7-seat)** | FWD | up to 6,000 | **~$650–720/mo** ❌ over budget | Taverna Infiniti N. Miami |
 | 7 | 2026 Hyundai Palisade SEL Premium FWD | $45,300 (+ $1,495 dest. ≈ $46,795) | 19 / 25 / 21 | $1,886 | 19.1 / 46.3 / 86.7 max | **Yes (7-seat, 2nd-row captains)** | FWD | 5,000 | **~$540–580/mo** ⚠️ tight, **best feature/price** | Hyundai of North Miami |
+| 8a | 2027 Kia Telluride S FWD *(ICE, redesign)* | ~$42,000 | 22 / 28 / 24 *(est.)* | ~$1,650 | 22.3 / 46 / 87 max *(est.)* | **Yes (7-seat)** | FWD | 5,500 | **~$560–590/mo** ✅ at budget | Rick Case Kia Sunrise |
+| 8b | 2027 Kia Telluride EX FWD Hybrid | $46,490 | **35 combined** ⚡ | **~$1,131** | similar to 8a | **Yes (7-seat)** | FWD | 5,500 | **~$590–640/mo** ⚠️ tight | Rick Case Kia Sunrise |
+| 8c | 2027 Kia Telluride EX FWD *(ICE)* | ~$45,000 | 22 / 28 / 24 *(est.)* | ~$1,650 | similar to 8a | **Yes (7-seat)** | FWD | 5,500 | **~$590–640/mo** ⚠️ tight | Rick Case Kia Sunrise |
+| 8d | 2027 Kia Telluride S **AWD** *(specific stock)* | ~$44,000 (confirm) | ~21 / 26 / 23 *(AWD est.)* | ~$1,720 | 22.3 / 46 / 87 max | **Yes (7-seat)** | AWD | 5,500 | **~$590–620/mo** ⚠️ tight | Hollywood Kia |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -288,6 +292,105 @@
   - Stock unit listed is FWD — fine for FL. AWD adds ~$2,000 MSRP and bumps payment ~$25/mo.
   - The 2026 Palisade was redesigned — first-year-of-redesign sometimes has rattles/recalls. Hyundai's 10-yr/100k powertrain warranty covers most concerns regardless.
   - V6 fuel economy (21 combined) is mediocre — same as GC L, less than Atlas (22) or QX60 (~24).
+
+---
+
+### 8) 2027 Kia Telluride (ICE + Hybrid) — Rick Case Kia Sunrise ✅/⚠️ — *NEW REDESIGN*
+
+- **Listing (model page, not single VIN):** https://www.rickcasekiasunrise.com/new/Kia/2027-Kia-Telluride-116364eeac18162db87f19ebf6bdba91.htm
+- **Dealer:** Rick Case Kia Sunrise
+- **Important context:** The 2027 Telluride is the **all-new second-generation redesign** with brand-new powertrains. The $900/mo Tellurides you saw earlier were the prior generation (2024–2026) — totally different vehicle and lease economics. This new one has aggressive launch-incentive lease support.
+
+**Powertrains (new for 2027):**
+- **ICE:** 2.5L Turbo I4, 277 hp / 311 lb-ft — replaces the old 3.8L V6
+- **Hybrid:** 2.5L Turbo + electric motor, 329 hp / 339 lb-ft, **35 mpg combined** on EX FWD
+
+**Trim ladder + MSRP:**
+| Trim | Powertrain | MSRP | EPA combined |
+|---|---|---|---|
+| LX | ICE 2.5T | $39,190 | ~24 mpg est. |
+| S | ICE 2.5T | ~$42,000 | ~24 mpg est. |
+| EX | ICE 2.5T | ~$45,000 | ~24 mpg est. |
+| **EX Hybrid** | **2.5T HEV** | **$46,490** | **35 mpg** ⚡ |
+| SX | ICE 2.5T | ~$50,500 | ~24 mpg |
+| SX-Prestige | ICE 2.5T | ~$56,790 | ~24 mpg |
+| X-Line SX Hybrid | HEV | ~$54,000 | 30/32/31 |
+| X-Line SX-Prestige Hybrid | HEV | $57,590 | 30/32/31 |
+
+**Cargo (similar to outgoing model, slightly larger):** ~21 cu ft behind 3rd · ~46 cu ft behind 2nd · ~87 cu ft max · 7-seat (2nd row captain's chairs available; 8-seat bench available LX/S)
+
+**Towing:** 5,500 lbs (ICE), 4,000 lbs (Hybrid)
+
+**Standard features (all trims have):**
+- **Dual 12.3" displays** (cluster + infotainment)
+- Wireless Apple CarPlay & Android Auto
+- 10-airbag system (front-center airbag standard — best-in-class)
+- Forward Collision Avoidance Assist
+- Lane Following Assist 2
+- Highway Driving Assist 2 (semi-autonomous lane centering)
+- Blind-spot monitoring
+- Adaptive cruise control
+- Rear Occupant Alert
+
+**National lease specials (running through May 4, 2026 — TOMORROW):**
+- 2027 Telluride S FWD: **$449/mo, 36 mo** (assume $3,999 DAS)
+- AWD: $469/mo, 36 mo
+- X-Line SX Prestige 36/12k: MF .00194, RV 68%, $2,950 lease cash
+
+**Lease estimates (36/12k, Tier 1, FL, $0 DAS, with conquest):**
+- **S FWD:** ~$560–590/mo tax-in ✅
+- **EX FWD ICE:** ~$590–640/mo ⚠️
+- **EX FWD Hybrid:** ~$590–640/mo ⚠️ — about the same as EX ICE because the hybrid has better residual that offsets the higher MSRP. **Plus you save ~$670/yr on gas.**
+- **SX or higher:** ~$650–750/mo ❌
+
+**Why the hybrid is the most interesting play here:**
+| | EX ICE | EX Hybrid |
+|---|---|---|
+| MSRP | ~$45,000 | $46,490 |
+| Combined MPG | ~24 | **35** |
+| Annual fuel @ 12k mi | $1,650 | **$1,131** |
+| **Fuel savings/yr** | — | **+$519** |
+| Est. lease tax-in | $590–640 | $590–640 |
+| **Effective monthly cost (lease + fuel ÷ 12)** | **$728** | **$684** |
+
+The hybrid is **~$44/mo cheaper to own** once you bake gas in — and you're getting a meaningfully more refined drivetrain (more HP, more torque, smoother power delivery).
+
+**Watch-outs:**
+- **Florida Kia dealers historically mark up Telluride** (sometimes $2k–$5k over MSRP, called "market adjustment" or "dealer fee"). Rick Case is large-volume but still does this. Confirm selling price before negotiating lease.
+- **First model year of redesigned Telluride** — possible early-build issues. But Kia's 10-yr/100k powertrain warranty covers it.
+- **Hybrid availability** is constrained — most dealers get few hybrid allocations. If they don't have one in stock, payment quotes go up because they have to dealer-trade.
+- **Generic listing page**, not a single VIN — when you find a specific stock unit, send it and I'll re-quote that VIN.
+
+---
+
+### 8d) 2027 Kia Telluride S AWD — Hollywood Kia (specific stock) ⚠️
+
+- **Stock / VIN:** 5XYPEES15VG023455
+- **Dealer:** Hollywood Kia
+- **Listing:** https://www.hollywoodkia.com/inventory/new-2027-kia-telluride-s-awd-5dr-sport-utility-5xypees15vg023455/
+- **Trim:** S AWD (one rung up from base LX, one rung below EX)
+- **MSRP:** ~$44,000 estimated (S FWD ~$42,000 + ~$2,000 AWD upgrade — confirm exact with dealer)
+- **Engine / drivetrain:** 2.5L Turbo I4, 277 hp / 311 lb-ft, 8-speed auto, AWD with locking center diff
+- **Fuel economy:** ~21 city / 26 hwy / 23 combined (AWD penalty ~1 mpg vs FWD)
+- **Annual fuel:** ~$1,720/yr at 12k mi @ $3.30/gal
+- **Cargo:** 22.3 cu ft behind 3rd row · ~46 / 87 cu ft max
+- **Towing:** 5,500 lbs
+- **Standard features (S adds vs LX):**
+  - Heated front seats
+  - Power driver's seat
+  - LED fog lights
+  - 18" alloy wheels
+  - Kia Connect telematics
+  - All standard LX content: dual 12.3" displays, wireless CarPlay/AA, Highway Driving Assist 2, Lane Following Assist, blind-spot, AEB, adaptive cruise
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$590–620/mo tax-in
+  - National advertised lease for S **AWD** is $469/mo, 36 mo (vs $449 FWD). Add $4,000 typical DAS rolled in + 7% FL tax → ~$615 effective tax-in.
+  - Push for the FWD version of the S to save ~$30/mo if AWD isn't a must-have for you (FL = no real AWD case).
+- **Why this trim matters:**
+  - You get the new 277-hp turbo + 8-speed + new dual 12.3" displays + best-in-class safety suite for ~$590/mo tax-in. That's competitive with the GC L Limited (#3) at $570–620 and beats the QX60 Pure (#6) by ~$80/mo with newer tech.
+- **Watch-outs:**
+  - Hollywood Kia is part of Greenway Auto Group — historically does **not** add as much "market adjustment" as some other FL Kia dealers, but always confirm OTD price has no $1k+ "dealer fee" beyond the standard ~$995 doc fee.
+  - This is **AWD** — at FL gas prices and zero snow, AWD costs you ~1 mpg ($90/yr more in fuel) and ~$25–30/mo more in lease. Skip unless you really want it.
+  - First-year-of-redesign — same caveat as #8 entries.
 
 ---
 
