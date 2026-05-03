@@ -24,6 +24,7 @@
 | 8b | 2027 Kia Telluride EX FWD Hybrid | $46,490 | **35 combined** ⚡ | **~$1,131** | similar to 8a | **Yes (7-seat)** | FWD | 5,500 | **~$590–640/mo** ⚠️ tight | Rick Case Kia Sunrise |
 | 8c | 2027 Kia Telluride EX FWD *(ICE)* | ~$45,000 | 22 / 28 / 24 *(est.)* | ~$1,650 | similar to 8a | **Yes (7-seat)** | FWD | 5,500 | **~$590–640/mo** ⚠️ tight | Rick Case Kia Sunrise |
 | 8d | 2027 Kia Telluride S **AWD** *(specific stock)* | ~$44,000 (confirm) | ~21 / 26 / 23 *(AWD est.)* | ~$1,720 | 22.3 / 46 / 87 max | **Yes (7-seat)** | AWD | 5,500 | **~$590–620/mo** ⚠️ tight | Hollywood Kia |
+| 8e | 2027 Kia Telluride S **FWD** *(specific stock)* | ~$42,000 (confirm) | 22 / 28 / 24 *(est.)* | ~$1,650 | 22.3 / 46 / 87 max | **Yes (7-seat)** | FWD | 5,500 | **~$560–590/mo** ✅ at budget | Hollywood Kia |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -391,6 +392,36 @@ The hybrid is **~$44/mo cheaper to own** once you bake gas in — and you're get
   - Hollywood Kia is part of Greenway Auto Group — historically does **not** add as much "market adjustment" as some other FL Kia dealers, but always confirm OTD price has no $1k+ "dealer fee" beyond the standard ~$995 doc fee.
   - This is **AWD** — at FL gas prices and zero snow, AWD costs you ~1 mpg ($90/yr more in fuel) and ~$25–30/mo more in lease. Skip unless you really want it.
   - First-year-of-redesign — same caveat as #8 entries.
+
+---
+
+### 8e) 2027 Kia Telluride S FWD — Hollywood Kia (specific stock) ✅ at budget
+
+- **Stock / VIN:** 5XYPE5S1XVG030773
+- **Dealer:** Hollywood Kia
+- **Listing:** https://www.hollywoodkia.com/inventory/new-2027-kia-telluride-s-fwd-sport-utility-5xype5s1xvg030773/
+- **Trim:** S FWD (one rung up from base LX)
+- **MSRP:** ~$42,000 (confirm exact with dealer; S FWD launch MSRP is typically $41,690)
+- **Engine / drivetrain:** 2.5L Turbo I4, 277 hp / 311 lb-ft, 8-speed auto, **FWD**
+- **Fuel economy:** 22 city / 28 hwy / 24 combined → **~$1,650/yr** at 12k mi @ $3.30/gal
+- **Cargo:** 22.3 cu ft behind 3rd row · ~46 / 87 cu ft max
+- **Towing:** 5,500 lbs
+- **Standard features (S adds vs LX):**
+  - Heated front seats
+  - 8-way power driver's seat
+  - LED fog lights
+  - 18" alloy wheels
+  - Kia Connect telematics
+  - Plus all LX content: dual 12.3" displays, wireless CarPlay/AA, Highway Driving Assist 2, Lane Following Assist 2, blind-spot, AEB w/ pedestrian/cyclist, adaptive cruise, 10-airbag system
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$560–590/mo tax-in
+  - Matches the national $449/mo headline (S FWD, 36 mo) + ~$4k DAS rolled into payment + 7% FL tax. Dealer-specific incentives may push lower; dealer markups push higher.
+- **Same-trim compare — Hollywood Kia vs Rick Case Kia (both #8a/8e):**
+  - Rick Case has bigger inventory and is typically more aggressive on price than Hollywood Kia. Get a quote from BOTH on this trim and let them compete. They're 12 miles apart on I-75, both ~25 miles from your zip.
+- **AWD vs FWD compare** (8d vs 8e at same dealer):
+  - AWD costs ~$2,000 more in MSRP, ~$25–30/mo more in lease, ~$70–90/yr more in fuel. In Miami: skip AWD, save the money.
+- **Watch-outs:**
+  - Confirm the dealer doesn't have any "market adjustment" or addendum sticker on this stock unit. Telluride redesign launch demand is high; some Florida Kia dealers add $1,500–$3,000 over MSRP on hot trims. If they do, walk to Rick Case.
+  - First-year-of-redesign reliability gamble.
 
 ---
 
