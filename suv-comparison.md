@@ -61,6 +61,76 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 
 ---
 
+## Features comparison
+
+**All vehicles include as standard:** wireless Apple CarPlay & Android Auto · adaptive cruise control · automatic emergency braking · lane-keep / lane departure warning · blind-spot monitoring · heated front seats · LED headlights · backup camera · keyless entry/push-button start
+
+**Symbols:** ✓ = standard · ○ = optional/package · — = not available · *trim* = standard at noted higher trim only
+
+### Interior & comfort
+
+| Vehicle | Sunroof | Seat material | Heated steering | Vent. front seats | Heated 2nd row | Vent. 2nd row | 2nd-row captains | Memory driver | HUD |
+|---|---|---|---|---|---|---|---|---|---|
+| 1. GC Laredo X | Single-pane ✓ | Leatherette | ✓ | — | — | — | — (bench) | — | — |
+| 2/2b. GC Limited | Single-pane ✓ (dual ○) | Leather | ✓ | ✓ | — | — | — (bench) | ✓ | — |
+| 3. GC L Limited | Single-pane ✓ | Leather | ✓ | ✓ | — | — | ○ (bench std) | ✓ | — |
+| 4. Atlas SE w/Tech | Panoramic ✓ | Leatherette | ✓ | — | — | — | — (bench) | — | — |
+| 5. Atlas SE base | — | Cloth/leatherette | — | — | — | — | — (bench) | — | — |
+| 6. QX60 Pure | Panoramic ✓ | Leatherette | — *(Luxe+)* | — *(Sensory+)* | — *(Luxe+)* | — *(Autograph)* | ✓ standard | ✓ | — *(Sensory+)* |
+| **7. Palisade SEL Premium** | **Panoramic ✓** | **Leather** | **✓** | **✓** | **✓** ⬅ | **✓** ⬅ rare | **✓ standard** | **✓** | — *(Limited)* |
+| 8a/d/e. Telluride S | ○ option | Cloth | ○ option | — *(EX+)* | — *(EX+)* | — | ○ option | — | — |
+| **8b. Telluride EX Hybrid** | **Panoramic ✓** | **SynTex (synth leather)** | **✓** | **✓** | **✓** | — | **✓ standard** | **✓** | — |
+| 8c. Telluride EX ICE | Panoramic ✓ | SynTex | ✓ | ✓ | ✓ | — | ✓ | ✓ | — |
+| 9a/b. Highlander XLE | Single-pane ✓ | SofTex (synth leather) | — *(Limited+)* | — *(Limited+)* | — *(Limited+)* | — | ○ option | — | — |
+| 9c. Highlander Limited Hybrid | Panoramic ✓ | Leather | ✓ | ✓ | ✓ | — | ✓ standard | ✓ | — *(Platinum)* |
+| 10. Audi Q5 Premium | Panoramic ✓ | Leather | ✓ | — *(Prestige)* | n/a (2-row) | n/a | n/a | ✓ | — *(Prestige)* |
+
+### Tech, convenience & safety
+
+| Vehicle | Power liftgate | Hands-free liftgate | 360° cam | Hands-free drive / lane-center | Phone-as-key | Wireless charging | Remote start | Premium audio | Tow hitch std |
+|---|---|---|---|---|---|---|---|---|---|
+| 1. GC Laredo X | ✓ | — *(Limited+)* | — *(Limited+)* | — *(Active Driving Assist on Limited+)* | — | ✓ | ✓ | — *(Alpine on Ltd+)* | — |
+| 2/2b. GC Limited | ✓ | ✓ | ✓ | ○ (Active Driving Assist option) | — | ✓ | ✓ | — *(Alpine std, McIntosh on Overland+)* | — |
+| 3. GC L Limited | ✓ | ✓ | ✓ | ○ Active Driving Assist | — | ✓ | ✓ | Alpine ✓ | — |
+| 4. Atlas SE w/Tech | ✓ | — *(SEL+)* | — *(SEL Premium+)* | ✓ Travel Assist (lane center) | — | ✓ | ✓ | — *(Harman Kardon on SEL+)* | **✓ factory** |
+| 5. Atlas SE base | — (manual) | — | — | ✓ Travel Assist | — | ✓ | — | — | — |
+| **6. QX60 Pure** | ✓ | — *(Sensory+)* | **✓ standard** | ✓ ProPilot Assist | — | ✓ | ✓ | — *(Klipsch on Sensory+)* | ○ option |
+| **7. Palisade SEL Premium** | ✓ | **✓ smart hands-free** | **✓ surround-view** | **✓ Highway Drive Assist 2** | **✓ Digital Key 2** | ✓ | ✓ | — *(Bose on Limited+)* | ○ option |
+| 8a/d/e. Telluride S | — *(EX+)* | — | — *(X-Line SX+)* | ✓ Highway Driving Assist 2 | — *(EX+)* | ✓ | ✓ | — *(Harman Kardon on SX-P)* | ○ option |
+| **8b. Telluride EX Hybrid** | **✓ smart power** | **✓** | — *(X-Line SX+)* | **✓ HDA 2** | **✓ Digital Key 2** | ✓ | ✓ | — *(Harman Kardon on SX-P)* | ○ option |
+| 8c. Telluride EX ICE | ✓ | ✓ | — | ✓ HDA 2 | ✓ | ✓ | ✓ | — | ○ |
+| 9a/b. Highlander XLE | ✓ | — *(Limited+)* | — *(Limited+)* | — (TSS 2.5+ has lane-trace, not full HDA) | — | ✓ | — *(XSE+)* | — *(JBL on Limited+)* | ○ |
+| 9c. Highlander Limited Hybrid | ✓ | ✓ kick sensor | ✓ | — (TSS only) | — | ✓ | ✓ | **JBL 11-spk ✓** | ○ |
+| 10. Audi Q5 Premium | ✓ | ✓ gesture | ✓ *(top-view, Premium Plus+)* | ○ Adaptive Cruise Assist *(Premium Plus+)* | ✓ Audi connect Plus | ✓ | ✓ via app | — *(B&O on Prestige)* | ○ |
+
+### Family-fit summary (the stuff that matters with a 20-month-old)
+
+| Vehicle | 3rd row practical for adults? | Cargo behind 3rd row | LATCH/ISOFIX 2nd row | 2nd row slide+tilt for 3rd row access | Easy car-seat install? |
+|---|---|---|---|---|---|
+| 1. GC Laredo X | n/a (no 3rd row) | n/a | ✓ on outboard 2nd | n/a | Easy (large rear door opening) |
+| 2/2b. GC Limited | n/a | n/a | ✓ outboard | n/a | Easy |
+| 3. GC L Limited | Kids only | 17.2 cu ft (small) | ✓ outboard 2nd, ○ 3rd | Manual slide-fold | OK; 2nd row 40/20/40 bench |
+| 4. Atlas SE w/Tech | **Adults OK** ⬅ best | **20.6 cu ft** | ✓ outboard 2nd | One-touch fold/slide | Easy; wide rear doors |
+| 5. Atlas SE base | Adults OK | 20.6 cu ft | ✓ outboard 2nd | One-touch fold/slide | Easy |
+| 6. QX60 Pure | Kids/short adults | 14.5 cu ft (smallest) | ✓ outboard 2nd | Walk-in motion captain's | OK with captains |
+| 7. Palisade SEL Premium | Adults OK | 19.1 cu ft | ✓ outboard 2nd | One-touch w/ memory return | Easy; standard captain's |
+| 8a/d/e. Telluride S | Kids only (bench narrower) | 22.3 cu ft (largest) | ✓ outboard 2nd | Manual slide/fold | OK |
+| 8b. Telluride EX Hybrid | **Adults OK** | 22.3 cu ft | ✓ outboard 2nd | One-touch + standard captain's | Easy; captains help |
+| 9a/b. Highlander XLE | Kids only | 16.0 cu ft | ✓ outboard 2nd | Slide/fold lever | Tight rear doors |
+| 9c. Highlander Limited Hybrid | Kids only | 16.0 cu ft | ✓ outboard 2nd | One-touch w/ captain's | OK with captains |
+| 10. Audi Q5 Premium | n/a (no 3rd row) | n/a | ✓ outboard 2nd | n/a | Easy |
+
+**Standout features by category** (what's genuinely unusual at the price):
+- **Ventilated 2nd-row captain's chairs:** ONLY the Palisade SEL Premium (#7) has this in the file — typically $70k+ luxury feature.
+- **Phone-as-key (Digital Key 2):** Palisade SEL Premium (#7), Telluride EX (#8b/c), Audi Q5 (#10).
+- **Hands-free / lane-centering driver assist as standard:** Atlas (Travel Assist), QX60 (ProPilot), Palisade (HDA 2), Telluride (HDA 2). Highlander gets *only* lane-trace, not full hands-free.
+- **Factory tow hitch standard:** Only the Atlas SE w/Tech (#4) — others are options.
+- **Surround-view 360° camera as standard at this price:** Palisade SEL Premium and QX60 Pure. Everyone else needs a higher trim.
+- **Panoramic roof as standard:** Atlas SE w/Tech, QX60 Pure, Palisade SEL Premium, Telluride EX, Highlander Limited Hybrid, Audi Q5. Skipped on: GC Laredo X (single-pane), Atlas SE base (none), Telluride S (optional), Highlander XLE (single-pane).
+- **Premium audio standard:** GC L Limited (Alpine), Highlander Limited Hybrid (JBL 11-speaker). Everyone else requires an upper trim.
+
+---
+
 ## Detail cards
 
 ### 1) 2026 Jeep Grand Cherokee Laredo X 4x2 — $40,910 MSRP ✅
