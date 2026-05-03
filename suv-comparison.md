@@ -144,6 +144,7 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 10 | 2026 Audi Q5 Premium *(stay-with-Audi play)* | $54,095 | 21 / 29 / 24 | ~$1,650 | 27.6 / 56.9 max | **No (5-seat, 2-row)** | quattro AWD | 4,400 | **~$620–680/mo** ❌ over budget *(even w/ pull-ahead)* | Audi Pembroke Pines |
 | 11a | 2026 Mazda CX-90 3.3 Turbo Select AWD | $38,800 | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$390–430/mo** ✅ (FL ad: $390+$3,999 DAS) | Mazda dealers |
 | **11b** | **2026 Mazda CX-90 3.3 Turbo Preferred AWD** | **$42,950** | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$420–460/mo** ✅ **best lease economics** | Mazda dealers |
+| 11b-stock | 2026 CX-90 Turbo Preferred AWD *(specific stock VIN …383820)* | $42,950 | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$420–460/mo** ✅ | Mazda of North Miami |
 | 11c | 2026 Mazda CX-90 PHEV Preferred | ~$50,000 | ~25 combined gas + **26-mi EV range** | ~$1,000 (combined) | similar to 11a | **Yes (7-seat)** | AWD std | 3,500 | **~$500–550/mo** ⚠️ but EV miles cut fuel cost | Mazda dealers |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
@@ -830,8 +831,13 @@ The Preferred at ~$420–460/mo gives you:
 - **Mazda doesn't currently run a competitive lease conquest** for non-Mazda owners. Confirm — you may not get extra Audi-lessee cash like you would from Hyundai/Kia/VW.
 - **AWD is mandatory** on every Turbo trim — no FWD option to save money like on Atlas.
 
+**Specific stock unit currently in inventory at Mazda of North Miami:**
+- VIN **JM3KKBHD5T1383820** · 2026 CX-90 Turbo Preferred AWD
+- Listing: https://www.mazdaofnorthmiami.com/inventory/new-2026-mazda-cx-90-preferred-awd-suv-jm3kkbhd5t1383820/
+- Quote this VIN by name when emailing Mazda of North Miami — also ask if they have other Preferred AWD stock so they can compete the prices on their own lot.
+
 **Florida Mazda dealers to email (same short note, swap in "2026 CX-90 Turbo Preferred AWD"):**
-1. **Mazda of North Miami** — closest to 33169
+1. **Mazda of North Miami** — closest to 33169 (has VIN JM3KKBHD5T1383820 in stock)
 2. **Brickell Mazda**
 3. **Ocean Mazda West Kendall**
 4. **Gunther Mazda** (Fort Lauderdale) — large volume, often most aggressive
