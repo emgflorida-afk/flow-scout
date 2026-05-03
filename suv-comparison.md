@@ -17,6 +17,7 @@
 | 2b | 2026 Jeep Grand Cherokee Limited *(alt stock VIN …594138)* | ~$46,500 | same as #2 | same as #2 | same as #2 | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
 | 3 | 2026 Jeep Grand Cherokee L Limited | ~$50,000 (confirm w/ dealer) | 19 / 26 / 21 | $1,886 | 17.2 / ~46 / 84.6 max | Yes (6–7 seat) | RWD (4x2) | 6,200 | **~$570–620/mo** ⚠️ tight to budget | Aventura CDJR |
 | 4 | 2026 VW Atlas 2.0T SE w/Technology FWD | ~$43,000 (confirm w/ dealer) | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 (FWD, no tow pkg) | **~$380–420/mo** ✅ | Palmetto 57 VW |
+| 5 | 2026 VW Atlas 2.0T SE FWD *(base SE)* | $39,310 | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 | **~$320–365/mo** ✅ **cheapest 3-row** | Palmetto 57 VW |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -159,6 +160,45 @@
   - 2.0T 4-cyl is peppy but turbo lag exists; not as smooth as the GC's V6.
   - VW reliability has been mixed historically — confirm warranty (6 yr / 72k mi bumper-to-bumper is standard new-VW promotion in 2026).
   - Trim is "SE w/Technology" — *not* the base "SE" advertised at $279/mo around town. Often has its own lease ad — ask Palmetto 57 specifically what their May 2026 SE w/Tech FWD lease offer is.
+
+---
+
+### 5) 2026 VW Atlas 2.0T SE FWD (base SE) — $39,310 MSRP ✅ cheapest 3-row
+
+- **Stock / VIN:** 1V2DN2CA5TC570869
+- **Dealer:** Palmetto 57 VW
+- **Listing:** https://www.palmetto57vw.com/inventory/new-2026-volkswagen-atlas-2-0t-se-fwd-4d-sport-utility-1v2dn2ca5tc570869/
+- **Engine / drivetrain:** 2.0L Turbo I4, 269 hp / 273 lb-ft, 8-speed auto, **FWD only**
+- **Fuel economy:** 20 city / 26 hwy / 22 combined → **~$1,800/yr** in fuel at 12k mi
+- **Seating:** 7 (3 rows)
+- **Cargo:** 20.6 / 55.5 / 96.6 max — same body as #4
+- **Towing:** ~2,000 lbs (FWD, no factory tow package on base SE)
+- **What you GET on base SE:**
+  - 12" infotainment with wireless CarPlay/AA
+  - Digital cockpit (configurable instrument cluster)
+  - Heated front seats
+  - Wireless phone charging
+  - Adaptive cruise + Travel Assist
+  - Blind-spot, rear cross-traffic, lane-keep, AEB
+  - 6 USB-C ports
+  - LED headlights + DRLs (not the full light bar)
+  - Cloth or leatherette seating (varies — confirm with dealer for this stock unit)
+- **What you LOSE vs SE w/Tech (#4):**
+  - 18" wheels (instead of 20")
+  - No full-width LED light bars front/rear
+  - No illuminated VW logos
+  - No factory trailer hitch
+  - No power liftgate (manual)
+  - No remote start
+  - No front parking sensors (rear still standard)
+  - No heated steering wheel (often)
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$320–365/mo tax-in
+  - Base SE typically gets the *most* aggressive lease cash from VW Credit because the manufacturer wants to clear entry trims. MF same as SE w/Tech (~0.00213 / 5.1% APR). Residual probably 1–2 points lower.
+  - **Cheapest 3-row in this comparison by a wide margin.** ~$60–100/mo less than SE w/Tech for the same family-trip capability.
+- **Watch-outs:**
+  - You're giving up some convenience tech (power liftgate matters when you're loading luggage with a kid in your arms — this might actually push you to #4 despite the savings).
+  - Same FWD-only caveat.
+  - Confirm if this stock unit is cloth or leatherette — cloth + a 20-month-old = stains.
 
 ---
 
