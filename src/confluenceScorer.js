@@ -1,7 +1,7 @@
 // =============================================================================
 // CONFLUENCE SCORER — unified multi-system scoring across all pattern tabs
 //
-// Stacks 11 independent confirmation layers into a single 0-13 score that
+// Stacks 12 independent confirmation layers into a single 0-15 score that
 // translates to A++/A+/A/B/C/F tier. The pattern detector said GO; this asks
 // "do enough OTHER systems agree to actually fire?"
 //
@@ -17,8 +17,11 @@
 //  9. FTFC (multi-TF alignment) [+2]
 // 10. Market researcher GREEN [+1]
 // 11. Chart Vision APPROVE [+2]
+// 12. Candle Range Theory (CRT) sweep+reversal [+2 high / +1 medium / +0 low]
 //
-// MAX 13 → A++. Real-world A++ rare; A-tier (7-8) is the typical fire threshold.
+// MAX 15 → A++. Real-world A++ rare; A-tier (8-9) is the typical fire threshold.
+// CRT exists to override vision VETO when the structure IS the sweep — vision
+// alone can't see "ATH = liquidity grab" without the structural detector.
 // =============================================================================
 
 var fs = require('fs');
@@ -38,6 +41,8 @@ var zigZagClusters = lazy('zigZagClusters');
 var johnPrecedent = lazy('johnPrecedent');
 var sniperFeed = lazy('sniperFeed');
 var lottoFeed = lazy('lottoFeed');
+var candleRangeTheory = lazy('candleRangeTheory');
+var johnPatternScanner = lazy('johnPatternScanner');
 
 function round2(v) { return Math.round(v * 100) / 100; }
 
@@ -238,6 +243,45 @@ async function scoreSetup(opts) {
   }
 
   // ─────────────────────────────────────────────────────
+  // Layer 12: Candle Range Theory (CRT) — sweep+reversal detection
+  //   Closes the "vision VETO at ATH" gap: when c2 sweeps liquidity above the
+  //   range and c3 closes back inside, that's a structural short signal that
+  //   pure trend-following vision misreads as "counter-trend at ATH".
+  //   Scoring: high → +2, medium → +1, low → +0 (still passes but no points).
+  // ─────────────────────────────────────────────────────
+  if (candleRangeTheory) {
+    try {
+      var crtRes = await candleRangeTheory.crtFor(ticker, { direction: direction, tf: 'Daily' });
+      if (crtRes && crtRes.ok && crtRes.crt && crtRes.crt.detected && crtRes.crt.direction === direction) {
+        var crtData = crtRes.crt;
+        var crtPoints = crtData.score === 'high' ? 2 : crtData.score === 'medium' ? 1 : 0;
+        if (crtPoints > 0) {
+          layers.candleRangeTheory = {
+            points: crtPoints,
+            passed: true,
+            detail: 'CRT-' + direction + ' (' + crtData.score + '): sweep $' +
+                    Number(crtData.sweepLevel).toFixed(2) + ' → reversal back inside range. Invalid > $' +
+                    Number(crtData.invalidationLevel).toFixed(2),
+          };
+          totalScore += crtPoints;
+        } else {
+          layers.candleRangeTheory = {
+            points: 0,
+            passed: 'partial',
+            detail: 'CRT structure present but score too weak (low) — informational',
+          };
+        }
+      } else {
+        layers.candleRangeTheory = { points: 0, passed: false, detail: 'No CRT pattern in last 3 daily bars' };
+      }
+    } catch (e) {
+      layers.candleRangeTheory = { points: 0, passed: 'unchecked', detail: e.message };
+    }
+  } else {
+    layers.candleRangeTheory = { points: 0, passed: 'unchecked', detail: 'CRT module unavailable' };
+  }
+
+  // ─────────────────────────────────────────────────────
   // Layer 11: Chart Vision (if pre-checked, use it; else mark as pending)
   // ─────────────────────────────────────────────────────
   if (preCheckedVision) {
@@ -293,13 +337,13 @@ async function scoreSetup(opts) {
     pattern: pattern,
     sourceConv: sourceConv,
     score: round2(totalScore),
-    maxPossible: 13,
+    maxPossible: 15,
     tier: tier,
     tierIcon: tierIcon,
     sizeRecommendation: sizeRecommendation,
     autoFireEligible: totalScore >= 11,  // A++ only for auto-fire
     layers: layers,
-    summary: tierIcon + ' ' + tier + ' (' + round2(totalScore) + '/13) — ' +
+    summary: tierIcon + ' ' + tier + ' (' + round2(totalScore) + '/15) — ' +
              (totalScore >= 11 ? 'auto-fire eligible if all conditions met'
               : totalScore >= 9 ? 'high-conviction manual fire'
               : totalScore >= 7 ? 'standard manual fire — 1ct trial'

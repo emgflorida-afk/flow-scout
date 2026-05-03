@@ -272,6 +272,12 @@ var zigZagClusters = null;
 try { zigZagClusters = require('./zigZagClusters'); console.log('[SERVER] zigZagClusters loaded OK'); }
 catch(e) { console.log('[SERVER] zigZagClusters not loaded:', e.message); }
 
+// CANDLE RANGE THEORY (CRT) — sweep+reversal detector. Layer 12 of confluence
+// stack. Closes the "vision VETOs ATH-shorts that ARE the sweep" gap.
+var candleRangeTheory = null;
+try { candleRangeTheory = require('./candleRangeTheory'); console.log('[SERVER] candleRangeTheory loaded OK'); }
+catch(e) { console.log('[SERVER] candleRangeTheory not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -902,6 +908,20 @@ app.get('/api/target-price/:ticker', async function(req, res) {
     var ticker = String(req.params.ticker || '').toUpperCase();
     if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/target-price/SPY' });
     var out = await targetPrice.targetFor(ticker);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CANDLE RANGE THEORY (CRT) — 3-bar sweep+reversal detector
+//   GET /api/crt/UNH?direction=short
+//   GET /api/crt/AMD                       (auto-detects direction)
+app.get('/api/crt/:ticker', async function(req, res) {
+  if (!candleRangeTheory) return res.status(500).json({ ok: false, error: 'candleRangeTheory not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/crt/UNH?direction=short' });
+    var direction = String(req.query.direction || '').toLowerCase();
+    var out = await candleRangeTheory.crtFor(ticker, { direction: direction || undefined, tf: 'Daily' });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
