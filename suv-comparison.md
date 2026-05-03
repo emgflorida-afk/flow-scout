@@ -148,6 +148,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 11c | 2026 Mazda CX-90 PHEV Preferred | ~$50,000 | ~25 combined gas + **26-mi EV range** | ~$1,000 (combined) | similar to 11a | **Yes (7-seat)** | AWD std | 3,500 | **~$500–550/mo** ⚠️ but EV miles cut fuel cost | Mazda dealers |
 | 12a | 2026 Acura MDX SH-AWD *(Base)* | $54,000 | 19 / 25 / 21 | ~$1,886 | 16.3 / 39.1 / 71.4 max | **Yes (7-seat)** | SH-AWD | 5,000 | **~$700–760/mo** ❌ over budget | Miami Acura |
 | 12b | 2026 Acura MDX Technology SH-AWD ⬅ best Acura value | $59,400 | 19 / 25 / 21 | ~$1,886 | 16.3 / 39.1 / 71.4 max | **Yes (7-seat)** | SH-AWD | 5,000 | **~$720–770/mo** ❌ over budget *(was $569/mo advertised w/ $5k DAS)* | Miami Acura |
+| 13a | 2026 Honda Pilot Sport FWD | $42,195 | 19 / 27 / 22 | $1,800 | 22.4 / 48.5 / 87 max | **Yes (8-seat bench)** | FWD | 5,000 | **~$510–540/mo** ✅ in budget | AutoNation Honda Hollywood |
+| 13b | 2026 Honda Pilot EX-L FWD ⬅ FL ad: $409 + $4,999 DAS | ~$45,500 | 19 / 27 / 22 | $1,800 | 22.4 / 48.5 / 87 max | **Yes (7-8 seat)** | FWD | 5,000 | **~$580–610/mo** ⚠️ tight | AutoNation Honda Hollywood |
+| 13c | 2026 Honda Pilot EX-L AWD | ~$47,400 | 19 / 25 / 21 | ~$1,886 | 22.4 / 48.5 / 87 max | **Yes (7-8 seat)** | AWD | 5,000 | **~$610–640/mo** ⚠️/❌ | AutoNation Honda Hollywood |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -918,6 +921,107 @@ The Preferred at ~$420–460/mo gives you:
 - **Reliability:** MDX is generally reliable (Honda mechanicals), but the new ZDX/MDX infotainment has had software glitches. Ask about any TSBs at the test drive.
 
 **Decision frame:** If you're already over budget anyway, the MDX is similar money to the QX60 (#6, ~$650–720/mo) but with a more refined drivetrain, better safety suite, more modern infotainment, and better materials than the QX60 Pure. **If luxury 3-row is the priority and budget flex is OK, MDX > QX60.** But for hitting $600 — neither works.
+
+---
+
+### 13) 2026 Honda Pilot — AutoNation Honda Hollywood ✅ **biggest 3rd-row cargo in the file**
+
+- **Listing:** https://www.autonationhondahollywood.com/new-inventory/index.htm?bodyStyle=SUV&gvOption=3rd%20Row%20Seat
+- **Dealer:** AutoNation Honda Hollywood (also Headquarter Honda, Braman Honda, Largo Honda, Rick Case Honda)
+- **Why this is interesting:** The 2026 Pilot has the **biggest cargo behind the 3rd row in the entire file (22.4 cu ft)** — even bigger than the Telluride (22.3) or Atlas (20.6). Plus power tailgate is now standard on **every** trim. Honda also runs a strong national lease offer for FL right now.
+
+**Powertrain:** 3.5L V6, 285 hp / 262 lb-ft, 10-speed auto. Same engine across every trim (no hybrid).
+
+**Trim ladder + MSRP:**
+| Trim | FWD | AWD |
+|---|---|---|
+| Sport | $42,195 | ~$44,200 |
+| EX-L | ~$45,500 | ~$47,400 |
+| TrailSport | — | ~$50,000 |
+| Touring | — | ~$50,000+ |
+| Elite | — | $53,495 |
+| Black Edition | — | ~$55,000 |
+
+**Fuel economy:**
+- 2WD: 19 / 27 / **22** combined → ~$1,800/yr
+- AWD (non-TrailSport): 19 / 25 / **21** combined → ~$1,886/yr
+- TrailSport: 18 / 23 / **20** combined → ~$1,980/yr
+
+**Cargo:** **22.4 cu ft behind 3rd row** · 48.5 cu ft behind 2nd · **87 cu ft max** — *biggest 3rd-row cargo in the file, comparable max to Atlas (96.6) and Telluride (87)*
+
+**Towing:** 5,000 lbs
+
+**Standard features (2026 Pilot Sport adds for this year):**
+- **Power tailgate now standard on every trim** ⬅ new for 2026
+- **12.3" infotainment + 10.2" digital cluster + wireless Apple CarPlay/Android Auto + Google Built-In** ⬅ standard on every trim
+- Honda Sensing safety suite: adaptive cruise w/ low-speed follow, AEB, lane-keep, blind-spot, road-sign recognition
+- Roof rails
+- Tri-zone climate
+- Cloth seats (Sport) or leatherette+ on EX-L+
+- Heated front seats from Sport up
+- 8-passenger bench standard (Sport, EX-L); captain's chairs standard from Touring up
+
+**EX-L adds vs Sport:**
+- Leather seats
+- Heated front + driver memory + 10-way power
+- Hands-free panoramic power tailgate
+- Panoramic glass roof
+- Wireless charging
+- Power lumbar
+- Heated steering wheel
+
+**Lease numbers (Honda Financial Services May 2026):**
+- MF ~0.00280 (≈ 6.7% APR — relatively high)
+- Residual: 64% Sport/EX-L, 63% Touring/Elite (decent)
+- **Florida advertised lease running through July 6, 2026:**
+  - **2026 Pilot 2WD EX-L: $409/mo, 36 mo, $4,999 DAS, 10k mi/yr**
+  - 2026 Pilot AWD EX-L: $409/mo, 36 mo, $5,999 DAS, 10k mi/yr
+  - $0.20/mi over 10k
+
+**Lease estimates (36/12k, Tier 1, FL, $0 DAS):**
+- **Sport FWD:** ~$510–540/mo tax-in ✅ — *in budget if you can live with cloth seats*
+- **EX-L FWD:** ~$580–610/mo tax-in ⚠️ — *advertised $409+$4,999 offer effectively lands here at $0 DAS, 12k mi*
+- **EX-L AWD:** ~$610–640/mo tax-in ⚠️/❌
+- **TrailSport / Touring / Elite:** $700+/mo ❌
+
+**The "$409/mo headline" reality check** (advertised FL offer, EX-L 2WD):
+| Step | $$ |
+|---|---|
+| Advertised payment | $409/mo |
+| + Roll $4,999 DAS into 36 months | +$128/mo |
+| + Bump 10k → 12k miles/year | +$15/mo |
+| **Pre-tax effective at $0 DAS, 12k** | **~$552/mo** |
+| + FL 7% tax | +$39/mo |
+| **Real tax-in monthly** | **~$591/mo** ⚠️ — *just under your $600 cap* |
+
+**Why Pilot is interesting in your shortlist:**
+
+| Vehicle | Lease tax-in | Cargo behind 3rd | Real monthly (lease + gas) |
+|---|---|---|---|
+| Atlas SE w/Tech (#4) | $400 | 20.6 | **$550** |
+| CX-90 Preferred AWD (#11b) | $440 | 14.9 | $583 |
+| **Pilot Sport FWD (#13a)** | **$525** | **22.4** ⬅ biggest | **$675** |
+| Pilot EX-L FWD (#13b) | $590 | 22.4 | $740 |
+| Highlander XLE Hybrid (#9b) | $572 | 16.0 | $666 |
+
+**Pilot's edge:** The 22.4 cu ft of cargo behind the 3rd row is genuinely best-in-class. With a stroller + 3rd row up + groceries, the Pilot is the only one that comfortably fits everything. The Atlas is close (20.6 cu ft) but loses by 2 cu ft.
+
+**Watch-outs:**
+- **Honda's MF (0.00280) is among the highest in the file** — more than 30% higher than VW (.00213) or Mazda (.00074). That hurts the lease economics despite a decent residual.
+- **Honda doesn't run a competitive lease conquest for current Audi lessees** as a standard program. Ask, but don't expect extra cash like Hyundai/Kia/VW.
+- **Sport trim is genuinely basic** — cloth seats, no panoramic roof, no leather, no heated steering wheel. With a wife who drives sometimes and a toddler, the EX-L is what you'd actually want — but EX-L is right at your budget cap.
+- **AWD adds ~$30/mo and hits MPG.** Skip in Miami.
+- **TrailSport is off-road focused** — terrible MPG (20), worst lease economics. Skip unless you're going overlanding.
+- **2026 Pilot is the 4th model year of the redesign** — reliability has been solid, no major recalls.
+
+**Florida Honda dealers to email:**
+1. **AutoNation Honda Hollywood** (you already linked)
+2. **Headquarter Honda** (Hialeah)
+3. **Braman Honda** (Miami)
+4. **Largo Honda** (Florida City)
+5. **Rick Case Honda** (Davie) — high volume
+
+**Same email template, swap in:** *"Looking at the **2026 Pilot EX-L FWD** for around **$580 tax-in, 36 months / 12k miles, $0 down**."*
 
 ---
 
