@@ -272,6 +272,12 @@ var zigZagClusters = null;
 try { zigZagClusters = require('./zigZagClusters'); console.log('[SERVER] zigZagClusters loaded OK'); }
 catch(e) { console.log('[SERVER] zigZagClusters not loaded:', e.message); }
 
+// CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
+// to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
+var chartVision = null;
+try { chartVision = require('./chartVision'); console.log('[SERVER] chartVision loaded OK'); }
+catch(e) { console.log('[SERVER] chartVision not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -889,6 +895,26 @@ app.get('/api/clusters/:ticker', async function(req, res) {
     var deviationPct = parseFloat(req.query.deviationPct) || 2.0;
     var tolerancePct = parseFloat(req.query.tolerancePct) || 1.0;
     var out = await zigZagClusters.clustersFor(ticker, { deviationPct: deviationPct, tolerancePct: tolerancePct });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CHART VISION REVIEW — Layer 2 of auto-fire. Send chart screenshot + trade
+// context to Claude vision API. Returns APPROVE / VETO / WAIT verdict.
+//   POST /api/chart-vision-review
+//   Body: { ticker, direction, tradeContext, imageBase64 }
+app.post('/api/chart-vision-review', async function(req, res) {
+  if (!chartVision) return res.status(500).json({ ok: false, error: 'chartVision not loaded' });
+  try {
+    var body = req.body || {};
+    if (!body.ticker) return res.status(400).json({ ok: false, error: 'ticker required in body' });
+    if (!body.imageBase64) return res.status(400).json({ ok: false, error: 'imageBase64 required (chart screenshot)' });
+    var out = await chartVision.reviewChart({
+      ticker: body.ticker,
+      direction: body.direction,
+      tradeContext: body.tradeContext,
+      imageBase64: body.imageBase64,
+    });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
