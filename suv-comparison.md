@@ -19,6 +19,7 @@
 | 4 | 2026 VW Atlas 2.0T SE w/Technology FWD | ~$43,000 (confirm w/ dealer) | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 (FWD, no tow pkg) | **~$380–420/mo** ✅ | Palmetto 57 VW |
 | 5 | 2026 VW Atlas 2.0T SE FWD *(base SE)* | $39,310 | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 | **~$320–365/mo** ✅ **cheapest 3-row** | Palmetto 57 VW |
 | 6 | 2027 Infiniti QX60 Pure FWD | ~$50,000 (confirm) | ~24 combined *(VC-Turbo)* | ~$1,650 | 14.5 / 41.6 / 75.4 max | **Yes (7-seat)** | FWD | up to 6,000 | **~$650–720/mo** ❌ over budget | Taverna Infiniti N. Miami |
+| 7 | 2026 Hyundai Palisade SEL Premium FWD | $45,300 (+ $1,495 dest. ≈ $46,795) | 19 / 25 / 21 | $1,886 | 19.1 / 46.3 / 86.7 max | **Yes (7-seat, 2nd-row captains)** | FWD | 5,000 | **~$540–580/mo** ⚠️ tight, **best feature/price** | Hyundai of North Miami |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -245,6 +246,48 @@
 | 2026 QX60 Luxe (nearby dealer) | $399/mo + tax | unspecified | **~$520–560/mo tax-in if low DAS, much higher if $5k+ down** — get full DAS before assuming |
 
 **The "$499/mo" headline trick:** advertised payment + $6,220 down + tax effectively works out to ~$719/mo at $0 DAS. Always ask: *"What's the OUT-THE-DOOR tax-in monthly at $0 due at signing?"* — that's the only number that lets you compare apples-to-apples.
+
+---
+
+### 7) 2026 Hyundai Palisade SEL Premium FWD — $46,795 MSRP ⚠️ best feature-per-dollar in the file
+
+- **Stock / VIN:** KM8RN5S2XTU120501
+- **Dealer:** Hyundai of North Miami
+- **Listing:** https://www.hyundaiofnorthmiami.com/inventory/new-2026-hyundai-palisade-sel-premium-fwd-fwd-sport-utility-km8rn5s2xtu120501/
+- **Engine / drivetrain:** 3.5L GDI V6, 287 hp / 260 lb-ft, 8-speed auto, FWD
+- **Fuel economy:** 19 city / 25 hwy / 21 combined → **~$1,886/yr** at 12k mi
+- **Seating:** 7 (3 rows; **2nd-row captain's chairs standard at SEL Premium**)
+- **Cargo:** 19.1 cu ft behind 3rd row · 46.3 cu ft behind 2nd · **86.7 cu ft max** — *more usable than QX60, similar to GC L*
+- **Towing:** 5,000 lbs
+- **Standard features (SEL Premium — this is where it crushes the field):**
+  - **Dual 12.3" curved displays** (digital cluster + infotainment)
+  - **Wireless Apple CarPlay & Android Auto**
+  - **Hyundai Digital Key 2** (phone or smartwatch as key)
+  - **Surround-view 360° camera**
+  - **Blind-spot view monitor** (live camera feed in cluster when you signal)
+  - **Side parking sensors** + reverse AEB + rear cross-traffic
+  - **Heated AND ventilated front seats**
+  - **Heated AND ventilated 2nd-row captain's chairs** ⬅ *unusual at this price*
+  - Heated steering wheel
+  - 4-way lumbar (driver) + memory driver's seat
+  - Auto-dim mirrors (interior + exterior)
+  - 64-color ambient lighting
+  - Universal garage door opener (Homelink)
+  - Adaptive cruise + Highway Drive Assist (semi-autonomous lane centering)
+  - Lane-keep assist + lane-following + AEB w/ pedestrian/cyclist detection
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with conquest):** ~$540–580/mo tax-in
+  - **Hyundai Motor Finance numbers (May 2026):** MF ~0.00224 (≈ 5.4% APR), Residual 66–67% on 36/12k. Best residual in the comparison.
+  - Hyundai is offering ~$2,000–$3,500 in lease cash + Hyundai Competitive Owner Coupon (~$500–$1,000) — you qualify as Audi lessee. Stack everything.
+  - National headline showing $489/mo for 2026 Palisade (CarsDirect) is for base SEL not SEL Premium; SEL Premium will run ~$60–80/mo more.
+- **What it beats vs other rows:**
+  - Beats Atlas SE w/Tech (#4) on luxury content (ventilated seats, 360 cam, digital key, dual 12.3" displays) — but costs ~$120–160/mo more.
+  - Beats QX60 Pure (#6) on price by ~$110–170/mo, has more cargo (86.7 vs 75.4 max), and gets more standard luxury features even though it's not a "luxury brand." If badge prestige is the only reason you'd pick QX60, this is the smarter buy.
+  - Beats GC L Limited (#3) on residual (66% vs ~58–61%) and money factor (5.4% vs 8.3% APR) — that's why it lands $30–60/mo cheaper despite similar MSRP.
+- **Watch-outs:**
+  - "SEL Premium" sits one rung below Limited and Calligraphy. If you want the giant panoramic sunroof, head-up display, or Nappa leather, those are Limited+ and add ~$80–100/mo to the lease.
+  - Stock unit listed is FWD — fine for FL. AWD adds ~$2,000 MSRP and bumps payment ~$25/mo.
+  - The 2026 Palisade was redesigned — first-year-of-redesign sometimes has rattles/recalls. Hyundai's 10-yr/100k powertrain warranty covers most concerns regardless.
+  - V6 fuel economy (21 combined) is mediocre — same as GC L, less than Atlas (22) or QX60 (~24).
 
 ---
 
