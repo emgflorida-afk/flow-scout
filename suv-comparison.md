@@ -236,6 +236,16 @@
   - Coming from an SQ5, the QX60 Pure interior will feel like a step down — softer ride, but less refined materials and dynamics.
 - **Why it's in the file:** If you'd rather pay more and stay in a luxury-badged 3-row, this is the cheapest path. But objectively, the VW Atlas SE w/Tech (#4) gives you more cargo, similar tech, and ~$250–300/mo less.
 
+**Dealer's actual advertised offer (from Taverna's specials page, https://www.tavernainfinitinorthmiami.com/new-vehicles/new-vehicle-specials/):**
+
+| Offer | Pre-tax monthly | DAS | Real $0-DAS, tax-in monthly |
+|---|---|---|---|
+| 2025 QX60 Pure FWD, 36mo | $499/mo | $6,719 ($6,220 down + $499 first) | **~$719/mo tax-in** ❌ |
+| 2026 QX60 Sport / Autograph | — | — | $6,000 retail bonus cash (purchase, not lease), ends 05/04/2026 |
+| 2026 QX60 Luxe (nearby dealer) | $399/mo + tax | unspecified | **~$520–560/mo tax-in if low DAS, much higher if $5k+ down** — get full DAS before assuming |
+
+**The "$499/mo" headline trick:** advertised payment + $6,220 down + tax effectively works out to ~$719/mo at $0 DAS. Always ask: *"What's the OUT-THE-DOOR tax-in monthly at $0 due at signing?"* — that's the only number that lets you compare apples-to-apples.
+
 ---
 
 ## Notes & methodology
