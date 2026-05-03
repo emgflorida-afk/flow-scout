@@ -785,6 +785,9 @@ const FILTERS_JS = [
   { id: "pullback",   label: "🎯 Pullback Retest",   test: r => r.pattern === "pullback-retest" },
   { id: "prep31",     label: "⏳ 3-1 Prep",          test: r => r.pattern === "3-1-prep" },
   { id: "watch",      label: "🎰 Actionable Watch",  test: r => r.pattern === "watch-actionable" },
+  { id: "conf_apppl", label: "🟢🟢🟢 A++ only",       test: r => r.confluence && r.confluence.tier === "A++" },
+  { id: "conf_aplus", label: "🟢🟢 A+ or better",     test: r => r.confluence && (r.confluence.tier === "A++" || r.confluence.tier === "A+") },
+  { id: "conf_a",     label: "🟢 A or better",        test: r => r.confluence && ["A++","A+","A"].indexOf(r.confluence.tier) >= 0 },
   { id: "tf6hr",      label: "⏱️ 6HR (best WR)",     test: r => r.tf === "6HR" },
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
@@ -3202,6 +3205,25 @@ function renderGridJS() {
           <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
+
+          ${r.confluence ? `
+          <div style="margin-top:10px; padding:10px 12px; background:rgba(70,180,255,0.10); border:2px solid ${r.confluence.tier === 'A++' ? '#16e39d' : r.confluence.tier === 'A+' ? '#46b4ff' : r.confluence.tier === 'A' ? '#fbbf24' : r.confluence.tier === 'B' ? '#999' : '#ff6b6b'}; border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:${r.confluence.tier === 'A++' ? '#16e39d' : r.confluence.tier === 'A+' ? '#46b4ff' : r.confluence.tier === 'A' ? '#fbbf24' : r.confluence.tier === 'B' ? '#999' : '#ff6b6b'}; font-weight:700; font-size:13px;">
+                ${r.confluence.tierIcon || ''} CONFLUENCE: ${r.confluence.tier} (${r.confluence.score}/13)
+              </span>
+              <span style="color:var(--txt-3); font-size:10px;">size rec: ${r.confluence.sizeRecommendation}ct</span>
+            </div>
+            <div style="color:var(--txt-2); font-style:italic; font-size:10px; margin-bottom:6px;">${r.confluence.summary || ''}</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-size:10px; color:var(--txt-3);">
+              ${Object.entries(r.confluence.layers || {}).map(([key, val]) => {
+                const ico = val.passed === true ? '✅' : val.passed === 'partial' ? '🟡' : val.passed === 'pending' ? '⏳' : val.passed === 'unchecked' ? '❔' : '❌';
+                const pts = val.points > 0 ? `+${val.points}` : val.points;
+                return `<div>${ico} ${key} <span style="color:var(--txt);">${pts}</span></div>`;
+              }).join('')}
+            </div>
+          </div>
+          ` : ''}
 
           ${r.actionableForecast ? `
           <div style="margin-top:10px; padding:8px 10px; background:rgba(180,70,255,0.08); border:1px solid rgba(180,70,255,0.30); border-radius:8px; font-size:10px; color:var(--txt-2);">

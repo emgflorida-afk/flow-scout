@@ -36,6 +36,10 @@ var floorPivots = null;
 try { floorPivots = require('./floorPivots'); }
 catch (e) { /* optional */ }
 
+var confluenceScorer = null;
+try { confluenceScorer = require('./confluenceScorer'); }
+catch (e) { /* optional */ }
+
 var holdOvernightChecker = null;
 try { holdOvernightChecker = require('./holdOvernightChecker'); }
 catch (e) { /* optional */ }
@@ -853,6 +857,24 @@ async function scanTicker(ticker, token, opts) {
     var volumeContext = computeVolumeContext(bars);
     var actionableForecast = buildActionableForecast(bars);
 
+    // Compute confluence score across all 11 layers (best-effort, non-blocking)
+    var confluence = null;
+    if (confluenceScorer && plan && plan.primary) {
+      try {
+        confluence = await confluenceScorer.scoreSetup({
+          ticker: ticker,
+          direction: pattern.direction,
+          trigger: plan.primary.trigger,
+          stop: plan.primary.stop,
+          tp1: plan.primary.tp1,
+          tp2: plan.primary.tp2,
+          pattern: pattern.name,
+          sourceConv: conviction,
+          sourceTab: 'JS',
+        });
+      } catch (e) { /* scorer optional, don't block scan */ }
+    }
+
     return {
       ticker: ticker,
       tf: tf,
@@ -865,6 +887,7 @@ async function scanTicker(ticker, token, opts) {
       holdRating: holdRating || null,
       volumeContext: volumeContext,
       actionableForecast: actionableForecast,
+      confluence: confluence,
       bars: bars.length,
       confirmRequired: 2,
     };

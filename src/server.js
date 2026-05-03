@@ -278,6 +278,13 @@ var chartVision = null;
 try { chartVision = require('./chartVision'); console.log('[SERVER] chartVision loaded OK'); }
 catch(e) { console.log('[SERVER] chartVision not loaded:', e.message); }
 
+// CONFLUENCE SCORER — unified 11-layer scoring across all pattern tabs.
+// Stacks pattern detector + WP + John + Sniper + pivots + target + clusters +
+// vol + FTFC + market researcher + chart vision into a 0-13 score and tier.
+var confluenceScorer = null;
+try { confluenceScorer = require('./confluenceScorer'); console.log('[SERVER] confluenceScorer loaded OK'); }
+catch(e) { console.log('[SERVER] confluenceScorer not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -895,6 +902,30 @@ app.get('/api/clusters/:ticker', async function(req, res) {
     var deviationPct = parseFloat(req.query.deviationPct) || 2.0;
     var tolerancePct = parseFloat(req.query.tolerancePct) || 1.0;
     var out = await zigZagClusters.clustersFor(ticker, { deviationPct: deviationPct, tolerancePct: tolerancePct });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CONFLUENCE SCORE — unified 11-layer scoring for any setup
+//   GET /api/confluence-score/:ticker?direction=long|short&trigger=X&stop=Y&tp1=Z&tp2=W&pattern=NAME&sourceTab=JS&sourceConv=N
+app.get('/api/confluence-score/:ticker', async function(req, res) {
+  if (!confluenceScorer) return res.status(500).json({ ok: false, error: 'confluenceScorer not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    var out = await confluenceScorer.scoreSetup({
+      ticker: ticker,
+      direction: req.query.direction || 'long',
+      trigger: req.query.trigger,
+      stop: req.query.stop,
+      tp1: req.query.tp1,
+      tp2: req.query.tp2,
+      pattern: req.query.pattern || null,
+      sourceConv: req.query.sourceConv ? parseFloat(req.query.sourceConv) : 0,
+      sourceTab: req.query.sourceTab || 'unknown',
+      visionVerdict: req.query.visionVerdict || null,
+      researchVerdict: req.query.researchVerdict || null,
+    });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
