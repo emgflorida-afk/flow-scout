@@ -18,6 +18,7 @@
 | 3 | 2026 Jeep Grand Cherokee L Limited | ~$50,000 (confirm w/ dealer) | 19 / 26 / 21 | $1,886 | 17.2 / ~46 / 84.6 max | Yes (6–7 seat) | RWD (4x2) | 6,200 | **~$570–620/mo** ⚠️ tight to budget | Aventura CDJR |
 | 4 | 2026 VW Atlas 2.0T SE w/Technology FWD | ~$43,000 (confirm w/ dealer) | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 (FWD, no tow pkg) | **~$380–420/mo** ✅ | Palmetto 57 VW |
 | 5 | 2026 VW Atlas 2.0T SE FWD *(base SE)* | $39,310 | 20 / 26 / 22 | $1,800 | 20.6 / 55.5 / 96.6 max | **Yes (7-seat)** | FWD | ~2,000 | **~$320–365/mo** ✅ **cheapest 3-row** | Palmetto 57 VW |
+| 6 | 2027 Infiniti QX60 Pure FWD | ~$50,000 (confirm) | ~24 combined *(VC-Turbo)* | ~$1,650 | 14.5 / 41.6 / 75.4 max | **Yes (7-seat)** | FWD | up to 6,000 | **~$650–720/mo** ❌ over budget | Taverna Infiniti N. Miami |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -199,6 +200,41 @@
   - You're giving up some convenience tech (power liftgate matters when you're loading luggage with a kid in your arms — this might actually push you to #4 despite the savings).
   - Same FWD-only caveat.
   - Confirm if this stock unit is cloth or leatherette — cloth + a 20-month-old = stains.
+
+---
+
+### 6) 2027 Infiniti QX60 Pure FWD — ~$50,000 MSRP ❌ OVER BUDGET (luxury option)
+
+- **Stock / VIN:** 5N1AL1E58VC330640
+- **Dealer:** Taverna Infiniti of North Miami
+- **Listing:** https://www.tavernainfinitinorthmiami.com/inventory/new-2027-infiniti-qx60-pure-fwd-fwd-crossover-5n1al1e58vc330640/
+- **Engine / drivetrain:** Per Infiniti USA, **2027 QX60 uses the new VC-Turbo 2.0L 4-cylinder**, 268 hp / 286 lb-ft, 9-speed auto, FWD. *(2022–2026 QX60 used a 3.5L V6, 295 hp — confirm with dealer which engine this stock unit has, since powertrain swap is new for 2027.)*
+- **Fuel economy:** ~24 combined (FWD with VC-Turbo) → **~$1,650/yr** at 12k mi @ $3.30/gal — **best fuel economy in the file** if the VC-Turbo info is correct
+- **Seating:** 7 (3 rows, 2nd row captain's chairs typically standard)
+- **Cargo:** 14.5 cu ft behind 3rd row · 41.6 cu ft behind 2nd · 75.4 cu ft max — *less than VW Atlas (96.6) and similar to GC L*
+- **Towing:** Up to 6,000 lbs (best tow rating in this file alongside the Jeeps)
+- **Standard features (Pure trim):**
+  - 12.3" infotainment + 12.3" digital cluster
+  - Wireless Apple CarPlay & Android Auto
+  - Leatherette seating
+  - Heated front seats
+  - Adaptive cruise control with full-speed range
+  - Blind-spot warning + rear cross-traffic alert
+  - Lane departure warning + lane-keep assist
+  - Automatic emergency braking with pedestrian detection
+  - Power liftgate
+  - Tri-zone climate
+  - Around-View Monitor (360-degree camera) — *available, not always standard on Pure; confirm*
+  - Klipsch audio — *available on higher trims only, Pure typically gets standard 6-speaker*
+- **Lease estimate (36/12k, Tier 1, FL, $0 DAS, with Audi conquest):** ~$650–720/mo tax-in
+  - **OVER your $600 budget by $50–120/mo.** Money factor is good (~0.00202 / 4.85% APR). Residual is mediocre (~59–60%). Infiniti runs competitive lease cash for current non-Infiniti lessees ($1,000–$2,000 typical) — you qualify as Audi lessee — but it's not enough to bridge the gap.
+  - Per public data, U.S. News' lease calc shows $714/mo at MSRP and standard Pure incentives. Aggressive negotiation + ~10% off MSRP could bring it down to ~$640.
+- **Watch-outs:**
+  - **2027 powertrain change is a real risk.** Brand-new VC-Turbo in QX60 = unknown reliability. Your current SQ5 has a refined drivetrain — stepping into a first-year engine swap is a downgrade in confidence.
+  - Cargo behind 3rd row (14.5 cu ft) is the *smallest* in this comparison — luggage + stroller may not fit with all 3 rows up.
+  - Pure is the absolute base trim — many "Infiniti luxury" features (heated steering, panoramic roof, Klipsch audio, leather seating, motion-activated liftgate) require Luxe trim or above (~$54,000+).
+  - Coming from an SQ5, the QX60 Pure interior will feel like a step down — softer ride, but less refined materials and dynamics.
+- **Why it's in the file:** If you'd rather pay more and stay in a luxury-badged 3-row, this is the cheapest path. But objectively, the VW Atlas SE w/Tech (#4) gives you more cargo, similar tech, and ~$250–300/mo less.
 
 ---
 
