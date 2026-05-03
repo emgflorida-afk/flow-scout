@@ -766,6 +766,9 @@ const FILTERS_WP = [
   { id: "short",     label: "Short bias",     test: r => r.direction === "short" },
   { id: "ftfc",      label: "Daily aligned",  test: r => r.dailyAligned === true },
   { id: "coilstack", label: "Coil + WP",      test: r => r.coilAligned === true },
+  { id: "conf_apppl", label: "🟢🟢🟢 A++ only", test: r => r.confluence && r.confluence.tier === "A++" },
+  { id: "conf_aplus", label: "🟢🟢 A+ or better", test: r => r.confluence && (r.confluence.tier === "A++" || r.confluence.tier === "A+") },
+  { id: "conf_a",    label: "🟢 A or better",  test: r => r.confluence && ["A++","A+","A"].indexOf(r.confluence.tier) >= 0 },
   { id: "safe",      label: "🟢 SAFE hold",   test: r => r.holdRating === "SAFE" },
 ];
 
@@ -803,6 +806,9 @@ const FILTERS_COIL = [
   { id: "doubleIn",  label: "Double Inside",  test: r => r.pattern === "double-inside" || r.pattern === "3-1-1" },
   { id: "long",      label: "Long bias",      test: r => r.direction === "long" },
   { id: "short",     label: "Short bias",     test: r => r.direction === "short" },
+  { id: "conf_apppl", label: "🟢🟢🟢 A++ only", test: r => r.confluence && r.confluence.tier === "A++" },
+  { id: "conf_aplus", label: "🟢🟢 A+ or better", test: r => r.confluence && (r.confluence.tier === "A++" || r.confluence.tier === "A+") },
+  { id: "conf_a",    label: "🟢 A or better",  test: r => r.confluence && ["A++","A+","A"].indexOf(r.confluence.tier) >= 0 },
   { id: "safe",      label: "🟢 SAFE hold",   test: r => r.holdRating === "SAFE" },
 ];
 

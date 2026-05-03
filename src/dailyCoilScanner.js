@@ -50,6 +50,10 @@ try { sniperFeed = require('./sniperFeed'); } catch (e) {}
 var johnPatternScannerLib = null;
 try { johnPatternScannerLib = require('./johnPatternScanner'); } catch (e) {}
 
+// Confluence scoring — unified 11-layer scoring across pattern tabs
+var confluenceScorer = null;
+try { confluenceScorer = require('./confluenceScorer'); } catch (e) {}
+
 var holdOvernightChecker = null;
 try { holdOvernightChecker = require('./holdOvernightChecker'); } catch (e) {}
 
@@ -450,6 +454,24 @@ async function scanTicker(ticker, token, opts) {
     var conviction = adjustConviction(pattern.conviction, ticker, bars, holdRating, tf);
     var volumeContext = computeVolumeContext(bars);
 
+    // Confluence score (best-effort, non-blocking)
+    var confluence = null;
+    if (confluenceScorer && plan && plan.primary) {
+      try {
+        confluence = await confluenceScorer.scoreSetup({
+          ticker: ticker,
+          direction: pattern.direction,
+          trigger: plan.primary.trigger,
+          stop: plan.primary.stop,
+          tp1: plan.primary.tp1,
+          tp2: plan.primary.tp2,
+          pattern: pattern.name,
+          sourceConv: conviction,
+          sourceTab: 'COIL',
+        });
+      } catch (e) { /* scorer optional */ }
+    }
+
     return {
       ticker: ticker,
       tf: tf,
@@ -461,6 +483,7 @@ async function scanTicker(ticker, token, opts) {
       plan: plan,
       holdRating: holdRating || null,
       volumeContext: volumeContext,
+      confluence: confluence,
       bars: bars.length,
     };
   } catch (e) {

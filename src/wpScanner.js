@@ -429,6 +429,25 @@ async function scanTicker(ticker, token, opts) {
     var rr1 = risk > 0 ? round2(Math.abs(tp1 - entry) / risk) : null;
     var rr2 = risk > 0 ? round2(Math.abs(tp2 - entry) / risk) : null;
 
+    // Confluence score (best-effort, lazy-required to avoid circular deps)
+    var confluence = null;
+    try {
+      var confluenceScorer = require('./confluenceScorer');
+      if (confluenceScorer && entry && stop) {
+        confluence = await confluenceScorer.scoreSetup({
+          ticker: ticker,
+          direction: sig.direction,
+          trigger: round2(entry),
+          stop: round2(stop),
+          tp1: round2(tp1),
+          tp2: round2(tp2),
+          pattern: sig.signal,
+          sourceConv: conviction,
+          sourceTab: 'WP',
+        });
+      }
+    } catch (e) { /* optional */ }
+
     return {
       ticker: ticker,
       signal: sig.signal,
@@ -450,6 +469,7 @@ async function scanTicker(ticker, token, opts) {
         rr1: round2(rr1),
         rr2: round2(rr2),
       },
+      confluence: confluence,
       dailyAligned: dailyAligned,
       counterTrendDaily: counterTrendDaily,
       coilAligned: coilAligned,
