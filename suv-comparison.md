@@ -93,16 +93,17 @@ Both dealers used the **same five tactics** to inflate the lease:
 
 ---
 
-## TL;DR — recommended shortlist (test-drive these 4)
+## TL;DR — recommended shortlist (test-drive these 5)
 
 Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 
 | Rank | Vehicle | Lease | + Gas/mo | **Real monthly** | Why |
 |---|---|---|---|---|---|
 | 🥇 | **VW Atlas SE w/Tech FWD** (#4) | $400 | $150 | **$550** | 3-row · 96.6 cu ft cargo (biggest in file) · power liftgate · 22 mpg · best-MF in this list |
-| 🥈 | **Toyota Highlander XLE Hybrid** (#9b) | $572 | $94 | **$666** | Bulletproof reliability · 35 mpg · Toyota residual tier · BUT smallest 3rd-row cargo (16 cu ft) |
-| 🥉 | **Kia Telluride EX FWD Hybrid** (#8b) | $615 | $94 | **$709** | New redesign · 35 mpg · best-in-class safety · 22.3 cu ft behind 3rd row · dual 12.3" displays |
-| 4 | **Hyundai Palisade SEL Premium FWD** (#7) | $560 | $157 | **$717** | Most luxury content per dollar (ventilated 2nd-row seats, 360 cam, digital key) · 86.7 cu ft cargo |
+| 🥈 | **Mazda CX-90 Turbo Preferred AWD** (#11b) | $440 | $143 | **$583** | AWD standard · vented front + heated 2nd row · panoramic roof · I6 turbo · most "luxury feel" in budget |
+| 🥉 | **Toyota Highlander XLE Hybrid** (#9b) | $572 | $94 | **$666** | Bulletproof reliability · 35 mpg · Toyota residual tier · BUT smallest 3rd-row cargo (16 cu ft) |
+| 4 | **Kia Telluride EX FWD Hybrid** (#8b) | $615 | $94 | **$709** | New redesign · 35 mpg · best-in-class safety · 22.3 cu ft behind 3rd row · dual 12.3" displays |
+| 5 | **Hyundai Palisade SEL Premium FWD** (#7) | $560 | $157 | **$717** | Most luxury content per dollar (ventilated 2nd-row seats, 360 cam, digital key) · 86.7 cu ft cargo |
 
 **Skip these** (in budget but compromised, or over budget):
 - VW Atlas SE FWD base (#5) — cheapest but no power liftgate is a real problem with a toddler
@@ -113,9 +114,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 **The ~$92/mo question on Audi pull-ahead:** Walking from Audi forfeits ~$3,300 (~$92/mo). The VW Atlas SE w/Tech beats the Q5 by ~$220/mo even after losing pull-ahead — net savings ~$130/mo / ~$4,700 over the 36-month lease. Money's clearly better non-Audi. **Stay with Audi only if badge/feel is worth $90+/mo to you.**
 
 **Action items:**
-1. Email all 4 dealers today using the template in the Notes section. Push for $0 DAS, tax-in monthly.
-2. Mention Audi-lessee status — Hyundai/Kia/VW all have $500–$1,000 conquest cash you'll qualify for.
-3. Test-drive in this order: Atlas (the value play), Highlander Hybrid (the reliability play), Telluride Hybrid (the new-tech play), Palisade (the luxury-feel-without-luxury-badge play).
+1. Email all 5 dealers today using the template in the Notes section. Push for $0 DAS, tax-in monthly.
+2. Mention Audi-lessee status — Hyundai/Kia/VW all have $500–$1,000 conquest cash you'll qualify for. (Mazda usually doesn't run one — confirm.)
+3. Test-drive in this order: Atlas (the value play), CX-90 (the luxury-feel play), Highlander Hybrid (the reliability play), Telluride Hybrid (the new-tech play), Palisade (the most-features-per-dollar play).
 4. Whichever wins the test drive, send me the written quote and I'll spot any markup in MF, fees, or hidden cap-cost padding.
 
 ---
@@ -172,6 +173,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 9a/b. Highlander XLE | Single-pane ✓ | SofTex (synth leather) | — *(Limited+)* | — *(Limited+)* | — *(Limited+)* | — | ○ option | — | — |
 | 9c. Highlander Limited Hybrid | Panoramic ✓ | Leather | ✓ | ✓ | ✓ | — | ✓ standard | ✓ | — *(Platinum)* |
 | 10. Audi Q5 Premium | Panoramic ✓ | Leather | ✓ | — *(Prestige)* | n/a (2-row) | n/a | n/a | ✓ | — *(Prestige)* |
+| 11a. CX-90 Select AWD | — *(Preferred+)* | Leatherette | — *(Preferred+)* | — *(Preferred+)* | — *(Preferred+)* | — *(Premium+)* | — (bench std) | — *(Preferred+)* | — *(Premium Sport+)* |
+| **11b. CX-90 Preferred AWD** | **Panoramic ✓** | **Leatherette** | **✓** | **✓** | **✓** | — *(Premium+)* | ○ option | **✓** | — *(Premium Sport+)* |
+| 11c. CX-90 PHEV Preferred AWD | Panoramic ✓ | Leatherette | ✓ | ✓ | ✓ | — | ○ option | ✓ | — |
 
 ### Tech, convenience & safety
 
@@ -190,6 +194,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 9a/b. Highlander XLE | ✓ | — *(Limited+)* | — *(Limited+)* | — (TSS 2.5+ has lane-trace, not full HDA) | — | ✓ | — *(XSE+)* | — *(JBL on Limited+)* | ○ |
 | 9c. Highlander Limited Hybrid | ✓ | ✓ kick sensor | ✓ | — (TSS only) | — | ✓ | ✓ | **JBL 11-spk ✓** | ○ |
 | 10. Audi Q5 Premium | ✓ | ✓ gesture | ✓ *(top-view, Premium Plus+)* | ○ Adaptive Cruise Assist *(Premium Plus+)* | ✓ Audi connect Plus | ✓ | ✓ via app | — *(B&O on Prestige)* | ○ |
+| 11a. CX-90 Select AWD | ✓ | — *(Premium+)* | — *(Premium Sport+)* | ✓ Mazda Radar Cruise + lane keep | — | ✓ | ✓ | — *(Bose on Premium Sport+)* | ○ |
+| **11b. CX-90 Preferred AWD** | ✓ | — *(Premium+)* | — *(Premium Sport+)* | ✓ Mazda Radar Cruise + lane keep | — | ✓ | ✓ | — *(Bose on Premium Sport+)* | ○ |
+| 11c. CX-90 PHEV Preferred AWD | ✓ | — | — | ✓ | — | ✓ | ✓ | — | ○ |
 
 ### Family-fit summary (the stuff that matters with a 20-month-old)
 
@@ -207,6 +214,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 9a/b. Highlander XLE | Kids only | 16.0 cu ft | ✓ outboard 2nd | Slide/fold lever | Tight rear doors |
 | 9c. Highlander Limited Hybrid | Kids only | 16.0 cu ft | ✓ outboard 2nd | One-touch w/ captain's | OK with captains |
 | 10. Audi Q5 Premium | n/a (no 3rd row) | n/a | ✓ outboard 2nd | n/a | Easy |
+| 11a. CX-90 Select AWD | Kids only (narrower) | 14.9 cu ft (small, ties QX60) | ✓ outboard 2nd | Slide/fold lever | OK; bench std |
+| **11b. CX-90 Preferred AWD** | Kids only | 14.9 cu ft | ✓ outboard 2nd | Slide/fold lever | OK; bench std |
+| 11c. CX-90 PHEV Preferred AWD | Kids only | 14.9 cu ft | ✓ outboard 2nd | Slide/fold lever | OK |
 
 **Standout features by category** (what's genuinely unusual at the price):
 - **Ventilated 2nd-row captain's chairs:** ONLY the Palisade SEL Premium (#7) has this in the file — typically $70k+ luxury feature.
