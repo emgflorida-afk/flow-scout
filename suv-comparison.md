@@ -13,7 +13,8 @@
 | # | Vehicle | MSRP | MPG (city/hwy/comb) | Annual fuel @ 12k mi, $3.30/gal | Cargo (cu ft) | 3rd row | Drive | Tow (lbs) | Est. lease tax-in 36/12k $0 DAS | Dealer |
 |---|---|---|---|---|---|---|---|---|---|---|
 | 1 | 2026 Jeep Grand Cherokee Laredo X | $40,910 | 19 / 26 / 22 | $1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$430–470/mo** ✅ | Aventura CDJR |
-| 2 | 2026 Jeep Grand Cherokee Limited | ~$46,500 (confirm w/ dealer) | 19 / 26 / 22 *(V6)* — or 21 / 28 / 24 *(2.0T)* | $1,650–$1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
+| 2 | 2026 Jeep Grand Cherokee Limited *(VIN …279332)* | ~$46,500 | 19 / 26 / 22 *(V6)* — or 21 / 28 / 24 *(2.0T)* | $1,650–$1,800 | 37.7 / 70.8 max | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
+| 2b | 2026 Jeep Grand Cherokee Limited *(alt stock VIN …594138)* | ~$46,500 | same as #2 | same as #2 | same as #2 | No (5-seat) | RWD (4x2) | 6,200 | **~$510–560/mo** ⚠️ | Aventura CDJR |
 | 3 | 2026 Jeep Grand Cherokee L Limited | ~$50,000 (confirm w/ dealer) | 19 / 26 / 21 | $1,886 | 17.2 / ~46 / 84.6 max | Yes (6–7 seat) | RWD (4x2) | 6,200 | **~$570–620/mo** ⚠️ tight to budget | Aventura CDJR |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
@@ -78,6 +79,18 @@
 - **Watch-outs:**
   - Same engine MSRP delta — 2.0T is usually a $1k–$2k option but lower fuel cost over the lease.
   - RWD-only (4x2). Same cargo footprint as Laredo X but more luxury/safety content for ~$5,500 more sticker.
+
+---
+
+### 2b) 2026 Jeep Grand Cherokee Limited 4x2 — ALT STOCK UNIT — ~$46,500 MSRP ⚠️
+
+- **Stock / VIN:** 1C4RJGBR6T8594138
+- **Dealer:** Aventura Chrysler Jeep Dodge Ram
+- **Listing:** https://www.aventurachryslerjeepdodgeram.com/inventory/new-2026-jeep-grand-cherokee-limited-4x2-sport-utility-1c4rjgbr6t8594138/
+- **Same trim as #2** — different stock unit (likely different exterior/interior color combo or option package). All engine, MPG, cargo, towing, and feature numbers identical to #2.
+- **Why list separately:** dealers will sometimes price/discount one stock unit more aggressively than another based on age on lot, factory holdback, or floor-plan cost. **Always quote both VINs** when emailing the dealer — let them tell you which is the better deal.
+- **What to ask the dealer in your email:**
+  > Please send out-the-door lease quotes on BOTH 1C4RJGBR9TC279332 and 1C4RJGBR6T8594138, 36mo/12k/$0 DAS/Tier 1/tax-in. Confirm exterior color, interior color, options/packages, and engine (V6 vs 2.0T) for each, plus the discount % off MSRP for each. I'd like to compare side-by-side.
 
 ---
 
