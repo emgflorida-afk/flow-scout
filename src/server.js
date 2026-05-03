@@ -285,6 +285,20 @@ var confluenceScorer = null;
 try { confluenceScorer = require('./confluenceScorer'); console.log('[SERVER] confluenceScorer loaded OK'); }
 catch(e) { console.log('[SERVER] confluenceScorer not loaded:', e.message); }
 
+// AUTO-FIRE ENGINE — Tier 1-3 orchestration for A++ confluence setups.
+// DRY by default (AUTO_FIRE_ENABLED=true required). Never submits to broker.
+// Pushes Discord proposal with countdown — AB executes manually.
+var autoFireEngine = null;
+try { autoFireEngine = require('./autoFireEngine'); console.log('[SERVER] autoFireEngine loaded OK'); }
+catch(e) { console.log('[SERVER] autoFireEngine not loaded:', e.message); }
+
+// TRADE TRACKER — Phase 3 paper-validation. Logs every fire decision with
+// confluence tier, tracks outcomes for hit-rate analysis. Auto-fire only
+// goes live (real broker) after 30 A++ trades show >=65% win rate.
+var tradeTracker = null;
+try { tradeTracker = require('./tradeTracker'); console.log('[SERVER] tradeTracker loaded OK'); }
+catch(e) { console.log('[SERVER] tradeTracker not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -904,6 +918,60 @@ app.get('/api/clusters/:ticker', async function(req, res) {
     var out = await zigZagClusters.clustersFor(ticker, { deviationPct: deviationPct, tolerancePct: tolerancePct });
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// AUTO-FIRE ENGINE — manual run (DRY by default unless AUTO_FIRE_ENABLED=true)
+//   POST /api/autofire/check?dryRun=1&force=1 (force bypasses time window for testing)
+app.post('/api/autofire/check', async function(req, res) {
+  if (!autoFireEngine) return res.status(500).json({ ok: false, error: 'autoFireEngine not loaded' });
+  try {
+    var dryRun = req.query.dryRun === '1' || (req.body && req.body.dryRun === true);
+    var force = req.query.force === '1' || (req.body && req.body.force === true);
+    var out = await autoFireEngine.runCheck({ dryRun: dryRun, force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/autofire/status', function(req, res) {
+  if (!autoFireEngine) return res.status(500).json({ ok: false, error: 'autoFireEngine not loaded' });
+  res.json(Object.assign({ ok: true }, autoFireEngine.getStatus()));
+});
+
+// TRADE TRACKER — Phase 3 paper-validation
+//   POST /api/tracker/log-fire          — record a new fire decision
+//   POST /api/tracker/close/:id         — mark a trade as closed with outcome
+//   GET  /api/tracker/stats             — hit rate by confluence tier (THE BIG GATE)
+//   GET  /api/tracker/open              — list open trades (waiting for outcome)
+//   GET  /api/tracker/list?ticker=X     — list all (filterable)
+app.post('/api/tracker/log-fire', function(req, res) {
+  if (!tradeTracker) return res.status(500).json({ ok: false, error: 'tradeTracker not loaded' });
+  try {
+    var rec = tradeTracker.logFire(req.body || {});
+    res.json({ ok: true, record: rec });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/tracker/close/:id', function(req, res) {
+  if (!tradeTracker) return res.status(500).json({ ok: false, error: 'tradeTracker not loaded' });
+  try {
+    var out = tradeTracker.markClosed(req.params.id, req.body || {});
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/tracker/stats', function(req, res) {
+  if (!tradeTracker) return res.status(500).json({ ok: false, error: 'tradeTracker not loaded' });
+  res.json(Object.assign({ ok: true }, tradeTracker.getStatsByTier(), { bySource: tradeTracker.getStatsBySource() }));
+});
+
+app.get('/api/tracker/open', function(req, res) {
+  if (!tradeTracker) return res.status(500).json({ ok: false, error: 'tradeTracker not loaded' });
+  res.json({ ok: true, open: tradeTracker.listOpen() });
+});
+
+app.get('/api/tracker/list', function(req, res) {
+  if (!tradeTracker) return res.status(500).json({ ok: false, error: 'tradeTracker not loaded' });
+  res.json({ ok: true, records: tradeTracker.listAll(req.query || {}) });
 });
 
 // CONFLUENCE SCORE — unified 11-layer scoring for any setup
@@ -3817,6 +3885,29 @@ cron.schedule('0 18 * * 0', async function() {
                   ' · ready=' + (out.ready || []).length);
     }
   } catch(e) { console.error('[WEEKLY-SWING] Sun cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// AUTO-FIRE ENGINE CRON -- every 5 min during sweet spot (9:45-10:30 AM ET).
+// DRY by default; ONLY pushes Discord if AUTO_FIRE_ENABLED=true on Railway.
+// Detects A++ confluence setups, proposes Tier 1 bracket order via Discord.
+// Never auto-submits to broker — AB always executes manually.
+cron.schedule('*/5 9-10 * * 1-5', async function() {
+  try {
+    if (!autoFireEngine) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    // Only fire during 9:45-10:30 AM ET
+    var inWindow = (etHr === 9 && etMin >= 45) || (etHr === 10 && etMin <= 30);
+    if (!inWindow) return;
+    console.log('[AUTOFIRE] cron triggered (' + etHr + ':' + etMin + ' ET sweet spot)');
+    var out = await autoFireEngine.runCheck();
+    if (out && out.action === 'PROPOSED') {
+      console.log('[AUTOFIRE] PROPOSED ' + (out.candidate && out.candidate.ticker) + ' — Discord pushed');
+    } else if (out && out.action === 'BLOCKED') {
+      console.log('[AUTOFIRE] BLOCKED: ' + (out.blockReasons || []).join(', '));
+    }
+  } catch(e) { console.error('[AUTOFIRE] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
