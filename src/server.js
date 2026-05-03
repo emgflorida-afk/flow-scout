@@ -260,6 +260,12 @@ var floorPivots = null;
 try { floorPivots = require('./floorPivots'); console.log('[SERVER] floorPivots loaded OK'); }
 catch(e) { console.log('[SERVER] floorPivots not loaded:', e.message); }
 
+// TARGET PRICE — Newton's-law next-day extrapolation. 3-day momentum projection.
+// Detects "unbalanced force" when actual close diverges from prior target.
+var targetPrice = null;
+try { targetPrice = require('./targetPrice'); console.log('[SERVER] targetPrice loaded OK'); }
+catch(e) { console.log('[SERVER] targetPrice not loaded:', e.message); }
+
 // OVERNIGHT TRADE MANAGER — Fri close snapshot + Mon AM exit plan for held positions
 var overnightTradeManager = null;
 try { overnightTradeManager = require('./overnightTradeManager'); console.log('[SERVER] overnightTradeManager loaded OK'); }
@@ -851,6 +857,18 @@ app.get('/api/pivots/:ticker', async function(req, res) {
     var ticker = String(req.params.ticker || '').toUpperCase();
     if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/pivots/SPY' });
     var out = await floorPivots.pivotsFor(ticker);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// TARGET PRICE — Newton's-law next-day extrapolation
+//   GET /api/target-price/SPY
+app.get('/api/target-price/:ticker', async function(req, res) {
+  if (!targetPrice) return res.status(500).json({ ok: false, error: 'targetPrice not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/target-price/SPY' });
+    var out = await targetPrice.targetFor(ticker);
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
