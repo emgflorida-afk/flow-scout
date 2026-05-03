@@ -141,6 +141,9 @@ Ranked by **total monthly cost (lease tax-in + gas / 12)** and family-fit:
 | 9b | 2026 Toyota Highlander XLE Hybrid ⚡ | ~$43,515 (+$1,700 over gas) | **35 combined** | **~$1,131** | 16.0 / 48.4 / 84.3 max | **Yes (7-8 seat)** | FWD | 3,500 | **~$556–588/mo** ✅ best total cost so far | Toyota of N. Miami |
 | 9c | 2026 Toyota Highlander Limited Hybrid | $48,315 | ~35 combined | ~$1,131 | 16.0 / 48.4 / 84.3 max | **Yes (7-seat)** | FWD | 3,500 | **~$590–630/mo** ⚠️ tight | Toyota of N. Miami |
 | 10 | 2026 Audi Q5 Premium *(stay-with-Audi play)* | $54,095 | 21 / 29 / 24 | ~$1,650 | 27.6 / 56.9 max | **No (5-seat, 2-row)** | quattro AWD | 4,400 | **~$620–680/mo** ❌ over budget *(even w/ pull-ahead)* | Audi Pembroke Pines |
+| 11a | 2026 Mazda CX-90 3.3 Turbo Select AWD | $38,800 | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$390–430/mo** ✅ (FL ad: $390+$3,999 DAS) | Mazda dealers |
+| **11b** | **2026 Mazda CX-90 3.3 Turbo Preferred AWD** | **$42,950** | 23 / 28 / 25 | ~$1,584 | 14.9 / 40 / 74.2 max | **Yes (7-8 seat)** | AWD std | 5,000 | **~$420–460/mo** ✅ **best lease economics** | Mazda dealers |
+| 11c | 2026 Mazda CX-90 PHEV Preferred | ~$50,000 | ~25 combined gas + **26-mi EV range** | ~$1,000 (combined) | similar to 11a | **Yes (7-seat)** | AWD std | 3,500 | **~$500–550/mo** ⚠️ but EV miles cut fuel cost | Mazda dealers |
 
 **Legend:** ✅ comfortably in budget · ⚠️ tight to budget · ❌ over budget
 
@@ -759,6 +762,70 @@ The hybrid is **~$44/mo cheaper to own** once you bake gas in — and you're get
 - If you'd pay a $80–120/mo premium for: badge, build quality, quattro AWD, new dual-display interior — Q5 wins.
 - If you only care about price + features + family practicality — Palisade SEL Premium (#7) or Telluride EX Hybrid (#8b) is a better deal at ~$580–615/mo tax-in with more cabin tech.
 - The Audi pull-ahead is **valuable but not infinite**. ~$3,300 over 36 months = $92/mo. If a non-Audi deal beats the Q5 by more than $90/mo, you're net ahead even after losing pull-ahead.
+
+---
+
+### 11) 2026 Mazda CX-90 — Mazda dealers ✅ **best lease economics in the file**
+
+- **Listing examples:** Brickell Mazda · Mazda of North Miami · Ocean Mazda West Kendall · Gunther Mazda (Fort Lauderdale)
+- **Why this is interesting:** Mazda Capital Services is currently subsidizing the CX-90 with **the lowest money factors in this file** — 0.00074 to 0.00145, equivalent to roughly **1.8–3.5% APR**. That's basically free money on the rent charge. This is what makes the CX-90 lease unusually competitive right now.
+
+**Powertrains:**
+- **3.3L Turbo I6 mild hybrid:** 280 hp / 332 lb-ft (Select, Preferred trims) — *the smoother, more refined drivetrain in the file*
+- **3.3L Turbo S I6:** 340 hp / 369 lb-ft (Premium Sport, Premium Plus) — needs 91 octane premium
+- **PHEV:** 2.5L + electric motor, 323 hp combined, 26-mile EV range
+
+**Trim ladder + MSRP (Turbo I6, AWD standard on every trim):**
+| Trim | MSRP | What you get |
+|---|---|---|
+| Select | $38,800 | Tri-zone climate, leatherette, 10.25" display, 8-spk audio, AWD |
+| **Preferred** | **$42,950** | **Adds vented front seats, heated 2nd row, 8-way power driver, memory seat, heated steering wheel, 12.3" display with wireless CarPlay/AA, panoramic moonroof** |
+| Premium Sport | $46,980 | Adds 21" wheels, head-up display, Bose audio, surround-view camera |
+| Premium / Premium Plus | $48k–$53k | Nappa leather, ventilated 2nd row, captain's chairs |
+
+**Fuel economy:** 23 city / 28 hwy / 25 combined → ~$1,584/yr at 12k mi @ $3.30/gal *(91 octane recommended on Turbo, so real cost ~$1,720/yr)*
+
+**Cargo:** 14.9 cu ft behind 3rd row · ~40 cu ft behind 2nd · 74.2 cu ft max — *similar to QX60, smaller than Atlas/Telluride/Palisade*
+
+**Towing:** 5,000 lbs (Turbo) — best-in-class tow with AWD standard
+
+**Lease numbers (Mazda Capital Services May 2026):**
+- MF **0.00074–0.00145** (1.8–3.5% APR equivalent) — lowest in the file
+- Residual: 58–62% on Turbo, 70% on PHEV (PHEV residual is great)
+- Up to $5,750 cash back available on select trims
+- FL advertised: **2026 CX-90 Turbo Select** at **$390/mo, 36 mo, $3,999 DAS** — that's ~$520 effective tax-in at $0 DAS
+
+**Lease estimates (36/12k, Tier 1, FL, $0 DAS):**
+- **Select AWD:** ~$390–430/mo tax-in ✅
+- **Preferred AWD:** ~$420–460/mo tax-in ✅ — *the sweet spot trim for your family*
+- **Premium Sport AWD:** ~$520–570/mo tax-in ⚠️ within budget
+- **PHEV Preferred:** ~$500–550/mo tax-in ⚠️ but EV range slashes fuel costs
+
+**Why the Preferred trim is the sweet spot:**
+The Preferred at ~$420–460/mo gives you:
+- **Ventilated front seats** (only Palisade SEL Premium and Highlander Limited Hybrid have this elsewhere in the file)
+- **Heated 2nd-row seats** (rare at this price)
+- **8-way power driver + memory** (no awkward repositioning when wife drives)
+- **Heated steering wheel + heated front seats**
+- **Panoramic moonroof**
+- **12.3" wireless CarPlay display**
+- **AWD standard** (only one in budget alongside Telluride S AWD)
+- **Smooth I6 turbo drivetrain** (more refined than Atlas's 4-cyl)
+
+**Watch-outs:**
+- **Smaller cargo behind 3rd row (14.9 cu ft)** — same as QX60, smaller than Atlas (20.6) or Telluride (22.3). Stroller + 3rd row up could be tight.
+- **3rd row is for kids only** — Mazda's 3rd row is narrower than Atlas/Telluride. Fine for occasional use, not adult trip-friendly.
+- **91 octane recommended** on Turbo (not strictly required, but adds ~$10/mo to gas).
+- **Residuals (58–62%) are weaker than Telluride (67%) or Palisade (66%)** — the low MF is what's keeping the lease cheap, not great resale economics.
+- **Mazda doesn't currently run a competitive lease conquest** for non-Mazda owners. Confirm — you may not get extra Audi-lessee cash like you would from Hyundai/Kia/VW.
+- **AWD is mandatory** on every Turbo trim — no FWD option to save money like on Atlas.
+
+**Florida Mazda dealers to email (same short note, swap in "2026 CX-90 Turbo Preferred AWD"):**
+1. **Mazda of North Miami** — closest to 33169
+2. **Brickell Mazda**
+3. **Ocean Mazda West Kendall**
+4. **Gunther Mazda** (Fort Lauderdale) — large volume, often most aggressive
+5. **Wesley Chapel Mazda** if you're willing to dealer-trade
 
 ---
 
