@@ -290,6 +290,21 @@ var triggerWatcher = null;
 try { triggerWatcher = require('./triggerWatcher'); console.log('[SERVER] triggerWatcher loaded OK'); }
 catch(e) { console.log('[SERVER] triggerWatcher not loaded:', e.message); }
 
+// POSITION MONITOR — Hedge fund "execution desk." Watches AB's open LMT
+// orders. Discord push when spread expanded beyond LMT (= won't fill) OR
+// when spread approaches LMT (= imminent fill). Solves the "stale LMT during
+// cascade" failure from May 4 SPY $715 trigger.
+var positionMonitor = null;
+try { positionMonitor = require('./positionMonitor'); console.log('[SERVER] positionMonitor loaded OK'); }
+catch(e) { console.log('[SERVER] positionMonitor not loaded:', e.message); }
+
+// MACRO SENTINEL — Hedge fund "macro desk." VIX threshold crosses + SPY
+// key level breaks + regime flip detection (risk-on / risk-off). Pushes
+// Discord with regime-aware verdict (FIRE NOW vs WAIT FOR CONFIRM).
+var macroSentinel = null;
+try { macroSentinel = require('./macroSentinel'); console.log('[SERVER] macroSentinel loaded OK'); }
+catch(e) { console.log('[SERVER] macroSentinel not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4277,6 +4292,34 @@ cron.schedule('*/3 9-15 * * 1-5', async function() {
       console.log('[TRIGGER-WATCH] cron fired ' + out.alertsSent + ' alerts');
     }
   } catch(e) { console.error('[TRIGGER-WATCH] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// POSITION MONITOR cron — every 60 sec during RTH watches open LMT orders.
+// Pushes Discord on STALE LMTs (won't fill) and IMMINENT FILLs.
+cron.schedule('* 9-15 * * 1-5', async function() {
+  try {
+    if (!positionMonitor) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 33) || (etHr >= 10 && etHr <= 14) || (etHr === 15 && etMin <= 55);
+    if (!inWindow) return;
+    await positionMonitor.runMonitor();
+  } catch(e) { console.error('[POSITION-MONITOR] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// MACRO SENTINEL cron — every 2 min during RTH for VIX/SPY level breaks +
+// regime flip detection. Discord push with FIRE/WAIT verdict.
+cron.schedule('*/2 9-15 * * 1-5', async function() {
+  try {
+    if (!macroSentinel) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 33) || (etHr >= 10 && etHr <= 14) || (etHr === 15 && etMin <= 55);
+    if (!inWindow) return;
+    await macroSentinel.runSentinel();
+  } catch(e) { console.error('[MACRO-SENTINEL] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
