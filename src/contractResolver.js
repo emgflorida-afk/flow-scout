@@ -532,11 +532,11 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   console.log('[RESOLVE] '+ticker+' '+type+' '+mode);
 
   var token=await getTSToken();
-  if (!token) { console.error('[RESOLVE] No TS token -- aborting'); return null; }
+  if (!token) { console.error('[RESOLVE] No TS token -- aborting'); return { ok:false, stage:'auth', reason:'TS access token unavailable (auth failed)' }; }
   console.log('[RESOLVE] Token OK');
 
   var price=await getPrice(ticker, token);
-  if (!price) { console.error('[RESOLVE] No price for',ticker); return null; }
+  if (!price) { console.error('[RESOLVE] No price for',ticker); return { ok:false, stage:'price', reason:'TS quote API returned no price for ' + ticker }; }
 
   var lvls=await getLVLs(ticker, token);
   if (!lvls) console.log('[RESOLVE] No LVL data -- continuing without LVL filter');
@@ -563,10 +563,10 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   }
 
   var expirations=await getExpirations(ticker, token);
-  if (!expirations.length) { console.error('[RESOLVE] No expirations for',ticker); return null; }
+  if (!expirations.length) { console.error('[RESOLVE] No expirations for',ticker); return { ok:false, stage:'expirations', reason:'TS option expirations API returned 0 dates for ' + ticker + ' (likely no listed options)' }; }
 
   var expiryObj=selectExpiry(expirations, mode);
-  if (!expiryObj) { console.error('[RESOLVE] No expiry found'); return null; }
+  if (!expiryObj) { console.error('[RESOLVE] No expiry found'); return { ok:false, stage:'expirySelect', reason:'No expiration matched ' + mode + ' DTE band (' + config.minDTE + '-' + config.maxDTE + '). Available: ' + expirations.slice(0,5).map(function(e){return e.date+'/'+e.dte+'DTE';}).join(', ') }; }
 
   var expiry=expiryObj.date, dte=expiryObj.dte;
   var rawChain=await getOptionChain(ticker, expiry, type, price, token);
@@ -582,7 +582,7 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
     }
   }
 
-  if (!rawChain.length) { console.error('[RESOLVE] No chain found for',ticker,type,'expiry:',expiry); return null; }
+  if (!rawChain.length) { console.error('[RESOLVE] No chain found for',ticker,type,'expiry:',expiry); return { ok:false, stage:'chain', reason:'TS option chain API returned 0 contracts for ' + ticker + ' ' + type + ' ' + expiry }; }
 
   var contracts=rawChain.map(function(c){return parseContract(c,expiry,type);}).filter(Boolean);
   console.log('[RESOLVE] Parsed contracts:',contracts.length,'maxPremium:$'+config.maxPremium);
@@ -590,10 +590,14 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
     var mids=contracts.slice(0,5).map(function(c){return '$'+c.mid.toFixed(2);}).join(', ');
     console.log('[RESOLVE] First 5 mids:',mids);
   }
-  if (!contracts.length) { console.error('[RESOLVE] No parseable contracts from',rawChain.length,'raw'); return null; }
+  if (!contracts.length) { console.error('[RESOLVE] No parseable contracts from',rawChain.length,'raw'); return { ok:false, stage:'parse', reason:'parseContract dropped all ' + rawChain.length + ' raw contracts (missing mid/strike/delta?)' }; }
 
   var best=selectBestContract(contracts, price, config, lvls, type);
-  if (!best) { console.error('[RESOLVE] No contract passed selection -- maxPremium:$'+config.maxPremium+' contracts checked:',contracts.length); return null; }
+  if (!best) {
+    var midSample = contracts.slice(0,8).map(function(c){return '$'+c.mid.toFixed(2)+'(d'+(c.delta?c.delta.toFixed(2):'?')+')';}).join(', ');
+    console.error('[RESOLVE] No contract passed selection -- maxPremium:$'+config.maxPremium+' contracts checked:',contracts.length);
+    return { ok:false, stage:'select', reason:'All ' + contracts.length + ' contracts filtered out by ' + mode + ' band ($' + config.minPremium + '-$' + config.maxPremium + ' premium, |delta|>=0.15). Sample mids: ' + midSample };
+  }
 
   var t1Pct=getT1Target(ticker), stopPct=config.stopPct;
   var entryPrice=entryMode==='BREAKOUT'?best.ask:parseFloat((best.ask*0.875).toFixed(2));

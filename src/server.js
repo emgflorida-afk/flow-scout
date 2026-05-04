@@ -1124,17 +1124,46 @@ app.post('/api/ayce-fire/build', async function(req, res) {
     //  - LOTTO fallback (1-14 DTE, $0.05-$2.00): catches cheap John-VIP-style picks
     //    that fall below DAY/SWING premium ranges. Fixes "build failed return null
     //    tried day plus swing" bug AB hit on lotto FIRE buttons.
-    if (!resolved && tradeType === 'DAY') {
+    // Track failure reasons across modes for honest diagnostics
+    var failureChain = [];
+    function captureFailure(modeName, r) {
+      if (!r) failureChain.push({ mode: modeName, stage: 'null', reason: 'returned null (no diagnostic)' });
+      else if (r.ok === false) failureChain.push({ mode: modeName, stage: r.stage || 'unknown', reason: r.reason || 'no reason' });
+    }
+
+    // Initial mode result might be a failure object OR null OR success (resolved.contractSymbol)
+    var isResolvedSuccess = resolved && (resolved.contractSymbol || resolved.symbol) && resolved.ok !== false;
+    if (!isResolvedSuccess && resolved && resolved.ok === false) captureFailure(tradeType, resolved);
+    if (!isResolvedSuccess) captureFailure(tradeType, resolved);
+
+    if (!isResolvedSuccess && tradeType === 'DAY') {
       console.log('[FIRE-BUILD] DAY mode failed for ' + ticker + ' — retrying SWING');
       resolved = await resolver.resolveContract(ticker, optType, 'SWING', {});
-      if (resolved) tradeType = 'SWING';
+      isResolvedSuccess = resolved && (resolved.contractSymbol || resolved.symbol) && resolved.ok !== false;
+      if (isResolvedSuccess) tradeType = 'SWING';
+      else captureFailure('SWING', resolved);
     }
-    if (!resolved && (tradeType === 'DAY' || tradeType === 'SWING')) {
+    if (!isResolvedSuccess && (tradeType === 'DAY' || tradeType === 'SWING')) {
       console.log('[FIRE-BUILD] SWING also failed for ' + ticker + ' — falling back to LOTTO mode');
       resolved = await resolver.resolveContract(ticker, optType, 'LOTTO', {});
-      if (resolved) tradeType = 'LOTTO';
+      isResolvedSuccess = resolved && (resolved.contractSymbol || resolved.symbol) && resolved.ok !== false;
+      if (isResolvedSuccess) tradeType = 'LOTTO';
+      else captureFailure('LOTTO', resolved);
     }
-    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null (tried DAY → SWING → LOTTO). Likely no available options matching premium/DTE bands for this ticker.' });
+    if (!isResolvedSuccess) {
+      // Build a useful error message from the actual failure chain
+      var summary = failureChain.map(function(f) { return f.mode + ' failed @ ' + f.stage + ': ' + f.reason; }).join(' || ');
+      return res.status(500).json({
+        ok: false,
+        error: 'contractResolver could not find a contract for ' + ticker + ' ' + optType,
+        ticker: ticker,
+        optType: optType,
+        failureChain: failureChain,
+        summary: summary,
+      });
+    }
+    // Continue with success path
+
     if (resolved.blocked) return res.json({ ok: false, blocked: true, reason: resolved.reason, lvls: resolved.lvls });
     var stockPrice = resolved.stockPrice || resolved.price;
     var contractSymbol = resolved.contractSymbol || resolved.symbol;
