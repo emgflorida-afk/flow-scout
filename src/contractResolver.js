@@ -37,6 +37,13 @@ const MODES = {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 5.00,
     minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 600,
   },
+  // LOTTO mode added May 4 2026 — fixes "build failed return null tried day plus swing"
+  // bug AB hit on lotto FIRE buttons. John's VIP picks are cheap OTM short-DTE options
+  // that fall outside DAY/SWING premium ranges. This mode is intentionally permissive.
+  LOTTO: {
+    label: 'LOTTO', minPremium: 0.05, maxPremium: 2.00,
+    minDTE: 1, maxDTE: 14, stopPct: 0.40, t1Pct: 0.60, maxRisk: 200,
+  },
 };
 
 const MIN_PREMIUM = 0.30;
@@ -508,7 +515,12 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   type=(type||'call').toLowerCase();
   tradeType=(tradeType||'SWING').toUpperCase();
   signalMeta=signalMeta||{};
-  var mode=tradeType.includes('DAY')?'DAY':'SWING';
+  // Fixed May 4 2026: previously hardcoded to DAY|SWING which broke LOTTO mode
+  // added to fix lotto FIRE button bug.
+  var mode = MODES[tradeType] ? tradeType
+           : tradeType.includes('DAY') ? 'DAY'
+           : tradeType.includes('LOTTO') ? 'LOTTO'
+           : 'SWING';
   var config=Object.assign({}, MODES[mode]); // copy so we can adjust per-ticker
   // HIGH-PRICED STOCKS: raise premium cap, force 1 contract
   if (HIGH_PRICE_TICKERS.has(ticker.toUpperCase())) {

@@ -1118,15 +1118,23 @@ app.post('/api/ayce-fire/build', async function(req, res) {
     var resolver = require('./contractResolver');
     var optType = direction === 'long' ? 'call' : 'put';
     var resolved = await resolver.resolveContract(ticker, optType, tradeType, {});
-    // FALLBACK: if DAY mode returns null (big-cap stocks have ITM strikes > $7
-    // max premium for DAY), retry with SWING mode which has higher cap. This
-    // fixes the "buttons don't work" bug AB hit on META/SPY/DIA/NVDA FIRE.
+    // FALLBACK CHAIN (May 4 2026 v2): DAY → SWING → LOTTO
+    //  - DAY first (3-5 DTE, $0.30-$3.50 premium): fits standard liquid setups
+    //  - SWING fallback (7-21 DTE, $0.50-$5): catches big-caps with ITM strikes
+    //  - LOTTO fallback (1-14 DTE, $0.05-$2.00): catches cheap John-VIP-style picks
+    //    that fall below DAY/SWING premium ranges. Fixes "build failed return null
+    //    tried day plus swing" bug AB hit on lotto FIRE buttons.
     if (!resolved && tradeType === 'DAY') {
       console.log('[FIRE-BUILD] DAY mode failed for ' + ticker + ' — retrying SWING');
       resolved = await resolver.resolveContract(ticker, optType, 'SWING', {});
       if (resolved) tradeType = 'SWING';
     }
-    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null (tried DAY+SWING)' });
+    if (!resolved && (tradeType === 'DAY' || tradeType === 'SWING')) {
+      console.log('[FIRE-BUILD] SWING also failed for ' + ticker + ' — falling back to LOTTO mode');
+      resolved = await resolver.resolveContract(ticker, optType, 'LOTTO', {});
+      if (resolved) tradeType = 'LOTTO';
+    }
+    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null (tried DAY → SWING → LOTTO). Likely no available options matching premium/DTE bands for this ticker.' });
     if (resolved.blocked) return res.json({ ok: false, blocked: true, reason: resolved.reason, lvls: resolved.lvls });
     var stockPrice = resolved.stockPrice || resolved.price;
     var contractSymbol = resolved.contractSymbol || resolved.symbol;

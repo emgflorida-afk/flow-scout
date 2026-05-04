@@ -71,7 +71,14 @@ var STOP_LOSS_PCT = 25;           // -25% premium hard stop
 var TIME_STOP_HOUR_ET = 14;       // 2 PM next-day time stop
 
 function isEnabled() {
-  return String(process.env.SIM_AUTO_ENABLED || 'false').toLowerCase() === 'true';
+  // DEFAULT TRUE (AB-requested May 4 2026): SIM is paper-money, can't hit live.
+  // Hard safety stays — account is hardcoded 'sim' inside fireSimOrder, so even
+  // if env mistakenly flips, it CANNOT route to live broker. This unlock lets
+  // AB get the full 6-week / 30-trade dataset without touching env vars.
+  // To force-disable: set SIM_AUTO_ENABLED=false explicitly.
+  var v = process.env.SIM_AUTO_ENABLED;
+  if (v == null || v === '') return true;  // default on
+  return String(v).toLowerCase() !== 'false';
 }
 
 function todayET() {
