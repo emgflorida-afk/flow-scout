@@ -1,33 +1,41 @@
 // =============================================================================
-// ICS TRADE MANAGER — active position management for ICS auto-fired trades.
+// ICS TRADE MANAGER — active position management. STRUCTURAL-STOPS PRIMARY.
 //
-// AB asked for active management, not set-and-forget. This cron polls open
-// SIM positions every 2 min during RTH and adjusts brackets based on ICS rules:
+// CRITICAL CORRECTION (May 4 2026, after AB called out the bug):
+//   Earlier draft used flat -25% premium stops. AB's memory documents this
+//   exact failure — "feedback_stop_management.md": flat-% stops triggered by
+//   noise, every April 8-10 loss came from flat stops or panic-cutting on
+//   normal pullbacks. Structural stops at the underlying-stock invalidation
+//   level are the only stops that survive intraday noise.
 //
-//   STAGE 1 — After TP1 fills (1ct exits at +50%):
-//     - Cancel old stop at -25%
-//     - Place new BREAKEVEN stop on remaining contracts
-//     - This locks in scratch on the runner; can't lose money on this trade
+// CORRECT HIERARCHY:
 //
-//   STAGE 2 — Premium reaches +75% (between TP1 and TP2):
-//     - Move stop from breakeven to +25% (lock 25% of gains)
+//   STAGE -1 (PRIMARY, runs every cron tick) — STRUCTURAL STOP
+//     Pull live stock price for setup.ticker.
+//     LONG: if stock_price <= structuralStopPrice → exit ALL contracts.
+//     SHORT: if stock_price >= structuralStopPrice → exit ALL contracts.
+//     This is the ONLY stop that should fire before TP1.
 //
-//   STAGE 3 — Premium reaches +100% (TP2):
-//     - Trim 2nd ct at +100%
-//     - Move runner stop to +50%
+//   STAGE 1 BE (after TP1 fills) — premium-based runner management
+//     1ct exited at +50% premium. Move remaining stop to entry premium.
+//     Rationale: BE on premium ≈ BE on stock if delta is stable. Acceptable
+//     RISK only because runner is now 1ct max, half the original capital.
 //
-//   STAGE 4 — 2 PM next-day time stop:
-//     - If position not in profit (premium <= entry): market close all
+//   STAGE 2 LOCK25 (HW reaches +75% premium)
+//     Trail stop to +25% premium. Locks 25% gains on runner.
 //
-//   STAGE 5 — Stock-trigger invalidation:
-//     - If underlying breaks structural stop level (2 days closed past): exit all
+//   STAGE 3 TP2 NOTIFY (HW reaches +100% premium)
+//     Trim 2nd ct, runner stop to +50% premium.
+//
+// THE KEY DIFFERENCE FROM v1:
+//   - STAGE -1 STRUCTURAL is the PRIMARY exit
+//   - The premium stages only run AFTER TP1 has already filled
+//   - Before TP1, the original -25% bracket from simAutoTrader is the
+//     SECONDARY ceiling (so if structural stop somehow doesn't fire, premium
+//     loss is still capped). But structural is the real exit.
 //
 // STATE: /data/ics_position_state.json
-//   { contractSymbol: { entry, originalSize, currentSize, highWaterPremium,
-//     stage, lastAdjustedAt, openedAt, structuralStop, ... } }
-//
-// SAFETY: Operates on SIM positions only. Reads from TS sim-api positions
-// endpoint, places adjustments via orderExecutor with sim flag.
+// SAFETY: SIM only. Operates on SIM3142118M account exclusively.
 // =============================================================================
 
 var fs = require('fs');
@@ -151,6 +159,53 @@ async function getCurrentPremium(token, contractSymbol) {
   } catch (e) { return null; }
 }
 
+// Pull current STOCK price for structural stop check
+async function getStockPrice(token, ticker) {
+  try {
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(ticker);
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var q = (data.Quotes || data.quotes || [])[0];
+    if (!q) return null;
+    return parseFloat(q.Last || q.Close || 0) || null;
+  } catch (e) { return null; }
+}
+
+// MARKET-CLOSE the entire option position — used by structural stop trigger and time stop.
+// Cancels all open orders for the symbol, then places SELL TO CLOSE market for full qty.
+async function marketCloseAll(token, contractSymbol, qty, reason) {
+  console.log('[ICS-MGR] MARKET CLOSE ' + contractSymbol + ' qty ' + qty + ' reason: ' + reason);
+  // Cancel any open stops/TPs first
+  var openOrders = await getSimOpenOrders(token, contractSymbol);
+  for (var i = 0; i < openOrders.length; i++) {
+    await cancelOrder(token, openOrders[i].OrderID);
+  }
+
+  // Place market sell-to-close
+  try {
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var url = 'https://sim-api.tradestation.com/v3/orderexecution/orders';
+    var body = {
+      AccountID: SIM_ACCOUNT,
+      Symbol: contractSymbol,
+      Quantity: String(qty),
+      OrderType: 'Market',
+      TradeAction: 'SELLTOCLOSE',
+      TimeInForce: { Duration: 'DAY' },
+      Route: 'Intelligent',
+    };
+    var r = await fetchLib(url, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      timeout: 8000,
+    });
+    return { ok: r.ok, status: r.status };
+  } catch (e) { return { ok: false, error: e.message }; }
+}
+
 async function pushDiscord(title, description, fields) {
   var dp = require('./discordPush');
   var embed = {
@@ -209,6 +264,48 @@ async function runManager() {
 
     var st = state[symbol];
     st.lastSeen = new Date().toISOString();
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // STAGE -1 — STRUCTURAL STOCK STOP (PRIMARY)
+    // Per AB's feedback_stop_management.md: NEVER flat % stops. Stop at the
+    // underlying-stock invalidation level. This block runs FIRST every cron.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (st.ticker && st.structuralStopPrice && st.direction) {
+      var stockPrice = await getStockPrice(token, st.ticker);
+      if (stockPrice) {
+        st.lastStockPrice = stockPrice;
+        var structuralBroken = (st.direction === 'long' && stockPrice <= st.structuralStopPrice) ||
+                                (st.direction === 'short' && stockPrice >= st.structuralStopPrice);
+        if (structuralBroken && st.stage !== 'EXITED_STRUCTURAL') {
+          console.log('[ICS-MGR] STRUCTURAL STOP HIT for ' + symbol + ': ' +
+                      st.ticker + ' at $' + stockPrice + ' broke $' + st.structuralStopPrice);
+          var closeResult = await marketCloseAll(token, symbol, qty,
+            'STRUCTURAL: ' + st.ticker + ' $' + stockPrice + ' broke invalidation $' + st.structuralStopPrice);
+          st.stage = 'EXITED_STRUCTURAL';
+          st.exitedAt = new Date().toISOString();
+          st.exitReason = 'structural-stop';
+          actions.push({
+            symbol: symbol,
+            action: 'STRUCTURAL_STOP_EXIT',
+            qty: qty,
+            ticker: st.ticker,
+            stockPrice: stockPrice,
+            structuralStopPrice: st.structuralStopPrice,
+            closeResult: closeResult,
+          });
+          await pushDiscord(
+            '🛑 STRUCTURAL STOP — ' + st.ticker + ' broke invalidation',
+            'Stock at $' + stockPrice.toFixed(2) + ' breached structural stop $' + st.structuralStopPrice.toFixed(2) + ' (' + st.direction.toUpperCase() + '). Closing all ' + qty + 'ct of ' + symbol + ' at market.',
+            [
+              { name: '📊 Why', value: 'AB rule: structural stops fire on stock-level invalidation, not premium-% noise. The trade thesis is broken when stock breaks ' + (st.direction === 'long' ? 'below' : 'above') + ' the entry trigger / stop level.', inline: false },
+              { name: '🎯 Position', value: 'Entry trigger: $' + (st.triggerPrice ? st.triggerPrice.toFixed(2) : '?') + '\nStructural stop: $' + st.structuralStopPrice.toFixed(2) + '\nCurrent stock: $' + stockPrice.toFixed(2) + '\nOption qty closed: ' + qty + 'ct', inline: false },
+            ]
+          );
+          saveState(state);
+          continue;  // skip the rest of the stages for this position
+        }
+      }
+    }
 
     var currentMid = await getCurrentPremium(token, symbol);
     if (currentMid && currentMid > st.highWaterPremium) {
@@ -300,23 +397,108 @@ async function runManager() {
       continue;
     }
 
-    // STAGE 3: TP2 hit (+100%) — trim 2nd ct, runner stop to +50%
+    // STAGE 3: TP2 hit (+100%) — auto-trim 1ct at LIMIT, runner stop to +50%
     if (['STAGE_1_BE', 'STAGE_2_LOCK25'].indexOf(st.stage) >= 0 && hwPctFromEntry >= STAGE_TP2_TRIGGER && qty >= 1) {
-      console.log('[ICS-MGR] +100% HW on ' + symbol + ' → TP2 trim recommendation');
-      // For now, just push Discord — actual sell-to-close on TP2 is more complex
-      // because it requires a LIMIT sell order at +100%, which is what TP2Premium
-      // bracket should already be. Real check: did TP2 already fill?
+      console.log('[ICS-MGR] +100% HW on ' + symbol + ' → AUTO-TRIM 1ct + runner stop +50%');
 
-      st.stage = 'STAGE_3_TP2_NOTIFIED';
+      var tp2Limit = Math.round(st.entry * (1 + STAGE_TP2_TRIGGER / 100) * 100) / 100;  // +100%
+      var runnerStopTrigger = Math.round(st.entry * (1 + STAGE_RUNNER_STOP / 100) * 100) / 100;  // +50%
+      var runnerStopLimit = Math.round((st.entry * (1 + STAGE_RUNNER_STOP / 100) - 0.05) * 100) / 100;
+      var trimQty = Math.min(1, qty);  // trim 1ct (or all if only 1 left)
+      var keepQty = qty - trimQty;
+
+      // 1) Place a LIMIT sell to trim 1ct at +100%
+      var trimRes;
+      try {
+        var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+        var trimUrl = 'https://sim-api.tradestation.com/v3/orderexecution/orders';
+        var trimBody = {
+          AccountID: SIM_ACCOUNT,
+          Symbol: symbol,
+          Quantity: String(trimQty),
+          OrderType: 'Limit',
+          LimitPrice: tp2Limit.toFixed(2),
+          TradeAction: 'SELLTOCLOSE',
+          TimeInForce: { Duration: 'GTC' },
+          Route: 'Intelligent',
+        };
+        var tr = await fetchLib(trimUrl, {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+          body: JSON.stringify(trimBody),
+          timeout: 8000,
+        });
+        trimRes = { ok: tr.ok, status: tr.status };
+      } catch (e) { trimRes = { ok: false, error: e.message }; }
+
+      // 2) Cancel old stop, place runner stop at +50% on the keepQty
+      if (keepQty > 0) {
+        var openOrders3 = await getSimOpenOrders(token, symbol);
+        var staleStops3 = openOrders3.filter(function(o) {
+          return o.OrderType === 'StopLimit' || o.OrderType === 'Stop';
+        });
+        for (var so3 = 0; so3 < staleStops3.length; so3++) {
+          await cancelOrder(token, staleStops3[so3].OrderID);
+        }
+        await placeBreakevenStop(token, symbol, keepQty, runnerStopTrigger, runnerStopLimit);
+      }
+
+      st.stage = 'STAGE_3_TP2_TRIM';
+      st.tp2TrimAt = new Date().toISOString();
+      st.tp2LimitPrice = tp2Limit;
+      st.runnerStopPrice = runnerStopTrigger;
+
+      actions.push({
+        symbol: symbol,
+        action: 'TP2_AUTO_TRIM_RUNNER_STOP',
+        trimQty: trimQty,
+        tp2Limit: tp2Limit,
+        runnerStopTrigger: runnerStopTrigger,
+        keepQty: keepQty,
+        trimResult: trimRes,
+      });
+
       await pushDiscord(
-        '🎯 TP2 ZONE — ' + symbol + ' at +100%',
-        'Premium reached +' + hwPctFromEntry.toFixed(0) + '%. If TP2 didn\'t auto-fill, trim manually now and trail runner stop to +50%.',
+        '🎯 TP2 +100% AUTO-TRIM — ' + symbol,
+        'Premium HW +' + hwPctFromEntry.toFixed(0) + '%. Auto-placed: 1ct LIMIT sell @ $' + tp2Limit + ', runner stop $' + runnerStopTrigger + ' (+50%).',
         [
-          { name: '📊 Position', value: 'Entry: $' + st.entry.toFixed(2) + ' · HW: $' + st.highWaterPremium.toFixed(2) + ' (+' + hwPctFromEntry.toFixed(0) + '%)\nQty: ' + qty + 'ct\nRecommended runner stop: $' + (st.entry * 1.50).toFixed(2) + ' (+50%)', inline: false },
+          { name: '📊 Position', value: 'Entry: $' + st.entry.toFixed(2) + ' · HW: $' + st.highWaterPremium.toFixed(2) + '\nTrim 1ct @ $' + tp2Limit + ' GTC\nRunner ' + keepQty + 'ct, stop $' + runnerStopTrigger + ' (+50%)', inline: false },
         ]
       );
       saveState(state);
       continue;
+    }
+
+    // STAGE 4: 2 PM next-day TIME STOP — exit if not in profit by 2 PM next trading day
+    if (st.openedAt && (st.stage === 'STAGE_0' || !st.stage)) {
+      var openedDate = new Date(st.openedAt);
+      var nowDate = new Date();
+      var daysSinceOpen = (nowDate - openedDate) / (1000 * 60 * 60 * 24);
+      var etHr = parseInt(nowDate.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+      // Time stop fires only on day 2+ after 2 PM ET, and only if currently NOT in profit (TP1 hasn't filled = STAGE_0)
+      if (daysSinceOpen >= 1 && etHr >= 14 && pctFromEntry <= 0) {
+        console.log('[ICS-MGR] 2 PM TIME STOP for ' + symbol + ' (day ' + daysSinceOpen.toFixed(1) + ', not in profit)');
+        var closeRes = await marketCloseAll(token, symbol, qty, '2 PM time stop, day ' + daysSinceOpen.toFixed(1) + ' not in profit');
+        st.stage = 'EXITED_TIMESTOP';
+        st.exitedAt = new Date().toISOString();
+        st.exitReason = 'time-stop-2pm';
+        actions.push({
+          symbol: symbol,
+          action: '2PM_TIME_STOP_EXIT',
+          qty: qty,
+          daysSinceOpen: daysSinceOpen.toFixed(1),
+          closeResult: closeRes,
+        });
+        await pushDiscord(
+          '⏰ 2 PM TIME STOP — ' + symbol,
+          'Day ' + daysSinceOpen.toFixed(1) + ' since open, not in profit. Exiting per ICS spec.',
+          [
+            { name: '📊 Position', value: 'Entry: $' + st.entry.toFixed(2) + ' · Current: $' + (currentMid || 0).toFixed(2) + ' (' + pctFromEntry.toFixed(0) + '%)\nQty closed: ' + qty + 'ct', inline: false },
+          ]
+        );
+        saveState(state);
+        continue;
+      }
     }
   }
 

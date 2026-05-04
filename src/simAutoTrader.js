@@ -543,6 +543,33 @@ async function runSimAuto(opts) {
 
     firesSucceeded++;
 
+    // Pre-seed icsTradeManager state with structural metadata so STAGE -1
+    // (stock-level structural stop) can fire on this position. Without this,
+    // the manager would only have option-premium info from TS positions API,
+    // not the underlying ticker / invalidation level.
+    try {
+      var icsStateFile = path.join(DATA_ROOT, 'ics_position_state.json');
+      var icsState = {};
+      try { icsState = JSON.parse(fs.readFileSync(icsStateFile, 'utf8')); } catch (e) {}
+      icsState[fireResult.contract.symbol] = {
+        contractSymbol: fireResult.contract.symbol,
+        ticker: setup.ticker,
+        direction: setup.direction,
+        structuralStopPrice: setup.stop,        // stock-level invalidation
+        triggerPrice: setup.trigger,             // stock-level entry trigger
+        entry: fireResult.limitPrice,            // option premium at fire
+        originalSize: fireResult.qty || 1,
+        currentSize: fireResult.qty || 1,
+        highWaterPremium: fireResult.limitPrice,
+        stage: 'STAGE_0',
+        openedAt: new Date().toISOString(),
+        source: setup.source,
+        pattern: setup.pattern,
+        tf: setup.tf,
+      };
+      fs.writeFileSync(icsStateFile, JSON.stringify(icsState, null, 2));
+    } catch (e) { console.error('[SIM-AUTO] icsState seed failed:', e.message); }
+
     // Log to trade tracker
     if (tradeTracker && tradeTracker.logFire) {
       try {
