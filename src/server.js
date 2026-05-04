@@ -284,6 +284,12 @@ var ayceScanner = null;
 try { ayceScanner = require('./ayceScanner'); console.log('[SERVER] ayceScanner loaded OK'); }
 catch(e) { console.log('[SERVER] ayceScanner not loaded:', e.message); }
 
+// TRIGGER WATCHER — semi-auto approval queue: monitors ARMED setups across all
+// scanners, pushes Discord card when spot hits trigger zone, with FIRE link.
+var triggerWatcher = null;
+try { triggerWatcher = require('./triggerWatcher'); console.log('[SERVER] triggerWatcher loaded OK'); }
+catch(e) { console.log('[SERVER] triggerWatcher not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4202,6 +4208,26 @@ cron.schedule('30 10 * * 1-5', async function() {
     var hits = (out && out.hits) || [];
     console.log('[AYCE] 10:30 scan complete: ' + hits.length + ' tickers');
   } catch(e) { console.error('[AYCE] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// TRIGGER WATCHER cron — every 3 min during RTH (9:30 - 3:55 ET)
+// Cross-references AYCE armed + JS conv >= 8 + COIL ready against live quotes.
+// Pushes Discord card to AB when ANY armed setup hits its trigger zone (semi-
+// auto approval queue). 15-min cooldown per ticker to avoid spam.
+cron.schedule('*/3 9-15 * * 1-5', async function() {
+  try {
+    if (!triggerWatcher) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    // Active 9:33 - 3:55 ET (give 3-min cushion after open)
+    var inWindow = (etHr === 9 && etMin >= 33) || (etHr >= 10 && etHr <= 14) || (etHr === 15 && etMin <= 55);
+    if (!inWindow) return;
+    var out = await triggerWatcher.runWatch();
+    if (out && out.alertsSent > 0) {
+      console.log('[TRIGGER-WATCH] cron fired ' + out.alertsSent + ' alerts');
+    }
+  } catch(e) { console.error('[TRIGGER-WATCH] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
