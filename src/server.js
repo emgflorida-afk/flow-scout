@@ -955,6 +955,83 @@ app.get('/api/ayce-scan/debug/:ticker', async function(req, res) {
 // before placing. Place endpoint actually fires the order via TS or Public.
 //
 // Account values: 'ts' (live TS) | 'sim' (TS simulation) | 'public' (Public.com)
+// Phase 2: classify hold-style from DTE + estimate theta load
+// Returns { dte, thetaPctPerDay, holdStyle, warnings[], evClassification }
+function classifyContract(midPrice, expiryStr, intentTradeType) {
+  var warnings = [];
+  var dte = 0;
+  try {
+    var exp = new Date(expiryStr);
+    var now = new Date();
+    dte = Math.max(0, Math.ceil((exp - now) / (24 * 3600 * 1000)));
+  } catch(e) {}
+
+  // Rough theta estimate (% of premium per day) for ATM-ish options
+  // Based on empirical patterns: shorter DTE = exponentially more theta
+  var thetaPctPerDay;
+  if (dte <= 1)      thetaPctPerDay = 50;
+  else if (dte <= 3) thetaPctPerDay = 25;
+  else if (dte <= 7) thetaPctPerDay = 12;
+  else if (dte <= 14) thetaPctPerDay = 6;
+  else if (dte <= 30) thetaPctPerDay = 3;
+  else if (dte <= 60) thetaPctPerDay = 1.5;
+  else                thetaPctPerDay = 0.8;
+
+  // Hold-style classification
+  var holdStyle, holdColor, holdIcon;
+  if (dte <= 5) {
+    holdStyle = 'DAY-ONLY';
+    holdColor = '#ff5050';
+    holdIcon = '⚠️';
+    warnings.push(holdIcon + ' DAY-ONLY: theta ~' + thetaPctPerDay + '%/day on ' + dte + ' DTE. EXIT BY EOD or 60-min flip.');
+  } else if (dte <= 14) {
+    holdStyle = 'SHORT-SWING';
+    holdColor = '#ffc107';
+    holdIcon = '🟡';
+    warnings.push(holdIcon + ' SHORT-SWING-OK: theta ~' + thetaPctPerDay + '%/day. Hold 1-3 days max, exit before week-2.');
+  } else if (dte <= 45) {
+    holdStyle = 'SWING-OK';
+    holdColor = '#4caf50';
+    holdIcon = '✅';
+    warnings.push(holdIcon + ' SWING-OK: theta ~' + thetaPctPerDay + '%/day. Hold-eligible up to 2-3 weeks.');
+  } else {
+    holdStyle = 'LEAP';
+    holdColor = '#5cf';
+    holdIcon = '✅';
+    warnings.push(holdIcon + ' LEAP: theta ~' + thetaPctPerDay + '%/day. Long-term hold-eligible.');
+  }
+
+  // Mismatch warning: if user's intent is SWING but contract is DAY-ONLY
+  if (intentTradeType === 'SWING' && holdStyle === 'DAY-ONLY') {
+    warnings.push('🚨 MISMATCH: You picked SWING but contract is DAY-ONLY (' + dte + ' DTE). Theta will eat profits even if direction is right. Consider longer expiry.');
+  }
+  if (intentTradeType === 'DAY' && holdStyle === 'LEAP') {
+    warnings.push('💡 NOTE: Long-DTE for DAY trade = paying for time you don\'t need. Consider closer expiry for better leverage.');
+  }
+
+  // Rough EV signal — assumes ~33% prob of profit, avg 2x premium gain on win, full premium loss
+  var pWin = dte <= 5 ? 0.30 : dte <= 14 ? 0.40 : 0.45;
+  var avgWin = midPrice * 1.5;   // typical day-trade target
+  var avgLoss = midPrice;         // worst case = full premium
+  var ev = pWin * avgWin - (1 - pWin) * avgLoss;
+  var evPct = midPrice > 0 ? Math.round((ev / midPrice) * 100) : 0;
+  var evClassification;
+  if (ev > 0.05 * midPrice) evClassification = '✅ POSITIVE EV (+' + evPct + '%)';
+  else if (ev > -0.10 * midPrice) evClassification = '🟡 MARGINAL EV (' + (evPct >= 0 ? '+' : '') + evPct + '%) — execution dependent';
+  else evClassification = '🚨 NEGATIVE EV (' + evPct + '%) — system flag, reconsider';
+
+  return {
+    dte: dte,
+    thetaPctPerDay: thetaPctPerDay,
+    holdStyle: holdStyle,
+    holdColor: holdColor,
+    warnings: warnings,
+    evClassification: evClassification,
+    evDollar: midPrice ? Math.round(ev * 100) : null,
+    pWinEstimate: pWin,
+  };
+}
+
 app.post('/api/ayce-fire/build', async function(req, res) {
   try {
     var b = req.body || {};
@@ -978,6 +1055,22 @@ app.post('/api/ayce-fire/build', async function(req, res) {
     var strike = resolved.strike;
     // Suggest a LMT slightly above mid for buy fills (cap 5% above mid)
     var limitPrice = optMid ? Math.round(optMid * 1.05 * 100) / 100 : null;
+
+    // Phase 2: classify hold-style + EV
+    var classification = classifyContract(optMid, expiry, tradeType);
+
+    // Auto-check earnings for warnings
+    var earningsWarning = null;
+    try {
+      var earningsCalendar = require('./economicCalendar');
+      if (earningsCalendar && earningsCalendar.checkTicker) {
+        var er = earningsCalendar.checkTicker(ticker);
+        if (er && er.earningsWithin3Days && er.nextEarnings) {
+          earningsWarning = '⚠️ EARNINGS in 3 days (' + er.nextEarnings + ') — IV crush risk + binary event';
+        }
+      }
+    } catch(e) {}
+
     res.json({
       ok: true,
       ticker: ticker,
@@ -1003,6 +1096,8 @@ app.post('/api/ayce-fire/build', async function(req, res) {
         route: 'Intelligent',
       },
       estimatedCost: limitPrice ? Math.round(limitPrice * 100 * size) : null,
+      classification: classification,
+      earningsWarning: earningsWarning,
       note: 'Single-leg directional fire. Stop = stock-trigger via TS bracket. TPs = manual @ +25/+50/+100% premium.',
     });
   } catch(e) {

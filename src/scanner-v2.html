@@ -3616,17 +3616,29 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
     const c = data.contract;
     const t = data.orderTicket;
     const accountColor = account === 'public' ? '#5cf' : account === 'sim' ? '#ff0' : '#4f4';
+    // Phase 2: build warnings/classification block
+    const cls = data.classification || {};
+    const earnings = data.earningsWarning;
+    const warningsHtml = (cls.warnings || []).map(w => {
+      const isHard = w.startsWith('🚨') || w.startsWith('⚠️');
+      return `<div style="font-size:11px;padding:6px 10px;border-radius:4px;margin-bottom:4px;background:${isHard ? 'rgba(255,80,80,0.15)' : 'rgba(76,175,80,0.12)'};color:${isHard ? '#ff8080' : '#88dd88'};">${w}</div>`;
+    }).join('');
+    const earningsHtml = earnings ? `<div style="font-size:11px;padding:6px 10px;border-radius:4px;margin-bottom:4px;background:rgba(255,193,7,0.18);color:#ffc107;">${earnings}</div>` : '';
+    const evHtml = cls.evClassification ? `<div style="font-size:11px;padding:6px 10px;border-radius:4px;margin-bottom:4px;background:rgba(92,207,255,0.10);color:${(cls.evClassification||'').includes('🚨') ? '#ff5050' : (cls.evClassification||'').includes('✅') ? '#4caf50' : '#ffc107'};">${cls.evClassification} · est EV: ${cls.evDollar >= 0 ? '+' : ''}$${cls.evDollar}/contract · P(win) ~${Math.round((cls.pWinEstimate||0)*100)}%</div>` : '';
+
     modal.firstChild.innerHTML = `
       <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
         <strong>🔥 FIRE — ${ticker} ${direction.toUpperCase()}</strong>
         <span style="cursor:pointer;color:#888;" onclick="document.getElementById('ayce-fire-modal').remove()">✕</span>
       </div>
-      <div style="background:#1a1f2a;padding:12px;border-radius:6px;margin-bottom:12px;font-family:monospace;font-size:12px;line-height:1.7;">
+      ${warningsHtml}${earningsHtml}${evHtml}
+      <div style="background:#1a1f2a;padding:12px;border-radius:6px;margin:10px 0 12px;font-family:monospace;font-size:12px;line-height:1.7;">
         <div><span style="color:#888;">Account:</span> <span style="color:${accountColor};font-weight:700;">${account.toUpperCase()}</span></div>
         <div><span style="color:#888;">Stock spot:</span> $${data.stockPrice || '—'}</div>
         <div><span style="color:#888;">Contract:</span> <strong>${c.symbol || '?'}</strong></div>
         <div><span style="color:#888;">Strike/Type:</span> $${c.strike || '?'} ${c.type.toUpperCase()}</div>
-        <div><span style="color:#888;">Expiry:</span> ${c.expiry || '?'}</div>
+        <div><span style="color:#888;">Expiry:</span> ${c.expiry || '?'} <span style="color:${cls.holdColor || '#888'};">(${cls.dte || '?'} DTE · ${cls.holdStyle || '?'})</span></div>
+        <div><span style="color:#888;">Theta load:</span> <span style="color:${cls.thetaPctPerDay >= 10 ? '#ff5050' : cls.thetaPctPerDay >= 5 ? '#ffc107' : '#4caf50'};">~${cls.thetaPctPerDay}%/day</span></div>
         <div><span style="color:#888;">Action:</span> BUY TO OPEN</div>
         <div><span style="color:#888;">Quantity:</span> ${t.quantity}</div>
         <div><span style="color:#888;">Order type:</span> Limit</div>
