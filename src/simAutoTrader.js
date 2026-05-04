@@ -47,6 +47,9 @@ var wpScanner = null;
 try { wpScanner = require('./wpScanner'); } catch (e) {}
 var tradeTracker = null;
 try { tradeTracker = require('./tradeTracker'); } catch (e) {}
+// EXTERNAL SETUPS — from AB's local Claude Code routine via POST /api/external-setups/import
+var externalSetups = null;
+try { externalSetups = require('./externalSetups'); } catch (e) {}
 var ts = null;
 try { ts = require('./tradestation'); } catch (e) {}
 
@@ -271,13 +274,30 @@ function collectQualifyingSetups() {
     } catch (e) { console.error('[SIM-AUTO] wp error:', e.message); }
   }
 
+  // EXTERNAL SETUPS — from AB's local Claude Code routines (POST /api/external-setups/import)
+  // These get full priority because AB's local research is the source of truth for ICS.
+  if (externalSetups && externalSetups.loadActiveSetups) {
+    try {
+      var ext = externalSetups.loadActiveSetups(24);  // 24h freshness window
+      ext.forEach(function(s) {
+        // External setups already have source/pattern/tf/holdRating/conviction normalized
+        // by the import endpoint. Just route through addIfQualifies for filter consistency.
+        addIfQualifies(s);
+      });
+      if (ext.length > 0) console.log('[SIM-AUTO] +' + ext.length + ' setups from external routines');
+    } catch (e) { console.error('[SIM-AUTO] external setups error:', e.message); }
+  }
+
   return setups;
 }
 
-// Determine ICS sizing — 2ct base, 3ct top-tier
+// Determine ICS sizing — 2ct base, 3ct top-tier, or AB's preferredSize override
 function pickSize(setup) {
+  // External setups can specify preferredSize (AB's research-driven override)
+  if (setup.preferredSize && setup.preferredSize >= 1 && setup.preferredSize <= 5) {
+    return setup.preferredSize;
+  }
   var topTier = (setup.conviction >= TOP_TIER_CONVICTION);
-  // Multi-system bonus: if same ticker hits in 2+ scanners (track via setup.systems if present)
   var multiSystem = (setup.systems && setup.systems.length >= 2) || setup.multiSystem;
   if (topTier && multiSystem) return TOP_TIER_SIZE;
   return BASE_SIZE;
@@ -291,28 +311,55 @@ async function fireSimOrder(setup, spot) {
 
   var qty = pickSize(setup);
 
-  // Build contract via /api/ayce-fire/build
+  // PREFERRED CONTRACT PATH — if AB's external setup specifies an exact contract
+  // (researched via Bullflow / volume / OI / flow data), use that verbatim.
+  // Otherwise fall through to /api/ayce-fire/build resolver.
+  var c, t, limitPrice;
   try {
-    var buildRes = await fetchLib(serverBase + '/api/ayce-fire/build', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ticker: setup.ticker,
-        direction: setup.direction,
-        tradeType: 'SWING',
-        account: 'sim',  // HARDCODED — never live
-        size: qty,
-      }),
-      timeout: 10000,
-    });
-    var buildData = await buildRes.json();
-    if (!buildData.ok || buildData.blocked) {
-      return { ok: false, error: 'build failed: ' + (buildData.error || buildData.reason) };
+    if (setup.preferredContractSymbol && /\d{6}[CP]\d+(\.\d+)?$/.test(String(setup.preferredContractSymbol).replace(/\s/g, ''))) {
+      console.log('[SIM-AUTO] Using PREFERRED contract from external setup: ' + setup.preferredContractSymbol);
+      // Pull live mid for the preferred contract via TS quote
+      var qResolve = await fetchLib(serverBase + '/api/quote-or-bars', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: setup.preferredContractSymbol }),
+        timeout: 8000,
+      }).catch(function() { return null; });
+      // Fall back to resolver if we can't get a live quote (rare)
+      if (!qResolve || !qResolve.ok) {
+        console.log('[SIM-AUTO] preferred contract quote failed — falling back to resolver');
+      } else {
+        var qData = await qResolve.json().catch(function() { return null; });
+        var liveMid = qData && (qData.mid || qData.midPrice || qData.last);
+        if (liveMid && liveMid > 0) {
+          c = { symbol: setup.preferredContractSymbol, strike: setup.preferredStrike, expiry: setup.preferredExpiry };
+          t = { quantity: qty, limitPrice: Math.round(liveMid * 1.05 * 100) / 100, timeInForce: 'GTC' };
+          limitPrice = parseFloat(t.limitPrice);
+        }
+      }
     }
 
-    var c = buildData.contract;
-    var t = buildData.orderTicket;
-    var limitPrice = parseFloat(t.limitPrice);
+    // Standard build path (resolver picks contract) — used when no preferred contract
+    if (!c) {
+      var buildRes = await fetchLib(serverBase + '/api/ayce-fire/build', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ticker: setup.ticker,
+          direction: setup.direction,
+          tradeType: 'SWING',
+          account: 'sim',
+          size: qty,
+        }),
+        timeout: 10000,
+      });
+      var buildData = await buildRes.json();
+      if (!buildData.ok || buildData.blocked) {
+        return { ok: false, error: 'build failed: ' + (buildData.error || buildData.reason) };
+      }
+      c = buildData.contract;
+      t = buildData.orderTicket;
+      limitPrice = parseFloat(t.limitPrice);
+    }
     // ICS exit math: stop -25%, TP1 +50%, TP2 +100%
     var stopPremium = Math.max(0.05, Math.round(limitPrice * (1 - STOP_LOSS_PCT / 100) * 100) / 100);
     var tp1Premium = Math.round(limitPrice * (1 + TP1_GAIN_PCT / 100) * 100) / 100;

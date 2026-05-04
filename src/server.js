@@ -356,6 +356,12 @@ var icsMorningBrief = null;
 try { icsMorningBrief = require('./icsMorningBrief'); console.log('[SERVER] icsMorningBrief loaded OK'); }
 catch(e) { console.log('[SERVER] icsMorningBrief not loaded:', e.message); }
 
+// EXTERNAL SETUPS — accepts pushes from AB's local Claude Code routines so
+// his /memory/ scanner output becomes the source of truth for the auto-trader.
+var externalSetups = null;
+try { externalSetups = require('./externalSetups'); console.log('[SERVER] externalSetups loaded OK'); }
+catch(e) { console.log('[SERVER] externalSetups not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4778,6 +4784,39 @@ app.get('/api/ics/morning-brief/preview', async function(req, res) {
   try {
     var brief = await icsMorningBrief.buildBrief();
     res.json({ ok: true, qualifying: brief.qualifying, openPositions: brief.openPositions, stats: brief.stats });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// EXTERNAL SETUPS — bridge from AB's local Claude Code routines.
+// AB's local /memory/ scanner agent posts here after writing its .md file.
+// Setups go into /data/external_setups.json and get merged into
+// simAutoTrader.collectQualifyingSetups() so the local routine output
+// drives the auto-trader.
+// =============================================================================
+app.post('/api/external-setups/import', function(req, res) {
+  if (!externalSetups) return res.status(500).json({ ok: false, error: 'externalSetups not loaded' });
+  try {
+    var auth = externalSetups.verifyToken(req.headers['x-source-token']);
+    if (!auth.ok) return res.status(401).json({ ok: false, error: auth.error || 'unauthorized' });
+    var result = externalSetups.importSetups(req.body || {});
+    res.json(Object.assign({ authMode: auth.mode }, result));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/external-setups/list', function(req, res) {
+  if (!externalSetups) return res.status(500).json({ ok: false, error: 'externalSetups not loaded' });
+  try {
+    res.json({ ok: true, imports: externalSetups.listImports() });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/external-setups/active', function(req, res) {
+  if (!externalSetups) return res.status(500).json({ ok: false, error: 'externalSetups not loaded' });
+  try {
+    var maxAge = parseFloat(req.query.maxAgeHours) || 24;
+    var setups = externalSetups.loadActiveSetups(maxAge);
+    res.json({ ok: true, count: setups.length, maxAgeHours: maxAge, setups: setups });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
