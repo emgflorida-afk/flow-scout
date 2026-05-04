@@ -5537,6 +5537,84 @@ app.post('/api/watchlist/run', async function(req, res) {
 // Replays a historical day from Bullflow /backtesting, runs every algo alert
 // through the live executeNow gates, and returns simulated stats. Read-only —
 // does not place orders or mutate brain state.
+// ASYNC BACKTEST — fire-and-forget so Railway gateway doesn't 502 on long streams.
+// POST /api/brain/backtest/start { date } -> { jobId, status: 'running' }
+// GET  /api/brain/backtest/result/:date  -> stats (when complete) or { status: 'running' }
+var BACKTEST_DIR = (function() {
+  var dataRoot = process.env.DATA_DIR || (require('fs').existsSync('/data') ? '/data' : require('path').join(__dirname, '..', 'data'));
+  var dir = require('path').join(dataRoot, 'backtest');
+  try { require('fs').mkdirSync(dir, { recursive: true }); } catch (e) {}
+  return dir;
+})();
+function backtestResultPath(date) { return require('path').join(BACKTEST_DIR, date + '.json'); }
+
+app.post('/api/brain/backtest/start', async function(req, res) {
+  try {
+    if (!backtester) return res.status(503).json({ error: 'backtester not loaded' });
+    var date = req.body && req.body.date;
+    if (!date) return res.status(400).json({ error: 'date required (YYYY-MM-DD)' });
+
+    // Check if already running or recently completed
+    var resultPath = backtestResultPath(date);
+    var existing = null;
+    try { existing = JSON.parse(require('fs').readFileSync(resultPath, 'utf8')); } catch(e) {}
+    if (existing && existing.status === 'done') {
+      return res.json({ ok: true, status: 'done', date: date, message: 'use GET /api/brain/backtest/result/' + date });
+    }
+
+    // Mark as running, kick off background
+    var marker = { status: 'running', date: date, startedAt: new Date().toISOString() };
+    require('fs').writeFileSync(resultPath, JSON.stringify(marker, null, 2));
+
+    res.json({ ok: true, status: 'running', date: date, pollUrl: '/api/brain/backtest/result/' + date });
+
+    // Run async — DON'T await
+    backtester.runBacktest({ date: date }).then(function(result) {
+      var done = Object.assign({ status: 'done', completedAt: new Date().toISOString() }, result);
+      try { require('fs').writeFileSync(resultPath, JSON.stringify(done, null, 2)); } catch(e) {
+        console.error('[BACKTEST-ASYNC] save failed:', e.message);
+      }
+      console.log('[BACKTEST-ASYNC] ' + date + ' completed: ' + (result.stats && result.stats.eventsReceived) + ' events');
+    }).catch(function(e) {
+      var failed = { status: 'error', date: date, error: e.message, failedAt: new Date().toISOString() };
+      try { require('fs').writeFileSync(resultPath, JSON.stringify(failed, null, 2)); } catch(_) {}
+    });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/brain/backtest/result/:date', function(req, res) {
+  try {
+    var date = req.params.date;
+    var resultPath = backtestResultPath(date);
+    var data;
+    try { data = JSON.parse(require('fs').readFileSync(resultPath, 'utf8')); }
+    catch(e) { return res.status(404).json({ error: 'no backtest started for ' + date, hint: 'POST /api/brain/backtest/start { date }' }); }
+    res.json(data);
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+app.get('/api/brain/backtest/list', function(req, res) {
+  try {
+    var fs = require('fs');
+    var files = fs.readdirSync(BACKTEST_DIR).filter(function(f) { return f.endsWith('.json'); });
+    var summary = files.map(function(f) {
+      try {
+        var d = JSON.parse(fs.readFileSync(require('path').join(BACKTEST_DIR, f), 'utf8'));
+        return {
+          date: f.replace('.json', ''),
+          status: d.status,
+          startedAt: d.startedAt,
+          completedAt: d.completedAt,
+          algoAlerts: (d.stats || {}).algoAlerts,
+          customAlerts: (d.stats || {}).customAlerts,
+        };
+      } catch(e) { return { date: f, error: e.message }; }
+    });
+    res.json({ ok: true, backtests: summary });
+  } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// LEGACY synchronous endpoint (will 502 on real trading days due to Railway gateway timeout)
 app.post('/api/brain/backtest', async function(req, res) {
   try {
     if (!backtester) return res.status(503).json({ error: 'backtester not loaded' });
