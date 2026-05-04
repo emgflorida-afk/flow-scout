@@ -261,38 +261,75 @@ async function placeOrder(opts) {
     quantity: String(opts.quantity),
   };
 
+  // Public option contracts have varying tick sizes:
+  //   - Penny-pilot: $0.01 increments (most liquid)
+  //   - Nickel-tick: $0.05 increments
+  //   - Dime-tick: $0.10 increments (some thinly traded / further OTM)
+  // We default to ROUND-UP-TO-NEAREST-$0.05 (covers penny + nickel pilots).
+  // If Public returns code 104 'must be $0.10 increments', placeOrder retries
+  // with $0.10 rounding (see retry block below).
+  function roundToTick(price, tick) {
+    var n = Number(price);
+    if (!isFinite(n)) return price;
+    // For BUY orders, round UP to ensure fill (we're willing to pay marginally more).
+    // For SELL orders, round DOWN. Defaults to UP since most placeOrder calls are buys.
+    var rounded = Math.ceil(n / tick) * tick;
+    return rounded.toFixed(2);
+  }
+  var defaultTick = instrumentType === 'OPTION' ? 0.05 : 0.01;
   if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') {
     if (opts.limitPrice == null) throw new Error('placeOrder: limitPrice required for LIMIT/STOP_LIMIT');
-    payload.limitPrice = Number(opts.limitPrice).toFixed(2);
+    payload.limitPrice = roundToTick(opts.limitPrice, defaultTick);
   }
   if (orderType === 'STOP' || orderType === 'STOP_LIMIT') {
     if (opts.stopPrice == null) throw new Error('placeOrder: stopPrice required for STOP/STOP_LIMIT');
-    payload.stopPrice = Number(opts.stopPrice).toFixed(2);
+    payload.stopPrice = roundToTick(opts.stopPrice, defaultTick);
   }
   if (instrumentType === 'OPTION') {
     payload.openCloseIndicator = openClose;
   }
 
   var url = BASE_URL + '/' + encodeURIComponent(a.accountId) + '/order';
-  var r = await fetch(url, {
-    method: 'POST',
-    headers: a.headers,
-    body: JSON.stringify(payload),
-  });
-  var bodyText = '';
-  try { bodyText = await r.text(); } catch(e) {}
-  if (!r.ok) {
-    return {
-      ok: false,
-      status: r.status,
-      error: bodyText.slice(0, 500),
-      requestPayload: payload,
-    };
+  async function postOnce(p) {
+    var r = await fetch(url, { method: 'POST', headers: a.headers, body: JSON.stringify(p) });
+    var bodyText = '';
+    try { bodyText = await r.text(); } catch(e) {}
+    return { httpStatus: r.status, ok: r.ok, body: bodyText };
+  }
+
+  var attempt = await postOnce(payload);
+
+  // Retry on tick-size error (code 104). Public tells us the required increment in the message.
+  if (!attempt.ok && instrumentType === 'OPTION') {
+    var errText = attempt.body || '';
+    var tickMatch = errText.match(/increments of \$([0-9.]+)/i);
+    if (errText.indexOf('"code":104') >= 0 && tickMatch) {
+      var requiredTick = parseFloat(tickMatch[1]);
+      if (isFinite(requiredTick) && requiredTick > 0 && requiredTick < 1) {
+        console.log('[PUBLIC] Tick-size retry: rounding to $' + requiredTick + ' (was $' + defaultTick + ')');
+        var retryPayload = Object.assign({}, payload);
+        // New orderId for the retry so Public doesn't think it's a duplicate
+        retryPayload.orderId = makeOrderId();
+        if (retryPayload.limitPrice != null) retryPayload.limitPrice = roundToTick(retryPayload.limitPrice, requiredTick);
+        if (retryPayload.stopPrice != null) retryPayload.stopPrice = roundToTick(retryPayload.stopPrice, requiredTick);
+        attempt = await postOnce(retryPayload);
+        if (attempt.ok) {
+          try { return Object.assign({ ok: true, requestPayload: retryPayload, retriedWithTick: requiredTick }, JSON.parse(attempt.body)); }
+          catch (e) { return { ok: true, status: attempt.httpStatus, raw: attempt.body.slice(0,500), requestPayload: retryPayload, retriedWithTick: requiredTick }; }
+        }
+        return { ok: false, status: attempt.httpStatus, error: attempt.body.slice(0,500), requestPayload: retryPayload, retriedWithTick: requiredTick };
+      }
+    }
+    return { ok: false, status: attempt.httpStatus, error: attempt.body.slice(0, 500), requestPayload: payload };
+  }
+
+  if (!attempt.ok) {
+    return { ok: false, status: attempt.httpStatus, error: attempt.body.slice(0, 500), requestPayload: payload };
   }
   try {
-    return Object.assign({ ok: true, requestPayload: payload }, JSON.parse(bodyText));
+    return Object.assign({ ok: true, requestPayload: payload }, JSON.parse(attempt.body));
   } catch (e) {
-    return { ok: true, status: r.status, raw: bodyText.slice(0, 500), requestPayload: payload };
+    return { ok: true, status: attempt.httpStatus, raw: attempt.body.slice(0, 500), requestPayload: payload };
   }
 }
 
