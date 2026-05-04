@@ -3964,6 +3964,42 @@ cron.schedule('*/5 9-10 * * 1-5', async function() {
   } catch(e) { console.error('[AUTOFIRE] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
+// AYCE SCANNER cron — fires at key intraday windows when AYCE strategies can
+// be detected. Each AYCE pattern needs specific time-of-day candles:
+//   - 8:30 AM ET: 8AM 4HR block & 8AM 1HR bar are closed (4HR-Retrig, Failed 9 setups visible)
+//   - 9:35 AM ET: post-bell, Miyagi / 4HR-Retrigger / Failed 9 trigger states known
+//   - 10:30 AM ET: 3-2-2 First Live execution window
+//   - 11:30 AM ET: 7HR Liquidity Sweep window opens
+cron.schedule('30 8,11 * * 1-5', async function() {
+  try {
+    if (!ayceScanner) return;
+    console.log('[AYCE] scheduled scan starting...');
+    var out = await ayceScanner.scanUniverse({});
+    var hits = (out && out.hits) || [];
+    console.log('[AYCE] scan complete: ' + hits.length + ' tickers with strategies');
+  } catch(e) { console.error('[AYCE] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+cron.schedule('35 9 * * 1-5', async function() {
+  try {
+    if (!ayceScanner) return;
+    console.log('[AYCE] post-bell scan starting...');
+    var out = await ayceScanner.scanUniverse({});
+    var hits = (out && out.hits) || [];
+    console.log('[AYCE] post-bell scan complete: ' + hits.length + ' tickers');
+  } catch(e) { console.error('[AYCE] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+cron.schedule('30 10 * * 1-5', async function() {
+  try {
+    if (!ayceScanner) return;
+    console.log('[AYCE] 10:30 scan (3-2-2 execution window) starting...');
+    var out = await ayceScanner.scanUniverse({});
+    var hits = (out && out.hits) || [];
+    console.log('[AYCE] 10:30 scan complete: ' + hits.length + ' tickers');
+  } catch(e) { console.error('[AYCE] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
 // reversal patterns (failed-2D, failed-2U, 2D-2U, 2U-2D, inside-week) right
 // after Daily close so AB sees John-style reversal candidates before evening
