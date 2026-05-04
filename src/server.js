@@ -329,6 +329,13 @@ var riskDesk = null;
 try { riskDesk = require('./riskDesk'); console.log('[SERVER] riskDesk loaded OK'); }
 catch(e) { console.log('[SERVER] riskDesk not loaded:', e.message); }
 
+// POWER HOUR BRIEF — auto-fires at 2:30 PM ET. Synthesizes top swing-eligible
+// setups across JS/COIL/WP/AYCE for next-day pre-positioning. Pushes Discord
+// card with multi-system confluence ranking + macro context.
+var powerHourBrief = null;
+try { powerHourBrief = require('./powerHourBrief'); console.log('[SERVER] powerHourBrief loaded OK'); }
+catch(e) { console.log('[SERVER] powerHourBrief not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4478,6 +4485,31 @@ cron.schedule('*/5 9-15 * * 1-5', async function() {
     await riskDesk.runRiskDesk();
   } catch(e) { console.error('[RISK-DESK] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
+
+// POWER HOUR BRIEF cron — fires at 2:30 PM ET each weekday.
+// Synthesizes top swing setups for next-day pre-positioning, pushes Discord.
+cron.schedule('30 14 * * 1-5', async function() {
+  try {
+    if (!powerHourBrief) return;
+    console.log('[POWER-HOUR-BRIEF] 2:30 PM cron firing...');
+    await powerHourBrief.runBrief();
+  } catch(e) { console.error('[POWER-HOUR-BRIEF] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// POWER HOUR BRIEF endpoint — manual trigger / view last brief
+app.post('/api/power-hour-brief/run', async function(req, res) {
+  if (!powerHourBrief) return res.status(500).json({ ok: false, error: 'powerHourBrief not loaded' });
+  try {
+    var brief = await powerHourBrief.runBrief();
+    res.json({ ok: true, brief: brief });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.get('/api/power-hour-brief/last', function(req, res) {
+  if (!powerHourBrief) return res.status(500).json({ ok: false, error: 'powerHourBrief not loaded' });
+  var b = powerHourBrief.loadLastBrief();
+  if (!b) return res.json({ ok: false, error: 'no brief generated yet' });
+  res.json({ ok: true, brief: b });
+});
 
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
 // reversal patterns (failed-2D, failed-2U, 2D-2U, 2U-2D, inside-week) right
