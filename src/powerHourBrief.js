@@ -285,11 +285,15 @@ async function pushBriefToDiscord(brief) {
     }],
   };
 
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[POWER-HOUR-BRIEF] PUSHED: ' + brief.totalUniqueTickers + ' tickers, top ' + topFields.length);
-  } catch (e) { console.log('[POWER-HOUR-BRIEF] discord error:', e.message); }
+  // Use shared discordPush helper — tracks heartbeat + retries on 5xx + logs full errors
+  var dp = require('./discordPush');
+  var result = await dp.send('powerHourBrief', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) {
+    console.log('[POWER-HOUR-BRIEF] PUSHED: ' + brief.totalUniqueTickers + ' tickers, top ' + topFields.length + ' (attempts ' + result.attempts + ')');
+  } else {
+    console.error('[POWER-HOUR-BRIEF] PUSH FAILED after ' + result.attempts + ' attempts: ' + (result.error || 'unknown'));
+  }
+  return result;
 }
 
 // ─── PUBLIC API ───────────────────────────────────────────────────────────

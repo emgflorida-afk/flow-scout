@@ -161,11 +161,11 @@ async function pushNewsAlert(headline, scoreData, source) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[NEWS-SCOUT] PUSH: ' + headline.title.slice(0, 60));
-  } catch (e) { console.log('[NEWS-SCOUT] discord error:', e.message); }
+  var dp = require('./discordPush');
+  var result = await dp.send('newsScout', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[NEWS-SCOUT] PUSH: ' + headline.title.slice(0, 60));
+  else console.error('[NEWS-SCOUT] push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────

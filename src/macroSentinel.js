@@ -172,11 +172,11 @@ async function pushVixCrossAlert(prevVix, currVix, threshold, direction) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[MACRO-SENTINEL] VIX cross alert: ' + threshold.level);
-  } catch (e) {}
+  var dp = require('./discordPush');
+  var result = await dp.send('macroSentinel', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[MACRO-SENTINEL] VIX cross alert: ' + threshold.level);
+  else console.error('[MACRO-SENTINEL] VIX push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 async function pushSpyLevelBreakAlert(spy, level, direction) {
@@ -192,11 +192,11 @@ async function pushSpyLevelBreakAlert(spy, level, direction) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[MACRO-SENTINEL] SPY level break: $' + level.price);
-  } catch (e) {}
+  var dp = require('./discordPush');
+  var result = await dp.send('macroSentinel', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[MACRO-SENTINEL] SPY level break: $' + level.price);
+  else console.error('[MACRO-SENTINEL] SPY push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 async function pushRegimeFlipAlert(prev, curr, regime) {
@@ -225,11 +225,11 @@ async function pushRegimeFlipAlert(prev, curr, regime) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[MACRO-SENTINEL] REGIME FLIP: ' + regime.direction);
-  } catch (e) {}
+  var dp = require('./discordPush');
+  var result = await dp.send('macroSentinel', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[MACRO-SENTINEL] REGIME FLIP: ' + regime.direction);
+  else console.error('[MACRO-SENTINEL] regime flip push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 // ─── MAIN ─────────────────────────────────────────────────────────────────

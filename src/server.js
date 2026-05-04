@@ -1394,6 +1394,41 @@ app.get('/api/desks/status', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// DESK HEALTH — heartbeat tracking for all 7 desks (May 4 2026 fix)
+// Reads /data/desk_heartbeats.json, shows last-success/last-failure/consec-fails
+// per desk so silent push failures become visible. After today's "Power Hour
+// brief built but didn't push to Discord" silent-failure pattern. AB can curl
+// this endpoint any time to see which desks are alive vs dying.
+//   GET /api/desks/health
+app.get('/api/desks/health', function(req, res) {
+  try {
+    var dp = require('./discordPush');
+    res.json(Object.assign({ ok: true }, dp.getHealth()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// MANUAL FIRE-TEST endpoints — trigger each desk's runner on demand.
+// Lets us verify push pipeline end-to-end without waiting for cron.
+//   POST /api/desks/test-push?desk=powerHourBrief
+//   Valid desks: powerHourBrief, triggerWatcher, breakoutWatcher,
+//                macroSentinel, newsScout, riskDesk, positionMonitor
+app.post('/api/desks/test-push', async function(req, res) {
+  var desk = String(req.query.desk || req.body && req.body.desk || '').trim();
+  if (!desk) return res.status(400).json({ ok: false, error: 'usage: ?desk=powerHourBrief' });
+  try {
+    var result;
+    if (desk === 'powerHourBrief' && powerHourBrief) result = await powerHourBrief.runBrief();
+    else if (desk === 'triggerWatcher' && triggerWatcher) result = await triggerWatcher.runWatch();
+    else if (desk === 'breakoutWatcher' && breakoutWatcher) result = await breakoutWatcher.runWatch();
+    else if (desk === 'macroSentinel' && macroSentinel) result = await macroSentinel.runSentinel();
+    else if (desk === 'newsScout' && newsScout) result = await newsScout.runScout();
+    else if (desk === 'riskDesk' && riskDesk) result = await riskDesk.runRiskDesk();
+    else if (desk === 'positionMonitor' && positionMonitor) result = await positionMonitor.runMonitor();
+    else return res.status(400).json({ ok: false, error: 'unknown or unloaded desk: ' + desk });
+    res.json({ ok: true, desk: desk, result: result || 'no return value' });
+  } catch(e) { res.status(500).json({ ok: false, desk: desk, error: e.message }); }
+});
+
 // CANDLE RANGE THEORY (CRT) — 3-bar sweep+reversal detector
 //   GET /api/crt/UNH?direction=short
 //   GET /api/crt/AMD                       (auto-detects direction)

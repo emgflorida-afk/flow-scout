@@ -210,16 +210,15 @@ async function pushTriggerAlert(setup, spot) {
     }],
   };
 
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(embed),
-      timeout: 5000,
-    });
-    console.log('[TRIGGER-WATCH] PUSHED: ' + setup.ticker + ' ' + setup.source + ' ' + setup.direction);
-  } catch (e) { console.log('[TRIGGER-WATCH] Discord push error:', e.message); }
+  // Use shared discordPush helper — tracks heartbeat + retries + logs full errors
+  var dp = require('./discordPush');
+  var result = await dp.send('triggerWatcher', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) {
+    console.log('[TRIGGER-WATCH] PUSHED: ' + setup.ticker + ' ' + setup.source + ' ' + setup.direction + ' (attempts ' + result.attempts + ')');
+  } else {
+    console.error('[TRIGGER-WATCH] PUSH FAILED for ' + setup.ticker + ' after ' + result.attempts + ' attempts: ' + (result.error || 'unknown'));
+  }
+  return result;
 }
 
 // Main scan-and-alert function

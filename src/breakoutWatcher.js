@@ -164,22 +164,14 @@ async function pushDiscord(newFires) {
   var content = lines.join('\n');
   if (content.length > 1900) content = content.slice(0, 1880) + '\n…(truncated)';
 
-  try {
-    var r = await fetchLib(DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: content, username: 'Breakout Watcher' }),
-    });
-    if (!r.ok) {
-      var t = await r.text();
-      console.warn('[BREAKOUT] discord push failed:', r.status, t.slice(0, 200));
-      return { error: 'discord-' + r.status };
-    }
+  var dp = require('./discordPush');
+  var result = await dp.send('breakoutWatcher', { content: content, username: 'Breakout Watcher' }, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) {
     console.log('[BREAKOUT] Discord push OK · ' + newFires.length + ' fires');
     return { posted: true, count: newFires.length };
-  } catch(e) {
-    console.error('[BREAKOUT] discord error:', e.message);
-    return { error: e.message };
+  } else {
+    console.error('[BREAKOUT] push FAILED after ' + result.attempts + ' attempts: ' + (result.error || 'unknown'));
+    return { error: result.error || 'discord-' + result.status };
   }
 }
 

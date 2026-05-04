@@ -162,11 +162,11 @@ async function pushStaleLmtAlert(order, spreadNAT, lmtPrice) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[POSITION-MONITOR] STALE LMT alert pushed: ' + ticker);
-  } catch (e) { console.log('[POSITION-MONITOR] Discord push error:', e.message); }
+  var dp = require('./discordPush');
+  var result = await dp.send('positionMonitor', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[POSITION-MONITOR] STALE LMT alert pushed: ' + ticker);
+  else console.error('[POSITION-MONITOR] stale-LMT push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 async function pushImminentFillAlert(order, spreadNAT, lmtPrice) {
@@ -195,11 +195,11 @@ async function pushImminentFillAlert(order, spreadNAT, lmtPrice) {
       timestamp: new Date().toISOString(),
     }],
   };
-  try {
-    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
-    await fetchLib(DISCORD_WEBHOOK, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(embed), timeout: 5000 });
-    console.log('[POSITION-MONITOR] IMMINENT FILL alert: ' + ticker);
-  } catch (e) {}
+  var dp = require('./discordPush');
+  var result = await dp.send('positionMonitor', embed, { webhook: DISCORD_WEBHOOK });
+  if (result.ok) console.log('[POSITION-MONITOR] IMMINENT FILL alert: ' + ticker);
+  else console.error('[POSITION-MONITOR] imminent-fill push FAILED: ' + (result.error || 'unknown'));
+  return result;
 }
 
 // ─── MAIN MONITOR ─────────────────────────────────────────────────────────
