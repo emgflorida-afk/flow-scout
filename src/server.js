@@ -5602,7 +5602,9 @@ app.post('/api/brain/backtest/start', async function(req, res) {
 
     // Run async — DON'T await
     backtester.runBacktest({ date: date }).then(function(result) {
-      var done = Object.assign({ status: 'done', completedAt: new Date().toISOString() }, result);
+      // Note: result has its own `status: 'OK'` from runBacktest — we put our
+      // 'done' AFTER so it overrides (fixes earlier bug where 'OK' won out).
+      var done = Object.assign({}, result, { status: 'done', completedAt: new Date().toISOString() });
       try { require('fs').writeFileSync(resultPath, JSON.stringify(done, null, 2)); } catch(e) {
         console.error('[BACKTEST-ASYNC] save failed:', e.message);
       }
