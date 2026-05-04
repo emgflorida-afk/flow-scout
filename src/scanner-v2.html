@@ -3656,9 +3656,27 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
       this.textContent = 'Placing...';
       this.disabled = true;
       try {
+        // PHASE 2.7 BRACKET SUPPORT — auto-attach stop + TP1 from setup data if present
+        // Stop: -25% premium (option-level) or structural stock-trigger
+        // TP1: +50% premium
+        const limitPrice = parseFloat(t.limitPrice);
+        const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.75 * 100) / 100);  // 25% loss
+        const tp1Premium = Math.round(limitPrice * 1.50 * 100) / 100;                    // 50% gain
+        const placeBody = {
+          ticker, contractSymbol: c.symbol, direction, account,
+          size: t.quantity, limitPrice: limitPrice,
+          stopPremium: stopPremium,
+          tp1Premium: tp1Premium,
+        };
+        // Pass along structural stock stop if available from card
+        if (window._currentAyceSetup && window._currentAyceSetup.stop) {
+          placeBody.structuralStopSymbol = ticker;
+          placeBody.structuralStopPrice = window._currentAyceSetup.stop;
+          placeBody.structuralStopPredicate = direction === 'long' ? 'below' : 'above';
+        }
         const pr = await fetch('/api/ayce-fire/place', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ticker, contractSymbol: c.symbol, direction, account, size: t.quantity, limitPrice: t.limitPrice }),
+          body: JSON.stringify(placeBody),
         });
         const pdata = await pr.json();
         if (pdata.ok) {

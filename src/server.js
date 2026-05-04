@@ -1198,23 +1198,26 @@ app.post('/api/ayce-fire/place', async function(req, res) {
     var size = parseInt(b.size || 1);
     var limitPrice = parseFloat(b.limitPrice);
     var contractSymbol = b.contractSymbol;
+    // BRACKET SUPPORT (Phase 2.7) — accept stop + TP1 + structural stop for OCO bracket
+    var stopPremium = parseFloat(b.stopPremium);          // exit at premium price (e.g. 0.75 of entry)
+    var tp1Premium = parseFloat(b.tp1Premium);             // take profit at premium (e.g. 1.25 of entry)
+    var structuralStopSymbol = b.structuralStopSymbol;    // ticker for stock-level stop
+    var structuralStopPrice = parseFloat(b.structuralStopPrice);
+    var structuralStopPredicate = b.structuralStopPredicate || (direction === 'long' ? 'below' : 'above');
+
     if (!ticker || !contractSymbol || !isFinite(limitPrice)) {
-      return res.status(400).json({ ok: false, error: 'usage: { ticker, contractSymbol, direction, account: ts|sim|public, size, limitPrice }' });
+      return res.status(400).json({ ok: false, error: 'usage: { ticker, contractSymbol, direction, account: ts|sim|public, size, limitPrice, stopPremium?, tp1Premium?, structuralStopPrice?, structuralStopSymbol? }' });
     }
 
     // BUG FIX: Validate option symbol format BEFORE Public placement
-    // Without this, a stock-only contractSymbol falls to EQUITY = SHARES order
-    // (the bug AB caught earlier this session).
     var isOptionSymbol = /\d{6}[CP]\d+(\.\d+)?$/.test(contractSymbol.replace(/\s/g, ''));
 
     if (account === 'public') {
       if (!publicBroker) return res.status(500).json({ ok: false, error: 'publicBroker not loaded' });
-      // SAFEGUARD: refuse to place on Public unless contractSymbol is OPRA option format.
-      // Prevents accidental SHARES orders.
       if (!isOptionSymbol) {
         return res.status(400).json({
           ok: false,
-          error: 'BLOCKED: contractSymbol "' + contractSymbol + '" does not match OPRA option format. Refusing to place on Public to prevent accidental SHARES order. Use full option symbol like "ADBE 260515C255".',
+          error: 'BLOCKED: contractSymbol "' + contractSymbol + '" does not match OPRA option format. Refusing to place on Public to prevent accidental SHARES order.',
           symbolReceived: contractSymbol,
         });
       }
@@ -1225,28 +1228,60 @@ app.post('/api/ayce-fire/place', async function(req, res) {
         orderType: 'LIMIT',
         limitPrice: String(limitPrice),
         timeInForce: 'DAY',
-        instrumentType: 'OPTION',  // EXPLICIT — don't rely on regex detection
+        instrumentType: 'OPTION',
         openCloseIndicator: 'OPEN',
       });
-      return res.json({ ok: true, account: 'public', result: pubRes });
+      return res.json({ ok: true, account: 'public', result: pubRes, note: 'Bracket attachment for Public not yet supported — stop/TP must be set manually post-fill.' });
     }
-    // TS (live or sim) — use orderExecutor
+
+    // TS (live or sim) — use orderExecutor with FULL bracket support
     var executor = require('./orderExecutor');
     var liveBypass = account === 'ts';
     var simMode = account === 'sim';
-    var orderRes = await executor.placeOrder({
+
+    // Build placeOrder params with bracket
+    var placeParams = {
+      account: account === 'ts' ? '11975462' : (account === 'sim' ? 'SIM3142118M' : '11975462'),
       symbol: contractSymbol,
-      tradeAction: 'BUYTOOPEN',
-      quantity: String(size),
-      orderType: 'Limit',
-      limitPrice: String(limitPrice),
-      timeInForce: { duration: 'DAY' },
-      route: 'Intelligent',
+      action: 'BUYTOOPEN',
+      qty: size,
+      limit: limitPrice,
+      duration: 'GTC',  // GTC for swings, brackets need this
+      manualFire: true, // bypass time-based gates (AB clicked FIRE intentionally)
       liveBypass: liveBypass,
-      simMode: simMode,
+    };
+
+    // Attach option-premium stop if provided
+    if (isFinite(stopPremium) && stopPremium > 0) {
+      placeParams.stop = stopPremium;
+    }
+
+    // Attach take-profit if provided
+    if (isFinite(tp1Premium) && tp1Premium > 0) {
+      placeParams.t1 = tp1Premium;
+    }
+
+    // Attach structural stop (stock-level trigger) if provided
+    if (structuralStopSymbol && isFinite(structuralStopPrice)) {
+      placeParams.structuralStop = {
+        symbol: String(structuralStopSymbol).toUpperCase(),
+        predicate: structuralStopPredicate,
+        price: structuralStopPrice,
+      };
+    }
+
+    console.log('[FIRE-PLACE] params:', JSON.stringify(placeParams, null, 2));
+    var orderRes = await executor.placeOrder(placeParams);
+
+    return res.json({
+      ok: !orderRes.error,
+      account: account,
+      result: orderRes,
+      bracketAttached: !!(placeParams.stop || placeParams.t1 || placeParams.structuralStop),
+      placeParams: placeParams,
     });
-    return res.json({ ok: true, account: account, result: orderRes });
   } catch(e) {
+    console.error('[FIRE-PLACE] error:', e);
     res.status(500).json({ ok: false, error: e.message });
   }
 });
