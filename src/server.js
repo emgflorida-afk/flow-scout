@@ -315,6 +315,20 @@ var macroSentinel = null;
 try { macroSentinel = require('./macroSentinel'); console.log('[SERVER] macroSentinel loaded OK'); }
 catch(e) { console.log('[SERVER] macroSentinel not loaded:', e.message); }
 
+// NEWS SCOUT — Hedge fund "news desk." Pulls market headlines from RSS
+// feeds (Yahoo / CNBC / MarketWatch), scores by keyword categories
+// (war/macro/energy/earnings/panic), pushes Discord on material events.
+var newsScout = null;
+try { newsScout = require('./newsScout'); console.log('[SERVER] newsScout loaded OK'); }
+catch(e) { console.log('[SERVER] newsScout not loaded:', e.message); }
+
+// RISK DESK — Hedge fund "risk officer." Monitors exposure, day-trade
+// budget, position concentration, correlated sector exposure, and daily
+// P/L milestones. Discord alerts on rule violations.
+var riskDesk = null;
+try { riskDesk = require('./riskDesk'); console.log('[SERVER] riskDesk loaded OK'); }
+catch(e) { console.log('[SERVER] riskDesk not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4438,6 +4452,31 @@ cron.schedule('*/2 9-15 * * 1-5', async function() {
     if (!inWindow) return;
     await macroSentinel.runSentinel();
   } catch(e) { console.error('[MACRO-SENTINEL] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// NEWS SCOUT cron — every 15 min during RTH + 1 pre-market check at 8 AM ET.
+// Pulls major financial news RSS feeds, scores by keyword category, pushes
+// Discord on material events (war / macro / earnings / panic keywords).
+cron.schedule('*/15 8-16 * * 1-5', async function() {
+  try {
+    if (!newsScout) return;
+    await newsScout.runScout();
+  } catch(e) { console.error('[NEWS-SCOUT] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// RISK DESK cron — every 5 min during RTH. Polls account balance + positions,
+// pushes Discord alerts on: daily loss limit, profit target, over-exposure,
+// position concentration, correlated sector exposure.
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!riskDesk) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 35) || (etHr >= 10 && etHr <= 14) || (etHr === 15 && etMin <= 55);
+    if (!inWindow) return;
+    await riskDesk.runRiskDesk();
+  } catch(e) { console.error('[RISK-DESK] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // JS PATTERN SCANNER -- 4:15 PM ET weekdays. Catches single/double-bar
