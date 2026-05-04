@@ -18,8 +18,9 @@
 // 10. Market researcher GREEN [+1]
 // 11. Chart Vision APPROVE [+2]
 // 12. Candle Range Theory (CRT) sweep+reversal [+2 high / +1 medium / +0 low]
+// 13. AYCE strategy alignment (Miyagi / 4HR / Failed 9 / etc.) [+1]
 //
-// MAX 15 → A++. Real-world A++ rare; A-tier (8-9) is the typical fire threshold.
+// MAX 16 → A++. Real-world A++ rare; A-tier (8-9) is the typical fire threshold.
 // CRT exists to override vision VETO when the structure IS the sweep — vision
 // alone can't see "ATH = liquidity grab" without the structural detector.
 // =============================================================================
@@ -43,6 +44,7 @@ var sniperFeed = lazy('sniperFeed');
 var lottoFeed = lazy('lottoFeed');
 var candleRangeTheory = lazy('candleRangeTheory');
 var johnPatternScanner = lazy('johnPatternScanner');
+var ayceScanner = lazy('ayceScanner');
 
 function round2(v) { return Math.round(v * 100) / 100; }
 
@@ -249,6 +251,43 @@ async function scoreSetup(opts) {
   //   pure trend-following vision misreads as "counter-trend at ATH".
   //   Scoring: high → +2, medium → +1, low → +0 (still passes but no points).
   // ─────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────
+  // Layer 13: AYCE strategy alignment (Miyagi / 4HR / Failed 9 / etc.)
+  //   If an AYCE strategy is detected and direction matches → +1
+  //   This is a separate methodology — when it ALSO agrees with the setup,
+  //   that's strong cross-system confluence.
+  // ─────────────────────────────────────────────────────
+  if (ayceScanner) {
+    try {
+      var ayceRes = await ayceScanner.scanTicker(ticker);
+      if (ayceRes && ayceRes.ok && ayceRes.strategies && ayceRes.strategies.length > 0) {
+        var matching = ayceRes.strategies.filter(function(s) {
+          return s.direction === direction && (s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired' || s.status === 'window-open-watch-5m');
+        });
+        if (matching.length > 0) {
+          layers.ayceStrategy = {
+            points: 1,
+            passed: true,
+            detail: 'AYCE ' + matching.map(function(m) { return m.name; }).join(', ') + ' aligned ' + direction,
+          };
+          totalScore += 1;
+        } else {
+          layers.ayceStrategy = {
+            points: 0,
+            passed: false,
+            detail: 'AYCE strategies detected but no direction-match: ' + ayceRes.strategies.map(function(s) { return s.name + '(' + (s.direction||'n/a') + '/' + (s.status||'?') + ')'; }).join(', '),
+          };
+        }
+      } else {
+        layers.ayceStrategy = { points: 0, passed: false, detail: 'no AYCE strategy fired' };
+      }
+    } catch (e) {
+      layers.ayceStrategy = { points: 0, passed: 'unchecked', detail: e.message };
+    }
+  } else {
+    layers.ayceStrategy = { points: 0, passed: 'unchecked', detail: 'AYCE module unavailable' };
+  }
+
   if (candleRangeTheory) {
     try {
       var crtRes = await candleRangeTheory.crtFor(ticker, { direction: direction, tf: 'Daily' });
@@ -337,13 +376,13 @@ async function scoreSetup(opts) {
     pattern: pattern,
     sourceConv: sourceConv,
     score: round2(totalScore),
-    maxPossible: 15,
+    maxPossible: 16,
     tier: tier,
     tierIcon: tierIcon,
     sizeRecommendation: sizeRecommendation,
     autoFireEligible: totalScore >= 11,  // A++ only for auto-fire
     layers: layers,
-    summary: tierIcon + ' ' + tier + ' (' + round2(totalScore) + '/15) — ' +
+    summary: tierIcon + ' ' + tier + ' (' + round2(totalScore) + '/16) — ' +
              (totalScore >= 11 ? 'auto-fire eligible if all conditions met'
               : totalScore >= 9 ? 'high-conviction manual fire'
               : totalScore >= 7 ? 'standard manual fire — 1ct trial'

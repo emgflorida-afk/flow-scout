@@ -278,6 +278,12 @@ var candleRangeTheory = null;
 try { candleRangeTheory = require('./candleRangeTheory'); console.log('[SERVER] candleRangeTheory loaded OK'); }
 catch(e) { console.log('[SERVER] candleRangeTheory not loaded:', e.message); }
 
+// AYCE SCANNER — 5 ATH strategies (Miyagi 12HR / 4HR Re-Trigger / 3-2-2 First Live /
+// 7HR Liquidity Sweep / Failed 9). Time-of-day-anchored patterns, fires near 9:30 ET.
+var ayceScanner = null;
+try { ayceScanner = require('./ayceScanner'); console.log('[SERVER] ayceScanner loaded OK'); }
+catch(e) { console.log('[SERVER] ayceScanner not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -908,6 +914,34 @@ app.get('/api/target-price/:ticker', async function(req, res) {
     var ticker = String(req.params.ticker || '').toUpperCase();
     if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/target-price/SPY' });
     var out = await targetPrice.targetFor(ticker);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// AYCE SCANNER — All 5 ATH strategies (Miyagi / 4HR / 3-2-2 / 7HR / Failed 9)
+//   GET  /api/ayce-scan/last           Last cached universe scan
+//   POST /api/ayce-scan/run             Run universe scan (slow)
+//   GET  /api/ayce-scan/debug/:ticker   Run on single ticker
+app.get('/api/ayce-scan/last', function(req, res) {
+  if (!ayceScanner) return res.status(500).json({ ok: false, error: 'ayceScanner not loaded' });
+  try { res.json(ayceScanner.loadLast()); }
+  catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/ayce-scan/run', async function(req, res) {
+  if (!ayceScanner) return res.status(500).json({ ok: false, error: 'ayceScanner not loaded' });
+  try {
+    var out = await ayceScanner.scanUniverse({});
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/ayce-scan/debug/:ticker', async function(req, res) {
+  if (!ayceScanner) return res.status(500).json({ ok: false, error: 'ayceScanner not loaded' });
+  try {
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/ayce-scan/debug/SPY' });
+    var out = await ayceScanner.scanTicker(ticker);
     res.json(out);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });

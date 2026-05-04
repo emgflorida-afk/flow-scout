@@ -689,6 +689,7 @@ const TABS = [
   { id: "coil",     label: "🌀 COIL",        modeDefault: "EOD PRE-POS" },
   { id: "wp",       label: "🌊 WP",          modeDefault: "4HR SWING" },
   { id: "js",       label: "🎯 JS",          modeDefault: "REVERSAL" },
+  { id: "ayce",     label: "🍽️ AYCE",        modeDefault: "ATH 5-PACK" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -795,6 +796,21 @@ const FILTERS_JS = [
   { id: "weekly",     label: "📆 Weekly",            test: r => r.tf === "Weekly" },
   { id: "daily",      label: "📅 Daily",             test: r => r.tf === "Daily" },
   { id: "safe",       label: "🟢 SAFE hold",         test: r => r.holdRating === "SAFE" },
+];
+
+// AYCE tab: 5 ATH strategies (Miyagi 12HR / 4HR Re-Trigger / 3-2-2 First Live / 7HR Sweep / Failed 9)
+// Each "hit" is a ticker with one or more detected strategies. Filter by name + status + direction.
+const FILTERS_AYCE = [
+  { id: "all",       label: "All",                     test: r => true },
+  { id: "armed",     label: "🔥 Armed (ready)",        test: r => (r.strategies||[]).some(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') },
+  { id: "miyagi",    label: "🥋 Miyagi 12HR",          test: r => (r.strategies||[]).some(s => s.name === 'Miyagi-12HR') },
+  { id: "retrig4hr", label: "🔄 4HR Re-Trigger",       test: r => (r.strategies||[]).some(s => s.name === '4HR-Retrigger') },
+  { id: "first322",  label: "🎯 3-2-2 First Live",     test: r => (r.strategies||[]).some(s => s.name === '3-2-2-First-Live') },
+  { id: "sweep7hr",  label: "🌊 7HR Liquidity Sweep",  test: r => (r.strategies||[]).some(s => s.name === '7HR-Liquidity-Sweep') },
+  { id: "failed9",   label: "💥 Failed 9",             test: r => (r.strategies||[]).some(s => s.name === 'Failed-9') },
+  { id: "long",      label: "Long bias",               test: r => (r.strategies||[]).some(s => s.direction === 'long') },
+  { id: "short",     label: "Short bias",              test: r => (r.strategies||[]).some(s => s.direction === 'short') },
+  { id: "indices",   label: "Indices only",            test: r => ['SPY','QQQ','IWM','DIA'].indexOf(r.ticker) >= 0 },
 ];
 
 // COIL tab: daily 1-3-1 / double-inside / 3-1-1 coil patterns from dailyCoilScanner
@@ -1021,6 +1037,7 @@ function renderFilters() {
   else if (activeTab === "coil")     dataSource = (coilData && [].concat(coilData.ready||[], coilData.watching||[], coilData.prep||[])) || [];
   else if (activeTab === "wp")       dataSource = (wpData && [].concat(wpData.ready||[], wpData.trial||[])) || [];
   else if (activeTab === "js")       dataSource = (jsData && [].concat(jsData.ready||[], jsData.watching||[], jsData.prep||[])) || [];
+  else if (activeTab === "ayce")     dataSource = (ayceData && ayceData.hits) || [];
   else if (activeTab === "starred")  dataSource = (typeof starredCache !== 'undefined' && starredCache) || [];
 
   document.getElementById("filters").innerHTML = FILTERS.map(f => {
@@ -1044,6 +1061,7 @@ function renderFilters() {
       else if (activeTab === "coil")     renderGridCoil();
       else if (activeTab === "wp")       renderGridWP();
       else if (activeTab === "js")       renderGridJS();
+      else if (activeTab === "ayce")     renderGridAYCE();
       else if (activeTab === "starred")  renderGridStarred();
     });
   });
@@ -2181,6 +2199,7 @@ function renderTabs() {
               : activeTab === "coil"     ? FILTERS_COIL
               : activeTab === "wp"       ? FILTERS_WP
               : activeTab === "js"       ? FILTERS_JS
+              : activeTab === "ayce"     ? FILTERS_AYCE
               : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
       renderTabs();
@@ -2227,6 +2246,7 @@ async function loadActiveTab() {
   if (activeTab === "coil")     return loadCoilData();
   if (activeTab === "wp")       return loadWPData();
   if (activeTab === "js")       return loadJSData();
+  if (activeTab === "ayce")     return loadAYCEData();
   if (activeTab === "starred")  return loadStarredData();
   document.getElementById("grid").innerHTML = `<div class="empty">Tab "${activeTab}" coming soon.</div>`;
   document.getElementById("stats").innerHTML = "";
@@ -3492,6 +3512,132 @@ function toggleStar(ticker, source) {
 }
 window.toggleStar = toggleStar;
 window.isStarred = isStarred;
+
+// =============================================================================
+// 🍽️ AYCE tab — 5 ATH strategies (Miyagi 12HR / 4HR Re-Trigger / 3-2-2 First
+// Live / 7HR Liquidity Sweep / Failed 9). Time-of-day-anchored patterns —
+// fires at 9:30 ET (most), 10 AM ET (3-2-2), or after 11 AM ET (7HR sweep).
+// =============================================================================
+let ayceData = null;
+
+async function loadAYCEData() {
+  FILTERS = FILTERS_AYCE;
+  if (!FILTERS_AYCE.find(f => f.id === activeFilter)) activeFilter = "all";
+  try {
+    if (!ayceData) document.getElementById("grid").innerHTML = `<div class="empty">Loading AYCE scanner... (60s — scanning ~50 tickers across 5 strategies)</div>`;
+    const r = await fetch("/api/ayce-scan/last", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    ayceData = data;
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No AYCE scan yet. <button onclick="runAYCEScan()" class="pill-mini" style="background:#5cf;">Run Scan Now</button></div>`;
+    document.getElementById("stats").innerHTML = "";
+    document.getElementById("filters").innerHTML = "";
+    return;
+  }
+  const hits = ayceData.hits || [];
+  const stratCount = hits.reduce((acc, h) => acc + (h.strategies||[]).length, 0);
+  const armed = hits.reduce((acc, h) => acc + (h.strategies||[]).filter(s => s.status==='armed'||s.status==='live-armed'||s.status==='live-fired').length, 0);
+  document.getElementById("scan-date").textContent = "AYCE Scan · " + new Date(ayceData.scannedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${hits.length} tickers · ${stratCount} strategies · ${armed} armed · <button onclick="runAYCEScan()" class="pill-mini" style="background:rgba(92,207,255,0.2);color:#5cf;">↻ Re-scan</button>`;
+  renderStatsAYCE();
+  renderFilters();
+  renderTabs();
+  renderGridAYCE();
+}
+
+async function runAYCEScan() {
+  document.getElementById("grid").innerHTML = `<div class="empty">Running universe scan... (60s)</div>`;
+  try {
+    const r = await fetch("/api/ayce-scan/run", { method: "POST" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    ayceData = await r.json();
+    loadAYCEData();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Scan error: <code>${e.message}</code></div>`;
+  }
+}
+window.runAYCEScan = runAYCEScan;
+
+function renderStatsAYCE() {
+  const hits = ayceData.hits || [];
+  const allStrats = hits.flatMap(h => (h.strategies||[]).map(s => ({ticker: h.ticker, ...s})));
+  const counts = {
+    'Miyagi-12HR': allStrats.filter(s => s.name === 'Miyagi-12HR').length,
+    '4HR-Retrigger': allStrats.filter(s => s.name === '4HR-Retrigger').length,
+    '3-2-2-First-Live': allStrats.filter(s => s.name === '3-2-2-First-Live').length,
+    '7HR-Liquidity-Sweep': allStrats.filter(s => s.name === '7HR-Liquidity-Sweep').length,
+    'Failed-9': allStrats.filter(s => s.name === 'Failed-9').length,
+  };
+  const stats = [
+    { k: "Tickers", v: hits.length, cls: "" },
+    { k: "🥋 Miyagi", v: counts['Miyagi-12HR'], cls: "aqua" },
+    { k: "🔄 4HR-Retrig", v: counts['4HR-Retrigger'], cls: "aqua" },
+    { k: "🎯 3-2-2", v: counts['3-2-2-First-Live'], cls: "" },
+    { k: "🌊 7HR-Sweep", v: counts['7HR-Liquidity-Sweep'], cls: "" },
+    { k: "💥 Failed-9", v: counts['Failed-9'], cls: "red" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridAYCE() {
+  try {
+    FILTERS = FILTERS_AYCE;
+    const hits = ayceData.hits || [];
+    let filter = FILTERS.find(f => f.id === activeFilter);
+    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
+    const filtered = hits.filter(r => filter.test(r));
+    if (!filtered.length) {
+      document.getElementById("grid").innerHTML = `<div class="empty">No tickers match "${filter.label}".${hits.length === 0 ? '<br><span style="font-size:11px;">Run an AYCE scan to populate.</span>' : ''}</div>`;
+      return;
+    }
+    document.getElementById("grid").innerHTML = filtered.map(h => {
+      const strats = h.strategies || [];
+      const hasLong = strats.some(s => s.direction === 'long');
+      const hasShort = strats.some(s => s.direction === 'short');
+      const dirClass = hasLong && !hasShort ? 'long' : hasShort && !hasLong ? 'short' : '';
+      const stratHtml = strats.map(s => {
+        const dirIcon = s.direction === 'long' ? '🟢' : s.direction === 'short' ? '🔴' : '🟡';
+        const statusBg = s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired' ? 'rgba(76,175,80,0.18)' :
+                         s.status === 'invalidated' || (s.status||'').startsWith('invalid') ? 'rgba(255,59,59,0.18)' :
+                         'rgba(255,193,7,0.18)';
+        const statusFg = s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired' ? '#4caf50' :
+                         s.status === 'invalidated' || (s.status||'').startsWith('invalid') ? '#ff3b3b' : '#ffc107';
+        return `
+          <div style="margin-top:8px; padding:10px; background:${statusBg}; border-left:3px solid ${statusFg}; border-radius:4px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+              <strong style="color:${statusFg}; font-size:12px;">${dirIcon} ${s.name}</strong>
+              <span style="font-size:10px; color:${statusFg}; font-weight:700; text-transform:uppercase;">${s.status || '?'}</span>
+            </div>
+            <div style="font-size:11px; color:var(--txt-2); line-height:1.5;">${s.thesis || ''}</div>
+            ${s.trigger ? `<div style="font-size:11px; margin-top:4px;"><span style="color:var(--txt-3);">Trigger:</span> <span class="mono" style="color:#ffd700;">$${s.trigger}</span> ${s.stop ? ` · <span style="color:var(--txt-3);">Stop:</span> <span class="mono" style="color:var(--red);">$${s.stop}</span>` : ''} ${s.T1 ? ` · <span style="color:var(--txt-3);">T1:</span> <span class="mono" style="color:#4caf50;">$${s.T1}</span>` : ''} ${s.T2 ? ` · <span style="color:var(--txt-3);">T2:</span> <span class="mono" style="color:#4caf50;">$${s.T2}</span>` : ''}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+      return `
+        <div class="card ${dirClass}" data-ayce-ticker="${h.ticker}">
+          <div class="card-head">
+            <div>
+              <div class="ticker mono">${h.ticker}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">Spot: $${h.spot}</div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
+              <span class="tag" style="background:rgba(255,165,0,0.2); color:#ffa500; font-size:10px;">🍽️ AYCE</span>
+              <span class="tag" style="font-size:10px;">${strats.length} strat${strats.length === 1 ? '' : 's'}</span>
+            </div>
+          </div>
+          ${stratHtml}
+        </div>
+      `;
+    }).join("");
+  } catch(e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">AYCE render error: <code style="color:var(--red)">${e.message}</code></div>`;
+  }
+}
+window.renderGridAYCE = renderGridAYCE;
+window.loadAYCEData = loadAYCEData;
 
 async function loadStarredData() {
   FILTERS = FILTERS_STARRED;
