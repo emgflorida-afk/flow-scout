@@ -1059,6 +1059,30 @@ app.post('/api/ayce-fire/build', async function(req, res) {
     var optMid = resolved.midPrice || resolved.mid || resolved.limit;
     var expiry = resolved.expiry || resolved.expiration;
     var strike = resolved.strike;
+
+    // SAFEGUARD: ensure contractSymbol is full OPRA option format
+    // (TICKER YYMMDD[CP]STRIKE), not just stock ticker.
+    // Without this, Public would default to SHARES order = the bug AB caught.
+    var isOptionFormat = contractSymbol && /\d{6}[CP]\d+(\.\d+)?$/.test(String(contractSymbol).replace(/\s/g, ''));
+    if (!isOptionFormat && expiry && strike) {
+      // Try to construct OPRA symbol from parts
+      try {
+        var d = new Date(expiry);
+        var yy = String(d.getUTCFullYear()).slice(2);
+        var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+        var dd = String(d.getUTCDate()).padStart(2, '0');
+        var typeChar = optType === 'call' ? 'C' : 'P';
+        contractSymbol = ticker + ' ' + yy + mm + dd + typeChar + strike;
+        isOptionFormat = /\d{6}[CP]\d+(\.\d+)?$/.test(contractSymbol.replace(/\s/g, ''));
+      } catch(e) {}
+    }
+    if (!isOptionFormat) {
+      return res.status(500).json({
+        ok: false,
+        error: 'contractResolver did not return a valid OPRA option symbol. Got: "' + contractSymbol + '". Required format: TICKER YYMMDDCPnnn',
+        resolved: { contractSymbol: contractSymbol, expiry: expiry, strike: strike, optType: optType }
+      });
+    }
     // Suggest a LMT slightly above mid for buy fills (cap 5% above mid)
     var limitPrice = optMid ? Math.round(optMid * 1.05 * 100) / 100 : null;
 
@@ -1123,8 +1147,23 @@ app.post('/api/ayce-fire/place', async function(req, res) {
     if (!ticker || !contractSymbol || !isFinite(limitPrice)) {
       return res.status(400).json({ ok: false, error: 'usage: { ticker, contractSymbol, direction, account: ts|sim|public, size, limitPrice }' });
     }
+
+    // BUG FIX: Validate option symbol format BEFORE Public placement
+    // Without this, a stock-only contractSymbol falls to EQUITY = SHARES order
+    // (the bug AB caught earlier this session).
+    var isOptionSymbol = /\d{6}[CP]\d+(\.\d+)?$/.test(contractSymbol.replace(/\s/g, ''));
+
     if (account === 'public') {
       if (!publicBroker) return res.status(500).json({ ok: false, error: 'publicBroker not loaded' });
+      // SAFEGUARD: refuse to place on Public unless contractSymbol is OPRA option format.
+      // Prevents accidental SHARES orders.
+      if (!isOptionSymbol) {
+        return res.status(400).json({
+          ok: false,
+          error: 'BLOCKED: contractSymbol "' + contractSymbol + '" does not match OPRA option format. Refusing to place on Public to prevent accidental SHARES order. Use full option symbol like "ADBE 260515C255".',
+          symbolReceived: contractSymbol,
+        });
+      }
       var pubRes = await publicBroker.placeOrder({
         symbol: contractSymbol,
         side: 'BUY_OPEN',
@@ -1132,6 +1171,8 @@ app.post('/api/ayce-fire/place', async function(req, res) {
         orderType: 'LIMIT',
         limitPrice: String(limitPrice),
         timeInForce: 'DAY',
+        instrumentType: 'OPTION',  // EXPLICIT — don't rely on regex detection
+        openCloseIndicator: 'OPEN',
       });
       return res.json({ ok: true, account: 'public', result: pubRes });
     }
