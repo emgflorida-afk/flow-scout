@@ -1505,9 +1505,23 @@ app.get('/api/contract-resolver/debug/:ticker', async function(req, res) {
       var m = modes[i];
       try {
         var resolved = await resolver.resolveContract(ticker, optType, m, {});
-        results[m] = resolved
-          ? { ok: true, symbol: resolved.contractSymbol || resolved.symbol, mid: resolved.mid || resolved.midPrice, strike: resolved.strike, expiry: resolved.expiry || resolved.expiration, delta: resolved.delta }
-          : { ok: false, reason: 'returned null — likely no option in this mode\'s premium/DTE band' };
+        if (!resolved) {
+          results[m] = { ok: false, reason: 'returned null (no diagnostic info)' };
+        } else if (resolved.ok === false) {
+          // Failure object with stage + reason from resolveContract
+          results[m] = { ok: false, stage: resolved.stage, reason: resolved.reason };
+        } else if (resolved.blocked) {
+          results[m] = { ok: false, blocked: true, reason: resolved.reason };
+        } else {
+          results[m] = {
+            ok: true,
+            symbol: resolved.contractSymbol || resolved.symbol,
+            mid: resolved.mid || resolved.midPrice,
+            strike: resolved.strike,
+            expiry: resolved.expiry || resolved.expiration,
+            delta: resolved.delta,
+          };
+        }
       } catch (e) {
         results[m] = { ok: false, error: e.message };
       }
