@@ -33,6 +33,53 @@ try { simAutoTrader = require('./simAutoTrader'); } catch (e) {}
 var tradeTracker = null;
 try { tradeTracker = require('./tradeTracker'); } catch (e) {}
 
+// Bullflow alignment lookup — reads /data/backtest/*.json for recent flow
+// data on each setup's ticker. Tells us if institutional flow ALIGNS with
+// the setup direction. Per AB: 'lining up makes sense'.
+var BACKTEST_DIR_BRIEF = path.join(DATA_ROOT, 'backtest');
+function getBullflowAlignment(ticker, direction) {
+  try {
+    if (!fs.existsSync(BACKTEST_DIR_BRIEF)) return null;
+    var files = fs.readdirSync(BACKTEST_DIR_BRIEF).filter(function(f) { return f.endsWith('.json'); }).sort().reverse();
+    var totals = { calls: 0, puts: 0, premium: 0, days: 0 };
+    var daysCounted = 0;
+    for (var i = 0; i < files.length && daysCounted < 5; i++) {
+      try {
+        var d = JSON.parse(fs.readFileSync(path.join(BACKTEST_DIR_BRIEF, files[i]), 'utf8'));
+        if (d.status !== 'done' || !d.stats) continue;
+        var byTicker = d.stats.byTicker || {};
+        var t = byTicker[ticker.toUpperCase()];
+        if (t) {
+          totals.calls += (t.calls || 0);
+          totals.puts += (t.puts || 0);
+          totals.premium += (t.totalPremium || 0);
+          totals.days++;
+        }
+        daysCounted++;
+      } catch (e) {}
+    }
+    if (totals.days === 0) return null;
+    var totalAlerts = totals.calls + totals.puts;
+    if (totalAlerts === 0) return { alignment: 'no-flow', daysCovered: daysCounted, alerts: 0 };
+    var pctCalls = totals.calls / totalAlerts;
+    var bullishFlow = pctCalls >= 0.6;
+    var bearishFlow = pctCalls <= 0.4;
+    var aligned = (direction === 'long' && bullishFlow) || (direction === 'short' && bearishFlow);
+    var contradicts = (direction === 'long' && bearishFlow) || (direction === 'short' && bullishFlow);
+    return {
+      alignment: aligned ? 'ALIGNED' : contradicts ? 'CONTRADICTS' : 'MIXED',
+      pctCalls: Math.round(pctCalls * 100),
+      pctPuts: Math.round((1 - pctCalls) * 100),
+      totalAlerts: totalAlerts,
+      premiumK: Math.round(totals.premium / 1000),
+      daysCovered: totals.days,
+    };
+  } catch (e) {
+    console.error('[ICS-MORNING] alignment lookup error:', e.message);
+    return null;
+  }
+}
+
 function todayET() {
   var et = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
   var [m, d, y] = et.split('/');
@@ -127,14 +174,28 @@ async function buildBrief() {
     var dirIcon = s.direction === 'long' ? '🟢' : '🔴';
     var convIcon = s.conviction >= 9 ? '🚀' : '🔥';
     var tf = inferTF(s.source);
+
+    // Bullflow alignment from recent backtest data
+    var bf = getBullflowAlignment(s.ticker, s.direction);
+    var bfLine = '';
+    if (bf && bf.alignment) {
+      var bfIcon = bf.alignment === 'ALIGNED' ? '✅' : bf.alignment === 'CONTRADICTS' ? '❌' : bf.alignment === 'MIXED' ? '🟡' : '⚫';
+      if (bf.alignment === 'no-flow') {
+        bfLine = '**Bullflow**: ⚫ no recent institutional flow on ' + s.ticker + '\n';
+      } else {
+        bfLine = '**Bullflow**: ' + bfIcon + ' ' + bf.alignment + ' · ' + bf.totalAlerts + ' alerts (' + bf.pctCalls + '%C/' + bf.pctPuts + '%P) · $' + bf.premiumK + 'K premium · ' + bf.daysCovered + 'd window\n';
+      }
+    }
+
     return {
       name: convIcon + ' #' + (i + 1) + ' ' + dirIcon + ' ' + s.ticker + ' — conv ' + s.conviction + ' · ' + (s.source || '?') + ' · ⏱️ ' + tf,
       value: '**Direction**: ' + (s.direction || '?').toUpperCase() +
              ' · **Trigger**: $' + (s.trigger ? s.trigger.toFixed(2) : '?') +
              ' · **Stop**: $' + (s.stop ? s.stop.toFixed(2) : '?') + '\n' +
              '**Pattern**: ' + (s.pattern || '?') + ' on **' + tf + '** · **Hold**: ' + (s.holdRating || '?') + '\n' +
+             bfLine +
              '*To verify pattern: open chart on ' + tf + ' timeframe (not daily)*\n' +
-             '```\n' + buildTitanTicket(s).slice(0, 700) + '\n```',
+             '```\n' + buildTitanTicket(s).slice(0, 600) + '\n```',
       inline: false,
     };
   });

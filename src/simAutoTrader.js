@@ -50,6 +50,12 @@ try { tradeTracker = require('./tradeTracker'); } catch (e) {}
 // EXTERNAL SETUPS — from AB's local Claude Code routine via POST /api/external-setups/import
 var externalSetups = null;
 try { externalSetups = require('./externalSetups'); } catch (e) {}
+// PRE-FIRE VISION GATE — chart-vision check before fire (returns SKIP today, will gate later)
+var prefireVisionGate = null;
+try { prefireVisionGate = require('./prefireVisionGate'); } catch (e) {}
+// PDT TRACKER — gates LIVE TS account fires (sim ignored)
+var pdtTracker = null;
+try { pdtTracker = require('./pdtTracker'); } catch (e) {}
 var ts = null;
 try { ts = require('./tradestation'); } catch (e) {}
 
@@ -533,6 +539,21 @@ async function runSimAuto(opts) {
     }
 
     firesAttempted++;
+
+    // Pre-fire vision gate (returns SKIP today since chart-img not wired yet,
+    // but if VETO returns block the fire). FAIL-OPEN if unavailable.
+    if (prefireVisionGate && prefireVisionGate.checkBeforeFire) {
+      try {
+        var vision = await prefireVisionGate.checkBeforeFire(setup);
+        if (vision && vision.result === 'VETO') {
+          console.log('[SIM-AUTO] VISION VETO for ' + setup.ticker + ': ' + vision.reason);
+          skips.push(setup.ticker + ' (vision VETO: ' + vision.reason + ')');
+          continue;
+        }
+        console.log('[SIM-AUTO] vision: ' + vision.result + ' ' + (vision.cached ? '(cached)' : '(fresh)'));
+      } catch (e) { console.error('[SIM-AUTO] vision gate error (continuing):', e.message); }
+    }
+
     console.log('[SIM-AUTO] FIRING ' + setup.ticker + ' ' + setup.direction + ' from ' + setup.source);
     var fireResult = await fireSimOrder(setup, spot);
 

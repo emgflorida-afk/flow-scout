@@ -369,6 +369,12 @@ var icsTradeManager = null;
 try { icsTradeManager = require('./icsTradeManager'); console.log('[SERVER] icsTradeManager loaded OK'); }
 catch(e) { console.log('[SERVER] icsTradeManager not loaded:', e.message); }
 
+// PDT TRACKER — Pattern Day Trader rolling-5d tracking for LIVE TS account.
+// Throttles live mode if 3+ day-trades in 5d window. SIM/Public unaffected.
+var pdtTracker = null;
+try { pdtTracker = require('./pdtTracker'); console.log('[SERVER] pdtTracker loaded OK'); }
+catch(e) { console.log('[SERVER] pdtTracker not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4864,6 +4870,32 @@ app.get('/api/ics/manage/status', function(req, res) {
   if (!icsTradeManager) return res.status(500).json({ ok: false, error: 'icsTradeManager not loaded' });
   try {
     res.json(Object.assign({ ok: true }, icsTradeManager.getStatus()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// PDT TRACKER endpoints — live-account day-trade gating
+app.get('/api/pdt/status', function(req, res) {
+  if (!pdtTracker) return res.status(500).json({ ok: false, error: 'pdtTracker not loaded' });
+  try {
+    res.json(Object.assign({ ok: true }, pdtTracker.getStatus()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/pdt/record-open', function(req, res) {
+  if (!pdtTracker) return res.status(500).json({ ok: false, error: 'pdtTracker not loaded' });
+  try {
+    var b = req.body || {};
+    var result = pdtTracker.recordOpen(b.account, b.ticker, b.contractSymbol, b.time);
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/pdt/record-close', function(req, res) {
+  if (!pdtTracker) return res.status(500).json({ ok: false, error: 'pdtTracker not loaded' });
+  try {
+    var b = req.body || {};
+    var result = pdtTracker.recordClose(b.account, b.ticker, b.contractSymbol, b.time);
+    res.json(result);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
