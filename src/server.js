@@ -362,6 +362,13 @@ var externalSetups = null;
 try { externalSetups = require('./externalSetups'); console.log('[SERVER] externalSetups loaded OK'); }
 catch(e) { console.log('[SERVER] externalSetups not loaded:', e.message); }
 
+// ICS TRADE MANAGER — active position management. Polls SIM positions every
+// 2 min, detects TP1 fills, moves stops to BE, locks 25% at +75% HW, etc.
+// AB asked: 'don't just set and forget — act like an active trader'.
+var icsTradeManager = null;
+try { icsTradeManager = require('./icsTradeManager'); console.log('[SERVER] icsTradeManager loaded OK'); }
+catch(e) { console.log('[SERVER] icsTradeManager not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4821,6 +4828,42 @@ app.get('/api/external-setups/active', function(req, res) {
     var maxAge = parseFloat(req.query.maxAgeHours) || 24;
     var setups = externalSetups.loadActiveSetups(maxAge);
     res.json({ ok: true, count: setups.length, maxAgeHours: maxAge, setups: setups });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// ICS TRADE MANAGER — active position adjustment
+// Cron: every 2 min during RTH 9:35 AM - 3:55 PM ET
+// Detects TP1 fills, moves stops to BE, locks 25% at +75% HW, etc.
+// =============================================================================
+cron.schedule('*/2 9-15 * * 1-5', async function() {
+  try {
+    if (!icsTradeManager) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 35) || (etHr >= 10 && etHr <= 14) || (etHr === 15 && etMin <= 55);
+    if (!inWindow) return;
+    var out = await icsTradeManager.runManager();
+    if (out && out.actionsTaken > 0) {
+      console.log('[ICS-MGR] cron took ' + out.actionsTaken + ' actions on ' + out.positionsTracked + ' positions');
+    }
+  } catch(e) { console.error('[ICS-MGR] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// Manual trigger + status endpoints
+app.post('/api/ics/manage/run', async function(req, res) {
+  if (!icsTradeManager) return res.status(500).json({ ok: false, error: 'icsTradeManager not loaded' });
+  try {
+    var out = await icsTradeManager.runManager();
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/ics/manage/status', function(req, res) {
+  if (!icsTradeManager) return res.status(500).json({ ok: false, error: 'icsTradeManager not loaded' });
+  try {
+    res.json(Object.assign({ ok: true }, icsTradeManager.getStatus()));
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
