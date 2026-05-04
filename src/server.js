@@ -1220,6 +1220,114 @@ app.post('/api/ayce-fire/place', async function(req, res) {
   }
 });
 
+// DESKS STATUS AGGREGATOR — single endpoint for all hedge-fund-desk state.
+// Returns macro regime + position health + armed setups + recommendation.
+//   GET /api/desks/status
+app.get('/api/desks/status', async function(req, res) {
+  try {
+    var out = {
+      ok: true,
+      timestamp: new Date().toISOString(),
+      desks: {},
+    };
+
+    // 1. MACRO DESK — current regime
+    if (macroSentinel) {
+      try {
+        var ts = require('./tradestation');
+        var token = await ts.getAccessToken().catch(function() { return null; });
+        if (token) {
+          var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+          var r = await fetchLib('https://api.tradestation.com/v3/marketdata/quotes/SPY,QQQ,$VIX.X,XLE,XLF,XLI,XLK,XLV,XLP,XLU,XLY,XLB', {
+            headers: { 'Authorization': 'Bearer ' + token }, timeout: 5000
+          });
+          if (r.ok) {
+            var data = await r.json();
+            var quotes = {};
+            (data.Quotes || []).forEach(function(q) {
+              quotes[q.Symbol] = {
+                last: parseFloat(q.Last || q.Close || 0),
+                pct: parseFloat(q.NetChangePct || 0),
+              };
+            });
+            var sectors = {};
+            ['XLE','XLF','XLI','XLK','XLV','XLP','XLU','XLY','XLB'].forEach(function(s) {
+              if (quotes[s]) sectors[s] = quotes[s];
+            });
+            var regime = macroSentinel.getRegimeVerdict(quotes['$VIX.X'], quotes['SPY'], sectors);
+            out.desks.macro = {
+              spy: quotes['SPY'],
+              qqq: quotes['QQQ'],
+              vix: quotes['$VIX.X'],
+              vixRegime: macroSentinel.getVixRegime(quotes['$VIX.X'].last),
+              regime: regime,
+            };
+          }
+        }
+      } catch (e) { out.desks.macro = { error: e.message }; }
+    }
+
+    // 2. EXECUTION DESK — open orders + position health
+    out.desks.execution = { note: 'See /api/orders for live order state via TS MCP' };
+
+    // 3. EQUITIES DESK — armed setups across scanners
+    var armed = [];
+    if (ayceScanner) {
+      try {
+        var ayceData = ayceScanner.loadLast();
+        var hits = (ayceData && ayceData.hits) || [];
+        hits.forEach(function(h) {
+          (h.strategies || []).forEach(function(s) {
+            if (['armed','live-armed','live-fired'].indexOf(s.status) >= 0) {
+              armed.push({
+                ticker: h.ticker, source: 'AYCE-' + s.name,
+                direction: s.direction, trigger: s.trigger, stop: s.stop, T1: s.T1
+              });
+            }
+          });
+        });
+      } catch(e) {}
+    }
+    if (johnPatternScanner) {
+      try {
+        var jsData = johnPatternScanner.loadLast();
+        var ready = (jsData && jsData.ready) || [];
+        ready.forEach(function(r) {
+          if ((r.conviction || 0) >= 8) {
+            armed.push({
+              ticker: r.ticker, source: 'JS-' + r.tf,
+              direction: r.direction, trigger: r.triggerPrice, stop: r.stopPrice
+            });
+          }
+        });
+      } catch(e) {}
+    }
+    out.desks.equities = { armed: armed, total: armed.length };
+
+    // 4. RECOMMENDATION
+    var rec;
+    if (out.desks.macro && out.desks.macro.regime) {
+      var rg = out.desks.macro.regime;
+      if (rg.fireRecommend && armed.length > 0) {
+        rec = '🎯 ' + rg.direction.toUpperCase() + ' regime + ' + armed.length + ' armed setups. Fire on direction-aligned ' + (rg.direction === 'bearish' ? 'PUTS' : 'CALLS') + ' at market — regime is pre-confirmed.';
+      } else if (rg.direction === 'bearish' && armed.length > 0) {
+        rec = '🟡 Bearish lean detected. Wait for clean 5m close confirmation on bearish setups.';
+      } else if (rg.direction === 'bullish' && armed.length > 0) {
+        rec = '🟢 Bullish lean. Wait for clean 5m close on bullish setups.';
+      } else if (armed.length === 0) {
+        rec = '💤 No armed setups. Save BP, wait for next trigger window.';
+      } else {
+        rec = '🟡 Chop regime. Stink-bid LMTs may not fill — be selective.';
+      }
+    } else {
+      rec = 'Macro data unavailable. Manual analysis required.';
+    }
+    out.recommendation = rec;
+
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // CANDLE RANGE THEORY (CRT) — 3-bar sweep+reversal detector
 //   GET /api/crt/UNH?direction=short
 //   GET /api/crt/AMD                       (auto-detects direction)
