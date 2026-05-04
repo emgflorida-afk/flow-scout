@@ -337,12 +337,24 @@ try { powerHourBrief = require('./powerHourBrief'); console.log('[SERVER] powerH
 catch(e) { console.log('[SERVER] powerHourBrief not loaded:', e.message); }
 
 // SIM AUTO TRADER — autonomous paper-trading on conv>=8 + Hold-SAFE setups.
-// Fires SIM-only orders when scanner setups hit triggers. Validates the
-// system without real-money risk. Hard-capped at 5 fires/day, 5 concurrent.
-// Requires SIM_AUTO_ENABLED=true env var to actually fire (default off).
+// Now ICS strategy (Intraday-Confirmed Swing): 2-3ct, TP1 same-day / TP2 next-day,
+// 2 PM next-day time stop. 65% win rate target over 90 trades to validate.
 var simAutoTrader = null;
 try { simAutoTrader = require('./simAutoTrader'); console.log('[SERVER] simAutoTrader loaded OK'); }
 catch(e) { console.log('[SERVER] simAutoTrader not loaded:', e.message); }
+
+// ICS JOURNAL — 4:05 PM EOD journal + Friday weekly review. Stateless agent
+// memory architecture (per "Claude Code 24/7 Trader" video pattern). Writes
+// /data/journal/YYYY-MM-DD.md + rolling strategy_state.md.
+var icsJournal = null;
+try { icsJournal = require('./icsJournal'); console.log('[SERVER] icsJournal loaded OK'); }
+catch(e) { console.log('[SERVER] icsJournal not loaded:', e.message); }
+
+// ICS MORNING BRIEF — 8:30 AM auto-publisher. Pushes Discord card with
+// tonight's qualifying setups + Titan conditional ticket text + open positions.
+var icsMorningBrief = null;
+try { icsMorningBrief = require('./icsMorningBrief'); console.log('[SERVER] icsMorningBrief loaded OK'); }
+catch(e) { console.log('[SERVER] icsMorningBrief not loaded:', e.message); }
 
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
@@ -4612,6 +4624,67 @@ cron.schedule('5 16 * * 1-5', async function() {
     await simAutoTrader.runEodRecap();
   } catch(e) { console.error('[SIM-AUTO] eod recap error:', e.message); }
 }, { timezone: 'America/New_York' });
+
+// ICS JOURNAL — 4:05 PM ET daily (Mon-Fri) writes journal file + Discord recap
+cron.schedule('5 16 * * 1-5', async function() {
+  try {
+    if (!icsJournal) return;
+    console.log('[ICS-JOURNAL] daily journal firing...');
+    await icsJournal.runDailyJournal();
+  } catch(e) { console.error('[ICS-JOURNAL] daily error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// ICS WEEKLY REVIEW — Friday 4:30 PM ET aggregates week
+cron.schedule('30 16 * * 5', async function() {
+  try {
+    if (!icsJournal) return;
+    console.log('[ICS-JOURNAL] weekly review firing...');
+    await icsJournal.runWeeklyReview();
+  } catch(e) { console.error('[ICS-JOURNAL] weekly error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// ICS MORNING BRIEF — 8:30 AM ET (Mon-Fri) pushes Discord card with today's
+// qualifying setups + Titan ticket text + open positions to manage
+cron.schedule('30 8 * * 1-5', async function() {
+  try {
+    if (!icsMorningBrief) return;
+    console.log('[ICS-MORNING] 8:30 AM brief firing...');
+    await icsMorningBrief.pushBrief();
+  } catch(e) { console.error('[ICS-MORNING] brief error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// ICS endpoints — manual trigger / view brief / view journal
+app.post('/api/ics/journal/run', async function(req, res) {
+  if (!icsJournal) return res.status(500).json({ ok: false, error: 'icsJournal not loaded' });
+  try {
+    var entry = await icsJournal.runDailyJournal();
+    res.json({ ok: true, entry: { date: entry.date, fireCount: entry.fireCount, openCount: entry.openCount } });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/ics/weekly/run', async function(req, res) {
+  if (!icsJournal) return res.status(500).json({ ok: false, error: 'icsJournal not loaded' });
+  try {
+    var out = await icsJournal.runWeeklyReview();
+    res.json({ ok: true, push: out });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/ics/morning-brief/run', async function(req, res) {
+  if (!icsMorningBrief) return res.status(500).json({ ok: false, error: 'icsMorningBrief not loaded' });
+  try {
+    var out = await icsMorningBrief.pushBrief();
+    res.json({ ok: true, qualifying: (out.qualifying || []).length, openPositions: (out.openPositions || []).length, push: out.pushResult });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/ics/morning-brief/preview', async function(req, res) {
+  if (!icsMorningBrief) return res.status(500).json({ ok: false, error: 'icsMorningBrief not loaded' });
+  try {
+    var brief = await icsMorningBrief.buildBrief();
+    res.json({ ok: true, qualifying: brief.qualifying, openPositions: brief.openPositions, stats: brief.stats });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
 
 // SIM AUTO endpoints — manual run / status / recap / position close
 app.post('/api/sim-auto/run', async function(req, res) {
