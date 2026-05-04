@@ -109,16 +109,32 @@ async function buildBrief() {
   var openPositions = extractOpenPositions(loadYesterdayJournal());
 
   // Build Discord embed
+  // Infer TF from source — surfaces the timeframe so AB doesn't compare
+  // 4HR/6HR/Weekly patterns against his daily chart and get confused.
+  function inferTF(source) {
+    if (!source) return '?';
+    if (source.indexOf('Weekly') >= 0) return 'Weekly';
+    if (source.indexOf('Daily') >= 0) return 'Daily';
+    if (source.indexOf('6HR') >= 0) return '6HR';
+    if (source.indexOf('4HR') >= 0) return '4HR';
+    if (source.indexOf('AYCE') >= 0) return '12HR/4HR (AYCE)';
+    if (source.indexOf('WP') >= 0) return '4HR';        // WP scanner is 4HR primary
+    if (source.indexOf('COIL') >= 0) return 'Daily';     // COIL scanner default
+    return '?';
+  }
+
   var topFields = top.map(function(s, i) {
     var dirIcon = s.direction === 'long' ? '🟢' : '🔴';
     var convIcon = s.conviction >= 9 ? '🚀' : '🔥';
+    var tf = inferTF(s.source);
     return {
-      name: convIcon + ' #' + (i + 1) + ' ' + dirIcon + ' ' + s.ticker + ' — conv ' + s.conviction + ' · ' + (s.source || '?'),
+      name: convIcon + ' #' + (i + 1) + ' ' + dirIcon + ' ' + s.ticker + ' — conv ' + s.conviction + ' · ' + (s.source || '?') + ' · ⏱️ ' + tf,
       value: '**Direction**: ' + (s.direction || '?').toUpperCase() +
              ' · **Trigger**: $' + (s.trigger ? s.trigger.toFixed(2) : '?') +
              ' · **Stop**: $' + (s.stop ? s.stop.toFixed(2) : '?') + '\n' +
-             '**Pattern**: ' + (s.pattern || '?') + ' · **Hold**: ' + (s.holdRating || '?') + '\n' +
-             '```\n' + buildTitanTicket(s).slice(0, 800) + '\n```',
+             '**Pattern**: ' + (s.pattern || '?') + ' on **' + tf + '** · **Hold**: ' + (s.holdRating || '?') + '\n' +
+             '*To verify pattern: open chart on ' + tf + ' timeframe (not daily)*\n' +
+             '```\n' + buildTitanTicket(s).slice(0, 700) + '\n```',
       inline: false,
     };
   });
