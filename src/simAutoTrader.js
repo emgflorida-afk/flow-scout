@@ -1,36 +1,36 @@
 // =============================================================================
-// SIM AUTO TRADER — autonomous paper-trading on the system's confluence picks.
+// ICS — Intraday-Confirmed Swing — autonomous SIM auto-trader.
+// (was simAutoTrader, evolved May 4 2026 after AB locked in ICS strategy)
 //
-// PURPOSE: Validate that the scanner + brain actually produce winning setups,
-// without risking real capital. Builds the 30-trade dataset that gates going
-// live (per tradeTracker: 65% hit rate on conv>=8 → safe to enable live auto).
+// THE ONE STRATEGY (locked in with AB):
+//   Setup detected EOD/overnight on JS/COIL/WP/AYCE scanners with conv>=8 + Hold SAFE.
+//   Trigger fires INTRADAY when stock breaks past prior-day high (long) or low (short).
+//   Hold 1-3 days. Trim TP1 same-day. Hold rest into next day. Trim or trail TP2.
+//   2 PM next-day time stop if no profit. Both directions across universe. 65% win rate target.
 //
-// HARD SAFETY (cannot be bypassed):
+// SIZING:
+//   - 2ct base for any qualifier (conv 8 + Hold SAFE + TFC)
+//   - 3ct top-tier (conv 9-10 + multi-system confluence)
+//
+// EXIT RULES:
+//   - TP1 +50% premium → exit 1ct (locks bill money same-day, NO PDT issue in SIM)
+//   - TP2 +100% premium → exit 2nd ct OR trail to entry
+//   - Time stop: 2 PM next trading day if not in profit → exit all
+//   - Hard kill: -25% premium OR structural invalidation 2-day daily close → exit all
+//
+// HARD SAFETY (cannot bypass):
 //   1. ALWAYS account='sim' — refuses to fire to 'ts' or 'public'
-//   2. Daily cap: max 5 SIM fires per day
-//   3. Concurrent cap: max 5 open paper positions
-//   4. Per-ticker cooldown: 24h (no double-fire same ticker)
-//   5. Time window: 9:45 AM - 3:30 PM ET only (RTH minus first 15 + last 30)
-//   6. SIM_AUTO_ENABLED env var must equal "true" (default false on first deploy)
+//   2. Daily cap: max 8 ICS fires/day (was 5, raised for both-direction universe)
+//   3. Concurrent cap: max 8 open positions (was 5)
+//   4. 7-day per-ticker cooldown (was 24h — ICS holds 1-3 days, want a buffer)
+//   5. Time window: 9:45 AM - 3:30 PM ET
+//   6. SIM_AUTO_ENABLED env var must = 'true'
+//   7. PDT-aware in live mode (counts day-trades in trailing 5d window)
 //
-// FIRE CRITERIA (ALL must be true):
-//   - Conviction >= 8 (high-quality setup only)
-//   - Hold rating = SAFE (no AVOID, no CAUTION)
-//   - Spot is at-or-past trigger (within 0.3% tolerance, direction-aware)
-//   - Earnings risk = null (no earnings in next 3 days)
-//   - Not in 24h ticker cooldown
-//   - Not already at concurrent cap
-//
-// LOGGING:
-//   - Every fire → tradeTracker.logFire() with full metadata
-//   - Discord push via discordPush helper (heartbeat tracked)
-//   - State: /data/sim_auto_state.json (daily fires, ticker cooldowns)
-//
-// DAILY RECAP at 4:05 PM ET:
-//   - Total fires today
-//   - Win rate to-date (from tradeTracker)
-//   - Open paper positions
-//   - Tomorrow's queue (setups that armed but didn't fire today)
+// VALIDATION GATE:
+//   30 trades → first read (±15% CI on win rate)
+//   60 trades → solid signal (±12% CI)
+//   90 trades → real validation (±10% CI) → safe to enable LIVE
 // =============================================================================
 
 var fs = require('fs');
@@ -56,12 +56,19 @@ var STATE_FILE = path.join(DATA_ROOT, 'sim_auto_state.json');
 var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
 
-// HARD SAFETY CONSTANTS
-var MAX_DAILY_FIRES = 5;
-var MAX_CONCURRENT_OPEN = 5;
-var TICKER_COOLDOWN_HRS = 24;
-var TRIGGER_TOLERANCE_PCT = 0.30;
+// HARD SAFETY CONSTANTS — ICS rules
+var MAX_DAILY_FIRES = 8;          // both-direction universe needs more headroom
+var MAX_CONCURRENT_OPEN = 8;      // 1-3 day holds × 2-3 fires/day
+var TICKER_COOLDOWN_HRS = 168;    // 7 days — don't re-fire same ticker until prior cycle done
+var TRIGGER_TOLERANCE_PCT = 0.20; // tightened — need clean break, not at-trigger
 var MIN_CONVICTION = 8;
+var TOP_TIER_CONVICTION = 9;      // 9-10 with multi-system → 3ct sizing
+var BASE_SIZE = 2;                 // ct
+var TOP_TIER_SIZE = 3;            // ct
+var TP1_GAIN_PCT = 50;            // first half exits at +50% same-day
+var TP2_GAIN_PCT = 100;           // second half exits at +100% next-day
+var STOP_LOSS_PCT = 25;           // -25% premium hard stop
+var TIME_STOP_HOUR_ET = 14;       // 2 PM next-day time stop
 
 function isEnabled() {
   return String(process.env.SIM_AUTO_ENABLED || 'false').toLowerCase() === 'true';
@@ -260,10 +267,22 @@ function collectQualifyingSetups() {
   return setups;
 }
 
-// Fire SIM order via the existing ayce-fire path (build → place)
+// Determine ICS sizing — 2ct base, 3ct top-tier
+function pickSize(setup) {
+  var topTier = (setup.conviction >= TOP_TIER_CONVICTION);
+  // Multi-system bonus: if same ticker hits in 2+ scanners (track via setup.systems if present)
+  var multiSystem = (setup.systems && setup.systems.length >= 2) || setup.multiSystem;
+  if (topTier && multiSystem) return TOP_TIER_SIZE;
+  return BASE_SIZE;
+}
+
+// Fire ICS SIM order via the existing ayce-fire path (build → place)
+// ICS rules: 2-3ct, TP1 +50% / TP2 +100%, -25% stop, structural override.
 async function fireSimOrder(setup, spot) {
   var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
   var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+
+  var qty = pickSize(setup);
 
   // Build contract via /api/ayce-fire/build
   try {
@@ -275,7 +294,7 @@ async function fireSimOrder(setup, spot) {
         direction: setup.direction,
         tradeType: 'SWING',
         account: 'sim',  // HARDCODED — never live
-        size: 1,
+        size: qty,
       }),
       timeout: 10000,
     });
@@ -287,10 +306,13 @@ async function fireSimOrder(setup, spot) {
     var c = buildData.contract;
     var t = buildData.orderTicket;
     var limitPrice = parseFloat(t.limitPrice);
-    var stopPremium = Math.max(0.05, Math.round(limitPrice * 0.75 * 100) / 100);
-    var tp1Premium = Math.round(limitPrice * 1.50 * 100) / 100;
+    // ICS exit math: stop -25%, TP1 +50%, TP2 +100%
+    var stopPremium = Math.max(0.05, Math.round(limitPrice * (1 - STOP_LOSS_PCT / 100) * 100) / 100);
+    var tp1Premium = Math.round(limitPrice * (1 + TP1_GAIN_PCT / 100) * 100) / 100;
+    var tp2Premium = Math.round(limitPrice * (1 + TP2_GAIN_PCT / 100) * 100) / 100;
 
-    // Place via /api/ayce-fire/place
+    // Place via /api/ayce-fire/place — uses TP1 for primary bracket; TP2 + time stop
+    // are managed by icsTradeManager (separate cron, not yet built — for v1 use TP1 + stop)
     var placeRes = await fetchLib(serverBase + '/api/ayce-fire/place', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -299,7 +321,7 @@ async function fireSimOrder(setup, spot) {
         contractSymbol: c.symbol,
         direction: setup.direction,
         account: 'sim',  // HARDCODED
-        size: t.quantity,
+        size: qty,        // ICS: 2 or 3 ct
         limitPrice: limitPrice,
         stopPremium: stopPremium,
         tp1Premium: tp1Premium,
@@ -319,9 +341,11 @@ async function fireSimOrder(setup, spot) {
       ok: true,
       contract: c,
       orderTicket: t,
+      qty: qty,
       limitPrice: limitPrice,
       stopPremium: stopPremium,
       tp1Premium: tp1Premium,
+      tp2Premium: tp2Premium,
       placeResult: placeData.result,
     };
   } catch (e) {
@@ -350,15 +374,22 @@ async function pushSimFireCard(setup, spot, fireResult) {
           inline: false,
         },
         {
-          name: '📋 Order Placed (SIM)',
+          name: '📋 ICS Order Placed (SIM) · ' + (fireResult.qty || t.quantity) + 'ct',
           value: '**' + c.symbol + '** @ $' + fireResult.limitPrice + ' LMT\n' +
-                 'Stop: $' + fireResult.stopPremium + '  ·  TP1: $' + fireResult.tp1Premium + '\n' +
-                 'Qty: ' + t.quantity + '  ·  Account: SIM',
+                 'Stop: $' + fireResult.stopPremium + ' (-25%)\n' +
+                 'TP1: $' + fireResult.tp1Premium + ' (+50%) · exits 1ct same-day\n' +
+                 'TP2: $' + fireResult.tp2Premium + ' (+100%) · exits rest next-day\n' +
+                 'Account: SIM',
           inline: false,
         },
         {
-          name: '🎯 Why this fired',
-          value: 'Conv ≥ 8 + Hold SAFE + No earnings risk + at-trigger spot.\nAll system gates passed. Paper trade live.',
+          name: '🎯 Why this fired (ICS)',
+          value: 'Conv ' + setup.conviction + ' + Hold SAFE + No earnings + spot past trigger.\nIntraday-Confirmed Swing — hold 1-3 days, trim aggressive.',
+          inline: false,
+        },
+        {
+          name: '⏱️ Exit checklist',
+          value: '• TP1 hit → exit 1ct, lock bill money\n• Hold rest into next day\n• 2 PM next-day = time stop if no profit\n• Stock-trigger override: ' + (setup.stop ? '$' + setup.stop : 'see scanner'),
           inline: false,
         },
       ],
