@@ -3582,6 +3582,93 @@ function renderStatsAYCE() {
   ).join("");
 }
 
+// AYCE-FIRE order builder — opens modal with order spec from /api/ayce-fire/build
+async function ayceFireBuild(ticker, direction, account, tradeType) {
+  tradeType = tradeType || 'DAY';
+  account = account || 'ts';
+  const modal = document.getElementById('ayce-fire-modal') || (() => {
+    const m = document.createElement('div');
+    m.id = 'ayce-fire-modal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    document.body.appendChild(m);
+    return m;
+  })();
+  modal.innerHTML = `<div style="background:#0e1116;border:1px solid #2a3140;border-radius:8px;padding:20px;max-width:520px;width:100%;color:#dde">
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px;">
+      <strong>🔥 FIRE — Building order...</strong>
+      <span style="cursor:pointer;color:#888;" onclick="document.getElementById('ayce-fire-modal').remove()">✕</span>
+    </div>
+    <div style="color:#888;font-size:13px;">Resolving contract for ${ticker} ${direction.toUpperCase()} on ${account.toUpperCase()}...</div>
+  </div>`;
+  modal.style.display = 'flex';
+  try {
+    const r = await fetch('/api/ayce-fire/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, direction, tradeType, account, size: 1 }),
+    });
+    const data = await r.json();
+    if (!data.ok || data.blocked) {
+      modal.querySelector('div').innerHTML = `<div style="color:#ff5050;">❌ Build failed: ${data.error || data.reason || 'unknown'}</div>
+        <button onclick="document.getElementById('ayce-fire-modal').remove()" style="margin-top:12px;padding:8px 16px;">Close</button>`;
+      return;
+    }
+    const c = data.contract;
+    const t = data.orderTicket;
+    const accountColor = account === 'public' ? '#5cf' : account === 'sim' ? '#ff0' : '#4f4';
+    modal.firstChild.innerHTML = `
+      <div style="display:flex;justify-content:space-between;margin-bottom:14px;">
+        <strong>🔥 FIRE — ${ticker} ${direction.toUpperCase()}</strong>
+        <span style="cursor:pointer;color:#888;" onclick="document.getElementById('ayce-fire-modal').remove()">✕</span>
+      </div>
+      <div style="background:#1a1f2a;padding:12px;border-radius:6px;margin-bottom:12px;font-family:monospace;font-size:12px;line-height:1.7;">
+        <div><span style="color:#888;">Account:</span> <span style="color:${accountColor};font-weight:700;">${account.toUpperCase()}</span></div>
+        <div><span style="color:#888;">Stock spot:</span> $${data.stockPrice || '—'}</div>
+        <div><span style="color:#888;">Contract:</span> <strong>${c.symbol || '?'}</strong></div>
+        <div><span style="color:#888;">Strike/Type:</span> $${c.strike || '?'} ${c.type.toUpperCase()}</div>
+        <div><span style="color:#888;">Expiry:</span> ${c.expiry || '?'}</div>
+        <div><span style="color:#888;">Action:</span> BUY TO OPEN</div>
+        <div><span style="color:#888;">Quantity:</span> ${t.quantity}</div>
+        <div><span style="color:#888;">Order type:</span> Limit</div>
+        <div><span style="color:#888;">Limit price:</span> <strong>$${t.limitPrice}</strong></div>
+        <div><span style="color:#888;">TIF:</span> ${t.timeInForce}</div>
+        <div><span style="color:#888;">Est. cost:</span> <strong>$${data.estimatedCost}</strong></div>
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:14px;">${data.note}</div>
+      <div style="display:flex;gap:8px;">
+        <button id="ayce-fire-place" style="flex:1;padding:10px;background:${accountColor};color:#000;font-weight:700;border:0;border-radius:4px;cursor:pointer;">PLACE ORDER</button>
+        <button onclick="navigator.clipboard.writeText('${c.symbol} BTO ${t.quantity} @ ${t.limitPrice} LMT ' + '${t.timeInForce}'); this.textContent='Copied'" style="padding:10px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Copy</button>
+        <button onclick="document.getElementById('ayce-fire-modal').remove()" style="padding:10px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Cancel</button>
+      </div>`;
+    document.getElementById('ayce-fire-place').onclick = async function() {
+      this.textContent = 'Placing...';
+      this.disabled = true;
+      try {
+        const pr = await fetch('/api/ayce-fire/place', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticker, contractSymbol: c.symbol, direction, account, size: t.quantity, limitPrice: t.limitPrice }),
+        });
+        const pdata = await pr.json();
+        if (pdata.ok) {
+          modal.firstChild.innerHTML = `<div style="color:#4f4;font-size:14px;">✅ ORDER PLACED on ${account.toUpperCase()}</div>
+            <pre style="background:#1a1f2a;padding:10px;font-size:11px;overflow:auto;max-height:200px;">${JSON.stringify(pdata.result, null, 2)}</pre>
+            <button onclick="document.getElementById('ayce-fire-modal').remove()" style="margin-top:12px;padding:8px 16px;">Close</button>`;
+        } else {
+          modal.firstChild.innerHTML = `<div style="color:#ff5050;">❌ Place failed: ${pdata.error || 'unknown'}</div>
+            <button onclick="document.getElementById('ayce-fire-modal').remove()" style="margin-top:12px;padding:8px 16px;">Close</button>`;
+        }
+      } catch(e) {
+        modal.firstChild.innerHTML = `<div style="color:#ff5050;">❌ Network error: ${e.message}</div>
+          <button onclick="document.getElementById('ayce-fire-modal').remove()" style="margin-top:12px;padding:8px 16px;">Close</button>`;
+      }
+    };
+  } catch(e) {
+    modal.firstChild.innerHTML = `<div style="color:#ff5050;">❌ Error: ${e.message}</div>
+      <button onclick="document.getElementById('ayce-fire-modal').remove()" style="margin-top:12px;padding:8px 16px;">Close</button>`;
+  }
+}
+window.ayceFireBuild = ayceFireBuild;
+
 function renderGridAYCE() {
   try {
     FILTERS = FILTERS_AYCE;
@@ -3616,6 +3703,18 @@ function renderGridAYCE() {
           </div>
         `;
       }).join('');
+      // Pick the primary armed strategy direction for fire buttons
+      const primaryArmed = strats.find(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') || strats[0];
+      const fireDir = primaryArmed && primaryArmed.direction;
+      const fireBtns = fireDir ? `
+        <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:4px;border:1px solid #2a3140;">
+          <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE — ${fireDir.toUpperCase()}</div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="event.stopPropagation();ayceFireBuild('${h.ticker}','${fireDir}','ts','DAY')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+            <button onclick="event.stopPropagation();ayceFireBuild('${h.ticker}','${fireDir}','public','DAY')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+            <button onclick="event.stopPropagation();ayceFireBuild('${h.ticker}','${fireDir}','sim','DAY')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">⚪ SIM</button>
+          </div>
+        </div>` : '';
       return `
         <div class="card ${dirClass}" data-ayce-ticker="${h.ticker}">
           <div class="card-head">
@@ -3629,6 +3728,7 @@ function renderGridAYCE() {
             </div>
           </div>
           ${stratHtml}
+          ${fireBtns}
         </div>
       `;
     }).join("");

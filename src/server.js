@@ -946,6 +946,115 @@ app.get('/api/ayce-scan/debug/:ticker', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// AYCE-FIRE — one-click order builder for AYCE / scanner setups
+//   POST /api/ayce-fire/build  body: { ticker, direction, tradeType, account, size }
+//   POST /api/ayce-fire/place  body: { ticker, direction, tradeType, account, size, limitPrice }
+//
+// Builds a single-leg directional order spec (call for long, put for short) using
+// contractResolver to pick the right strike/expiry. Returns a preview AB can review
+// before placing. Place endpoint actually fires the order via TS or Public.
+//
+// Account values: 'ts' (live TS) | 'sim' (TS simulation) | 'public' (Public.com)
+app.post('/api/ayce-fire/build', async function(req, res) {
+  try {
+    var b = req.body || {};
+    var ticker = String(b.ticker || '').toUpperCase();
+    var direction = String(b.direction || '').toLowerCase();
+    var tradeType = String(b.tradeType || 'DAY').toUpperCase();  // DAY or SWING
+    var account = String(b.account || 'ts').toLowerCase();
+    var size = parseInt(b.size || 1);
+    if (!ticker || !['long','short'].includes(direction)) {
+      return res.status(400).json({ ok: false, error: 'usage: { ticker, direction: long|short, tradeType: DAY|SWING, account: ts|sim|public, size }' });
+    }
+    var resolver = require('./contractResolver');
+    var optType = direction === 'long' ? 'call' : 'put';
+    var resolved = await resolver.resolveContract(ticker, optType, tradeType, {});
+    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null' });
+    if (resolved.blocked) return res.json({ ok: false, blocked: true, reason: resolved.reason, lvls: resolved.lvls });
+    var stockPrice = resolved.stockPrice || resolved.price;
+    var contractSymbol = resolved.contractSymbol || resolved.symbol;
+    var optMid = resolved.midPrice || resolved.mid || resolved.limit;
+    var expiry = resolved.expiry || resolved.expiration;
+    var strike = resolved.strike;
+    // Suggest a LMT slightly above mid for buy fills (cap 5% above mid)
+    var limitPrice = optMid ? Math.round(optMid * 1.05 * 100) / 100 : null;
+    res.json({
+      ok: true,
+      ticker: ticker,
+      direction: direction,
+      tradeType: tradeType,
+      account: account,
+      size: size,
+      stockPrice: stockPrice,
+      contract: {
+        symbol: contractSymbol,
+        type: optType,
+        strike: strike,
+        expiry: expiry,
+        midEstimate: optMid,
+      },
+      orderTicket: {
+        action: 'BUY_TO_OPEN',
+        symbol: contractSymbol,
+        quantity: size,
+        orderType: 'Limit',
+        limitPrice: limitPrice,
+        timeInForce: 'DAY',
+        route: 'Intelligent',
+      },
+      estimatedCost: limitPrice ? Math.round(limitPrice * 100 * size) : null,
+      note: 'Single-leg directional fire. Stop = stock-trigger via TS bracket. TPs = manual @ +25/+50/+100% premium.',
+    });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/ayce-fire/place', async function(req, res) {
+  try {
+    var b = req.body || {};
+    var ticker = String(b.ticker || '').toUpperCase();
+    var direction = String(b.direction || '').toLowerCase();
+    var account = String(b.account || 'ts').toLowerCase();
+    var size = parseInt(b.size || 1);
+    var limitPrice = parseFloat(b.limitPrice);
+    var contractSymbol = b.contractSymbol;
+    if (!ticker || !contractSymbol || !isFinite(limitPrice)) {
+      return res.status(400).json({ ok: false, error: 'usage: { ticker, contractSymbol, direction, account: ts|sim|public, size, limitPrice }' });
+    }
+    if (account === 'public') {
+      if (!publicBroker) return res.status(500).json({ ok: false, error: 'publicBroker not loaded' });
+      var pubRes = await publicBroker.placeOrder({
+        symbol: contractSymbol,
+        side: 'BUY_OPEN',
+        quantity: String(size),
+        orderType: 'LIMIT',
+        limitPrice: String(limitPrice),
+        timeInForce: 'DAY',
+      });
+      return res.json({ ok: true, account: 'public', result: pubRes });
+    }
+    // TS (live or sim) — use orderExecutor
+    var executor = require('./orderExecutor');
+    var liveBypass = account === 'ts';
+    var simMode = account === 'sim';
+    var orderRes = await executor.placeOrder({
+      symbol: contractSymbol,
+      tradeAction: 'BUYTOOPEN',
+      quantity: String(size),
+      orderType: 'Limit',
+      limitPrice: String(limitPrice),
+      timeInForce: { duration: 'DAY' },
+      route: 'Intelligent',
+      liveBypass: liveBypass,
+      simMode: simMode,
+    });
+    return res.json({ ok: true, account: account, result: orderRes });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // CANDLE RANGE THEORY (CRT) — 3-bar sweep+reversal detector
 //   GET /api/crt/UNH?direction=short
 //   GET /api/crt/AMD                       (auto-detects direction)
