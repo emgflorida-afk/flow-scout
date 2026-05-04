@@ -5543,9 +5543,88 @@ function defaultSetupRadar() {
 app.get('/api/setup-radar', function(req, res) {
   try {
     var fs = require('fs');
-    if (!fs.existsSync(SETUP_RADAR_FILE)) return res.json(defaultSetupRadar());
-    var raw = fs.readFileSync(SETUP_RADAR_FILE, 'utf8');
-    var data = JSON.parse(raw);
+    var data = defaultSetupRadar();
+    // Merge with existing radar file (morningSetupScanner output, when working)
+    if (fs.existsSync(SETUP_RADAR_FILE)) {
+      try {
+        var raw = fs.readFileSync(SETUP_RADAR_FILE, 'utf8');
+        data = JSON.parse(raw);
+      } catch(e) {}
+    }
+
+    // ENRICH May 4 2026: Tomorrow tab was empty because morningSetupScanner
+    // failed for all 12 default tickers. Now we ALSO pull the qualifying
+    // setups from simAutoTrader (which reads JS/COIL/WP/AYCE + AB's external
+    // setups), bucket them into ready/forming, and merge.
+    if (simAutoTrader && simAutoTrader.collectQualifyingSetups) {
+      try {
+        var qualifying = simAutoTrader.collectQualifyingSetups();
+        var seenKeys = {};
+        // Don't duplicate existing radar entries
+        ['ready', 'forming', 'dead', 'earningsWatch'].forEach(function(bucket) {
+          (data[bucket] || []).forEach(function(item) {
+            if (item && item.ticker) seenKeys[item.ticker.toUpperCase() + ':' + (item.direction || '?')] = true;
+          });
+        });
+
+        qualifying.forEach(function(s) {
+          if (!s.ticker) return;
+          var key = s.ticker.toUpperCase() + ':' + (s.direction || '?');
+          if (seenKeys[key]) return;
+          seenKeys[key] = true;
+
+          var card = {
+            ticker: s.ticker,
+            direction: s.direction,
+            type: s.pattern || 'ICS',
+            spot: s.spot || null,
+            trigger: s.trigger,
+            stop: s.stop,
+            tp1: s.tp1,
+            tp2: s.tp2,
+            tp3: s.tp3,
+            conviction: s.conviction,
+            holdRating: s.holdRating,
+            source: s.source,
+            tf: s.tf,
+            preferredContractSymbol: s.preferredContractSymbol || null,
+            flowNotes: s.flowNotes || null,
+          };
+
+          // Bucket by conviction:
+          //  - >= 9 + Hold SAFE -> ready (high-quality, fire-on-trigger candidates)
+          //  - 7-8 + Hold SAFE  -> forming (trial-eligible)
+          //  - earnings risk    -> earningsWatch
+          //  - < 7 or AVOID     -> dead
+          if (s.earningsRisk) {
+            data.earningsWatch = data.earningsWatch || [];
+            data.earningsWatch.push(card);
+          } else if ((s.conviction || 0) >= 9 && s.holdRating === 'SAFE') {
+            data.ready = data.ready || [];
+            data.ready.push(card);
+          } else if ((s.conviction || 0) >= 7 && s.holdRating !== 'AVOID') {
+            data.forming = data.forming || [];
+            data.forming.push(card);
+          } else {
+            data.dead = data.dead || [];
+            data.dead.push(card);
+          }
+        });
+
+        // Re-sort ready by conviction desc
+        if (data.ready) data.ready.sort(function(a, b) { return (b.conviction || 0) - (a.conviction || 0); });
+        if (data.forming) data.forming.sort(function(a, b) { return (b.conviction || 0) - (a.conviction || 0); });
+      } catch(e) { console.error('[SETUP-RADAR] enrich error:', e.message); }
+    }
+
+    // Update note to reflect current state
+    if ((data.ready || []).length > 0 || (data.forming || []).length > 0) {
+      data.note = 'Enriched with qualifying setups from JS/COIL/WP/AYCE + external routines (' +
+                  (data.ready || []).length + ' ready, ' +
+                  (data.forming || []).length + ' forming)';
+    }
+    data.enrichedAt = new Date().toISOString();
+
     res.json(data);
   } catch(e) {
     res.status(500).json({ error: e.message });
