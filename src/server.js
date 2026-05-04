@@ -1284,15 +1284,19 @@ app.post('/api/ayce-fire/place', async function(req, res) {
           symbolReceived: contractSymbol,
         });
       }
+      // Public.com API: orderSide must be 'BUY' or 'SELL' alone (enum strict).
+      // The OPEN/CLOSE goes into openCloseIndicator, not concatenated to side.
+      // Fixed May 4 2026 after AB hit: 'Cannot deserialize value of type
+      // OrderSide from String "BUY_OPEN": not one of [SELL, BUY]'.
       var pubRes = await publicBroker.placeOrder({
         symbol: contractSymbol,
-        side: 'BUY_OPEN',
+        side: 'BUY',                          // was 'BUY_OPEN' — Public rejects compound enum
         quantity: String(size),
         orderType: 'LIMIT',
         limitPrice: String(limitPrice),
         timeInForce: 'DAY',
         instrumentType: 'OPTION',
-        openCloseIndicator: 'OPEN',
+        openCloseIndicator: 'OPEN',           // separate field, correctly set
       });
       return res.json({ ok: true, account: 'public', result: pubRes, note: 'Bracket attachment for Public not yet supported — stop/TP must be set manually post-fill.' });
     }

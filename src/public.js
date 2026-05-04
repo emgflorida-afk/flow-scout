@@ -231,8 +231,26 @@ async function placeOrder(opts) {
   var isOption = /\d{6}[CP]\d+/.test(symbol);
   var instrumentType = opts.instrumentType || (isOption ? 'OPTION' : 'EQUITY');
   var orderType = (opts.orderType || 'LIMIT').toUpperCase();
-  var orderSide = String(opts.side).toUpperCase();
-  var openClose = (opts.openCloseIndicator || (orderSide === 'BUY' ? 'OPEN' : 'CLOSE')).toUpperCase();
+  // Defensive: Public's enum is strict — accepts only 'BUY' or 'SELL'.
+  // If a caller passes 'BUY_OPEN' / 'SELL_CLOSE' / 'BUYTOOPEN' (TS-style),
+  // strip the suffix and infer openClose from it.
+  var rawSide = String(opts.side).toUpperCase();
+  var orderSide;
+  var inferredOpenClose = null;
+  if (rawSide === 'BUY' || rawSide === 'SELL') {
+    orderSide = rawSide;
+  } else if (rawSide.indexOf('BUY') === 0) {
+    orderSide = 'BUY';
+    if (rawSide.indexOf('OPEN') >= 0 || rawSide.indexOf('TOOPEN') >= 0) inferredOpenClose = 'OPEN';
+    else if (rawSide.indexOf('CLOSE') >= 0 || rawSide.indexOf('TOCLOSE') >= 0) inferredOpenClose = 'CLOSE';
+  } else if (rawSide.indexOf('SELL') === 0) {
+    orderSide = 'SELL';
+    if (rawSide.indexOf('OPEN') >= 0 || rawSide.indexOf('TOOPEN') >= 0) inferredOpenClose = 'OPEN';
+    else if (rawSide.indexOf('CLOSE') >= 0 || rawSide.indexOf('TOCLOSE') >= 0) inferredOpenClose = 'CLOSE';
+  } else {
+    throw new Error('placeOrder: side must contain BUY or SELL (got "' + rawSide + '")');
+  }
+  var openClose = (opts.openCloseIndicator || inferredOpenClose || (orderSide === 'BUY' ? 'OPEN' : 'CLOSE')).toUpperCase();
 
   var payload = {
     orderId: opts.orderId || makeOrderId(),
@@ -290,16 +308,25 @@ async function preflightOrder(opts) {
   var instrumentType = opts.instrumentType || (isOption ? 'OPTION' : 'EQUITY');
   var orderType = (opts.orderType || 'LIMIT').toUpperCase();
 
+  // Same defensive normalization as placeOrder — strip OPEN/CLOSE suffix.
+  var rawSide2 = String(opts.side).toUpperCase();
+  var orderSide2 = (rawSide2 === 'BUY' || rawSide2 === 'SELL') ? rawSide2
+                  : rawSide2.indexOf('BUY') === 0 ? 'BUY'
+                  : rawSide2.indexOf('SELL') === 0 ? 'SELL'
+                  : null;
+  if (!orderSide2) throw new Error('preflightOrder: side must contain BUY or SELL (got "' + rawSide2 + '")');
+  var inferredOpenClose2 = (rawSide2.indexOf('OPEN') >= 0) ? 'OPEN' : (rawSide2.indexOf('CLOSE') >= 0) ? 'CLOSE' : null;
+
   var payload = {
     instrument: { symbol: symbol, type: instrumentType },
-    orderSide: String(opts.side).toUpperCase(),
+    orderSide: orderSide2,
     orderType: orderType,
     expiration: { timeInForce: (opts.timeInForce || 'DAY').toUpperCase() },
     quantity: String(opts.quantity),
   };
   if (orderType === 'LIMIT' || orderType === 'STOP_LIMIT') payload.limitPrice = Number(opts.limitPrice).toFixed(2);
   if (orderType === 'STOP'  || orderType === 'STOP_LIMIT') payload.stopPrice  = Number(opts.stopPrice).toFixed(2);
-  if (instrumentType === 'OPTION') payload.openCloseIndicator = (opts.openCloseIndicator || (String(opts.side).toUpperCase() === 'BUY' ? 'OPEN' : 'CLOSE'));
+  if (instrumentType === 'OPTION') payload.openCloseIndicator = (opts.openCloseIndicator || inferredOpenClose2 || (orderSide2 === 'BUY' ? 'OPEN' : 'CLOSE'));
 
   var url = BASE_URL + '/' + encodeURIComponent(a.accountId) + '/orders/preflight-single-leg';
   var r = await fetch(url, { method: 'POST', headers: a.headers, body: JSON.stringify(payload) });
