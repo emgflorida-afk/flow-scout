@@ -1457,6 +1457,50 @@ app.post('/api/desks/test-push', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, desk: desk, error: e.message }); }
 });
 
+// CONTRACT RESOLVER DEBUG — diagnostic endpoint for FIRE-fail debugging.
+// When a Lotto/AYCE FIRE button errors with "build failed... tried DAY -> SWING -> LOTTO",
+// AB can hit this endpoint to see what the resolver actually got from the option chain.
+// Returns: spot price, available expirations, sample contracts, filter result per mode.
+//   GET /api/contract-resolver/debug/:ticker?direction=long|short
+app.get('/api/contract-resolver/debug/:ticker', async function(req, res) {
+  try {
+    var resolver = require('./contractResolver');
+    var ticker = String(req.params.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || 'long').toLowerCase();
+    var optType = direction === 'long' ? 'call' : 'put';
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/contract-resolver/debug/SPY?direction=long' });
+
+    var modes = ['DAY', 'SWING', 'LOTTO'];
+    var results = {};
+    for (var i = 0; i < modes.length; i++) {
+      var m = modes[i];
+      try {
+        var resolved = await resolver.resolveContract(ticker, optType, m, {});
+        results[m] = resolved
+          ? { ok: true, symbol: resolved.contractSymbol || resolved.symbol, mid: resolved.mid || resolved.midPrice, strike: resolved.strike, expiry: resolved.expiry || resolved.expiration, delta: resolved.delta }
+          : { ok: false, reason: 'returned null — likely no option in this mode\'s premium/DTE band' };
+      } catch (e) {
+        results[m] = { ok: false, error: e.message };
+      }
+    }
+
+    res.json({
+      ok: true,
+      ticker: ticker,
+      direction: direction,
+      optType: optType,
+      timestamp: new Date().toISOString(),
+      modeResults: results,
+      fallbackChainPickedFirst: results.DAY.ok ? 'DAY' : results.SWING.ok ? 'SWING' : results.LOTTO.ok ? 'LOTTO' : 'NONE',
+      bandConfig: {
+        DAY: { premium: '$0.30-$3.50', dte: '2-5' },
+        SWING: { premium: '$0.50-$5.00', dte: '7-21' },
+        LOTTO: { premium: '$0.02-$5.00', dte: '0-45' },
+      },
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // CANDLE RANGE THEORY (CRT) — 3-bar sweep+reversal detector
 //   GET /api/crt/UNH?direction=short
 //   GET /api/crt/AMD                       (auto-detects direction)

@@ -37,12 +37,14 @@ const MODES = {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 5.00,
     minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 600,
   },
-  // LOTTO mode added May 4 2026 — fixes "build failed return null tried day plus swing"
-  // bug AB hit on lotto FIRE buttons. John's VIP picks are cheap OTM short-DTE options
-  // that fall outside DAY/SWING premium ranges. This mode is intentionally permissive.
+  // LOTTO mode (May 4 2026 v2) — MAXIMUM PERMISSIVE, last-resort fallback.
+  // Goal: never return null when ANY tradable option exists for the ticker.
+  // After v1's $0.05-$2.00 / 1-14 DTE still bounced AB's test, we widened to
+  // $0.02-$5.00 / 0-45 DTE so AYCE big-cap setups (sometimes 30+ DTE, sometimes
+  // very-cheap deep-OTM lottos) can both resolve through this fallback.
   LOTTO: {
-    label: 'LOTTO', minPremium: 0.05, maxPremium: 2.00,
-    minDTE: 1, maxDTE: 14, stopPct: 0.40, t1Pct: 0.60, maxRisk: 200,
+    label: 'LOTTO', minPremium: 0.02, maxPremium: 5.00,
+    minDTE: 0, maxDTE: 45, stopPct: 0.40, t1Pct: 0.60, maxRisk: 300,
   },
 };
 
