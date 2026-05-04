@@ -180,16 +180,30 @@ async function runBacktest(opts) {
 async function getPeakReturn(opts) {
   var apiKey = process.env.BULLFLOW_API_KEY;
   if (!apiKey) return { error: 'BULLFLOW_API_KEY missing' };
-  if (!opts || !opts.symbol || !opts.timestamp) return { error: 'symbol and timestamp required' };
+  if (!opts || !opts.symbol || opts.oldPrice == null || !opts.timestamp) {
+    return { error: 'symbol, oldPrice, timestamp all required (per Bullflow /v1/data/peakReturn spec)' };
+  }
 
+  // Per Bullflow docs: query params are `sym`, `old_price`, `trade_timestamp`
+  // (not `symbol` and `timestamp` which we used previously).
   var url = BULLFLOW_BASE + '/data/peakReturn?key=' + encodeURIComponent(apiKey) +
-            '&symbol=' + encodeURIComponent(opts.symbol) +
-            '&timestamp=' + encodeURIComponent(opts.timestamp);
+            '&sym=' + encodeURIComponent(opts.symbol) +
+            '&old_price=' + encodeURIComponent(opts.oldPrice) +
+            '&trade_timestamp=' + encodeURIComponent(opts.timestamp);
 
   try {
     var res = await fetch(url);
-    if (!res.ok) return { error: 'HTTP ' + res.status };
-    return await res.json();
+    if (!res.ok) return { error: 'HTTP ' + res.status, url: url.replace(apiKey, 'REDACTED') };
+    var json = await res.json();
+    return {
+      ok: true,
+      symbol: opts.symbol,
+      entryPrice: opts.oldPrice,
+      tradeTimestamp: opts.timestamp,
+      peakPrice: parseFloat(json.peakPriceSinceTimestamp),
+      peakPctReturn: parseFloat(json.peakPercentReturnSinceTimestamp),
+      raw: json,
+    };
   } catch(e) {
     return { error: e.message };
   }

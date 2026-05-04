@@ -5504,13 +5504,15 @@ app.post('/api/brain/backtest', async function(req, res) {
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-// GET /api/brain/peak-return?symbol=O:SPY...&timestamp=2026-04-11T14:30:00Z
+// GET /api/brain/peak-return?symbol=O:SPY260408C00520000&oldPrice=1.35&timestamp=1775669400
+// Per Bullflow /v1/data/peakReturn spec: needs sym, old_price, trade_timestamp
 app.get('/api/brain/peak-return', async function(req, res) {
   try {
     if (!backtester) return res.status(503).json({ error: 'backtester not loaded' });
     var result = await backtester.getPeakReturn({
-      symbol: req.query.symbol,
-      timestamp: req.query.timestamp,
+      symbol: req.query.symbol || req.query.sym,
+      oldPrice: req.query.oldPrice || req.query.old_price,
+      timestamp: req.query.timestamp || req.query.trade_timestamp,
     });
     res.json(result);
   } catch(e) { res.status(500).json({ error: e.message }); }
