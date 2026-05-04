@@ -2803,6 +2803,16 @@ function renderGridCoil() {
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0},qty:2,tradeType:'SWING',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="Place 2ct on TradeStation (auto-resolves option, queues for next-day open)">📱 TS 2ct</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0}},this)" title="Place bracket OCO on Public with full plan">📱 Public Bracket</button>
           </div>
+
+          <!-- Phase 2.7 FIRE buttons (TS LIVE / PUBLIC / SIM) — same as AYCE -->
+          <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:6px;border:1px solid #2a3140;">
+            <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE (auto-bracket: stop -25% / TP +50%) — ${r.direction.toUpperCase()}</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','ts','SWING')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','public','SWING')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','sim','SWING')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">⚪ SIM</button>
+            </div>
+          </div>
         </div>
       `;
     }).join("");
@@ -3075,6 +3085,16 @@ function renderGridWP() {
               <span style="padding:5px 10px; font-size:10px; color:var(--txt-3); font-style:italic;">⚠️ Conviction <7 — system blocks size-up</span>
             `}
           </div>
+
+          <!-- Phase 2.7 FIRE buttons (TS LIVE / PUBLIC / SIM) — same as AYCE -->
+          <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:6px;border:1px solid #2a3140;">
+            <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE (auto-bracket: stop -25% / TP +50%) — ${r.direction.toUpperCase()}</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','ts','SWING')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','public','SWING')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','sim','SWING')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">⚪ SIM</button>
+            </div>
+          </div>
         </div>
       `;
     }).join("");
@@ -3302,6 +3322,16 @@ function renderGridJS() {
               <span style="padding:5px 10px; font-size:10px; color:var(--txt-3); font-style:italic;">⚠️ Conviction <7 — system blocks size-up</span>
             `}
           </div>
+
+          <!-- Phase 2.7 FIRE buttons (TS LIVE / PUBLIC / SIM) — same as AYCE -->
+          <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:6px;border:1px solid #2a3140;">
+            <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE (auto-bracket: stop -25% / TP +50%) — ${r.direction.toUpperCase()}</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','ts','SWING')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','public','SWING')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','sim','SWING')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">⚪ SIM</button>
+            </div>
+          </div>
         </div>
       `;
     }).join("");
@@ -3450,6 +3480,16 @@ function renderGridLotto() {
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchLottoToPublic('${p.ticker}', this)" title="Place on Public.com (1 ct LIMIT)">📱 Public</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchLottoToBracket('${p.ticker}', this)" title="Place full bracket on Public">📱 Bracket</button>
+          </div>
+
+          <!-- Phase 2.7 FIRE buttons (TS LIVE / PUBLIC / SIM AUTO) — Lotto resolves option via /api/ayce-fire -->
+          <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:6px;border:1px solid #2a3140;">
+            <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE (auto-bracket: stop -25% / TP +50%) — ${p.direction || 'LONG'}</div>
+            <div style="display:flex;gap:6px;">
+              <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction||'CALL').toLowerCase()==='call'?'long':'short'}','ts','DAY')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction||'CALL').toLowerCase()==='call'?'long':'short'}','public','DAY')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+              <button onclick="event.stopPropagation();ayceFireAuto('${p.ticker}','${(p.direction||'CALL').toLowerCase()==='call'?'long':'short'}','sim','DAY')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;" title="Auto-play: skip modal, fire immediately">⚪ SIM AUTO</button>
+            </div>
           </div>
         </div>
       `;
@@ -3698,6 +3738,66 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
   }
 }
 window.ayceFireBuild = ayceFireBuild;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AYCE-FIRE AUTO — skip modal, fire immediately. Used for SIM auto-play
+// across all tabs (esp. Lotto). Resolves contract via /api/ayce-fire/build,
+// then immediately POSTs to /api/ayce-fire/place with auto-bracket.
+// Toast shows resolution + fill status. Use sparingly — no preview.
+// ─────────────────────────────────────────────────────────────────────────────
+async function ayceFireAuto(ticker, direction, account, tradeType) {
+  tradeType = tradeType || 'DAY';
+  account = account || 'sim';
+  // Bottom-right toast
+  const toast = document.createElement('div');
+  toast.style.cssText = 'position:fixed;bottom:24px;right:24px;background:#1a1f2a;border:1px solid #2a3140;color:#dde;padding:12px 16px;border-radius:6px;z-index:10000;font-size:12px;font-family:monospace;min-width:240px;max-width:380px;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+  const accountColor = account === 'public' ? '#5cf' : account === 'sim' ? '#ff0' : '#4f4';
+  toast.innerHTML = `<div style="color:${accountColor};font-weight:700;">🔥 AUTO-FIRE ${ticker} ${direction.toUpperCase()} → ${account.toUpperCase()}</div>
+    <div style="color:#888;margin-top:4px;">Resolving contract…</div>`;
+  document.body.appendChild(toast);
+  setTimeout(() => { if (toast.parentNode) toast.remove(); }, 12000);
+  try {
+    const r = await fetch('/api/ayce-fire/build', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, direction, tradeType, account, size: 1 }),
+    });
+    const data = await r.json();
+    if (!data.ok || data.blocked) {
+      toast.innerHTML = `<div style="color:#ff5050;font-weight:700;">❌ ${ticker} build failed</div>
+        <div style="color:#888;margin-top:4px;">${data.error || data.reason || 'unknown'}</div>`;
+      return;
+    }
+    const c = data.contract;
+    const t = data.orderTicket;
+    const limitPrice = parseFloat(t.limitPrice);
+    const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.75 * 100) / 100);
+    const tp1Premium = Math.round(limitPrice * 1.50 * 100) / 100;
+    toast.innerHTML = `<div style="color:${accountColor};font-weight:700;">🔥 AUTO-FIRE ${ticker} ${direction.toUpperCase()} → ${account.toUpperCase()}</div>
+      <div style="color:#888;margin-top:4px;">Placing ${c.symbol} @ $${limitPrice}…</div>`;
+    const pr = await fetch('/api/ayce-fire/place', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker, contractSymbol: c.symbol, direction, account,
+        size: t.quantity, limitPrice,
+        stopPremium, tp1Premium,
+      }),
+    });
+    const pdata = await pr.json();
+    if (pdata.ok) {
+      toast.innerHTML = `<div style="color:#4f4;font-weight:700;">✅ ${ticker} placed on ${account.toUpperCase()}</div>
+        <div style="color:#dde;margin-top:4px;">${c.symbol} @ $${limitPrice}</div>
+        <div style="color:#888;font-size:11px;margin-top:4px;">stop $${stopPremium} / TP $${tp1Premium}</div>`;
+    } else {
+      toast.innerHTML = `<div style="color:#ff5050;font-weight:700;">❌ ${ticker} place failed</div>
+        <div style="color:#888;margin-top:4px;">${pdata.error || 'unknown'}</div>`;
+    }
+  } catch (e) {
+    toast.innerHTML = `<div style="color:#ff5050;font-weight:700;">❌ ${ticker} network error</div>
+      <div style="color:#888;margin-top:4px;">${e.message}</div>`;
+  }
+}
+window.ayceFireAuto = ayceFireAuto;
 
 function renderGridAYCE() {
   try {
