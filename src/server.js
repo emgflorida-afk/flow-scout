@@ -150,6 +150,16 @@ app.get('/scanner-v2', function(req, res) {
   res.sendFile(path.join(process.cwd(), 'src', 'scanner-v2.html'));
 });
 
+// Trading Floor Dashboard (May 4 2026) - visual UI for /api/desks/status.
+// Renders regime banner + SPY/QQQ/VIX tiles + armed setups + recommendation.
+// Auto-refreshes every 30s. Mobile-friendly.
+app.get('/desks', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'desks-dashboard.html'));
+});
+app.get('/desks-dashboard.html', function(req, res) {
+  res.sendFile(path.join(process.cwd(), 'src', 'desks-dashboard.html'));
+});
+
 // LVL Scanner endpoint (Apr 29 2026) - computes 25sense / LVL state for the
 // WP universe across multiple timeframes (Daily + 1H by default). Returns
 // per-ticker {tfs: {Daily: {signal, plan, levels, ...}, 1H: {...}}}.

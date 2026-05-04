@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Flow Scout — Trading Floor</title>
+<style>
+:root {
+  --bg: #0a0d12;
+  --panel: #0f141c;
+  --border: #1e2530;
+  --txt: #dde;
+  --txt-2: #a8b0bb;
+  --txt-3: #6b7480;
+  --green: #4ade80;
+  --red: #f87171;
+  --yellow: #facc15;
+  --blue: #60a5fa;
+  --orange: #fb923c;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--txt); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 16px; min-height: 100vh; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.3px; }
+.subtitle { font-size: 11px; color: var(--txt-3); }
+.refresh-info { font-size: 11px; color: var(--txt-3); display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); animation: pulse 2s infinite; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+.regime-banner {
+  padding: 24px;
+  border-radius: 12px;
+  text-align: center;
+  margin-bottom: 16px;
+  font-weight: 700;
+  border: 2px solid var(--border);
+  background: var(--panel);
+}
+.regime-bearish { background: linear-gradient(135deg, #2a0e0e, #1a0808); border-color: var(--red); color: var(--red); }
+.regime-bullish { background: linear-gradient(135deg, #0e2a14, #08180a); border-color: var(--green); color: var(--green); }
+.regime-chop    { background: linear-gradient(135deg, #2a2410, #1a1808); border-color: var(--yellow); color: var(--yellow); }
+.regime-banner .label { font-size: 32px; letter-spacing: 1px; margin-bottom: 8px; }
+.regime-banner .verdict { font-size: 13px; font-weight: 400; line-height: 1.5; opacity: 0.9; max-width: 600px; margin: 8px auto 0; }
+.regime-banner .signal-counts { font-size: 11px; opacity: 0.6; margin-top: 12px; }
+
+.grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+@media (max-width: 700px) { .grid { grid-template-columns: 1fr; } }
+
+.tile {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+}
+.tile h3 { font-size: 11px; color: var(--txt-3); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; margin-bottom: 8px; }
+.tile .value { font-size: 26px; font-weight: 700; margin-bottom: 4px; font-feature-settings: 'tnum'; }
+.tile .change { font-size: 12px; }
+.up { color: var(--green); }
+.down { color: var(--red); }
+.flat { color: var(--txt-2); }
+
+.recommendation {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  margin-bottom: 16px;
+  border-left: 4px solid var(--blue);
+}
+.recommendation h3 { font-size: 11px; color: var(--blue); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; margin-bottom: 8px; }
+.recommendation .text { font-size: 15px; line-height: 1.5; }
+
+.section { margin-bottom: 16px; }
+.section-title { font-size: 12px; color: var(--txt-3); text-transform: uppercase; letter-spacing: 0.8px; font-weight: 600; margin-bottom: 10px; padding-left: 4px; }
+
+.armed-list { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.armed-row { display: grid; grid-template-columns: 80px 1fr 80px 80px 80px; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--border); align-items: center; font-size: 13px; }
+.armed-row:last-child { border-bottom: none; }
+.armed-row .ticker { font-weight: 700; font-size: 14px; }
+.armed-row .source { color: var(--txt-3); font-size: 11px; font-family: monospace; }
+.armed-row .dir-long { color: var(--green); font-weight: 600; font-size: 11px; }
+.armed-row .dir-short { color: var(--red); font-weight: 600; font-size: 11px; }
+.armed-row .level { font-family: monospace; color: var(--txt-2); font-size: 12px; }
+.armed-row .level-label { color: var(--txt-3); font-size: 9px; text-transform: uppercase; }
+
+.empty { padding: 30px; text-align: center; color: var(--txt-3); font-size: 13px; }
+.error { color: var(--red); padding: 16px; background: rgba(248,113,113,0.1); border: 1px solid var(--red); border-radius: 8px; }
+
+.footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid var(--border); display: flex; justify-content: space-between; font-size: 11px; color: var(--txt-3); }
+.actions { display: flex; gap: 8px; }
+.actions a, .actions button { font-size: 11px; padding: 6px 12px; background: var(--panel); border: 1px solid var(--border); color: var(--txt-2); border-radius: 6px; text-decoration: none; cursor: pointer; }
+.actions a:hover, .actions button:hover { background: var(--border); color: var(--txt); }
+
+.sectors { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px; margin-top: 8px; }
+@media (max-width: 700px) { .sectors { grid-template-columns: repeat(3, 1fr); } }
+.sector { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 8px; text-align: center; }
+.sector .name { font-size: 9px; color: var(--txt-3); margin-bottom: 2px; font-weight: 600; }
+.sector .pct { font-size: 12px; font-weight: 700; font-feature-settings: 'tnum'; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>🏦 Flow Scout — Trading Floor</h1>
+    <div class="subtitle">Mini Hedge Fund Dashboard</div>
+  </div>
+  <div class="refresh-info"><span class="dot"></span> auto-refresh every 30s · <span id="last-update">loading…</span></div>
+</div>
+
+<div id="content"><div class="empty">Loading desks…</div></div>
+
+<div class="footer">
+  <div>flow-scout-production.up.railway.app/desks</div>
+  <div class="actions">
+    <button onclick="loadData()">↻ Refresh now</button>
+    <a href="/scanner-v2.html" target="_blank">Scanner</a>
+    <a href="/api/desks/status" target="_blank">JSON</a>
+  </div>
+</div>
+
+<script>
+async function loadData() {
+  try {
+    const r = await fetch('/api/desks/status', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    render(d);
+    document.getElementById('last-update').textContent = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  } catch (e) {
+    document.getElementById('content').innerHTML = '<div class="error">Failed to load: ' + e.message + '</div>';
+  }
+}
+
+function fmtPct(p) {
+  if (p == null || isNaN(p)) return '—';
+  const sign = p >= 0 ? '+' : '';
+  const cls = p > 0 ? 'up' : p < 0 ? 'down' : 'flat';
+  return `<span class="${cls}">${sign}${p.toFixed(2)}%</span>`;
+}
+function fmtPrice(p) { return p == null || isNaN(p) ? '—' : '$' + p.toFixed(2); }
+
+function render(d) {
+  const m = (d.desks && d.desks.macro) || {};
+  const e = (d.desks && d.desks.equities) || {};
+  const armed = e.armed || [];
+  const regime = m.regime || {};
+
+  let regimeClass = 'regime-chop';
+  let regimeLabel = '🟡 CHOP REGIME';
+  if (regime.direction === 'bearish') { regimeClass = 'regime-bearish'; regimeLabel = '🔴 RISK-OFF — BEARISH'; }
+  else if (regime.direction === 'bullish') { regimeClass = 'regime-bullish'; regimeLabel = '🟢 RISK-ON — BULLISH'; }
+
+  let html = '';
+
+  // Regime banner
+  html += `<div class="regime-banner ${regimeClass}">
+    <div class="label">${regimeLabel}</div>
+    <div class="verdict">${regime.verdict || 'No regime data'}</div>
+    <div class="signal-counts">Bearish: ${regime.bearishCount || 0}/3 · Bullish: ${regime.bullishCount || 0}/3</div>
+  </div>`;
+
+  // Recommendation
+  html += `<div class="recommendation">
+    <h3>📋 Recommendation</h3>
+    <div class="text">${d.recommendation || 'No recommendation'}</div>
+  </div>`;
+
+  // Tiles: SPY / QQQ / VIX
+  const spy = m.spy || {};
+  const qqq = m.qqq || {};
+  const vix = m.vix || {};
+  html += `<div class="grid">
+    <div class="tile">
+      <h3>SPY</h3>
+      <div class="value ${spy.pct > 0 ? 'up' : spy.pct < 0 ? 'down' : 'flat'}">${fmtPrice(spy.last)}</div>
+      <div class="change">${fmtPct(spy.pct)}</div>
+    </div>
+    <div class="tile">
+      <h3>QQQ</h3>
+      <div class="value ${qqq.pct > 0 ? 'up' : qqq.pct < 0 ? 'down' : 'flat'}">${fmtPrice(qqq.last)}</div>
+      <div class="change">${fmtPct(qqq.pct)}</div>
+    </div>
+    <div class="tile">
+      <h3>VIX <span style="font-weight:400;color:var(--txt-3);font-size:10px;">${m.vixRegime ? '· ' + m.vixRegime.label : ''}</span></h3>
+      <div class="value ${vix.pct > 5 ? 'down' : vix.pct < -5 ? 'up' : 'flat'}">${vix.last ? vix.last.toFixed(2) : '—'}</div>
+      <div class="change">${fmtPct(vix.pct)}</div>
+    </div>
+  </div>`;
+
+  // Armed setups
+  html += `<div class="section">
+    <div class="section-title">🔥 Armed Setups (${armed.length})</div>
+    <div class="armed-list">`;
+  if (!armed.length) {
+    html += `<div class="empty">No armed setups across scanners</div>`;
+  } else {
+    armed.slice(0, 12).forEach(a => {
+      const dirCls = a.direction === 'long' ? 'dir-long' : 'dir-short';
+      const dirLabel = a.direction === 'long' ? 'LONG ▲' : 'SHORT ▼';
+      html += `<div class="armed-row">
+        <div class="ticker">${a.ticker}</div>
+        <div class="source">${a.source || '?'}</div>
+        <div class="${dirCls}">${dirLabel}</div>
+        <div><span class="level-label">Trig</span><br><span class="level">${a.trigger ? '$' + a.trigger : '—'}</span></div>
+        <div><span class="level-label">Stop</span><br><span class="level">${a.stop ? '$' + a.stop : '—'}</span></div>
+      </div>`;
+    });
+  }
+  html += `</div></div>`;
+
+  document.getElementById('content').innerHTML = html;
+}
+
+loadData();
+setInterval(loadData, 30000);  // refresh every 30 sec
+</script>
+</body>
+</html>
