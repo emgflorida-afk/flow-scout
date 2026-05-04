@@ -1052,7 +1052,15 @@ app.post('/api/ayce-fire/build', async function(req, res) {
     var resolver = require('./contractResolver');
     var optType = direction === 'long' ? 'call' : 'put';
     var resolved = await resolver.resolveContract(ticker, optType, tradeType, {});
-    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null' });
+    // FALLBACK: if DAY mode returns null (big-cap stocks have ITM strikes > $7
+    // max premium for DAY), retry with SWING mode which has higher cap. This
+    // fixes the "buttons don't work" bug AB hit on META/SPY/DIA/NVDA FIRE.
+    if (!resolved && tradeType === 'DAY') {
+      console.log('[FIRE-BUILD] DAY mode failed for ' + ticker + ' — retrying SWING');
+      resolved = await resolver.resolveContract(ticker, optType, 'SWING', {});
+      if (resolved) tradeType = 'SWING';
+    }
+    if (!resolved) return res.status(500).json({ ok: false, error: 'contractResolver returned null (tried DAY+SWING)' });
     if (resolved.blocked) return res.json({ ok: false, blocked: true, reason: resolved.reason, lvls: resolved.lvls });
     var stockPrice = resolved.stockPrice || resolved.price;
     var contractSymbol = resolved.contractSymbol || resolved.symbol;
