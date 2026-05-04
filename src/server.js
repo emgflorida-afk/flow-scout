@@ -336,6 +336,14 @@ var powerHourBrief = null;
 try { powerHourBrief = require('./powerHourBrief'); console.log('[SERVER] powerHourBrief loaded OK'); }
 catch(e) { console.log('[SERVER] powerHourBrief not loaded:', e.message); }
 
+// SIM AUTO TRADER — autonomous paper-trading on conv>=8 + Hold-SAFE setups.
+// Fires SIM-only orders when scanner setups hit triggers. Validates the
+// system without real-money risk. Hard-capped at 5 fires/day, 5 concurrent.
+// Requires SIM_AUTO_ENABLED=true env var to actually fire (default off).
+var simAutoTrader = null;
+try { simAutoTrader = require('./simAutoTrader'); console.log('[SERVER] simAutoTrader loaded OK'); }
+catch(e) { console.log('[SERVER] simAutoTrader not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4572,6 +4580,80 @@ app.post('/api/power-hour-brief/run', async function(req, res) {
   try {
     var brief = await powerHourBrief.runBrief();
     res.json({ ok: true, brief: brief });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// SIM AUTO TRADER — every 5 min during RTH fire window (9:45 AM - 3:30 PM ET).
+// Hard-capped: 5 fires/day, 5 concurrent open, 24h ticker cooldown, conv>=8,
+// hold=SAFE, no earnings risk, account ALWAYS = 'sim'.
+// Validates the system before going live. Goal: 65% win rate over 30 trades.
+// =============================================================================
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!simAutoTrader) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 45) || (etHr >= 10 && etHr < 15) || (etHr === 15 && etMin <= 30);
+    if (!inWindow) return;
+    var out = await simAutoTrader.runSimAuto();
+    if (out && out.firesSucceeded > 0) {
+      console.log('[SIM-AUTO] cron fired ' + out.firesSucceeded + ' SIM trades');
+    }
+  } catch(e) { console.error('[SIM-AUTO] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// SIM AUTO daily recap cron — 4:05 PM ET each weekday after market close
+cron.schedule('5 16 * * 1-5', async function() {
+  try {
+    if (!simAutoTrader) return;
+    console.log('[SIM-AUTO] 4:05 PM EOD recap firing...');
+    await simAutoTrader.runEodRecap();
+  } catch(e) { console.error('[SIM-AUTO] eod recap error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// SIM AUTO endpoints — manual run / status / recap / position close
+app.post('/api/sim-auto/run', async function(req, res) {
+  if (!simAutoTrader) return res.status(500).json({ ok: false, error: 'simAutoTrader not loaded' });
+  try {
+    var force = req.query.force === 'true' || (req.body && req.body.force === true);
+    var out = await simAutoTrader.runSimAuto({ force: force });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/sim-auto/status', function(req, res) {
+  if (!simAutoTrader) return res.status(500).json({ ok: false, error: 'simAutoTrader not loaded' });
+  try {
+    res.json(Object.assign({ ok: true }, simAutoTrader.getStatus()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/sim-auto/recap', async function(req, res) {
+  if (!simAutoTrader) return res.status(500).json({ ok: false, error: 'simAutoTrader not loaded' });
+  try {
+    var out = await simAutoTrader.runEodRecap();
+    res.json({ ok: true, push: out });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/sim-auto/close-position', function(req, res) {
+  if (!simAutoTrader) return res.status(500).json({ ok: false, error: 'simAutoTrader not loaded' });
+  try {
+    var ticker = String((req.body && req.body.ticker) || req.query.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: { ticker }' });
+    var outcome = (req.body && req.body.outcome) || null;  // 'win' | 'loss' | 'breakeven' (passed through to tradeTracker)
+    var out = simAutoTrader.markPositionClosed(ticker, outcome);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/sim-auto/qualifying', function(req, res) {
+  if (!simAutoTrader) return res.status(500).json({ ok: false, error: 'simAutoTrader not loaded' });
+  try {
+    var setups = simAutoTrader.collectQualifyingSetups();
+    res.json({ ok: true, count: setups.length, setups: setups });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 app.get('/api/power-hour-brief/last', function(req, res) {
