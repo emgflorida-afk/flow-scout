@@ -94,6 +94,13 @@ function normalizeSetup(s) {
     preferredStrike: isFinite(parseFloat(s.preferredStrike || s.strike)) ? parseFloat(s.preferredStrike || s.strike) : null,
     preferredSize: parseInt(s.preferredSize || s.size || 0, 10) || null,  // override 2-3ct default
     flowNotes: s.flowNotes || null,        // 'Bullflow shows 4.2k call vol on this strike, OI 12k'
+    // CHART VISION VERDICT (May 4 2026): AB's local routine has TV MCP access
+    // and can run chart-vision per setup. Pass the verdict here so morning brief
+    // shows it AND simAutoTrader gates fire on VETO.
+    visionVerdict: s.visionVerdict || null,    // 'APPROVE' | 'WAIT' | 'VETO' | null
+    visionReason: s.visionReason || null,      // free-text reason from vision review
+    visionScore: isFinite(parseFloat(s.visionScore)) ? parseFloat(s.visionScore) : null,  // 0-10
+    visionAt: s.visionAt || null,              // ISO timestamp of vision check
   };
 }
 
