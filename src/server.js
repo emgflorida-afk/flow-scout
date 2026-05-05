@@ -4982,6 +4982,19 @@ app.get('/api/uoa/recent', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Direct enrichment dry-run — no scoring, no Discord push, just returns the
+// enriched payload for a ticker:direction so we can verify TS quote + setup
+// match + tier stack + Titan ticket assembly.
+app.post('/api/uoa/enrich-test', async function(req, res) {
+  try {
+    var uoaEnrichment = require('./uoaEnrichment');
+    var alert = req.body || {};
+    if (!alert.ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    var enriched = await uoaEnrichment.enrichUoaPush(alert);
+    res.json({ ok: true, enriched: enriched });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // EOD reset cron — clears tier state at end of trading day
 cron.schedule('5 16 * * 1-5', function() {
   try {

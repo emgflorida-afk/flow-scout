@@ -35,6 +35,8 @@ var alertTiers = null;
 try { alertTiers = require('./alertTiers'); } catch (e) {}
 var dp = null;
 try { dp = require('./discordPush'); } catch (e) {}
+var uoaEnrichment = null;
+try { uoaEnrichment = require('./uoaEnrichment'); } catch (e) {}
 
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var LOG_FILE = path.join(DATA_ROOT, 'uoa_log.json');
@@ -118,29 +120,81 @@ async function handleAlert(alert) {
   var direction = String(alert.direction || 'long').toLowerCase();
   var stack = alertTiers ? alertTiers.getStackStatus(ticker, direction) : { fullStack: false };
 
-  // Push Discord card
-  var icon = s >= WHALE_THRESHOLD ? '🐋🐋' : '🌊';
-  var stackLine = stack.fullStack
-    ? '✅ FULL STACK — TV Tier 1 + 2 fired earlier today on ' + ticker + ' ' + direction
-    : stack.t1Fired ? '🟡 Tier 1 fired today (no Tier 2 yet)'
-    : stack.t2Fired ? '🟡 Tier 2 fired today (no Tier 1)'
-    : '⚫ No TV alerts on this ticker today';
+  // ENRICH — pull live ticker context, scanner setup, level distance, Titan ticket
+  var enriched = null;
+  if (uoaEnrichment && uoaEnrichment.enrichUoaPush) {
+    try {
+      enriched = await uoaEnrichment.enrichUoaPush({
+        ticker: ticker, direction: direction,
+        totalPremium: alert.totalPremium || alert.premium,
+        size: alert.size, contractSymbol: alert.contractSymbol,
+      });
+    } catch (e) { console.error('[UOA] enrichment error:', e.message); }
+  }
 
+  var icon = s >= WHALE_THRESHOLD ? '🐋🐋' : '🌊';
   var triggerAutoFire = s >= WHALE_THRESHOLD && stack.fullStack;
+
+  // Build stackLine — prefer enriched version (has emoji + tier age info)
+  var stackLine = (enriched && enriched.summary && enriched.summary.stackLine)
+    ? enriched.summary.stackLine
+    : (stack.fullStack
+        ? '✅ FULL STACK — TV Tier 1 + 2 fired earlier today on ' + ticker + ' ' + direction
+        : stack.t1Fired ? '🟡 Tier 1 fired today (no Tier 2 yet)'
+        : stack.t2Fired ? '🟡 Tier 2 fired today (no Tier 1)'
+        : '⚫ No TV alerts on this ticker today');
+
+  // Build description with enriched live spot + day H/L if available
+  var descParts = [
+    '**Premium**: $' + Math.round((alert.totalPremium || alert.premium || 0) / 1000) + 'K',
+    '**Size**: ' + (alert.size || '?') + ' contracts',
+    '**Contract**: ' + (alert.contractSymbol || '?'),
+  ];
+  if (enriched && enriched.summary && enriched.summary.liveLine) {
+    descParts.push(enriched.summary.liveLine);
+  }
+
+  // Fields — enriched setup + level + Titan ticket
+  var fields = [
+    { name: '📊 Stack confluence', value: stackLine, inline: false },
+  ];
+
+  if (enriched && enriched.summary && enriched.summary.setupLine) {
+    fields.push({ name: '🎯 Scanner setup', value: enriched.summary.setupLine, inline: false });
+  }
+  if (enriched && enriched.summary && enriched.summary.levelLine) {
+    fields.push({ name: '📍 Level distance', value: enriched.summary.levelLine, inline: false });
+  }
+
+  fields.push({
+    name: '🎬 Decision',
+    value: triggerAutoFire
+      ? '✅ AUTO-FIRE SIM (whale + full stack)'
+      : (enriched && enriched.levelInfo && enriched.levelInfo.atTrigger
+          ? '🔥 AT TRIGGER ZONE — manual fire ready (verify chart)'
+          : '🔔 Watch — manual fire if you confirm chart'),
+    inline: false,
+  });
+
+  // Pre-formatted Titan ticket — collapse into ```code block``` if present
+  if (enriched && enriched.ticket) {
+    var ticketText = enriched.ticket;
+    if (ticketText.length > 1000) ticketText = ticketText.slice(0, 997) + '...';
+    fields.push({
+      name: '📋 Titan ticket (copy-paste ready)',
+      value: '```\n' + ticketText + '\n```',
+      inline: false,
+    });
+  }
 
   var embed = {
     username: 'Flow Scout — UOA Detector',
     embeds: [{
       title: icon + ' ' + (s >= WHALE_THRESHOLD ? 'WHALE' : 'UOA') + ' — ' + ticker + ' ' + direction.toUpperCase() + ' (score ' + s + '/15)',
-      description: '**Premium**: $' + Math.round((alert.totalPremium || alert.premium || 0) / 1000) + 'K' +
-                   '\n**Size**: ' + (alert.size || '?') + ' contracts' +
-                   '\n**Contract**: ' + (alert.contractSymbol || '?'),
+      description: descParts.join('\n'),
       color: s >= WHALE_THRESHOLD ? 15158332 : 5763719,
-      fields: [
-        { name: '📊 Stack confluence', value: stackLine, inline: false },
-        { name: '🎯 Decision', value: triggerAutoFire ? '✅ AUTO-FIRE SIM (whale + full stack)' : '🔔 Watch — manual fire if you confirm chart', inline: false },
-      ],
-      footer: { text: 'Flow Scout | UOA Detector | live Bullflow scoring' },
+      fields: fields,
+      footer: { text: 'Flow Scout | UOA Detector | enriched live + scanner + tier' },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -158,7 +212,7 @@ async function handleAlert(alert) {
     } catch (e) { console.error('[UOA] auto-fire intent error:', e.message); }
   }
 
-  return { ok: true, action: triggerAutoFire ? 'auto-fire-intent' : 'discord-push', score: s, stack: stack };
+  return { ok: true, action: triggerAutoFire ? 'auto-fire-intent' : 'discord-push', score: s, stack: stack, enriched: !!enriched };
 }
 
 function getRecentUoa(maxAgeHours) {
