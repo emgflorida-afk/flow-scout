@@ -2486,8 +2486,10 @@ function renderGridTomorrow() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 Public</button>
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 Bracket</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', false, this)" title="Fire on TradeStation immediately (market entry)">⚡ TS FIRE</button>
+            <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 PUBLIC</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 BRACKET</button>
           </div>
         </div>
       `;
@@ -2496,6 +2498,80 @@ function renderGridTomorrow() {
     document.getElementById("grid").innerHTML = `<div class="empty">Tomorrow render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
+
+// May 6 — TradeStation fire dispatcher for Tomorrow tab radar entries.
+// Mirrors dispatchRadarToPublic but routes to /api/take-trade (the same
+// endpoint scanner.html uses for TS fires). useTrigger=true queues a
+// conditional bracket; false fires immediately.
+async function dispatchRadarToTS(ticker, useTrigger, btn) {
+  if (!radarData || !radarData._flat) return alert('Radar data not loaded');
+  const r = radarData._flat.find(x => x.ticker === ticker);
+  if (!r) return alert('Setup not found in radar for ' + ticker);
+
+  const isLong = (r.target || 0) >= (r.spot || 0);
+  const dirText = (r.direction || (isLong ? 'LONG' : 'SHORT')).toUpperCase();
+  const isCall = dirText === 'LONG' || dirText === 'CALL';
+  const direction = isCall ? 'BULLISH' : 'BEARISH';
+
+  // Build OPRA contract symbol from preferredContractSymbol (already in OPRA
+  // format like NTAP260515C00115000) or fall back to constructing from r.contract
+  let contractSym = r.preferredContractSymbol || r.contract;
+  if (!contractSym) return alert('No contract symbol for ' + ticker + ' — cannot fire');
+  // Convert NTAP260515C00115000 to TS-style "NTAP 260515C00115000" (with space)
+  const opraMatch = contractSym.replace(/^O:/, '').match(/^([A-Z]+)(\d{6}[CP]\d+)$/);
+  const tsSymbol = opraMatch ? opraMatch[1] + ' ' + opraMatch[2] : contractSym;
+
+  // Premium math from setup. Default to 25%/50% TPs if no optionEntry.
+  const optEntry = r.optionEntry || 0;
+  const optStop  = r.optionStop || (optEntry * 0.75);
+  const optTp1   = r.optionTp1 || r.optTp1 || (optEntry * 1.25);
+  const optTp2   = r.optionTp2 || (optEntry * 1.50);
+
+  if (!optEntry) return alert('No option entry price for ' + ticker + ' — refresh radar mids');
+
+  const sec = localStorage.getItem('stratum_secret');
+  if (!sec) return alert('STRATUM_SECRET missing in localStorage. ARM to set it.');
+
+  const verb = useTrigger ? 'QUEUE w/ TRIGGER' : 'FIRE NOW';
+  if (!confirm(`⚡ TS ${verb} — ${ticker} ${dirText}?\n\nContract: ${tsSymbol}\nEntry: $${optEntry.toFixed(2)}  Stop: $${optStop.toFixed(2)}  TP1: $${optTp1.toFixed(2)}\n${useTrigger ? 'Trigger: ' + ticker + ' above $' + r.trigger : 'Immediate market entry'}\n\nAccount: 11975462 LIVE`)) return;
+
+  const body = {
+    ticker: ticker,
+    symbol: tsSymbol,
+    direction: direction,
+    qty: 1,
+    entry: optEntry,
+    stop: optStop,
+    tp1: optTp1,
+    tp2: optTp2,
+    structuralStop: r.stop ? { symbol: ticker, predicate: 'below', price: r.stop } : null,
+    live: true,
+    source: 'tomorrow-radar-' + ticker + (useTrigger ? '-queued' : '-firenow'),
+  };
+  if (useTrigger && r.trigger) {
+    body.trigger = { symbol: ticker, predicate: 'above', price: r.trigger };
+  }
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ submitting…'; }
+  try {
+    const resp = await fetch('/api/take-trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json();
+    if (resp.status === 200) {
+      const ok = (j.brackets || []).filter(x => x.ok).length;
+      alert(`✅ ${ok}/${(j.brackets||[]).length} bracket(s) ${useTrigger ? 'QUEUED' : 'FIRED'} at TS LIVE\nDollar risk: $${j.dollarRisk}`);
+    } else {
+      alert(`❌ TS fire failed: ${j.error || 'HTTP ' + resp.status}`);
+    }
+  } catch (e) {
+    alert(`❌ TS fire network error: ${e.message}`);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = useTrigger ? '🎯 TS QUEUE' : '⚡ TS FIRE'; }
+}
+window.dispatchRadarToTS = dispatchRadarToTS;
 
 // =============================================================================
 // 📈 SNIPER tab — Sniper Trades chart-analysis posts from /api/sniper-feed
