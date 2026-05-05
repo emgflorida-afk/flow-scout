@@ -2236,6 +2236,7 @@ async function loadActiveTab() {
   if (document.getElementById("overlay")?.classList?.contains("active")) {
     return;
   }
+  if (activeTab !== "tomorrow") stopRadarSpotPoll();
   if (activeTab === "scan")     return loadScanData();
   if (activeTab === "movers")   return loadMoversData();
   if (activeTab === "lvl")      return loadLvlData();
@@ -2256,6 +2257,82 @@ async function loadActiveTab() {
 // =============================================================================
 // 🌅 TOMORROW tab — reads /api/setup-radar (Living EOD watchlist)
 // =============================================================================
+
+// May 6 — Live spot poll for Tomorrow tab proximity indicator. Setup-radar
+// returns spot=null because qualifying-setups don't include real-time spot.
+// We override with live TS quotes, polled every 10s.
+window._radarSpots = {};
+let _radarSpotTimer = null;
+
+async function refreshRadarSpots() {
+  if (!radarData || !radarData._flat || !radarData._flat.length) return;
+  const tickers = Array.from(new Set(radarData._flat.map(r => r.ticker).filter(Boolean)));
+  if (!tickers.length) return;
+  try {
+    const r = await fetch('/api/ticker-quote?symbols=' + tickers.join(','), { cache: 'no-store' });
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d || !d.quotes) return;
+    d.quotes.forEach(q => { window._radarSpots[q.symbol] = q; });
+    if (activeTab === 'tomorrow') renderGridTomorrow();
+  } catch (e) { /* fail silent */ }
+}
+
+function startRadarSpotPoll() {
+  if (_radarSpotTimer) return;
+  refreshRadarSpots();
+  _radarSpotTimer = setInterval(refreshRadarSpots, 10000);
+}
+function stopRadarSpotPoll() {
+  if (_radarSpotTimer) { clearInterval(_radarSpotTimer); _radarSpotTimer = null; }
+}
+
+// Build proximity-to-trigger visual indicator. Shows live spot, distance to
+// trigger, and a horizontal bar with center marker for trigger.
+function buildProximityHtml(spot, trigger, direction) {
+  if (!spot || !trigger) {
+    return `<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border);border-radius:6px;padding:8px 10px;margin:8px 0;font-size:11px;color:var(--txt-3);">Spot loading…</div>`;
+  }
+  const diff = spot - trigger;
+  const pctDiff = trigger > 0 ? (diff / trigger * 100) : 0;
+  const isAbove = diff >= 0;
+  // For LONG: green if above trigger, gray if below. For SHORT: green if below trigger, gray if above.
+  const isLong = (direction || '').toUpperCase() === 'LONG' || (direction || '').toUpperCase() === 'CALL';
+  const triggered = isLong ? isAbove : !isAbove;
+  const atTrigger = Math.abs(pctDiff) < 0.1;
+  let stateLabel, stateColor;
+  if (atTrigger) {
+    stateLabel = '🎯 AT TRIGGER';
+    stateColor = '#ffb86c';
+  } else if (triggered) {
+    stateLabel = '✅ TRIGGERED';
+    stateColor = '#4caf50';
+  } else {
+    stateLabel = `⏳ ${Math.abs(pctDiff).toFixed(2)}% away`;
+    stateColor = '#888';
+  }
+  const arrow = isAbove ? '↑' : '↓';
+  const sign = isAbove ? '+' : '';
+  // Visual bar: center is trigger, fill extends left if below or right if above
+  const barWidth = Math.min(50, Math.abs(pctDiff) * 25);
+  const barSide = isAbove ? 'right' : 'left';
+  return `
+    <div style="background:rgba(255,255,255,0.04);border:1px solid ${stateColor};border-radius:6px;padding:8px 12px;margin:8px 0;font-size:11px;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+        <span style="font-size:14px;font-weight:700;color:#fff;">SPOT $${spot.toFixed(2)}</span>
+        <span style="color:var(--txt-3);">→</span>
+        <span style="color:var(--txt-2);">trig $${trigger.toFixed(2)}</span>
+        <span style="color:${stateColor};font-weight:700;">${arrow} ${sign}${diff.toFixed(2)} (${sign}${pctDiff.toFixed(2)}%)</span>
+        <span style="margin-left:auto;background:${stateColor};color:#000;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;">${stateLabel}</span>
+      </div>
+      <div style="position:relative;height:6px;background:rgba(255,255,255,0.06);border-radius:3px;overflow:hidden;">
+        <div style="position:absolute;left:50%;top:0;bottom:0;width:2px;background:#fff;opacity:0.4;"></div>
+        <div style="position:absolute;${barSide}:50%;top:0;bottom:0;width:${barWidth}%;background:${stateColor};opacity:0.7;"></div>
+      </div>
+    </div>
+  `;
+}
+
 async function loadTomorrowData() {
   FILTERS = FILTERS_TOMORROW;
   try {
@@ -2269,6 +2346,8 @@ async function loadTomorrowData() {
     (data.forming || []).forEach(x => flat.push(Object.assign({ _state: "forming" }, x)));
     (data.earningsWatch || []).forEach(x => flat.push(Object.assign({ _state: "earnings" }, x)));
     radarData = { ...data, _flat: flat };
+    // Kick off live spot poll the moment we have tickers
+    startRadarSpotPoll();
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Could not load setup radar: <code>${e.message}</code><br>Run an EOD scan or POST /api/setup-radar to populate.</div>`;
     document.getElementById("stats").innerHTML = "";
@@ -2368,12 +2447,16 @@ function renderGridTomorrow() {
       }
 
       // READY/FORMING shape — full trade card
+      // Override r.spot with live data from /api/ticker-quote (setup-radar
+      // doesn't carry spot — overridden by 10s spot poll once available)
+      const liveSpot = (window._radarSpots && window._radarSpots[r.ticker] && window._radarSpots[r.ticker].last) || r.spot;
+      const proximityHtml = buildProximityHtml(liveSpot, r.trigger, dirText);
       return `
         <div class="card ${dirClass}" data-radar-ticker="${r.ticker}">
           <div class="card-head">
             <div>
               <div class="ticker mono">${r.ticker}</div>
-              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">$${fmtNum(r.spot || 0)}${r.type ? ` · Type ${r.type}` : ''}</div>
+              <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${liveSpot ? '$' + fmtNum(liveSpot) : '$—'}${r.type ? ` · Type ${r.type}` : ''}</div>
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="dir-pill ${dirPill}">${dirText}</span>
@@ -2382,6 +2465,8 @@ function renderGridTomorrow() {
               <button class="star-btn" data-ticker="${r.ticker}" onclick="event.stopPropagation();toggleStar('${r.ticker}','tomorrow')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;">${starred?'★':'☆'}</button>
             </div>
           </div>
+
+          ${proximityHtml}
 
           <div class="metrics">
             ${r.trigger ? `<div class="metric"><span class="metric-key">Trigger</span><span class="metric-val mono aqua">${typeof r.trigger === 'number' ? '$'+fmtNum(r.trigger) : r.trigger}</span></div>` : ''}
