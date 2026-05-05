@@ -65,6 +65,10 @@ try { simTradeJournal = require('./simTradeJournal'); } catch (e) {}
 var ts = null;
 try { ts = require('./tradestation'); } catch (e) {}
 
+// Phase 4.29 — FIRE GRADE composite (consolidated grade gate replaces conviction)
+var fireGradeComputer = null;
+try { fireGradeComputer = require('./fireGradeComputer'); } catch (e) {}
+
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var STATE_FILE = path.join(DATA_ROOT, 'sim_auto_state.json');
 // Phase 4.27 — log of all SIM fires that were BLOCKED by gates so AB can audit
@@ -497,7 +501,7 @@ async function chartVisionCheck(ticker, direction, tradeType) {
 // On block, also writes to /data/sim_blocked_log.json so AB can audit later.
 async function runGates(setup) {
   var gates = {
-    ta: 'skipped', tape: 'skipped', mtb: 'skipped', vision: 'skipped',
+    ta: 'skipped', tape: 'skipped', mtb: 'skipped', vision: 'skipped', fireGrade: 'skipped',
   };
   var diagnostics = {};
 
@@ -580,6 +584,40 @@ async function runGates(setup) {
         gates: gates,
         diagnostics: diagnostics,
       };
+    }
+  }
+
+  // ---- Gate 5: FIRE GRADE composite (Phase 4.29) ----
+  // The consolidated structural rating that supersedes the individual gates
+  // for fire/no-fire decisions. Block if grade is C or D.
+  // Toggle via SIM_FIRE_GRADE_GATE (default ON).
+  if (gateEnabled('SIM_FIRE_GRADE_GATE', true) && fireGradeComputer && fireGradeComputer.computeFireGrade) {
+    try {
+      var fg = await fireGradeComputer.computeFireGrade({
+        ticker: setup.ticker,
+        direction: setup.direction,
+        tradeType: setup.tradeType || 'SWING',
+        pattern: setup.pattern,
+      });
+      diagnostics.fireGrade = {
+        grade: fg.grade, score: fg.score, denominator: fg.denominator,
+        strategyType: fg.strategyType, fireRecommendation: fg.fireRecommendation,
+        warnings: fg.warnings,
+      };
+      gates.fireGrade = fg.grade;
+      setup._fireGrade = fg;  // attach for journaling / Discord
+      if (fg.grade === 'C' || fg.grade === 'D') {
+        return {
+          pass: false,
+          gate: 'FIRE_GRADE',
+          reason: 'FIRE_GRADE: ' + fg.grade + ' (' + fg.score + '/' + fg.denominator + ') — ' + ((fg.warnings || []).join(' · ') || 'insufficient gates'),
+          gates: gates,
+          diagnostics: diagnostics,
+        };
+      }
+    } catch (e) {
+      diagnostics.fireGrade = { error: e.message };
+      // fail-open on errors
     }
   }
 
@@ -762,10 +800,11 @@ async function pushReplaySummary(replay) {
           value: 'TA gate: ' + (gateEnabled('SIM_TA_GATE', true) ? 'ON' : 'OFF') +
                  ' · Tape: ' + (gateEnabled('SIM_TAPE_GATE', true) ? 'ON' : 'OFF') +
                  ' · Vision: ' + (gateEnabled('SIM_VISION_GATE', false) ? 'ON' : 'OFF') +
-                 ' · MTB hard: ' + (gateEnabled('SIM_MTB_GATE', false) ? 'ON' : 'OFF (soft)'),
+                 ' · MTB hard: ' + (gateEnabled('SIM_MTB_GATE', false) ? 'ON' : 'OFF (soft)') +
+                 ' · FireGrade: ' + (gateEnabled('SIM_FIRE_GRADE_GATE', true) ? 'ON' : 'OFF'),
           inline: false },
       ],
-      footer: { text: 'Flow Scout | Phase 4.27 — SIM Gate Retro' },
+      footer: { text: 'Flow Scout | Phase 4.29 — SIM Gate Retro + FIRE GRADE' },
       timestamp: new Date().toISOString(),
     }],
   };

@@ -5815,6 +5815,41 @@ app.get('/api/multi-test-breakout', async function (req, res) {
   }
 });
 
+// =============================================================================
+// PHASE 4.29 — FIRE GRADE composite signal (May 5 PM 2026)
+// Replaces the broken "conviction score" pattern: today's highest-conviction
+// (SCORE 14 ABBV) was the worst loser. FIRE GRADE rolls all our existing
+// gates (trend / breakout / tape / TA / liquidity / vision) into one A-D
+// grade. Cards filter to GRADE A only by default.
+//
+// GET /api/fire-grade?ticker=CRM&direction=long&tradeType=SWING
+// Returns:
+//   {
+//     ok, ticker, direction, tradeType, grade ('A'|'B'|'C'|'D'), score 0-6,
+//     gates: { trend, breakout, tape, ta, liquidity, vision },
+//     strategyType: 'BREAKOUT'|'REVERSAL'|'PULLBACK_RETEST'|'COIL'|'CHOP'|'UNKNOWN',
+//     warnings: [...], fireRecommendation: 'FIRE_FULL'|'TRIAL_1CT'|'WATCH'|'SKIP',
+//   }
+// =============================================================================
+var fireGradeComputer = null;
+try { fireGradeComputer = require('./fireGradeComputer'); console.log('[SERVER] fireGradeComputer loaded OK'); }
+catch (e) { console.log('[SERVER] fireGradeComputer not loaded:', e.message); }
+
+app.get('/api/fire-grade', async function(req, res) {
+  if (!fireGradeComputer) return res.status(500).json({ ok: false, error: 'fireGradeComputer not loaded' });
+  try {
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || '').toLowerCase();
+    var tradeType = String(req.query.tradeType || 'SWING').toUpperCase();
+    var pattern = req.query.pattern || null;
+    if (!ticker || !direction) return res.status(400).json({ ok: false, error: 'ticker + direction required' });
+    var out = await fireGradeComputer.computeFireGrade({ ticker: ticker, direction: direction, tradeType: tradeType, pattern: pattern });
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // John Repeat-Pick Flagger endpoint
 var johnRepeatFlagger = null;
 try { johnRepeatFlagger = require('./johnRepeatFlagger'); console.log('[SERVER] johnRepeatFlagger loaded OK'); }

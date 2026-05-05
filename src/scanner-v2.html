@@ -666,6 +666,62 @@
     font-size: 10px;
     font-weight: 500;
   }
+
+  /* Phase 4.29 — FIRE GRADE pill + buttons */
+  .fire-grade-pill {
+    letter-spacing: 0.2px;
+    text-transform: uppercase;
+    box-shadow: 0 0 12px rgba(0,0,0,0.25);
+  }
+  .fire-grade-pill.grade-a {
+    background: rgba(22, 227, 157, 0.15);
+    color: #16e39d;
+    border-color: #16e39d;
+  }
+  .fire-grade-pill.grade-b {
+    background: rgba(255, 193, 7, 0.15);
+    color: #ffc107;
+    border-color: #ffc107;
+  }
+  .fire-grade-pill.grade-c {
+    background: rgba(136,136,136,0.15);
+    color: #888;
+    border-color: #555;
+  }
+  .fire-grade-pill.grade-d {
+    background: rgba(60,60,60,0.30);
+    color: #555;
+    border-color: #444;
+  }
+  .btn-trial-only {
+    opacity: 0.7;
+  }
+  .btn-disabled {
+    opacity: 0.3;
+    cursor: not-allowed !important;
+    pointer-events: none;
+  }
+  .fire-gate-checklist > div {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .grade-filter-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--line-bright);
+    background: var(--bg-2);
+    color: var(--txt-1);
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .grade-filter-toggle.active {
+    border-color: #16e39d;
+    color: #16e39d;
+  }
 </style>
 </head>
 <body>
@@ -728,7 +784,17 @@ let scan = null;          // WP scan data (SCAN tab)
 let movers = null;        // Live movers data (MOVERS tab)
 // activeTab: URL ?tab=movers takes precedence > localStorage > default "scan"
 let activeTab = (new URLSearchParams(window.location.search).get("tab")) || localStorage.getItem("activeTab") || "scan";
-let activeFilter = "all";
+// Phase 4.29 — first-load default is grade_a (Grade A only). Toggle to "all"
+// re-shows everything. Each tab loader has its own grade_a-aware default helper.
+let activeFilter = "grade_a";
+
+// Phase 4.29 — pick default filter per tab (prefers Grade A when defined).
+function defaultFilterIdFor(filterList) {
+  if (!Array.isArray(filterList) || !filterList.length) return "all";
+  const dflt = filterList.find(f => f.isDefault);
+  return dflt ? dflt.id : (filterList[0] && filterList[0].id) || "all";
+}
+window.defaultFilterIdFor = defaultFilterIdFor;
 let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 
 // Phase 4.17 — tabs reordered by daily usage priority (most-used first):
@@ -782,7 +848,9 @@ const FILTERS_SCAN = [
 ];
 
 const FILTERS_MOVERS = [
-  { id: "all",     label: "All",            test: c => true },
+  { id: "grade_a", label: "🅰️ Grade A only",  test: c => c.fireGrade && c.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab", label: "🅰️🅱️ Grade A+B",  test: c => c.fireGrade && (c.fireGrade.grade === "A" || c.fireGrade.grade === "B") },
+  { id: "all",     label: "Show all grades", test: c => true },
   { id: "top",     label: "Top 10",         test: (c, i) => i < 10 },
   { id: "up",      label: "Up movers",      test: c => c.pctChange > 0 },
   { id: "down",    label: "Down movers",    test: c => c.pctChange < 0 },
@@ -802,7 +870,9 @@ const FILTERS_LVL = [
 
 // TOMORROW tab: filters across the 4 setup states
 const FILTERS_TOMORROW = [
-  { id: "all",      label: "All",          test: r => true },
+  { id: "grade_a",  label: "🅰️ Grade A only", test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab", label: "🅰️🅱️ Grade A+B",  test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",      label: "Show all grades", test: r => true },
   { id: "ready",    label: "🔥 READY",     test: r => r._state === "ready" },
   { id: "forming",  label: "🟡 FORMING",   test: r => r._state === "forming" },
   { id: "earnings", label: "📅 Earnings",  test: r => r._state === "earnings" },
@@ -827,7 +897,9 @@ const FILTERS_SNIPER = [
 
 // WP tab: 4HR/EMA swing scanner with risk-based sizing tiers
 const FILTERS_WP = [
-  { id: "all",       label: "All",            test: r => true },
+  { id: "grade_a",   label: "🅰️ Grade A only", test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab",  label: "🅰️🅱️ Grade A+B",  test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",       label: "Show all grades", test: r => true },
   { id: "max",       label: "🚀 MAX (9-10)",  test: r => (r.conviction||0) >= 9 },
   { id: "ready",     label: "🔥 Ready (7+)",  test: r => (r.conviction||0) >= 7 },
   { id: "trial",     label: "🟡 Trial (5-6)", test: r => (r.conviction||0) >= 5 && (r.conviction||0) < 7 },
@@ -843,7 +915,9 @@ const FILTERS_WP = [
 
 // JS tab: John Pattern Scanner — failed-2D / failed-2U / 2D-2U / 2U-2D / inside-week
 const FILTERS_JS = [
-  { id: "all",        label: "All",                  test: r => true },
+  { id: "grade_a",    label: "🅰️ Grade A only",      test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab",   label: "🅰️🅱️ Grade A+B",       test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",        label: "Show all grades",      test: r => true },
   { id: "ready",      label: "🔥 Ready (7+)",        test: r => (r.conviction||0) >= 7 },
   { id: "watching",   label: "🟡 Watching (6)",      test: r => (r.conviction||0) === 6 },
   { id: "long",       label: "Long bias",            test: r => r.direction === "long" },
@@ -869,7 +943,9 @@ const FILTERS_JS = [
 // AYCE tab: 5 ATH strategies (Miyagi 12HR / 4HR Re-Trigger / 3-2-2 First Live / 7HR Sweep / Failed 9)
 // Each "hit" is a ticker with one or more detected strategies. Filter by name + status + direction.
 const FILTERS_AYCE = [
-  { id: "all",       label: "All",                     test: r => true },
+  { id: "grade_a",   label: "🅰️ Grade A only",         test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab",  label: "🅰️🅱️ Grade A+B",          test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",       label: "Show all grades",        test: r => true },
   { id: "armed",     label: "🔥 Armed (ready)",        test: r => (r.strategies||[]).some(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') },
   { id: "miyagi",    label: "🥋 Miyagi 12HR",          test: r => (r.strategies||[]).some(s => s.name === 'Miyagi-12HR') },
   { id: "retrig4hr", label: "🔄 4HR Re-Trigger",       test: r => (r.strategies||[]).some(s => s.name === '4HR-Retrigger') },
@@ -883,7 +959,9 @@ const FILTERS_AYCE = [
 
 // COIL tab: daily 1-3-1 / double-inside / 3-1-1 coil patterns from dailyCoilScanner
 const FILTERS_COIL = [
-  { id: "all",       label: "All",            test: r => true },
+  { id: "grade_a",   label: "🅰️ Grade A only",  test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab",  label: "🅰️🅱️ Grade A+B",   test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",       label: "Show all grades", test: r => true },
   { id: "ready",     label: "🔥 Ready (8+)",  test: r => (r.conviction||0) >= 8 && r.direction !== "neutral" },
   { id: "watching",  label: "🟡 Watching",    test: r => (r.conviction||0) >= 6 && (r.conviction||0) < 8 },
   { id: "131",       label: "1-3-1",          test: r => r.pattern === "1-3-1" },
@@ -915,7 +993,9 @@ const FILTERS_SWINGS = [
 
 // LOTTO tab: cheap-call lottery picks (John VIP feed)
 const FILTERS_LOTTO = [
-  { id: "all",     label: "All",          test: r => true },
+  { id: "grade_a", label: "🅰️ Grade A only",  test: r => r.fireGrade && r.fireGrade.grade === "A", isDefault: true },
+  { id: "grade_ab", label: "🅰️🅱️ Grade A+B",  test: r => r.fireGrade && (r.fireGrade.grade === "A" || r.fireGrade.grade === "B") },
+  { id: "all",     label: "Show all grades", test: r => true },
   { id: "call",    label: "Calls",        test: r => r.direction === "CALL" },
   { id: "put",     label: "Puts",         test: r => r.direction === "PUT" },
   { id: "today",   label: "Today only",   test: r => {
@@ -1957,6 +2037,153 @@ async function fetchVpForRows(rows, getTicker, opts) {
 }
 window.fetchVpForRows = fetchVpForRows;
 
+// =============================================================================
+// PHASE 4.29 — FIRE GRADE composite signal (May 5 PM 2026)
+// Replaces the broken conviction score (today's high-conviction = worst losses).
+// FIRE GRADE rolls up trend / breakout / tape / TA / liquidity / vision into
+// one A-D rating per setup. Cards filter to GRADE A only by default.
+// =============================================================================
+
+// Single-row fetch — used by individual card refresh / debugging.
+async function fetchFireGrade(ticker, direction, tradeType) {
+  if (!ticker || !direction) return null;
+  let dir = String(direction).toLowerCase();
+  if (dir === 'call' || dir === 'bullish' || dir === 'bull') dir = 'long';
+  else if (dir === 'put' || dir === 'bearish' || dir === 'bear') dir = 'short';
+  const tt = (tradeType || 'SWING').toUpperCase();
+  try {
+    const r = await fetch(`/api/fire-grade?ticker=${encodeURIComponent(ticker)}&direction=${encodeURIComponent(dir)}&tradeType=${encodeURIComponent(tt)}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch (e) { return null; }
+}
+window.fetchFireGrade = fetchFireGrade;
+
+// BULK FIRE-GRADE FETCH — mutates rows in place (sets r.fireGrade = {...}).
+// 30-concurrent cap. Skips rows missing ticker / direction.
+async function buildFireGradeForRows(rows, getTicker, getDir, tradeType) {
+  if (!rows || !rows.length) return;
+  const tt = (tradeType || 'SWING').toUpperCase();
+  const queue = rows.slice(0, 50);  // cap at 50 per render
+  async function worker() {
+    while (queue.length) {
+      const r = queue.shift();
+      const ticker = getTicker ? getTicker(r) : r.ticker;
+      let dir = getDir ? getDir(r) : r.direction;
+      if (!ticker || !dir) continue;
+      let dirNorm = String(dir).toLowerCase();
+      if (dirNorm === 'call' || dirNorm === 'bullish' || dirNorm === 'bull') dirNorm = 'long';
+      else if (dirNorm === 'put' || dirNorm === 'bearish' || dirNorm === 'bear') dirNorm = 'short';
+      try {
+        const tr = await fetch(`/api/fire-grade?ticker=${encodeURIComponent(ticker)}&direction=${encodeURIComponent(dirNorm)}&tradeType=${encodeURIComponent(tt)}`, { cache: 'no-store' });
+        if (tr.ok) r.fireGrade = await tr.json();
+      } catch (e) { /* fail open */ }
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker(), worker(), worker()]);  // 6 concurrent
+  return rows;
+}
+window.buildFireGradeForRows = buildFireGradeForRows;
+
+// FIRE GRADE PILL — most prominent visual element on a card.
+function buildFireGradeBadge(fireGrade) {
+  if (!fireGrade || !fireGrade.grade) return '';
+  const colors = { A: '#16e39d', B: '#ffc107', C: '#888', D: '#444' };
+  const icons  = { A: '🅰️', B: '🅱️', C: '⚪', D: '❌' };
+  const labels = {
+    A: 'GRADE A — FIRE READY',
+    B: 'GRADE B — TRIAL 1CT',
+    C: 'GRADE C — WATCH',
+    D: 'GRADE D — SKIP',
+  };
+  const g = fireGrade.grade;
+  const color = colors[g] || '#888';
+  const denom = fireGrade.denominator || 6;
+  const tip = `${fireGrade.score || 0}/${denom} gates passed${fireGrade.warnings && fireGrade.warnings.length ? ' · ' + fireGrade.warnings.join(' · ') : ''}`;
+  return `<span class="fire-grade-pill grade-${g.toLowerCase()}" title="${tip}" style="background:${color}22; color:${color}; font-weight:800; padding:6px 12px; font-size:13px; border-radius:6px; border:2px solid ${color}; display:inline-block;">${icons[g]} ${labels[g]} (${fireGrade.score || 0}/${denom})</span>`;
+}
+window.buildFireGradeBadge = buildFireGradeBadge;
+
+// 6-GATE CHECKLIST — visible on every card.
+function buildGateChecklist(gates) {
+  if (!gates) return '';
+  const items = [
+    ['trend', 'Daily trend'],
+    ['breakout', 'Breakout/V-turn'],
+    ['tape', 'Tape aligned'],
+    ['ta', '5-bar TA'],
+    ['liquidity', 'Liquidity'],
+    ['vision', 'Vision'],
+  ];
+  const html = items.map(function(pair) {
+    const key = pair[0]; const label = pair[1];
+    const g = gates[key] || {};
+    let icon = '❌';
+    let color = '#ff6b6b';
+    if (g.passed === true) { icon = '✅'; color = '#4caf50'; }
+    else if (g.passed === 'skipped') { icon = '⚪'; color = '#888'; }
+    const reason = String(g.reason || '').replace(/"/g, '&quot;').slice(0, 240);
+    return `<div title="${reason}" style="color:${color};">${icon} ${label}</div>`;
+  }).join('');
+  return `<div class="fire-gate-checklist" style="font-size:11px; line-height:1.6; display:grid; grid-template-columns:1fr 1fr; gap:2px 12px; margin-top:6px;">${html}</div>`;
+}
+window.buildGateChecklist = buildGateChecklist;
+
+// STRATEGY TYPE TAG — pinned next to ticker.
+function buildStrategyTag(type) {
+  if (!type) return '';
+  const tags = {
+    BREAKOUT:        '🚀 BREAKOUT',
+    REVERSAL:        '🔻 REVERSAL',
+    PULLBACK_RETEST: '🌊 PULLBACK',
+    COIL:            '📦 COIL — wait',
+    CHOP:            '⚠ CHOP',
+    UNKNOWN:         '? UNKNOWN',
+  };
+  const colors = {
+    BREAKOUT: '#4caf50', REVERSAL: '#ffc107', PULLBACK_RETEST: '#46b4ff',
+    COIL: '#b39ddb', CHOP: '#ff6b6b', UNKNOWN: '#888',
+  };
+  const c = colors[type] || '#888';
+  return `<span class="strategy-tag" style="font-size:11px; color:${c}; background:${c}22; padding:2px 8px; border-radius:4px; font-weight:600;">${tags[type] || type}</span>`;
+}
+window.buildStrategyTag = buildStrategyTag;
+
+// Returns CSS class to apply to fire buttons based on grade.
+// Grade A = full color · Grade B = dim (trial only) · Grade C/D = disabled.
+function buttonClassForGrade(grade) {
+  if (!grade) return '';
+  if (grade === 'A') return '';
+  if (grade === 'B') return 'btn-trial-only';
+  return 'btn-disabled';
+}
+window.buttonClassForGrade = buttonClassForGrade;
+
+// Filter row helper — returns true when grade is shown given current toggle.
+window._showAllGrades = false;
+function isFireGradeVisible(fireGrade) {
+  if (window._showAllGrades) return true;
+  // When toggle is OFF, hide D entirely; show A only.
+  if (!fireGrade || !fireGrade.grade) return false;  // ungraded → hidden by default
+  return fireGrade.grade === 'A';
+}
+window.isFireGradeVisible = isFireGradeVisible;
+
+// Sort helper: Grade A → B → C → D, then by score within group.
+function sortByFireGrade(rows) {
+  if (!rows || !rows.length) return rows;
+  const order = { A: 0, B: 1, C: 2, D: 3 };
+  return rows.slice().sort(function(a, b) {
+    const ga = a.fireGrade ? (order[a.fireGrade.grade] != null ? order[a.fireGrade.grade] : 4) : 5;
+    const gb = b.fireGrade ? (order[b.fireGrade.grade] != null ? order[b.fireGrade.grade] : 4) : 5;
+    if (ga !== gb) return ga - gb;
+    const sa = (a.fireGrade && a.fireGrade.score) || 0;
+    const sb = (b.fireGrade && b.fireGrade.score) || 0;
+    return sb - sa;
+  });
+}
+window.sortByFireGrade = sortByFireGrade;
+
 async function dispatchToPublic(payload, btn) {
   // Phase 4.16 — TA gate before fire on ALL tabs
   if (payload && payload.ticker && payload.direction) {
@@ -2765,7 +2992,6 @@ function renderTabs() {
     el.addEventListener("click", () => {
       if (el.classList.contains("disabled")) return;
       activeTab = el.dataset.tab;
-      activeFilter = "all";
       localStorage.setItem("activeTab", activeTab);
       FILTERS = activeTab === "movers"   ? FILTERS_MOVERS
               : activeTab === "lvl"      ? FILTERS_LVL
@@ -2779,6 +3005,9 @@ function renderTabs() {
               : activeTab === "ayce"     ? FILTERS_AYCE
               : activeTab === "starred"  ? FILTERS_STARRED
               : FILTERS_SCAN;
+      // Phase 4.29 — tabs with FIRE GRADE default to Grade A (configured via isDefault)
+      const dflt = (FILTERS || []).find(f => f.isDefault);
+      activeFilter = dflt ? dflt.id : "all";
       renderTabs();
       loadActiveTab();
     });
@@ -2937,6 +3166,11 @@ async function loadTomorrowData() {
         const isLong = (r.target || 0) >= (r.spot || 0);
         return (r.direction || (isLong ? 'long' : 'short'));
       }, '60m');
+      // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
+      await buildFireGradeForRows(tradable, r => r.ticker, r => {
+        const isLong = (r.target || 0) >= (r.spot || 0);
+        return (r.direction || (isLong ? 'long' : 'short'));
+      }, 'SWING');
     } catch (e) { /* fail open */ }
     // Phase 4.23 — bulk VPOC fetch for tradable setups. Async — re-render when ready.
     try {
@@ -3001,7 +3235,16 @@ function renderGridTomorrow() {
     }
     // Sort: READY first, then FORMING, then EARNINGS
     const order = { ready: 0, forming: 1, earnings: 2 };
-    filtered.sort((a, b) => (order[a._state] ?? 99) - (order[b._state] ?? 99));
+    filtered.sort((a, b) => {
+      // Phase 4.29 — Grade A → B → C → D inside same state
+      const stateDiff = (order[a._state] ?? 99) - (order[b._state] ?? 99);
+      if (stateDiff !== 0) return stateDiff;
+      const ord = { A: 0, B: 1, C: 2, D: 3 };
+      const ga = a.fireGrade ? (ord[a.fireGrade.grade] != null ? ord[a.fireGrade.grade] : 4) : 5;
+      const gb = b.fireGrade ? (ord[b.fireGrade.grade] != null ? ord[b.fireGrade.grade] : 4) : 5;
+      if (ga !== gb) return ga - gb;
+      return ((b.fireGrade && b.fireGrade.score) || 0) - ((a.fireGrade && a.fireGrade.score) || 0);
+    });
 
     // Async hold-overnight lookups
     setTimeout(() => {
@@ -3050,20 +3293,29 @@ function renderGridTomorrow() {
       // doesn't carry spot — overridden by 10s spot poll once available)
       const liveSpot = (window._radarSpots && window._radarSpots[r.ticker] && window._radarSpots[r.ticker].last) || r.spot;
       const proximityHtml = buildProximityHtml(liveSpot, r.trigger, dirText);
+      // Phase 4.29 — FIRE GRADE pill + checklist + strategy tag
+      const fireGradeBadge = buildFireGradeBadge(r.fireGrade);
+      const gateChecklist  = buildGateChecklist(r.fireGrade && r.fireGrade.gates);
+      const strategyTag    = buildStrategyTag(r.fireGrade && r.fireGrade.strategyType);
+      const gradeLetter    = (r.fireGrade && r.fireGrade.grade) || null;
+      const btnClass       = buttonClassForGrade(gradeLetter);
       return `
-        <div class="card ${dirClass}" data-radar-ticker="${r.ticker}">
+        <div class="card ${dirClass}" data-radar-ticker="${r.ticker}" data-grade="${gradeLetter || ''}">
           <div class="card-head">
             <div>
-              <div class="ticker mono">${r.ticker}</div>
+              <div class="ticker mono">${r.ticker} ${strategyTag}</div>
               <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${liveSpot ? '$' + fmtNum(liveSpot) : '$—'}${r.type ? ` · Type ${r.type}` : ''}</div>
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+              ${fireGradeBadge}
               <span class="dir-pill ${dirPill}">${dirText}</span>
               <span class="lvl-tfpill ${pill.cls}" style="padding: 4px 10px; font-size:11px;">${pill.txt}</span>
               <span id="hold-pill-${r.ticker}-tomorrow" data-hold-ticker="${r.ticker}" data-hold-dir="${dirText}"></span>
               <button class="star-btn" data-ticker="${r.ticker}" onclick="event.stopPropagation();toggleStar('${r.ticker}','tomorrow')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;">${starred?'★':'☆'}</button>
             </div>
           </div>
+
+          ${gateChecklist}
 
           ${proximityHtml}
 
@@ -3091,10 +3343,10 @@ function renderGridTomorrow() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', false, this)" title="Fire on TradeStation immediately (market entry)">⚡ TS FIRE</button>
-            <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 PUBLIC</button>
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 BRACKET</button>
+            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', false, this)" title="Fire on TradeStation immediately (market entry)">⚡ TS FIRE</button>
+            <button class="btn btn-secondary ${btnClass}" style="background:linear-gradient(180deg,#666,#444); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
+            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 PUBLIC</button>
+            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 BRACKET</button>
           </div>
         </div>
       `;
@@ -3214,6 +3466,8 @@ async function loadActionData() {
     }));
     // Phase 4.22 — multi-test breakout flag (long-only)
     try { await buildMultiTestBreakoutForRows(actionable, r => r.ticker, r => r.direction, '60m'); } catch (e) {}
+    // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
+    try { await buildFireGradeForRows(actionable, r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
     // Phase 4.23 — bulk VPOC fetch for ACTIONABLE + WATCH (high-conviction).
     // Non-blocking: render once now, then re-render with VPOC pills when data lands.
     try {
@@ -3498,7 +3752,7 @@ window.dispatchActionToBracket = dispatchActionToBracket;
 
 async function loadSniperData() {
   FILTERS = FILTERS_SNIPER;
-  if (!FILTERS_SNIPER.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_SNIPER.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_SNIPER);
   try {
     if (!sniperData) document.getElementById("grid").innerHTML = `<div class="empty">Loading sniper analysis...</div>`;
     const r = await fetch("/api/sniper-feed?limit=30", { cache: "no-store" });
@@ -3591,7 +3845,7 @@ let swingLeapData = null;
 
 async function loadSwingLeapData() {
   FILTERS = FILTERS_SWINGS;
-  if (!FILTERS_SWINGS.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_SWINGS.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_SWINGS);
   try {
     if (!swingLeapData) document.getElementById("grid").innerHTML = `<div class="empty">Loading swing/leap analysis...</div>`;
     const r = await fetch("/api/swing-leap-feed?limit=30", { cache: "no-store" });
@@ -3736,7 +3990,7 @@ let coilData = null;
 
 async function loadCoilData() {
   FILTERS = FILTERS_COIL;
-  if (!FILTERS_COIL.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_COIL.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_COIL);
   try {
     if (!coilData) document.getElementById("grid").innerHTML = `<div class="empty">Loading coil scan...<br><span style="font-size:11px;">Last EOD scan or click Refresh to run live.</span></div>`;
     const r = await fetch("/api/coil-scan", { cache: "no-store" });
@@ -3754,6 +4008,8 @@ async function loadCoilData() {
   const total = ready.length + watching.length + prep.length;
   // Phase 4.17 — TA verify each coil row
   try { await buildTaForRows([...ready, ...watching, ...prep], r => r.ticker, r => r.direction); } catch (e) {}
+  // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
+  try { await buildFireGradeForRows([...ready, ...watching, ...prep], r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
   document.getElementById("scan-date").textContent = "Coil Scan · " + new Date(coilData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${total} coiled · ${(coilData.scanned || 0)} scanned · ${coilData.tookMs || 0}ms`;
   renderStatsCoil();
@@ -3915,7 +4171,7 @@ let wpData = null;
 
 async function loadWPData() {
   FILTERS = FILTERS_WP;
-  if (!FILTERS_WP.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_WP.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_WP);
   try {
     if (!wpData) document.getElementById("grid").innerHTML = `<div class="empty">Loading WP scan... 4HR EMA setups across universe.<br><span style="font-size:11px;">First run takes ~25s — pulls 4HR bars + computes 9/21 EMA + multi-TF alignment.</span></div>`;
     const r = await fetch("/api/wp-scan", { cache: "no-store" });
@@ -3986,6 +4242,8 @@ async function loadWPData() {
   try { await buildTaForRows([...ready, ...trial], r => r.ticker, r => r.direction); } catch (e) {}
   // Phase 4.22 — multi-test breakout flag (long-only)
   try { await buildMultiTestBreakoutForRows([...ready, ...trial], r => r.ticker, r => r.direction, '60m'); } catch (e) {}
+  // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
+  try { await buildFireGradeForRows([...ready, ...trial], r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
   document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${ready.length + trial.length} setups · ${(wpData.scanned || 0)} scanned · acct $${(wpData.accountSize || 20000).toLocaleString()}`;
   renderStatsWP();
@@ -4056,12 +4314,14 @@ function renderGridWP() {
     FILTERS = FILTERS_WP;
     const all = [].concat(wpData.ready || [], wpData.trial || []);
     let filter = FILTERS.find(f => f.id === activeFilter);
-    if (!filter) { activeFilter = "all"; filter = FILTERS[0]; }
-    const filtered = all.filter(r => filter.test(r));
+    if (!filter) { activeFilter = defaultFilterIdFor(FILTERS_WP); filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0]; }
+    const filtered = sortByFireGrade(all.filter(r => filter.test(r)));  // Phase 4.29 — sort by grade
     if (!filtered.length) {
+      const onGrade = filter && filter.id && filter.id.startsWith('grade_');
       document.getElementById("grid").innerHTML = `
         <div class="empty">
           No WP setups match "${filter.label}".<br>
+          ${onGrade ? '<span style="font-size:11px; color:var(--txt-3);">Try the <b>Show all grades</b> filter to see B/C/D setups.</span><br>' : ''}
           <button id="wp-refresh-btn" onclick="refreshWPScan()" class="btn btn-primary" style="margin-top:12px;">🌊 Re-scan now</button>
         </div>`;
       return;
@@ -4110,22 +4370,31 @@ function renderGridWP() {
       const optDir = r.direction === 'long' ? 'CALL' : 'PUT';
       const sizeUpDisabled = !allowSizeUp;
 
+      // Phase 4.29 — FIRE GRADE pill + checklist + strategy tag
+      const fireGradeBadge = buildFireGradeBadge(r.fireGrade);
+      const gateChecklist  = buildGateChecklist(r.fireGrade && r.fireGrade.gates);
+      const strategyTag    = buildStrategyTag(r.fireGrade && r.fireGrade.strategyType);
+      const gradeLetter    = (r.fireGrade && r.fireGrade.grade) || null;
+      const btnClass       = buttonClassForGrade(gradeLetter);
+
       return `
-        <div class="card" data-wp-ticker="${r.ticker}">
+        <div class="card" data-wp-ticker="${r.ticker}" data-grade="${gradeLetter || ''}">
           <div class="card-head">
             <div style="flex:1;">
-              <div class="ticker mono">${r.ticker} ${info.icon}</div>
+              <div class="ticker mono">${r.ticker} ${info.icon} ${strategyTag}</div>
               <div style="font-size:11px; color:var(--txt-3); margin-top:4px;">
                 ${r.signal} · ${r.isWeekly ? "📆 Weekly" : "4HR"} · close $${r.lastClose}${r.isWeekly && r.weeklyPattern ? ` · <span style="color:#b446ff;">${r.weeklyPattern}</span>` : ""}
               </div>
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
-              <span class="tag" style="background:${tierColor}22; color:${tierColor}; font-weight:700; font-size:11px;">${tier}</span>
-              <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              ${fireGradeBadge}
+              <span class="tag" style="background:${tierColor}22; color:${tierColor}; font-weight:700; font-size:10px; opacity:0.7;" title="Legacy conviction (kept for debugging — FIRE GRADE replaces this)">${tier} (legacy)</span>
               ${timeStopPillHtml('SWING')}
               <button onclick="event.stopPropagation();toggleStar('${r.ticker}','wp')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
           </div>
+
+          ${gateChecklist}
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
@@ -4169,10 +4438,10 @@ function renderGridWP() {
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
             ${allowSizeUp ? `
-              <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="Public 1ct (cash leg)">📱 Public 1ct</button>
-              <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0},stop:${plan.stop||0},tp1:${plan.tp1||0},tp2:${plan.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'SWING',pattern:'${r.signal}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct (margin/no-PDT, swing)">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
+              <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="Public 1ct (cash leg)">📱 Public 1ct</button>
+              <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0},stop:${plan.stop||0},tp1:${plan.tp1||0},tp2:${plan.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'SWING',pattern:'${r.signal}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct (margin/no-PDT, swing)">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
             ` : `
-              <button class="btn btn-primary" style="background:rgba(255,193,7,0.2); color:#ffc107; padding:5px 10px; font-size:11px; border:1px dashed #ffc107;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="TRIAL only — 1ct Public, NO size-up">🟡 Public 1ct (trial)</button>
+              <button class="btn btn-primary ${btnClass}" style="background:rgba(255,193,7,0.2); color:#ffc107; padding:5px 10px; font-size:11px; border:1px dashed #ffc107;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="TRIAL only — 1ct Public, NO size-up">🟡 Public 1ct (trial)</button>
               <span style="padding:5px 10px; font-size:10px; color:var(--txt-3); font-style:italic;">⚠️ Conviction <7 — system blocks size-up</span>
             `}
           </div>
@@ -4181,8 +4450,8 @@ function renderGridWP() {
           <div style="margin-top:10px;padding:8px;background:#0a0d12;border-radius:6px;border:1px solid #2a3140;">
             <div style="font-size:10px;color:#888;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px;">🔥 ONE-CLICK FIRE (auto-bracket: stop -25% / TP +50%) — ${r.direction.toUpperCase()}</div>
             <div style="display:flex;gap:6px;">
-              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','ts','SWING')" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
-              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','public','SWING')" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','ts','SWING')" class="${btnClass}" style="flex:1;padding:8px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+              <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','public','SWING')" class="${btnClass}" style="flex:1;padding:8px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
               <button onclick="event.stopPropagation();ayceFireBuild('${r.ticker}','${r.direction}','sim','SWING')" style="flex:1;padding:8px;background:rgba(255,255,0,0.15);color:#ff0;border:1px solid #ff0;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">⚪ SIM</button>
             </div>
           </div>
@@ -4202,7 +4471,7 @@ let jsData = null;
 
 async function loadJSData() {
   FILTERS = FILTERS_JS;
-  if (!FILTERS_JS.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_JS.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_JS);
   try {
     if (!jsData) document.getElementById("grid").innerHTML = `<div class="empty">Loading JS scan... reversal patterns John actually uses.<br><span style="font-size:11px;">Failed-2D · Failed-2U · 2D-2U · 2U-2D · Inside-week</span></div>`;
     const r = await fetch("/api/js-scan", { cache: "no-store" });
@@ -4219,6 +4488,8 @@ async function loadJSData() {
   try { await buildTaForRows(all, r => r.ticker, r => r.direction); } catch (e) {}
   // Phase 4.22 — multi-test breakout flag (long-only)
   try { await buildMultiTestBreakoutForRows(all, r => r.ticker, r => r.direction, '60m'); } catch (e) {}
+  // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
+  try { await buildFireGradeForRows(all, r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
   document.getElementById("scan-date").textContent = "JS Pattern Scan · " + new Date(jsData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${all.length} patterns · ${jsData.scanned || 0} scanned · ${Object.keys(jsData.byPattern || {}).length} pattern types`;
   renderStatsJS();
@@ -4472,7 +4743,7 @@ window.holdPill = holdPill;
 async function loadLottoData() {
   FILTERS = FILTERS_LOTTO;
   // Reset activeFilter if it's not a LOTTO filter id (avoids cross-tab residue)
-  if (!FILTERS_LOTTO.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_LOTTO.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_LOTTO);
   try {
     if (!lottoData) document.getElementById("grid").innerHTML = `<div class="empty">Loading lotto feed...</div>`;
     const r = await fetch("/api/lotto-feed?limit=30", { cache: "no-store" });
@@ -4488,6 +4759,8 @@ async function loadLottoData() {
   document.getElementById("scan-date").textContent = "Lotto Feed · " + new Date(lottoData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   // Phase 4.17 — TA verify each Lotto pick
   try { await buildTaForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short'); } catch (e) {}
+  // Phase 4.29 — FIRE GRADE composite (LOTTO trade type)
+  try { await buildFireGradeForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short', 'LOTTO'); } catch (e) {}
   const picks = lottoData.picks || [];
   const todayPicks = picks.filter(p => {
     const d = new Date(p.postedAt);
@@ -4527,9 +4800,9 @@ function renderGridLotto() {
     const picks = lottoData.picks || [];
     let filter = FILTERS.find(f => f.id === activeFilter);
     if (!filter) {
-      // activeFilter was from a different tab — reset to "all"
-      activeFilter = "all";
-      filter = FILTERS[0];
+      // activeFilter was from a different tab — reset to default (Phase 4.29: prefers Grade A)
+      activeFilter = defaultFilterIdFor(FILTERS_LOTTO);
+      filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
     }
     const filtered = picks.filter(r => filter.test(r));
     if (!filtered.length) {
@@ -4661,7 +4934,7 @@ let ayceData = null;
 
 async function loadAYCEData() {
   FILTERS = FILTERS_AYCE;
-  if (!FILTERS_AYCE.find(f => f.id === activeFilter)) activeFilter = "all";
+  if (!FILTERS_AYCE.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_AYCE);
   try {
     if (!ayceData) document.getElementById("grid").innerHTML = `<div class="empty">Loading AYCE scanner... (60s — scanning ~50 tickers across 5 strategies)</div>`;
     const r = await fetch("/api/ayce-scan/last", { cache: "no-store" });
@@ -4684,6 +4957,14 @@ async function loadAYCEData() {
       const primary = strats.find(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') || strats[0];
       return primary && primary.direction;
     });
+  } catch (e) {}
+  // Phase 4.29 — FIRE GRADE composite per AYCE hit (using primary strategy direction)
+  try {
+    await buildFireGradeForRows(hits, h => h.ticker, h => {
+      const strats = h.strategies || [];
+      const primary = strats.find(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') || strats[0];
+      return primary && primary.direction;
+    }, 'SWING');
   } catch (e) {}
   document.getElementById("scan-date").textContent = "AYCE Scan · " + new Date(ayceData.scannedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${hits.length} tickers · ${stratCount} strategies · ${armed} armed · <button onclick="runAYCEScan()" class="pill-mini" style="background:rgba(92,207,255,0.2);color:#5cf;">↻ Re-scan</button>`;
@@ -5492,6 +5773,10 @@ async function loadMoversData() {
     try {
       const ups = (movers.movers || []).filter(m => m.pctChange > 0);
       await buildMultiTestBreakoutForRows(ups, r => r.ticker, () => 'long', '60m');
+    } catch (e) { /* fail open */ }
+    // Phase 4.29 — FIRE GRADE composite (DAY trade type for movers)
+    try {
+      await buildFireGradeForRows(movers.movers || [], r => r.ticker, r => (r.pctChange > 0 ? 'long' : 'short'), 'DAY');
     } catch (e) { /* fail open */ }
     // Phase 4.23 — bulk VPOC fetch for all movers. Async; re-render when data lands.
     try {
