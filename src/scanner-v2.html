@@ -2671,6 +2671,14 @@ async function loadActionData() {
     const r = await fetch(`/api/action-radar?maxBudget=${budget}&minScore=10`, { cache: 'no-store' });
     if (!r.ok) throw new Error('HTTP ' + r.status);
     actionData = await r.json();
+    // Phase 4.15 — bulk TA verify for ACTIONABLE rows so card shows alignment badge
+    const actionable = (actionData.rows || []).filter(r => r.status === 'ACTIONABLE');
+    await Promise.all(actionable.map(async r => {
+      try {
+        const tr = await fetch(`/api/ta-verify?ticker=${encodeURIComponent(r.ticker)}&direction=${encodeURIComponent(r.direction)}`, { cache: 'no-store' });
+        if (tr.ok) r.ta = await tr.json();
+      } catch (e) {}
+    }));
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Action radar error: <code style="color:var(--red)">${e.message}</code></div>`;
     return;
@@ -2753,6 +2761,18 @@ function renderGridAction() {
       johnBadge = `<span class="tag" style="background:rgba(124,77,255,0.3); color:#b39ddb; font-weight:700;" title="John picked ${r.ticker} ${jr.daysSinceMostRecent}d ago — proven track record"> 🔁 JOHN REPEAT ×${jr.count} (last ${jr.daysSinceMostRecent}d ago) </span>`;
     }
 
+    // Phase 4.15 — TA alignment badge so AB sees if last 5m bars match direction
+    let taBadge = '';
+    if (r.ta) {
+      if (r.ta.alignment === 'aligned') {
+        taBadge = `<span class="tag" style="background:rgba(76,175,80,0.25); color:#4caf50;" title="Last 5m bars MATCH direction — ${r.ta.reason}">📊 TA ✅ ALIGNED ${r.ta.pctMove5min >= 0 ? '+' : ''}${r.ta.pctMove5min}%</span>`;
+      } else if (r.ta.alignment === 'opposite') {
+        taBadge = `<span class="tag" style="background:rgba(244,67,54,0.3); color:#ff5050; font-weight:700;" title="DANGER — TA contradicts direction. ${r.ta.reason}">📊 TA ❌ OPPOSITE ${r.ta.pctMove5min >= 0 ? '+' : ''}${r.ta.pctMove5min}% — DON'T FIRE</span>`;
+      } else if (r.ta.alignment === 'mixed') {
+        taBadge = `<span class="tag" style="background:rgba(255,193,7,0.25); color:#ffc107;" title="Mixed bars — chop. ${r.ta.reason}">📊 TA ⚠ CHOP ${r.ta.pctMove5min >= 0 ? '+' : ''}${r.ta.pctMove5min}%</span>`;
+      }
+    }
+
     return `
       <div class="card" style="background:${statusBg}; border-left:4px solid ${statusColor};">
         <div class="card-head">
@@ -2763,6 +2783,7 @@ function renderGridAction() {
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
             ${johnBadge}
+            ${taBadge}
             ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
@@ -2805,12 +2826,34 @@ function renderGridAction() {
 // ACTION tab dispatchers (May 5 PM — TS LIVE + Public from ACTION cards)
 // =============================================================================
 
+// Pre-fire TA verification — checks if last 5 5m bars align with direction
+// AB rule May 5 PM: 'is there a way to make sure TA still matches because
+// you get in and TA shows dumping or pumping which is different'
+async function preFireTACheck(ticker, direction) {
+  try {
+    const r = await fetch(`/api/ta-verify?ticker=${encodeURIComponent(ticker)}&direction=${encodeURIComponent(direction)}`, { cache: 'no-store' });
+    if (!r.ok) return { alignment: 'unknown', verdict: '⚠ check failed' };
+    return await r.json();
+  } catch (e) { return { alignment: 'unknown', verdict: '⚠ check error' }; }
+}
+window.preFireTACheck = preFireTACheck;
+
 // TS LIVE / QUEUE fire from ACTION row
 async function dispatchActionToTS(row, useTrigger, btn) {
   if (!row || !row.suggested || !row.suggested.contract) return alert('No contract resolved for ' + (row && row.ticker));
   const sug = row.suggested;
   const stop = sug.structuralStop || {};
   const direction = row.direction === 'long' ? 'BULLISH' : 'BEARISH';
+
+  // Phase 4.15 — TA verification before fire
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ TA check…'; }
+  const ta = await preFireTACheck(row.ticker, row.direction);
+  if (btn) { btn.disabled = false; btn.textContent = useTrigger ? '🎯 TS QUEUE' : '⚡ TS FIRE'; }
+  if (ta.alignment === 'opposite') {
+    if (!confirm(`⚠️ TA WARNING — ${ta.verdict}\n\n${ta.reason}\n\nLast 5m: ${ta.greenCount} green / ${ta.redCount} red, ${ta.pctMove5min}% move\n\nDo you STILL want to fire? (probably should NOT)`)) {
+      return;
+    }
+  }
 
   // Convert OPRA "TICKER 260515C115" to TS-style (already has space, just normalize)
   const tsSymbol = String(sug.contract).trim();

@@ -5180,6 +5180,67 @@ cron.schedule('*/1 9-16 * * 1-5', async function() {
   } catch(e) { console.error('[ACTIVE-POS-CRON]', e.message); }
 }, { timezone: 'America/New_York' });
 
+// Phase 4.15 — TA Verification endpoint. Pre-fire check: pull last 5 5m bars
+// and confirm they ALIGN with intended trade direction. Prevents AB from
+// firing into a clear counter-trend (e.g. firing LONG when last 5 bars are
+// red, or firing SHORT when last 5 bars are green).
+app.get('/api/ta-verify', async function(req, res) {
+  try {
+    var ticker = (req.query.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || '').toLowerCase();
+    if (!ticker || !direction) return res.status(400).json({ ok: false, error: 'ticker + direction required' });
+    if (!ts || !ts.getAccessToken) return res.status(500).json({ ok: false, error: 'no TS' });
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+    var fetchLib = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?interval=5&unit=Minute&barsback=5';
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 });
+    if (!r.ok) return res.status(500).json({ ok: false, error: 'TS http ' + r.status });
+    var data = await r.json();
+    var bars = (data.Bars || []).map(function(b) {
+      return { open: parseFloat(b.Open), close: parseFloat(b.Close), high: parseFloat(b.High), low: parseFloat(b.Low) };
+    });
+    if (bars.length < 3) return res.json({ ok: true, ticker: ticker, direction: direction, alignment: 'unknown', reason: 'not enough bars' });
+
+    var greenCount = bars.filter(function(b){ return b.close >= b.open; }).length;
+    var redCount = bars.length - greenCount;
+    var trendUp = greenCount >= 3;
+    var trendDown = redCount >= 3;
+    var lastClose = bars[bars.length - 1].close;
+    var firstOpen = bars[0].open;
+    var pctMove = firstOpen > 0 ? ((lastClose - firstOpen) / firstOpen) * 100 : 0;
+
+    var alignment;
+    var verdict;
+    var reason;
+
+    if (direction === 'long' || direction === 'bullish' || direction === 'call') {
+      if (trendUp) { alignment = 'aligned'; verdict = '✅ GO'; reason = greenCount + '/' + bars.length + ' bars green, +' + pctMove.toFixed(2) + '% — trend UP matches LONG'; }
+      else if (trendDown) { alignment = 'opposite'; verdict = '❌ BLOCK'; reason = redCount + '/' + bars.length + ' bars RED, ' + pctMove.toFixed(2) + '% — DUMPING into your LONG entry. Wait for reversal.'; }
+      else { alignment = 'mixed'; verdict = '⚠ WAIT'; reason = greenCount + '/' + bars.length + ' green, ' + pctMove.toFixed(2) + '% — chop, no clear trend'; }
+    } else if (direction === 'short' || direction === 'bearish' || direction === 'put') {
+      if (trendDown) { alignment = 'aligned'; verdict = '✅ GO'; reason = redCount + '/' + bars.length + ' bars RED, ' + pctMove.toFixed(2) + '% — trend DOWN matches SHORT'; }
+      else if (trendUp) { alignment = 'opposite'; verdict = '❌ BLOCK'; reason = greenCount + '/' + bars.length + ' bars GREEN, +' + pctMove.toFixed(2) + '% — PUMPING into your SHORT entry. Wait for reversal.'; }
+      else { alignment = 'mixed'; verdict = '⚠ WAIT'; reason = redCount + '/' + bars.length + ' red, ' + pctMove.toFixed(2) + '% — chop, no clear trend'; }
+    }
+
+    res.json({
+      ok: true,
+      ticker: ticker,
+      direction: direction,
+      alignment: alignment,
+      verdict: verdict,
+      reason: reason,
+      barsChecked: bars.length,
+      greenCount: greenCount,
+      redCount: redCount,
+      pctMove5min: +pctMove.toFixed(2),
+      lastClose: lastClose,
+    });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // John Repeat-Pick Flagger endpoint
 var johnRepeatFlagger = null;
 try { johnRepeatFlagger = require('./johnRepeatFlagger'); console.log('[SERVER] johnRepeatFlagger loaded OK'); }
