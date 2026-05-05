@@ -375,6 +375,22 @@ var pdtTracker = null;
 try { pdtTracker = require('./pdtTracker'); console.log('[SERVER] pdtTracker loaded OK'); }
 catch(e) { console.log('[SERVER] pdtTracker not loaded:', e.message); }
 
+// ALERT TIERS — Tier 1/2/3 classification + stack tracking. Filters TV alert
+// noise so Tier 3 5m flicks only act if Tier 1+2 already fired today.
+var alertTiers = null;
+try { alertTiers = require('./alertTiers'); console.log('[SERVER] alertTiers loaded OK'); }
+catch(e) { console.log('[SERVER] alertTiers not loaded:', e.message); }
+
+// TV ALERT RECEIVER — webhook for TV alerts → tier-aware Discord pipeline.
+var tvAlertReceiver = null;
+try { tvAlertReceiver = require('./tvAlertReceiver'); console.log('[SERVER] tvAlertReceiver loaded OK'); }
+catch(e) { console.log('[SERVER] tvAlertReceiver not loaded:', e.message); }
+
+// UOA DETECTOR — Unusual Options Activity scorer + auto-Discord on $1M+ flow.
+var uoaDetector = null;
+try { uoaDetector = require('./uoaDetector'); console.log('[SERVER] uoaDetector loaded OK'); }
+catch(e) { console.log('[SERVER] uoaDetector not loaded:', e.message); }
+
 // CHART VISION — Layer 2 of auto-fire architecture. Sends chart screenshot
 // to Claude vision API for qualitative review. Returns APPROVE / VETO / WAIT.
 var chartVision = null;
@@ -4898,6 +4914,83 @@ app.post('/api/pdt/record-close', function(req, res) {
     res.json(result);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
+
+// =============================================================================
+// TV ALERT WEBHOOK — receives webhooks from TradingView alerts
+// =============================================================================
+app.post('/api/tv-alert/incoming', async function(req, res) {
+  if (!tvAlertReceiver) return res.status(500).json({ ok: false, error: 'tvAlertReceiver not loaded' });
+  try {
+    var result = await tvAlertReceiver.process(req.body || {});
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Test endpoint — simulate a TV alert without TV actually firing
+app.post('/api/tv-alert/test', async function(req, res) {
+  if (!tvAlertReceiver) return res.status(500).json({ ok: false, error: 'tvAlertReceiver not loaded' });
+  try {
+    var sample = req.body && Object.keys(req.body).length > 0 ? req.body : {
+      ticker: 'ADBE',
+      direction: 'long',
+      tier: 1,
+      tf: '1D',
+      alertName: 'TEST: Daily close above Friday H',
+      price: 254.06,
+      trigger: 253.56,
+      stacked: true,
+      confirmations: 3,
+    };
+    var result = await tvAlertReceiver.process(sample);
+    res.json(Object.assign({ samplePayload: sample }, result));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Alert tier status — see which tickers have full stacks today
+app.get('/api/alert-tiers/status', function(req, res) {
+  if (!alertTiers) return res.status(500).json({ ok: false, error: 'alertTiers not loaded' });
+  try {
+    res.json(Object.assign({ ok: true }, alertTiers.getAllStacks()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Manual reset (called by 4:05 PM EOD cron — also exposed for testing)
+app.post('/api/alert-tiers/reset', function(req, res) {
+  if (!alertTiers) return res.status(500).json({ ok: false, error: 'alertTiers not loaded' });
+  try {
+    res.json(Object.assign({ ok: true }, alertTiers.resetDay()));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// UOA DETECTOR endpoints — manual scoring + recent activity
+// =============================================================================
+app.post('/api/uoa/score', async function(req, res) {
+  if (!uoaDetector) return res.status(500).json({ ok: false, error: 'uoaDetector not loaded' });
+  try {
+    var alert = req.body || {};
+    var result = await uoaDetector.handleAlert(alert);
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/uoa/recent', function(req, res) {
+  if (!uoaDetector) return res.status(500).json({ ok: false, error: 'uoaDetector not loaded' });
+  try {
+    var maxAge = parseFloat(req.query.maxAgeHours) || 24;
+    res.json({ ok: true, maxAgeHours: maxAge, alerts: uoaDetector.getRecentUoa(maxAge) });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// EOD reset cron — clears tier state at end of trading day
+cron.schedule('5 16 * * 1-5', function() {
+  try {
+    if (alertTiers) {
+      alertTiers.resetDay();
+      console.log('[ALERT-TIERS] daily reset complete');
+    }
+  } catch(e) { console.error('[ALERT-TIERS] reset error:', e.message); }
+}, { timezone: 'America/New_York' });
 
 // SIM AUTO endpoints — manual run / status / recap / position close
 app.post('/api/sim-auto/run', async function(req, res) {
