@@ -5096,6 +5096,56 @@ app.get('/api/backtest/results', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Phase 4.9 — V-Bottom scanner. Catches reversal patterns (ADBE-style) that
+// live-movers tab misses because it favors high-% movers, not recoveries.
+app.get('/api/v-bottom-scan', async function(req, res) {
+  try {
+    var vbot = require('./vBottomScanner');
+    var minScore = parseInt(req.query.minScore || '8', 10);
+    var result = await vbot.runScan({ minScore: minScore });
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Cron: run V-bottom scan every 3 min during market hours, push Discord on
+// score >= 12 candidates that weren't already flagged in the last 15 min.
+var _vBottomLastFlagged = {};
+cron.schedule('*/3 9-16 * * 1-5', async function() {
+  try {
+    var vbot = require('./vBottomScanner');
+    var dp = require('./discordPush');
+    var result = await vbot.runScan({ minScore: 12 });
+    if (!result.ok || !result.candidates) return;
+    var WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
+      'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+    for (var i = 0; i < Math.min(5, result.candidates.length); i++) {
+      var c = result.candidates[i];
+      var lastFlag = _vBottomLastFlagged[c.ticker] || 0;
+      if (Date.now() - lastFlag < 15 * 60 * 1000) continue;  // 15 min cooldown
+      _vBottomLastFlagged[c.ticker] = Date.now();
+
+      var icon = c.totalScore >= 15 ? '🚀🚀' : '📈';
+      var embed = {
+        username: 'Flow Scout — V-Bottom Scanner',
+        embeds: [{
+          title: icon + ' V-BOTTOM CANDIDATE — ' + c.ticker + ' (score ' + c.totalScore + '/27)',
+          description: '**Spot $' + c.spot + '** · Day low $' + c.dayLow + ' / high $' + c.dayHigh +
+                       '\nPullback depth: ' + c.pullbackDepth + '% · Recovery: ' + c.recoveryPct + '%' +
+                       '\nRange position: ' + c.rangePosition + '% (>50% = recovered past midpoint)',
+          color: c.totalScore >= 15 ? 5763719 : 15844367,
+          fields: [
+            { name: '📊 Pattern', value: 'Last 5 bars: ' + c.greenLast5 + ' green | VWAP $' + c.vwap + ' (' + (c.aboveVwap ? '✅ above' : '❌ below') + ') | Volume ' + (c.volIncreasing ? '✅ increasing' : '⚠️ flat/falling'), inline: false },
+            { name: '🌊 Flow boost', value: c.uoaBonus > 0 ? c.uoaBonus + ' UOA alerts last 30min (+' + c.uoaBonus + ')' : 'No recent UOA — chart-only signal', inline: false },
+          ],
+          footer: { text: 'V-Bottom Scanner | catches reversal recoveries before they exhaust' },
+          timestamp: new Date().toISOString(),
+        }],
+      };
+      try { await dp.send('vBottomScanner', embed, { webhook: WEBHOOK }); } catch (e) {}
+    }
+  } catch(e) { console.error('[V-BOTTOM CRON]', e.message); }
+}, { timezone: 'America/New_York' });
+
 // Bulk ticker-quote endpoint — used by Tomorrow tab to compute live distance to trigger
 app.get('/api/ticker-quote', async function(req, res) {
   try {
