@@ -51,6 +51,11 @@ var ts = null;
 try { ts = require('./tradestation'); }
 catch (e) { console.log('[FIRE-GRADE] tradestation not loaded:', e.message); }
 
+// Phase 4.30E — JOHN-LIKE bonus gate (matches setup against historical pattern profiles)
+var johnLikePicker = null;
+try { johnLikePicker = require('./johnLikePicker'); }
+catch (e) { console.log('[FIRE-GRADE] johnLikePicker not loaded:', e.message); }
+
 // --- 60s cache keyed by ticker|direction|tradeType --------------------------
 var _cache = {};
 var CACHE_TTL_MS = 60 * 1000;
@@ -342,6 +347,40 @@ async function checkVisionGate(ticker, direction, tradeType) {
 }
 
 // =============================================================================
+// PHASE 4.30E — JOHN-LIKE BONUS GATE
+// =============================================================================
+// Matches setup against John's historical pattern profiles. Grants:
+//   +1 bonus if setup matches any John pattern with sampleSize >= 3
+//   +1 additional bonus if matched pattern's historical winRate >= 0.55
+// The bonus is added to gate count when grading. Capped at +2.
+async function checkJohnLikeBonus(ticker, direction, setup) {
+  try {
+    if (!johnLikePicker || !johnLikePicker.matchSetup) {
+      return { matched: false, bonus: 0, reason: 'johnLikePicker not loaded' };
+    }
+    var match = await johnLikePicker.matchSetup(ticker, normDir(direction), setup && setup.plan);
+    if (!match || !match.matched) {
+      return { matched: false, bonus: 0, reason: 'no John pattern match' };
+    }
+    var bonus = 0;
+    if (match.historicalSampleSize >= 3) bonus += 1;
+    if ((match.historicalWinRate || 0) >= 0.55) bonus += 1;
+    return {
+      matched: true,
+      bonus: bonus,
+      label: match.label,
+      historicalWinRate: match.historicalWinRate,
+      historicalSampleSize: match.historicalSampleSize,
+      historicalAvgMFE: match.historicalAvgMFE,
+      reason: 'matches ' + match.label + ' (n=' + match.historicalSampleSize +
+              ', winRate=' + Math.round((match.historicalWinRate || 0) * 100) + '%)',
+    };
+  } catch (e) {
+    return { matched: false, bonus: 0, reason: 'john bonus error: ' + e.message };
+  }
+}
+
+// =============================================================================
 // STRATEGY TYPE DETECTION
 // =============================================================================
 function detectStrategyType(setup, gates) {
@@ -455,14 +494,15 @@ async function computeFireGrade(setup) {
   var cached = fromCache(key);
   if (cached) return Object.assign({}, cached, { cached: true });
 
-  // Run all 6 gates in parallel
-  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG] = await Promise.all([
+  // Run all 6 gates + John-like bonus in parallel
+  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG, johnBonus] = await Promise.all([
     checkTrendGate(ticker, direction),
     checkBreakoutGate(ticker, direction, setup),
     checkTapeGate(direction),
     checkTaGate(ticker, direction),
     checkLiquidityGate(ticker, direction, tradeType),
     checkVisionGate(ticker, direction, tradeType),
+    checkJohnLikeBonus(ticker, direction, setup),
   ]);
 
   var gates = {
@@ -477,6 +517,26 @@ async function computeFireGrade(setup) {
   var graded = composeGrade(gates);
   var strategyType = detectStrategyType(setup, gates);
   var warnings = buildWarnings(gates);
+
+  // Phase 4.30E — JOHN-LIKE bonus: grant up to +2 to grade score (max 1 grade-step)
+  if (johnBonus && johnBonus.bonus > 0) {
+    var origScore = graded.score;
+    graded.score = Math.min(graded.denominator, origScore + johnBonus.bonus);
+    // Re-grade if bonus pushed us into a higher grade
+    var oldGrade = graded.grade;
+    if (graded.denominator === 6) {
+      if (graded.score >= 5) { graded.grade = 'A'; graded.fireRecommendation = 'FIRE_FULL'; }
+      else if (graded.score === 4) { graded.grade = 'B'; graded.fireRecommendation = 'TRIAL_1CT'; }
+      else if (graded.score === 3) { graded.grade = 'C'; graded.fireRecommendation = 'WATCH'; }
+    } else {
+      if (graded.score >= 4) { graded.grade = 'A'; graded.fireRecommendation = 'FIRE_FULL'; }
+      else if (graded.score === 3) { graded.grade = 'B'; graded.fireRecommendation = 'TRIAL_1CT'; }
+      else if (graded.score === 2) { graded.grade = 'C'; graded.fireRecommendation = 'WATCH'; }
+    }
+    if (graded.grade !== oldGrade) {
+      warnings.unshift('GRADE BUMPED ' + oldGrade + ' → ' + graded.grade + ' via JOHN-LIKE bonus (+' + johnBonus.bonus + ')');
+    }
+  }
 
   // COIL detection override — never grant FIRE on a coil (wait for break)
   if (strategyType === 'COIL') {
@@ -499,6 +559,7 @@ async function computeFireGrade(setup) {
     strategyType: strategyType,
     warnings: warnings,
     fireRecommendation: graded.fireRecommendation,
+    johnLike: johnBonus,  // Phase 4.30E — surface to UI
     timestamp: new Date().toISOString(),
   };
 
@@ -530,5 +591,6 @@ module.exports = {
   checkTaGate: checkTaGate,
   checkLiquidityGate: checkLiquidityGate,
   checkVisionGate: checkVisionGate,
+  checkJohnLikeBonus: checkJohnLikeBonus,  // Phase 4.30E
   detectStrategyType: detectStrategyType,
 };

@@ -4469,6 +4469,17 @@ function renderGridWP() {
 // =============================================================================
 let jsData = null;
 
+// Phase 4.30 — JOHN-LIKE PICKS data (auto-generated EOD)
+let johnLikePicksData = null;
+
+async function loadJohnLikePicks() {
+  try {
+    const r = await fetch("/api/john-like-pick", { cache: "no-store" });
+    if (!r.ok) return;
+    johnLikePicksData = await r.json();
+  } catch (e) { /* not loaded yet — fine */ }
+}
+
 async function loadJSData() {
   FILTERS = FILTERS_JS;
   if (!FILTERS_JS.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_JS);
@@ -4483,6 +4494,8 @@ async function loadJSData() {
     document.getElementById("filters").innerHTML = "";
     return;
   }
+  // Phase 4.30D — load JOHN-LIKE picks alongside JS scan
+  await loadJohnLikePicks();
   const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
   // Phase 4.17 — TA verify each pattern row
   try { await buildTaForRows(all, r => r.ticker, r => r.direction); } catch (e) {}
@@ -4566,14 +4579,20 @@ function renderGridJS() {
       return;
     }
 
-    const refreshBtn = `<div style="margin-bottom:12px; text-align:right;"><button id="js-refresh-btn" onclick="refreshJSScan()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">🎯 Re-scan</button></div>`;
+    const refreshBtn = `<div style="margin-bottom:12px; text-align:right;">
+      <button onclick="refreshJohnLikePicks()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px; margin-right:6px; background:rgba(251,191,36,0.18); color:#fbbf24; border:1px solid #fbbf24;">JOHN-LIKE Re-gen</button>
+      <button id="js-refresh-btn" onclick="refreshJSScan()" class="btn btn-secondary" style="padding:6px 12px; font-size:11px;">🎯 Re-scan</button>
+    </div>`;
 
     const focusBanner = `
       <div style="margin-bottom:12px; padding:10px; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.3); border-radius:8px; font-size:12px; color:var(--txt-2);">
         <strong style="color:#fbbf24;">🛡️ AB DISCIPLINE RULES</strong> · Wait for 2 candle closes past trigger before firing · Custom 3-layer stops enforced · No averaging down (John can, you can't)
       </div>`;
 
-    document.getElementById("grid").innerHTML = refreshBtn + focusBanner + filtered.map(r => {
+    // Phase 4.30D — JOHN-LIKE PICKS section (top of JS tab)
+    const johnLikeHtml = renderJohnLikePicksSection();
+
+    document.getElementById("grid").innerHTML = refreshBtn + focusBanner + johnLikeHtml + filtered.map(r => {
       const info = JS_PATTERN_INFO[r.pattern] || { icon: '🎯', desc: r.pattern };
       const dirColor = r.direction === 'long' ? '#16e39d' : r.direction === 'short' ? '#ff6b6b' : '#ffc107';
       const convColor = r.conviction >= 9 ? '#16e39d' : r.conviction >= 7 ? '#ffc107' : '#ff6b6b';
@@ -4705,6 +4724,98 @@ function renderGridJS() {
     document.getElementById("grid").innerHTML = `<div class="empty">JS render error: <code style="color:var(--red)">${e.message}</code></div>`;
   }
 }
+
+// =============================================================================
+// PHASE 4.30D — JOHN-LIKE PICKS rendering (top section of JS tab)
+// =============================================================================
+function renderJohnLikePicksSection() {
+  if (!johnLikePicksData) return '';
+  const picks = johnLikePicksData.picks || [];
+  const session = johnLikePicksData.forSession || '?';
+  const generatedAt = johnLikePicksData.generatedAt
+    ? new Date(johnLikePicksData.generatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : 'unknown';
+  if (!picks.length) {
+    return `<div style="margin-bottom:14px; padding:14px; background:rgba(251,191,36,0.08); border:1px solid rgba(251,191,36,0.3); border-radius:10px;">
+      <div style="font-weight:700; color:#fbbf24; font-size:13px; margin-bottom:6px;">🤖 JOHN-LIKE PICKS · ${session}</div>
+      <div style="font-size:11px; color:var(--txt-3);">No qualifying setups for this session. ${johnLikePicksData.note || 'Auto-regenerates EOD 5:30 PM ET.'}</div>
+    </div>`;
+  }
+  const cards = picks.map((p, i) => {
+    const c = p.contract || {};
+    const dirIcon = (p.direction === 'long' || p.direction === 'call') ? '▲' : '▼';
+    const dirColor = (p.direction === 'long' || p.direction === 'call') ? '#16e39d' : '#ff6b6b';
+    const optDir = (p.direction === 'long' || p.direction === 'call') ? 'CALL' : 'PUT';
+    const winRatePct = Math.round((p.historicalWinRate || 0) * 100);
+    const winColor = winRatePct >= 60 ? '#16e39d' : winRatePct >= 50 ? '#fbbf24' : '#ff6b6b';
+    const labelDisplay = (p.structuralLabel || 'unknown').replace(/_/g, ' ');
+    return `
+      <div style="background:rgba(251,191,36,0.06); border:1px solid rgba(251,191,36,0.30); border-radius:8px; padding:12px; margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+          <div style="flex:1;">
+            <div style="font-size:14px; font-weight:700;">
+              <span style="color:${dirColor};">${dirIcon}</span>
+              <span class="mono" style="color:#fff;">${p.ticker}</span>
+              <span style="color:var(--txt-3); font-weight:400; font-size:11px;"> · ${labelDisplay}</span>
+            </div>
+            <div style="font-size:11px; color:var(--txt-2); margin-top:3px;">
+              <span style="color:${winColor}; font-weight:700;">${winRatePct}% historical win rate</span> ·
+              n=${p.historicalSampleSize} ·
+              avgMFE +${Math.round(p.historicalAvgMFE || 0)}% ·
+              source: ${p.source || '?'}
+            </div>
+          </div>
+          <div style="text-align:right; font-size:10px; color:var(--txt-3);">#${i + 1}</div>
+        </div>
+
+        <div style="margin-top:10px; padding:8px; background:#0a0d12; border-radius:6px; border:1px solid #2a3140; font-size:11px;">
+          <div style="font-weight:700; color:#fbbf24; margin-bottom:4px;">📜 Suggested contract (John-style)</div>
+          <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px; font-family:monospace; font-size:11px;">
+            <div><span style="color:var(--txt-3);">Symbol:</span> <span style="color:#fff;">${p.ticker} ${c.strike || '?'}${optDir.charAt(0)} ${c.expiry || '?'}</span></div>
+            <div><span style="color:var(--txt-3);">DTE:</span> <span style="color:#fff;">${c.dte || '?'}d</span></div>
+            <div><span style="color:var(--txt-3);">Entry:</span> <span style="color:#fbbf24;">$${(c.triggerPrice || 0).toFixed(2)}</span></div>
+            <div><span style="color:var(--txt-3);">Stop:</span> <span style="color:#ff6b6b;">$${(c.stopPrice || 0).toFixed(2)}</span></div>
+            <div><span style="color:var(--txt-3);">TP1/2/3:</span> <span style="color:#16e39d;">+25% / +50% / +100%</span></div>
+            <div><span style="color:var(--txt-3);">Stop pct:</span> <span style="color:#fff;">-${c.stopPct || 25}%</span></div>
+          </div>
+        </div>
+
+        <div style="margin-top:10px; padding:8px; background:rgba(70,180,255,0.08); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2); line-height:1.5;">
+          <strong style="color:#46b4ff;">🧠 Reverse-engineered logic:</strong> ${p.logic || 'pattern match — no logic generated'}
+        </div>
+
+        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>
+          <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','ts','SWING')" style="padding:5px 10px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
+          <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','public','SWING')" style="padding:5px 10px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
+          <button onclick="event.stopPropagation();dispatchToTS({ticker:'${p.ticker}',direction:'${optDir}',trigger:${c.triggerPrice || 0},stop:${c.stopPrice || 0},tp1:${(c.triggerPrice || 0) * 1.05},tp2:${(c.triggerPrice || 0) * 1.10},qty:1,tradeType:'JOHN_LIKE',pattern:'${p.structuralLabel}',conviction:8},this)" style="padding:5px 10px;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid #f59e0b;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">📱 TS BRACKET 1ct</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `<div style="margin-bottom:18px; padding:14px; background:rgba(251,191,36,0.04); border:2px solid rgba(251,191,36,0.30); border-radius:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div>
+        <div style="font-size:14px; font-weight:700; color:#fbbf24;">🤖 JOHN-LIKE PICKS for ${session}</div>
+        <div style="font-size:10px; color:var(--txt-3); margin-top:2px;">Auto-replicated using John's historical playbook (152+ picks). Generated ${generatedAt}. Treat as candidates, not Word from God.</div>
+      </div>
+      <span style="font-size:11px; color:var(--txt-3); background:#222; padding:4px 8px; border-radius:4px;">${picks.length} ${picks.length === 1 ? 'pick' : 'picks'}</span>
+    </div>
+    ${cards}
+  </div>`;
+}
+
+async function refreshJohnLikePicks() {
+  try {
+    const r = await fetch('/api/john-like-pick/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const out = await r.json();
+    if (!out.ok) { alert('Re-gen failed: ' + (out.error || 'unknown')); return; }
+    await loadJohnLikePicks();
+    renderGridJS();
+  } catch (e) { alert('Re-gen error: ' + e.message); }
+}
+window.refreshJohnLikePicks = refreshJohnLikePicks;
 
 // =============================================================================
 // 🎰 LOTTO tab — John VIP daily picks (cheap-call lotteries) from /api/lotto-feed

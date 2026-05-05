@@ -191,6 +191,20 @@ var johnPatternMatcher = null;
 try { johnPatternMatcher = require('./johnPatternMatcher'); console.log('[SERVER] johnPatternMatcher loaded OK'); }
 catch(e) { console.log('[SERVER] johnPatternMatcher not loaded:', e.message); }
 
+// Phase 4.30 — JOHN PATTERN REPLICATOR (5 modules total)
+// Replaces John VIP subscription by reverse-engineering 152+ historical picks.
+var johnPickAnalyzer = null;
+try { johnPickAnalyzer = require('./johnPickAnalyzer'); console.log('[SERVER] johnPickAnalyzer loaded OK'); }
+catch(e) { console.log('[SERVER] johnPickAnalyzer not loaded:', e.message); }
+
+var johnPatternProfiler = null;
+try { johnPatternProfiler = require('./johnPatternProfiler'); console.log('[SERVER] johnPatternProfiler loaded OK'); }
+catch(e) { console.log('[SERVER] johnPatternProfiler not loaded:', e.message); }
+
+var johnLikePicker = null;
+try { johnLikePicker = require('./johnLikePicker'); console.log('[SERVER] johnLikePicker loaded OK'); }
+catch(e) { console.log('[SERVER] johnLikePicker not loaded:', e.message); }
+
 // PUBLIC.COM broker (May 1 2026) — cash account, no PDT, used when AB needs
 // to day-trade and TS Titan margin would PDT-flag him.
 var publicBroker = null;
@@ -696,6 +710,87 @@ app.get('/api/john-precedent/:ticker', function(req, res) {
 app.get('/api/john-precedent', function(req, res) {
   if (!johnPatternMatcher) return res.status(500).json({ ok: false, error: 'johnPatternMatcher not loaded' });
   res.json(johnPatternMatcher.getStatus());
+});
+
+// =============================================================================
+// PHASE 4.30 — JOHN PATTERN REPLICATOR ENDPOINTS
+// =============================================================================
+// Phase 4.30A — Backfill historical picks with reverse-engineered chart state
+//                + forward outcomes (TP1/2/3 hits, stops, MFE/MAE).
+// POST /api/john-pick-analyzer/backfill?force=1&max=20
+app.post('/api/john-pick-analyzer/backfill', async function(req, res) {
+  if (!johnPickAnalyzer) return res.status(500).json({ ok: false, error: 'johnPickAnalyzer not loaded' });
+  try {
+    var body = req.body || {};
+    var force = body.force === true || req.query.force === '1';
+    var maxPicks = parseInt(body.max || req.query.max || '0', 10) || null;
+    var batchSize = parseInt(body.batchSize || '8', 10);
+    var batchDelayMs = parseInt(body.batchDelayMs || '1500', 10);
+    var out = await johnPickAnalyzer.backfillAll({
+      force: force,
+      maxPicks: maxPicks,
+      batchSize: batchSize,
+      batchDelayMs: batchDelayMs,
+    });
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.get('/api/john-pick-analyzer/stats', function(req, res) {
+  if (!johnPickAnalyzer) return res.status(500).json({ ok: false, error: 'johnPickAnalyzer not loaded' });
+  res.json(johnPickAnalyzer.getStats());
+});
+
+// Phase 4.30B — Build pattern profiles (clusters by structural label, win rate, MFE)
+app.post('/api/john-pattern-profile/build', function(req, res) {
+  if (!johnPatternProfiler) return res.status(500).json({ ok: false, error: 'johnPatternProfiler not loaded' });
+  try { res.json(johnPatternProfiler.buildProfiles()); }
+  catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+app.get('/api/john-pattern-profile', function(req, res) {
+  if (!johnPatternProfiler) return res.status(500).json({ ok: false, error: 'johnPatternProfiler not loaded' });
+  var data = johnPatternProfiler.loadProfiles();
+  if (!data) return res.json({ ok: false, error: 'no profiles built — POST /api/john-pattern-profile/build first' });
+  res.json(Object.assign({ ok: true }, data));
+});
+app.get('/api/john-pattern-profile/top', function(req, res) {
+  if (!johnPatternProfiler) return res.status(500).json({ ok: false, error: 'johnPatternProfiler not loaded' });
+  var minN = parseInt(req.query.minN || '3', 10);
+  res.json({ ok: true, profiles: johnPatternProfiler.getTopProfiles({ minN: minN }) });
+});
+
+// Phase 4.30C — Generate live JOHN-LIKE picks (live + saved snapshot)
+app.post('/api/john-like-pick/generate', async function(req, res) {
+  if (!johnLikePicker) return res.status(500).json({ ok: false, error: 'johnLikePicker not loaded' });
+  try {
+    var body = req.body || {};
+    var minWinRate = parseFloat(body.minWinRate != null ? body.minWinRate : req.query.minWinRate || '0.50');
+    var minSampleSize = parseInt(body.minSampleSize || req.query.minSampleSize || '3', 10);
+    var maxPicks = parseInt(body.maxPicks || req.query.maxPicks || '8', 10);
+    var out = await johnLikePicker.generate({
+      minWinRate: minWinRate,
+      minSampleSize: minSampleSize,
+      maxPicks: maxPicks,
+    });
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+// Latest cached picks (used by JS tab in scanner-v2.html)
+app.get('/api/john-like-pick', function(req, res) {
+  if (!johnLikePicker) return res.status(500).json({ ok: false, error: 'johnLikePicker not loaded' });
+  var data = johnLikePicker.loadLatest();
+  if (!data) return res.json({ ok: true, picks: [], note: 'no picks generated yet — POST /api/john-like-pick/generate or wait for 5:30 PM ET cron' });
+  res.json(Object.assign({ ok: true }, data));
+});
+// Match a single setup against the John pattern profiles (used by FIRE GRADE bonus)
+app.get('/api/john-like-pick/match', async function(req, res) {
+  if (!johnLikePicker) return res.status(500).json({ ok: false, error: 'johnLikePicker not loaded' });
+  try {
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || 'long').toLowerCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    var match = await johnLikePicker.matchSetup(ticker, direction, null);
+    res.json({ ok: true, match: match });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // =============================================================================
@@ -4866,6 +4961,71 @@ cron.schedule('30 16 * * 1-5', async function() {
                   ' dead=' + (out.dead || []).length);
     }
   } catch(e) { console.error('[MSS] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// =============================================================================
+// PHASE 4.30G — JOHN-LIKE PICKER — 5:30 PM ET weekdays (after MSS at 4:30)
+// =============================================================================
+// AB ending John VIP subscription. This cron auto-generates next-day picks
+// using the historical pattern profiles (built from 152+ John picks).
+// Output: /data/john_like_picks_YYYY-MM-DD.json + Discord push to default webhook.
+// AB wakes up Tue-Fri to a fresh idea list pre-vetted against John's playbook.
+cron.schedule('30 17 * * 1-5', async function() {
+  try {
+    if (!johnLikePicker) return;
+    console.log('[JLP] cron triggered (5:30 PM ET) — generating tomorrow JOHN-LIKE picks');
+    // Ensure profiles exist; rebuild if not
+    if (johnPatternProfiler) {
+      var profileData = johnPatternProfiler.loadProfiles();
+      if (!profileData) {
+        console.log('[JLP] no profiles found — rebuilding before generation');
+        johnPatternProfiler.buildProfiles();
+      }
+    }
+    var out = await johnLikePicker.generate({ minWinRate: 0.50, minSampleSize: 3, maxPicks: 8 });
+    if (out && out.ok) {
+      console.log('[JLP] cron complete · ' + (out.picks || []).length + ' picks for ' + out.forSession);
+      // Discord push of the brief
+      try {
+        var dp = require('./discordPush');
+        var picks = out.picks || [];
+        if (picks.length === 0) {
+          await dp.send('johnLikePicker', {
+            embeds: [{
+              title: 'JOHN-LIKE PICKS · ' + out.forSession,
+              description: 'No qualifying setups for tomorrow. Scanner produced ' + out.candidatesScanned + ' candidates but none matched a John pattern with winRate >= 50% (n>=3).',
+              color: 0x888888,
+            }],
+            username: 'JOHN-LIKE Picker',
+          });
+        } else {
+          var lines = picks.slice(0, 6).map(function(p, i) {
+            var c = p.contract || {};
+            var dirIcon = (p.direction === 'long' || p.direction === 'call') ? '▲' : '▼';
+            return (i + 1) + '. ' + dirIcon + ' **' + p.ticker + '** · ' + p.structuralLabel.replace(/_/g, ' ') +
+              ' · ' + Math.round((p.historicalWinRate || 0) * 100) + '% win (n=' + p.historicalSampleSize + ')\n' +
+              '   ' + p.ticker + ' ' + (c.strike || '?') + (p.direction === 'long' || p.direction === 'call' ? 'C' : 'P') +
+              ' ' + (c.expiry || '?') + ' · entry $' + (c.triggerPrice || 0).toFixed(2) +
+              ' · stop $' + (c.stopPrice || 0).toFixed(2) + ' · TP +25/+50/+100%\n' +
+              '   *' + (p.logic || '').slice(0, 220) + '*';
+          });
+          await dp.send('johnLikePicker', {
+            embeds: [{
+              title: 'JOHN-LIKE PICKS · for ' + out.forSession,
+              description: 'Auto-generated EOD ' + new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' }) +
+                ' from ' + out.candidatesScanned + ' scanner candidates. AI-replicated using John\'s historical playbook (152+ picks).\n\n' +
+                lines.join('\n\n'),
+              color: 0xfbbf24,
+              footer: { text: 'Phase 4.30 · pattern winRate >= 50% · n >= 3 · NOT WORD FROM GOD' },
+            }],
+            username: 'JOHN-LIKE Picker',
+          });
+        }
+      } catch (de) { console.error('[JLP] discord push error:', de.message); }
+    } else {
+      console.error('[JLP] cron generate failed:', out && out.error);
+    }
+  } catch(e) { console.error('[JLP] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // DAILY COIL SCANNER -- 3:50 PM ET weekdays (10 min before close).

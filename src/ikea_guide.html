@@ -191,7 +191,7 @@
 <div class="container">
 
 <h1>🪜 Flow Scout IKEA Trade Guide</h1>
-<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 (Phase 4.29)</div>
+<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 (Phase 4.30 — JOHN PATTERN REPLICATOR)</div>
 
 <div class="tldr">
   <h2>📌 TL;DR</h2>
@@ -254,6 +254,54 @@
   </div>
   <div class="danger" style="margin-top:10px;">
     <b>The May 5 lesson</b>: conviction was busted (highest = worst loser). Don't trust a single number — trust the structural composite of trend + breakout + tape + TA + liquidity + vision. If 5/6 gates can't agree, the setup isn't ready.
+  </div>
+</div>
+
+<!-- PHASE 4.30 — JOHN PATTERN REPLICATOR -->
+<div class="step" style="border:2px solid #fbbf24; background:linear-gradient(180deg, rgba(251,191,36,0.12), rgba(251,191,36,0.02));">
+  <h2 style="color:#fbbf24;"><span class="step-num" style="background:linear-gradient(180deg,#fbbf24,#b45309); color:#000;">JR</span>JOHN PATTERN REPLICATOR (Phase 4.30 — May 5 PM)</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 12px;">
+    <b>Why this exists:</b> AB is ending the John VIP subscription. The system now <b>replicates John's thinking</b> using his 152+ historical picks. Each historical pick was reverse-engineered: WHAT THE CHART WAS DOING when he posted, and DID IT WORK after. From those answers we built <b>5 structural pattern templates</b> with measured win rates. A live cron at 5:30 PM ET produces tomorrow's John-like picks.
+  </p>
+  <h3 style="font-size:14px; margin:16px 0 8px; color:var(--txt);">The 5 structural labels</h3>
+  <table>
+    <thead><tr><th>Label</th><th>What it means</th><th>Example</th></tr></thead>
+    <tbody>
+      <tr><td><b>BREAKOUT_LONG</b></td><td>Stock at resistance, breaking out with volume</td><td>META 615C 5/6 (5/5 night) — entry $606.80, breaking $606 res</td></tr>
+      <tr><td><b>PULLBACK_RETEST_LONG</b></td><td>Daily uptrend pulled back to support, bouncing</td><td>NVDA after a 3-1-2 fires, retests trigger</td></tr>
+      <tr><td><b>REVERSAL_LONG</b></td><td>Stock at recent low, hammer or failed-2D</td><td>V-bottom on a beaten-up name with daily down trend</td></tr>
+      <tr><td><b>CONTINUATION_LONG</b></td><td>Daily uptrend, no pullback, just trending up</td><td>Strong RS name extending</td></tr>
+      <tr><td><b>FAILED_2U_SHORT</b></td><td>Stock broke prior high then failed back below</td><td>Bull bait flushes — bear thesis activates</td></tr>
+      <tr><td><b>BREAKDOWN_SHORT</b></td><td>Stock at support, breaking down with volume</td><td>Daily down + intraday flush</td></tr>
+      <tr><td><b>REVERSAL_SHORT</b></td><td>At resistance with daily uptrend = ATH-short</td><td>52w high name with rejection candle</td></tr>
+    </tbody>
+  </table>
+  <h3 style="font-size:14px; margin:16px 0 8px; color:var(--txt);">How to use</h3>
+  <ul class="checklist" style="font-size:13px;">
+    <li>Open the <b>JS tab</b> in scanner-v2 — top section is "🤖 JOHN-LIKE PICKS"</li>
+    <li>Each card shows: ticker, structural label, historical win rate, n (sample size), avgMFE, suggested contract per John's style (DTE / strike / TP ladder / stop), reverse-engineered logic narrative</li>
+    <li>Treat as candidates, not Word from God — the AI is replicating, not perceiving</li>
+    <li>Cron runs <b>5:30 PM ET</b> weekdays (after MSS at 4:30 PM). AB wakes Tue-Fri to a fresh idea list</li>
+    <li>Bonus: when a live setup matches a high-win-rate John pattern, FIRE GRADE grants <b>+1 or +2 bonus</b> points (easier path to GRADE A)</li>
+  </ul>
+  <h3 style="font-size:14px; margin:16px 0 8px; color:var(--txt);">Endpoints</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">POST /api/john-pick-analyzer/backfill</td><td>One-time enrich 152 picks with chart state + outcomes</td></tr>
+      <tr><td class="mono">GET /api/john-pick-analyzer/stats</td><td>Counts of enriched picks by label / outcome</td></tr>
+      <tr><td class="mono">POST /api/john-pattern-profile/build</td><td>Build pattern profiles (winRate, MFE per label)</td></tr>
+      <tr><td class="mono">GET /api/john-pattern-profile/top</td><td>Profiles sorted by winRate</td></tr>
+      <tr><td class="mono">POST /api/john-like-pick/generate</td><td>Live: pull current scanner output → match → tomorrow's picks</td></tr>
+      <tr><td class="mono">GET /api/john-like-pick</td><td>Latest cached picks (used by JS tab)</td></tr>
+      <tr><td class="mono">GET /api/john-like-pick/match?ticker=X&direction=long</td><td>One-shot: does this setup match a John pattern?</td></tr>
+    </tbody>
+  </table>
+  <div class="ok" style="margin-top:14px;">
+    <b>Threshold:</b> only patterns with historical winRate &ge; 50% AND sample size &ge; 3 surface. Lower-quality patterns are silently filtered.
+  </div>
+  <div class="danger" style="margin-top:10px;">
+    <b>Important caveat:</b> these are AI-generated using John's historical data. Treat as candidates, not Word from God. The original John brought judgment + selectivity that we cannot fully replicate. Cross-check every John-Like pick against FIRE GRADE before sizing up.
   </div>
 </div>
 
