@@ -3731,6 +3731,31 @@ app.post('/api/take-trade', async function(req, res) {
       }
     }
 
+    // Phase 4.11 — auto-record successful fires into active-positions manager
+    // so the system tracks the LOCKED structural stop and pushes exit alerts
+    // on 60m close break (NOT on tape ripples that I keep flip-flopping on)
+    try {
+      var anySuccess = results.some(function(r) { return r.ok; });
+      if (anySuccess && activePositions && activePositions.recordPosition && structuralStop) {
+        activePositions.recordPosition({
+          ticker: ticker,
+          direction: direction === 'BULLISH' ? 'long' : 'short',
+          optionSymbol: symbol,
+          entryPrice: entry,
+          qty: qty,
+          account: live ? '11975462-LIVE' : 'SIM3142118M',
+          structuralStop: structuralStop,
+          triggerPrice: trigger ? trigger.price : null,
+          tp1: tp1,
+          tp2: tp2,
+          notes: b.source || 'take-trade',
+          source: b.source || 'take-trade',
+          timeframe: '60',  // default to 60m close for SWING — NOT 5m scalp noise
+        });
+        console.log('[ACTIVE-POS] recorded ' + ticker + ' ' + direction + ' (structural stop: ' + structuralStop.price + ')');
+      }
+    } catch (e) { console.error('[ACTIVE-POS] record error:', e.message); }
+
     // Apr 26 PM bug fix — only count SUCCESSFUL bracket placements against
     // the daily cap. Failed attempts (blacklist, TS reject, risk-cap, etc.)
     // should not burn a daily slot.
@@ -5095,6 +5120,65 @@ app.get('/api/backtest/results', function(req, res) {
     res.json({ ok: true, results: summarized });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
+
+// =============================================================================
+// PHASE 4.11 — ACTIVE POSITIONS MANAGER
+// AB feedback May 5 PM: "you keep doing this over and over... fix this shit"
+// SYSTEM manages exits via LOCKED structural stop, NOT me flip-flopping on
+// every tape ripple. Default timeframe = 60m close (swing), not 5m (scalp).
+// =============================================================================
+var activePositions = null;
+try { activePositions = require('./activePositions'); console.log('[SERVER] activePositions loaded OK'); }
+catch (e) { console.log('[SERVER] activePositions not loaded:', e.message); }
+
+// Record a new position (called by ACTION/Live Movers/Tomorrow fire dispatchers)
+app.post('/api/active-positions/record', function(req, res) {
+  if (!activePositions) return res.status(500).json({ ok: false, error: 'activePositions not loaded' });
+  try {
+    var entry = activePositions.recordPosition(req.body || {});
+    res.json({ ok: true, position: entry });
+  } catch (e) { res.status(400).json({ ok: false, error: e.message }); }
+});
+
+// List open positions
+app.get('/api/active-positions', function(req, res) {
+  if (!activePositions) return res.status(500).json({ ok: false, error: 'activePositions not loaded' });
+  try {
+    var all = req.query.all === 'true' ? activePositions.loadPositions() : activePositions.getOpenPositions();
+    res.json({ ok: true, positions: all });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Manually close a position (user exited)
+app.post('/api/active-positions/close', function(req, res) {
+  if (!activePositions) return res.status(500).json({ ok: false, error: 'activePositions not loaded' });
+  try {
+    var result = activePositions.markClosed(req.body && req.body.id, req.body && req.body.reason);
+    res.json(result);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Manual scan trigger (for testing — cron does this every minute)
+app.post('/api/active-positions/scan', async function(req, res) {
+  if (!activePositions) return res.status(500).json({ ok: false, error: 'activePositions not loaded' });
+  try {
+    var result = await activePositions.scanAllPositions();
+    res.json(result);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CRON: scan all open positions every 60s during market hours.
+// Pushes Discord alert ONLY when structural stop hits on the 60m close.
+// No flip-flops. No tape-noise overrides. The stop is the rule.
+cron.schedule('*/1 9-16 * * 1-5', async function() {
+  try {
+    if (!activePositions) return;
+    var result = await activePositions.scanAllPositions();
+    if (result.stopHitCount > 0) {
+      console.log('[ACTIVE-POS-CRON] ' + result.stopHitCount + ' position(s) stopped out, alerts pushed');
+    }
+  } catch(e) { console.error('[ACTIVE-POS-CRON]', e.message); }
+}, { timezone: 'America/New_York' });
 
 // Phase 4.10 — UNIFIED ACTION RADAR
 // Cross-references UOA flow + live-movers + V-bottom + option chain into
