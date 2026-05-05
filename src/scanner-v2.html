@@ -4161,11 +4161,11 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
       this.textContent = 'Placing...';
       this.disabled = true;
       try {
-        // PHASE 2.7 BRACKET SUPPORT — auto-attach stop + TP1 from setup data if present
-        // Stop: -25% premium (option-level) or structural stock-trigger
-        // TP1: +50% premium
+        // Phase 4.13 (May 5 PM) — STRUCTURAL stop is PRIMARY. Option premium
+        // stop is now -50% TAIL-RISK CATCH only (NEVER -25% flat — that bug
+        // cost AB ~$200 today on ABBV+SBUX). Per feedback_stop_management.md.
         const limitPrice = parseFloat(t.limitPrice);
-        const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.75 * 100) / 100);  // 25% loss
+        const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.50 * 100) / 100);  // -50% tail-risk catch
         const tp1Premium = Math.round(limitPrice * 1.50 * 100) / 100;                    // 50% gain
         const placeBody = {
           ticker, contractSymbol: c.symbol, direction, account,
@@ -4173,7 +4173,7 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
           stopPremium: stopPremium,
           tp1Premium: tp1Premium,
         };
-        // Pass along structural stock stop if available from card
+        // Pass along structural stock stop if available from card — PRIMARY EXIT
         if (window._currentAyceSetup && window._currentAyceSetup.stop) {
           placeBody.structuralStopSymbol = ticker;
           placeBody.structuralStopPrice = window._currentAyceSetup.stop;
@@ -4236,7 +4236,8 @@ async function ayceFireAuto(ticker, direction, account, tradeType) {
     const c = data.contract;
     const t = data.orderTicket;
     const limitPrice = parseFloat(t.limitPrice);
-    const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.75 * 100) / 100);
+    // Phase 4.13 — -50% TAIL-RISK CATCH ONLY (was -25% flat — bug)
+    const stopPremium = Math.max(0.05, Math.round(limitPrice * 0.50 * 100) / 100);
     const tp1Premium = Math.round(limitPrice * 1.50 * 100) / 100;
     toast.innerHTML = `<div style="color:${accountColor};font-weight:700;">🔥 AUTO-FIRE ${ticker} ${direction.toUpperCase()} → ${account.toUpperCase()}</div>
       <div style="color:#888;margin-top:4px;">Placing ${c.symbol} @ $${limitPrice}…</div>`;
