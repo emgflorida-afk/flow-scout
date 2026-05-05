@@ -2689,12 +2689,120 @@ function renderGridAction() {
 
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
           <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">📈 TV chart</button>
-          ${r.status === 'ACTIONABLE' && sug.contract && sug.affordability !== 'TOO_EXPENSIVE' ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${r.direction === 'long' ? 'CALL' : 'PUT'}',trigger:0},this)" title="Place 1ct on Public">📱 Public 1ct</button>` : ''}
+          ${r.status === 'ACTIONABLE' && sug.contract ? `
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, false, this)" title="Fire on TradeStation immediately (LIVE 11975462)">⚡ TS FIRE</button>
+            <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
+          ` : ''}
+          ${r.status === 'ACTIONABLE' && sug.contract && sug.affordability !== 'TOO_EXPENSIVE' ? `
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToPublic(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Place 1ct on Public.com">📱 PUBLIC</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToBracket(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Place full synthetic bracket on Public">📱 BRACKET</button>
+          ` : ''}
         </div>
       </div>
     `;
   }).join("");
 }
+
+// =============================================================================
+// ACTION tab dispatchers (May 5 PM — TS LIVE + Public from ACTION cards)
+// =============================================================================
+
+// TS LIVE / QUEUE fire from ACTION row
+async function dispatchActionToTS(row, useTrigger, btn) {
+  if (!row || !row.suggested || !row.suggested.contract) return alert('No contract resolved for ' + (row && row.ticker));
+  const sug = row.suggested;
+  const stop = sug.structuralStop || {};
+  const direction = row.direction === 'long' ? 'BULLISH' : 'BEARISH';
+
+  // Convert OPRA "TICKER 260515C115" to TS-style (already has space, just normalize)
+  const tsSymbol = String(sug.contract).trim();
+
+  const optEntry = parseFloat(sug.mid) || 0;
+  if (!optEntry) return alert('No option mid available — refresh ACTION tab');
+  const optStop = +(optEntry * 0.5).toFixed(2);   // -50% tail-risk catch only (NEVER -25%)
+  const optTp1 = +(optEntry * 1.25).toFixed(2);
+  const optTp2 = +(optEntry * 1.50).toFixed(2);
+
+  const sec = localStorage.getItem('stratum_secret');
+  if (!sec) return alert('STRATUM_SECRET missing in localStorage — ARM to set it');
+
+  const verb = useTrigger ? 'TS QUEUE w/ TRIGGER' : 'TS FIRE NOW';
+  const trigStr = useTrigger && sug.stockTrigger
+    ? `Trigger: ${row.ticker} above $${Number(sug.stockTrigger).toFixed(2)}`
+    : 'Immediate market entry';
+  const stopStr = stop.symbol
+    ? `Structural stop: ${stop.symbol} ${stop.predicate || 'below'} $${Number(stop.price).toFixed(2)}`
+    : `Stop: option < $${optStop} (-50% tail-risk only)`;
+
+  if (!confirm(`⚡ ${verb} — ${row.ticker} ${row.direction.toUpperCase()}?\n\nContract: ${tsSymbol}\nEntry: $${optEntry.toFixed(2)}\nTP1: $${optTp1.toFixed(2)} (+25%)\nTP2: $${optTp2.toFixed(2)} (+50%)\n\n${trigStr}\n${stopStr}\n\nAccount: 11975462 LIVE`)) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ submitting…'; }
+  const body = {
+    ticker: row.ticker,
+    symbol: tsSymbol,
+    direction,
+    qty: 1,
+    entry: optEntry,
+    stop: optStop,
+    tp1: optTp1,
+    tp2: optTp2,
+    structuralStop: (stop.symbol && stop.price) ? {
+      symbol: stop.symbol,
+      predicate: stop.predicate || (row.direction === 'long' ? 'below' : 'above'),
+      price: parseFloat(stop.price),
+    } : null,
+    live: true,
+    source: 'action-' + row.ticker + (useTrigger ? '-queued' : '-firenow'),
+  };
+  if (useTrigger && sug.stockTrigger) {
+    body.trigger = { symbol: row.ticker, predicate: row.direction === 'long' ? 'above' : 'below', price: parseFloat(sug.stockTrigger) };
+  }
+  try {
+    const resp = await fetch('/api/take-trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json();
+    if (resp.status === 200) {
+      const ok = (j.brackets || []).filter(x => x.ok).length;
+      alert(`✅ ${ok}/${(j.brackets || []).length} bracket(s) ${useTrigger ? 'QUEUED' : 'FIRED'} on TS LIVE\nDollar risk: $${j.dollarRisk}`);
+    } else {
+      alert(`❌ TS fire failed: ${j.error || 'HTTP ' + resp.status}`);
+    }
+  } catch (e) {
+    alert(`❌ TS network error: ${e.message}`);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = useTrigger ? '🎯 TS QUEUE' : '⚡ TS FIRE'; }
+}
+window.dispatchActionToTS = dispatchActionToTS;
+
+// Public 1ct fire from ACTION row
+function dispatchActionToPublic(row, btn) {
+  if (!row || !row.suggested || !row.suggested.contract) return alert('No contract for ' + row.ticker);
+  return dispatchToPublic({
+    ticker: row.ticker,
+    direction: row.direction === 'long' ? 'CALL' : 'PUT',
+    trigger: parseFloat(row.suggested.stockTrigger) || 0,
+  }, btn);
+}
+window.dispatchActionToPublic = dispatchActionToPublic;
+
+// Public synthetic bracket from ACTION row
+function dispatchActionToBracket(row, btn) {
+  if (!row || !row.suggested || !row.suggested.contract) return alert('No contract for ' + row.ticker);
+  const sug = row.suggested;
+  const stop = sug.structuralStop || {};
+  return dispatchToBracket({
+    ticker: row.ticker,
+    direction: row.direction === 'long' ? 'CALL' : 'PUT',
+    trigger: parseFloat(sug.stockTrigger) || 0,
+    stop: parseFloat(stop.price) || 0,
+    tp1: 0,  // dispatchToBracket will compute from entry + 25%
+    tp2: 0,
+  }, btn);
+}
+window.dispatchActionToBracket = dispatchActionToBracket;
 
 async function loadSniperData() {
   FILTERS = FILTERS_SNIPER;
