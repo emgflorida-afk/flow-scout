@@ -234,6 +234,47 @@ async function processAlert(alert) {
     console.error('[FLOW->CLUSTER] feed error:', e.message);
   }
 
+  // Phase 4.1 (May 5): WIRE INTO UOA DETECTOR.
+  // Every Bullflow alert now scored for UOA. If score >= 7 (premium / sweep /
+  // velocity / whale flag stack), uoaDetector pushes Discord card and checks
+  // alertTiers for stack confluence. If whale + Tier 1+2 stacked = AUTO-FIRE
+  // SIM intent. This closes the "institutions piling in → system sees it →
+  // screens chart at AB" loop AB asked for this morning.
+  try {
+    var uoaDetector = require('./uoaDetector');
+    // Determine direction from OPRA symbol's C/P character
+    var contractMatch = rawSymbol.match(/\d{6}([CP])\d/);
+    var optType = contractMatch ? contractMatch[1] : null;
+    var direction = optType === 'C' ? 'long' : optType === 'P' ? 'short' : 'unknown';
+
+    // Extract local vol/oi/type since they're not in processAlert scope
+    var uoaVol  = parseInt(alert.volume || alert.size || 0, 10);
+    var uoaOi   = parseInt(alert.open_interest || alert.openInterest || 0, 10);
+    var uoaType = String(alert.alert_type || alert.alertType || alert.alertName || 'unknown').toLowerCase();
+
+    // Normalize payload for uoaDetector
+    var uoaPayload = {
+      ticker:          ticker,
+      direction:       direction,
+      contractSymbol:  rawSymbol,
+      totalPremium:    prem,
+      premium:         prem,
+      size:            uoaVol,
+      volOiRatio:      uoaOi > 0 && uoaVol > 0 ? uoaVol / uoaOi : 0,
+      velocity:        alert.velocity || 0,
+      isWhale:         prem > 10000000,
+      alertType:       uoaType,
+      executionType:   alert.execution_type || alert.executionType || null,
+      flowScore:       score,
+    };
+    // Fire-and-forget — don't await (don't slow down main flow processing)
+    uoaDetector.handleAlert(uoaPayload).catch(function(e) {
+      console.error('[FLOW->UOA] handleAlert error:', e.message);
+    });
+  } catch(e) {
+    console.error('[FLOW->UOA] wire error:', e.message);
+  }
+
   // Apr 20 2026: Discord flow posts OFF by default (AB decision). Flow routes to
   // scanner only. liveAggregator still receives all alerts (scanner populates).
   // Re-enable by setting FLOW_DISCORD_ENABLED=true.
