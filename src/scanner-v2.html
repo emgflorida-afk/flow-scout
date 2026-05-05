@@ -4817,6 +4817,11 @@ function renderGridMovers() {
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}
           ${m.optionSymbol ? '<span class="tag neutral">📋 Contract Ready</span>' : ""}
         </div>
+        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();fireMoverOrder(${ms.indexOf(m)}, this)" title="Fire on TradeStation immediately (open Fire modal)">⚡ TS FIRE</button>
+          <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchMoverToPublic(${ms.indexOf(m)}, this)" title="Place 1ct on Public.com">📱 PUBLIC</button>
+          <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchMoverToBracket(${ms.indexOf(m)}, this)" title="Place full bracket on Public (entry + stop + TP)">📱 BRACKET</button>
+        </div>
       </div>
     `;
   }).join("");
