@@ -25,8 +25,12 @@ var path = require('path');
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var OVERRIDES_FILE = path.join(DATA_ROOT, 'bullflow_custom_filters.json');
 
-// AB's saved Bullflow alerts (May 5 2026 — 6 total)
+// AB's saved Bullflow alerts (May 5 2026 PM — 10 total after Bullflow X audit)
+// Created 1M+ Block / 5M+ Whale / Sweep 500K+ AA via Chrome MCP automation to
+// catch institutional blocks we previously silent-logged ($NBIS 500%, $NOK $10M,
+// $DDOG +45%, $EBAY pre-GME-news).
 var KNOWN_FILTERS = {
+  // ── Existing 7 (pre-audit)
   'repeat high sig': {
     direction: 'either',          // not directional on its own — OPRA C/P decides
     weight: 6,                    // high-confidence — Bullflow's repeat-flow algo
@@ -48,6 +52,13 @@ var KNOWN_FILTERS = {
     autoFireEligible: true,
     description: "AB's directional bull filter — flow only, calls + sweeps + Above-Ask",
   },
+  'bullflow': {
+    direction: 'either',
+    weight: 6,                    // generic Bullflow brand alert — moderate weight
+    premiumFloor: 0,
+    autoFireEligible: false,      // not enough specificity to auto-fire
+    description: "AB's catch-all Bullflow alert (broad criteria) — manual review",
+  },
   '75k, aa, sweep': {
     direction: 'either',
     weight: 7,                    // high — $75K AA Sweep slightly less than 100K version
@@ -68,6 +79,29 @@ var KNOWN_FILTERS = {
     premiumFloor: 0,
     autoFireEligible: false,      // require manual confirm — vol can be late OI rebalance
     description: 'Unusual volume (vol/OI ratio) — early signal, often noisy',
+  },
+
+  // ── NEW (May 5 2026 PM — created via Chrome MCP automation)
+  '1m+ block': {
+    direction: 'either',
+    weight: 8,                    // institutional block + AA = high signal
+    premiumFloor: 1000000,
+    autoFireEligible: true,
+    description: '$1M+ block trade, Above-Ask only — catches NBIS/IBIT/SNDK style institutional entries',
+  },
+  '5m+ whale': {
+    direction: 'either',
+    weight: 9,                    // top tier — $5M+ premium = mega institutional commitment
+    premiumFloor: 5000000,
+    autoFireEligible: true,
+    description: '$5M+ whale on any execution (block/sweep/multileg), Above-Ask — catches NOK/MU/SPX-style mega bets',
+  },
+  'sweep 500k+ aa': {
+    direction: 'either',
+    weight: 7,                    // sweep + AA = institutional aggression, moderate-large size
+    premiumFloor: 500000,
+    autoFireEligible: true,
+    description: '$500K+ sweep, Above-Ask only — catches DDOG/EBAY-style aggressive institutional sweeps',
   },
 };
 
