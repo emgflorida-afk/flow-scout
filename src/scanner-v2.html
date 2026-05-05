@@ -679,6 +679,7 @@ let activeFilter = "all";
 let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 
 const TABS = [
+  { id: "action",   label: "🎯 ACTION",      modeDefault: "WHAT TO DO NOW" },
   { id: "scan",     label: "📊 SCAN",        modeDefault: "SWING" },
   { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
   { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
@@ -2237,6 +2238,8 @@ async function loadActiveTab() {
     return;
   }
   if (activeTab !== "tomorrow") stopRadarSpotPoll();
+  if (activeTab !== "action") stopActionPoll();
+  if (activeTab === "action")   return loadActionData();
   if (activeTab === "scan")     return loadScanData();
   if (activeTab === "movers")   return loadMoversData();
   if (activeTab === "lvl")      return loadLvlData();
@@ -2577,6 +2580,121 @@ window.dispatchRadarToTS = dispatchRadarToTS;
 // 📈 SNIPER tab — Sniper Trades chart-analysis posts from /api/sniper-feed
 // =============================================================================
 let sniperData = null;
+
+// =============================================================================
+// 🎯 ACTION tab — unified "What do I do" view
+// Cross-references UOA flow + live-movers + V-bottom + affordability
+// Auto-applies decision algorithm. Polls /api/action-radar every 20s.
+// =============================================================================
+let actionData = null;
+let _actionPollTimer = null;
+
+async function loadActionData() {
+  try {
+    const budget = parseInt(localStorage.getItem('public_max_budget') || '500');
+    const r = await fetch(`/api/action-radar?maxBudget=${budget}&minScore=10`, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    actionData = await r.json();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">Action radar error: <code style="color:var(--red)">${e.message}</code></div>`;
+    return;
+  }
+  document.getElementById("scan-date").textContent = "Action Radar · " + new Date(actionData.timestamp).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  document.getElementById("meta").textContent = `${actionData.actionableCount} ACTIONABLE · ${actionData.tickerCount - actionData.actionableCount} watch/filtered · budget $${actionData.maxBudget}/ct`;
+  renderStatsAction();
+  renderTabs();
+  document.getElementById("filters").innerHTML = '';
+  renderGridAction();
+  startActionPoll();
+}
+
+function startActionPoll() {
+  if (_actionPollTimer) return;
+  _actionPollTimer = setInterval(loadActionData, 20000);
+}
+function stopActionPoll() {
+  if (_actionPollTimer) { clearInterval(_actionPollTimer); _actionPollTimer = null; }
+}
+
+function renderStatsAction() {
+  const rows = actionData.rows || [];
+  const actionable = rows.filter(r => r.status === 'ACTIONABLE').length;
+  const watch = rows.filter(r => r.status === 'WATCH').length;
+  const exhausted = rows.filter(r => r.status === 'PASS-EXHAUSTED').length;
+  const stats = [
+    { k: "🟢 ACTIONABLE", v: actionable, cls: "green" },
+    { k: "🟡 WATCH",      v: watch,      cls: "aqua" },
+    { k: "⛔ PASS",       v: exhausted,  cls: "" },
+    { k: "Total tickers", v: rows.length, cls: "" },
+  ];
+  document.getElementById("stats").innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridAction() {
+  const rows = actionData.rows || [];
+  if (!rows.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">No flow events score 10+ in last 30 min. Quiet tape — wait for the next setup.</div>`;
+    return;
+  }
+  document.getElementById("grid").innerHTML = rows.map(r => {
+    const statusBg = r.status === 'ACTIONABLE' ? 'rgba(76,175,80,0.18)' :
+                    r.status === 'WATCH' ? 'rgba(70,180,255,0.15)' :
+                    'rgba(120,120,120,0.12)';
+    const statusColor = r.status === 'ACTIONABLE' ? '#4caf50' :
+                        r.status === 'WATCH' ? '#46b4ff' : '#888';
+    const statusLabel = r.status === 'ACTIONABLE' ? '🟢 ACTIONABLE' :
+                        r.status === 'WATCH' ? '🟡 WATCH' :
+                        '⛔ PASS — ' + (r.reason || 'filtered');
+
+    const dirIcon = r.direction === 'long' ? '🟢' : r.direction === 'short' ? '🔴' : '⚪';
+    const filters = (r.customFilters || []).slice(0, 3).join(', ') || '(algo flow)';
+    const live = r.live || {};
+    const chart = r.chart || {};
+    const sug = r.suggested || {};
+
+    let affordBadge = '';
+    if (sug.affordability === 'AFFORDABLE')   affordBadge = `<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">💰 Affordable $${(sug.contractCost||0).toFixed(0)}</span>`;
+    else if (sug.affordability === 'STRETCH') affordBadge = `<span class="tag" style="background:rgba(255,193,7,0.2); color:#ffc107;">⚠ Stretch $${(sug.contractCost||0).toFixed(0)}</span>`;
+    else if (sug.affordability === 'TOO_EXPENSIVE') affordBadge = `<span class="tag" style="background:rgba(244,67,54,0.2); color:#f44336;">❌ Too rich $${(sug.contractCost||0).toFixed(0)}</span>`;
+
+    return `
+      <div class="card" style="background:${statusBg}; border-left:4px solid ${statusColor};">
+        <div class="card-head">
+          <div>
+            <div class="ticker mono">${dirIcon} ${r.ticker}</div>
+            <div style="font-size:11px; color: var(--txt-3); margin-top:4px;">${live.last ? '$' + Number(live.last).toFixed(2) : '$—'} ${live.pctChange != null ? `(${live.pctChange >= 0 ? '+' : ''}${Number(live.pctChange).toFixed(2)}%)` : ''}</div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
+            ${affordBadge}
+            <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
+          </div>
+        </div>
+
+        <div style="margin-top:10px; display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:11px;">
+          <div><span style="color:var(--txt-3);">Alerts (30m)</span><br><b class="mono">${r.alertCount}</b></div>
+          <div><span style="color:var(--txt-3);">Total $</span><br><b class="mono">$${Math.round(r.totalPremium/1000)}K</b></div>
+          <div><span style="color:var(--txt-3);">Range pos</span><br><b class="mono ${live.rangePosition > 85 ? 'red' : live.rangePosition > 60 ? 'aqua' : 'green'}">${live.rangePosition != null ? live.rangePosition + '%' : '—'}</b></div>
+        </div>
+
+        <div style="margin-top:8px; font-size:11px;">
+          <div><span style="color:var(--txt-3);">Filters fired:</span> <span class="mono">${filters}</span></div>
+          ${chart.recoveryPct != null ? `<div><span style="color:var(--txt-3);">V-bottom:</span> recovery ${chart.recoveryPct}%, range ${chart.rangePos}%, ${chart.greenLast5}/5 green${chart.aboveVwap ? ', ✅VWAP' : ', ❌VWAP'} (score ${chart.vBottomScore})</div>` : ''}
+          ${sug.contract ? `<div><span style="color:var(--txt-3);">Contract:</span> <span class="mono">${sug.contract}</span> @ $${(sug.mid||0).toFixed(2)} mid · 1ct=$${(sug.contractCost||0).toFixed(0)}</div>` : ''}
+          ${sug.stockTrigger ? `<div><span style="color:var(--txt-3);">Underlying trigger:</span> <span class="mono">$${Number(sug.stockTrigger).toFixed(2)}</span></div>` : ''}
+          ${sug.structuralStop ? `<div><span style="color:var(--txt-3);">Structural stop:</span> <span class="mono red">${sug.structuralStop.symbol} ${sug.structuralStop.predicate} $${Number(sug.structuralStop.price).toFixed(2)}</span></div>` : ''}
+        </div>
+
+        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">📈 TV chart</button>
+          ${r.status === 'ACTIONABLE' && sug.contract && sug.affordability !== 'TOO_EXPENSIVE' ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${r.direction === 'long' ? 'CALL' : 'PUT'}',trigger:0},this)" title="Place 1ct on Public">📱 Public 1ct</button>` : ''}
+        </div>
+      </div>
+    `;
+  }).join("");
+}
 
 async function loadSniperData() {
   FILTERS = FILTERS_SNIPER;

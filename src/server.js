@@ -5096,6 +5096,180 @@ app.get('/api/backtest/results', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Phase 4.10 — UNIFIED ACTION RADAR
+// Cross-references UOA flow + live-movers + V-bottom + option chain into
+// ONE ranked actionable list. Solves AB feedback May 5: "I don't know
+// where to look — flow surfacing on chat, scanner separate, no unified
+// 'what do I do' view."
+//
+// Decision algorithm applied per ticker:
+//   1. UOA score >= 12 in last 30 min (flow signal threshold)
+//   2. NOT exhausted on live-movers (rangePosition <= 85%)
+//   3. Bull flow direction matches chart bias
+//   4. V-Bottom recent or fresh breakout
+//   5. Option affordability tier
+//
+// Output: actionable, watchlist, or filtered with reason.
+app.get('/api/action-radar', async function(req, res) {
+  try {
+    var maxBudget = parseFloat(req.query.maxBudget || '500');
+    var minScore = parseInt(req.query.minScore || '10', 10);
+
+    // Pull all the inputs in parallel
+    var fs = require('fs');
+    var path = require('path');
+    var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+
+    // 1. UOA log (last 30 min)
+    var uoaCutoff = Date.now() - (30 * 60 * 1000);
+    var uoaLog = [];
+    try {
+      uoaLog = JSON.parse(fs.readFileSync(path.join(DATA_ROOT, 'uoa_log.json'), 'utf8'));
+    } catch (e) {}
+    var recentUoa = uoaLog.filter(function(a) {
+      return a.timestamp && new Date(a.timestamp).getTime() >= uoaCutoff && a.score >= minScore;
+    });
+
+    // 2. Live movers
+    var fetchLib = require('node-fetch');
+    var moversData = { movers: [] };
+    try {
+      var mr = await fetchLib('http://localhost:' + (process.env.PORT || 3000) + '/api/live-movers', { timeout: 6000 });
+      if (mr.ok) moversData = await mr.json();
+    } catch (e) {}
+    var moversByTicker = {};
+    (moversData.movers || []).forEach(function(m){ moversByTicker[m.ticker] = m; });
+
+    // 3. V-Bottom scan
+    var vbot = require('./vBottomScanner');
+    var vbScan = await vbot.runScan({ minScore: 0 });
+    var vbByTicker = {};
+    (vbScan.candidates || []).forEach(function(c){ vbByTicker[c.ticker] = c; });
+
+    // Aggregate per-ticker
+    var byTicker = {};
+    recentUoa.forEach(function(a) {
+      var t = (a.ticker || '').toUpperCase();
+      if (!t) return;
+      if (!byTicker[t]) {
+        byTicker[t] = {
+          ticker: t,
+          alerts: [],
+          maxScore: 0,
+          totalPremium: 0,
+          longCount: 0,
+          shortCount: 0,
+          customAlertNames: new Set(),
+        };
+      }
+      var b = byTicker[t];
+      b.alerts.push(a);
+      if (a.score > b.maxScore) b.maxScore = a.score;
+      b.totalPremium += a.premium || 0;
+      if (a.direction === 'long') b.longCount++;
+      else if (a.direction === 'short') b.shortCount++;
+      if (a.customAlertName) b.customAlertNames.add(a.customAlertName);
+    });
+
+    // Build action rows
+    var rows = [];
+    Object.keys(byTicker).forEach(function(t) {
+      var b = byTicker[t];
+      var direction = b.longCount > b.shortCount ? 'long' : (b.shortCount > b.longCount ? 'short' : 'mixed');
+      var mover = moversByTicker[t];
+      var vb = vbByTicker[t];
+
+      // Determine status via decision algorithm
+      var status = 'ACTIONABLE';
+      var reason = '';
+      var rangePos = mover ? (((mover.last - mover.low) / (mover.high - mover.low)) * 100) : null;
+      var isExhausted = false;
+
+      if (b.maxScore < 12) {
+        status = 'WATCH';
+        reason = 'Score ' + b.maxScore + ' (under 12 threshold)';
+      } else if (mover && rangePos != null && rangePos > 85 && direction === 'long') {
+        status = 'PASS-EXHAUSTED';
+        reason = 'rangePos ' + rangePos.toFixed(0) + '% — top of day, chase territory';
+        isExhausted = true;
+      } else if (mover && rangePos != null && rangePos < 15 && direction === 'short') {
+        status = 'PASS-EXHAUSTED';
+        reason = 'rangePos ' + rangePos.toFixed(0) + '% — bottom of day, late short';
+        isExhausted = true;
+      } else if (direction === 'mixed') {
+        status = 'WATCH';
+        reason = 'Mixed flow (longCount=' + b.longCount + ', shortCount=' + b.shortCount + ')';
+      }
+
+      // Compute affordability tier from option mid (using mover data if available)
+      var affordability = 'unknown';
+      var contractCost = null;
+      if (mover && mover.optionMid) {
+        contractCost = mover.optionMid * 100;
+        if (contractCost <= maxBudget) affordability = 'AFFORDABLE';
+        else if (contractCost <= maxBudget * 2) affordability = 'STRETCH';
+        else affordability = 'TOO_EXPENSIVE';
+      }
+
+      // Boost actionable rank by V-bottom score
+      var vbScore = vb ? vb.totalScore : 0;
+
+      rows.push({
+        ticker: t,
+        direction: direction,
+        maxScore: b.maxScore,
+        alertCount: b.alerts.length,
+        totalPremium: Math.round(b.totalPremium),
+        customFilters: Array.from(b.customAlertNames),
+        status: status,
+        reason: reason,
+        live: {
+          last: mover ? mover.last : null,
+          pctChange: mover ? mover.pctChange : null,
+          rangePosition: rangePos != null ? +rangePos.toFixed(1) : null,
+          isExhausted: isExhausted,
+          score: mover ? mover.score : null,
+        },
+        chart: vb ? {
+          recoveryPct: vb.recoveryPct,
+          rangePos: vb.rangePosition,
+          greenLast5: vb.greenLast5,
+          aboveVwap: vb.aboveVwap,
+          vBottomScore: vbScore,
+        } : null,
+        suggested: mover && mover.optionSymbol ? {
+          contract: mover.optionSymbol,
+          mid: mover.optionMid,
+          contractCost: contractCost,
+          affordability: affordability,
+          structuralStop: mover.structuralStop,
+          stockTrigger: mover.triggerPrice,
+        } : null,
+      });
+    });
+
+    // Rank: ACTIONABLE first, then by maxScore + V-bottom bonus
+    rows.sort(function(a, b) {
+      var sa = a.status === 'ACTIONABLE' ? 1000 : (a.status === 'WATCH' ? 500 : 0);
+      var sb = b.status === 'ACTIONABLE' ? 1000 : (b.status === 'WATCH' ? 500 : 0);
+      sa += a.maxScore + (a.chart ? a.chart.vBottomScore : 0);
+      sb += b.maxScore + (b.chart ? b.chart.vBottomScore : 0);
+      return sb - sa;
+    });
+
+    res.json({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      maxBudget: maxBudget,
+      tickerCount: rows.length,
+      actionableCount: rows.filter(function(r){ return r.status === 'ACTIONABLE'; }).length,
+      rows: rows,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // Phase 4.9 — V-Bottom scanner. Catches reversal patterns (ADBE-style) that
 // live-movers tab misses because it favors high-% movers, not recoveries.
 app.get('/api/v-bottom-scan', async function(req, res) {
