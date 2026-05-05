@@ -1506,7 +1506,33 @@ function getStratumSecret() {
 // Defaults to OPTION fire if the card has a resolved contract symbol; otherwise
 // falls back to EQUITY (stock) at trigger price. Always 1 ct/sh, LIMIT, DAY.
 // AB can edit qty/price in the confirm dialog.
+// Phase 4.16 — universal TA gate for ALL fire dispatchers across all tabs.
+// Pulls last 5 5m bars, returns alignment vs intended direction.
+// If 'opposite' (e.g., long entry but bars dumping), shows warning dialog.
+// If user cancels, returns false. Otherwise returns true.
+async function taGateOrAbort(ticker, direction) {
+  if (!ticker || !direction) return true;  // skip if missing data
+  let dirNorm = String(direction).toLowerCase();
+  if (dirNorm === 'call' || dirNorm === 'bullish') dirNorm = 'long';
+  else if (dirNorm === 'put' || dirNorm === 'bearish') dirNorm = 'short';
+  try {
+    const r = await fetch(`/api/ta-verify?ticker=${encodeURIComponent(ticker)}&direction=${encodeURIComponent(dirNorm)}`, { cache: 'no-store' });
+    if (!r.ok) return true;  // fail open
+    const ta = await r.json();
+    if (ta.alignment === 'opposite') {
+      return confirm(`⚠️ TA WARNING for ${ticker}\n\n${ta.verdict}\n${ta.reason}\n\nLast 5m: ${ta.greenCount}G / ${ta.redCount}R, ${ta.pctMove5min >= 0 ? '+' : ''}${ta.pctMove5min}% move\n\nThe stock is ${dirNorm === 'long' ? 'DUMPING into your LONG' : 'PUMPING into your SHORT'} entry.\n\nFire anyway? (Recommend NO)`);
+    }
+    return true;
+  } catch (e) { return true; }
+}
+window.taGateOrAbort = taGateOrAbort;
+
 async function dispatchToPublic(payload, btn) {
+  // Phase 4.16 — TA gate before fire on ALL tabs
+  if (payload && payload.ticker && payload.direction) {
+    const ok = await taGateOrAbort(payload.ticker, payload.direction);
+    if (!ok) return;
+  }
   const orig = btn.textContent;
   // payload contract: { ticker, direction, contract?, optionEntry?, trigger, stop?, tp1?, tp2? }
   const ticker = payload.ticker;
@@ -1583,6 +1609,10 @@ window.dispatchToPublic = dispatchToPublic;
 // 2ct overnight pre-position leg of COIL setups (and elsewhere on demand).
 // =============================================================================
 async function dispatchToTS(payload, btn) {
+  if (payload && payload.ticker && payload.direction) {
+    const ok = await taGateOrAbort(payload.ticker, payload.direction);
+    if (!ok) return;
+  }
   const orig = btn.textContent;
   const ticker = payload.ticker;
   const direction = (payload.direction || '').toUpperCase();
@@ -1683,6 +1713,10 @@ window.dispatchScanToPublic = dispatchScanToPublic;
 // Calls /api/public/bracket which manages the full lifecycle server-side.
 // =============================================================================
 async function dispatchToBracket(payload, btn) {
+  if (payload && payload.ticker && payload.direction) {
+    const ok = await taGateOrAbort(payload.ticker, payload.direction);
+    if (!ok) return;
+  }
   const orig = btn.textContent;
   const ticker = payload.ticker;
   const direction = (payload.direction || '').toUpperCase();
@@ -2139,6 +2173,11 @@ function copyMoverTicket(idx) {
 async function fireMoverOrder(idx, btn) {
   const m = movers.movers[idx];
   const isUp = m.pctChange > 0;
+  // Phase 4.16 — TA gate
+  if (m && m.ticker) {
+    const ok = await taGateOrAbort(m.ticker, isUp ? 'long' : 'short');
+    if (!ok) return;
+  }
   const live = account === "LIVE";
   const hasContract = !!m.optionSymbol;
 
@@ -4152,6 +4191,11 @@ function renderStatsAYCE() {
 
 // AYCE-FIRE order builder — opens modal with order spec from /api/ayce-fire/build
 async function ayceFireBuild(ticker, direction, account, tradeType) {
+  // Phase 4.16 — TA gate before any AYCE-fire path (used by JS/COIL/WP/LOTTO/AYCE tabs)
+  if (ticker && direction) {
+    const ok = await taGateOrAbort(ticker, direction);
+    if (!ok) return;
+  }
   tradeType = tradeType || 'DAY';
   account = account || 'ts';
   const modal = document.getElementById('ayce-fire-modal') || (() => {
@@ -4274,6 +4318,10 @@ window.ayceFireBuild = ayceFireBuild;
 // Toast shows resolution + fill status. Use sparingly — no preview.
 // ─────────────────────────────────────────────────────────────────────────────
 async function ayceFireAuto(ticker, direction, account, tradeType) {
+  if (ticker && direction) {
+    const ok = await taGateOrAbort(ticker, direction);
+    if (!ok) return;
+  }
   tradeType = tradeType || 'DAY';
   account = account || 'sim';
   // Bottom-right toast
