@@ -247,6 +247,43 @@
   </ul>
 </div>
 
+<!-- STEP 0 (Phase 4.20) — TAPE FIRST -->
+<div class="step" style="border:2px solid var(--gold); background:linear-gradient(180deg, rgba(255,184,108,0.10), rgba(255,184,108,0.02));">
+  <h2 style="color:var(--gold);"><span class="step-num" style="background:linear-gradient(180deg,#ffb86c,#cc7a2a);">0</span>CHECK THE TAPE FIRST</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 12px;">
+    Before you even pick a tab, look at the <b>tape verdict bar</b> at the top of the scanner. It's polled every 60s and shows live SPY/QQQ/IWM/VIX + sector leadership. <b>The tape decides what you trade — the setup is secondary.</b>
+  </p>
+  <table>
+    <thead><tr><th>Tape</th><th>Color</th><th>Trade what?</th><th>Sizing rule</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b style="color:var(--green);">🟢 RISK-ON</b></td>
+        <td class="mono"><span style="color:var(--green)">green strip</span></td>
+        <td><b>Prefer LONGS</b> — calls aligned with tape</td>
+        <td>Shorts need <b>extra</b> confluence (6/6 + counter-tape acknowledged)</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--red);">🔴 RISK-OFF</b></td>
+        <td class="mono"><span style="color:var(--red)">red strip</span></td>
+        <td><b>Prefer SHORTS</b> — puts aligned with tape</td>
+        <td>Longs need <b>extra</b> confluence; consider waiting for V-bottom</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--amber);">🟡 MIXED</b></td>
+        <td class="mono"><span style="color:var(--amber)">amber strip</span></td>
+        <td>Only fire <b>6/6 clean setups</b></td>
+        <td><b>Smaller size</b> (1ct trial). Skip anything with even one ⚠ flag.</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="ok" style="margin-top:12px;">
+    📺 <b>Counter-tape badge</b>: any card whose direction fights the tape gets a <code>⚠ COUNTER-TAPE</code> tag automatically. Don't ignore it — it means the broad market is moving against your trade.
+  </div>
+  <div class="danger" style="margin-top:8px;">
+    ❌ <b>Never skip Step 0</b>. The agent has been caught claiming "indices flat" without checking — that's how losers get pitched. The bar is on every tab; read it before reading the cards.
+  </div>
+</div>
+
 <!-- STEP 1 -->
 <div class="step">
   <h2><span class="step-num">1</span>WHICH TAB? (by time of day)</h2>

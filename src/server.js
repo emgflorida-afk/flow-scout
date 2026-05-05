@@ -5717,6 +5717,164 @@ app.get('/api/ticker-quote', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// ===========================================================================
+// Phase 4.20 — MARKET-CONTEXT AUTO-CHECK
+// ---------------------------------------------------------------------------
+// Permanent tape verdict surfaced on every scanner card. AB caught the agent
+// claiming "indices flat" on May 5 PM without verifying — same failure as the
+// MORNING_ROUTINE_v3 "PRICE FIRST THESIS SECOND" rule. Fix is structural:
+// every card carries the tape verdict so the assumption can't slip through.
+//
+// Pulls live quotes for SPY/QQQ/IWM/DIA/VIX + sector ETFs (XLK/XLF/XLE/XLV/
+// XLY/XLI/XLP). Computes deterministic RISK_ON / RISK_OFF / MIXED classifier
+// based on broad-index alignment + VIX spike check. Emits warnings when a
+// counter-tape direction would be at risk (e.g. "tech leading +2%, tech
+// shorts will fight tape").
+//
+// Cached 60s in-memory (module-level var). Fail-open everywhere so a bad
+// pull never crashes a card render — UI just shows no badge.
+// ===========================================================================
+var _marketContextCache = { ts: 0, payload: null };
+var MARKET_CONTEXT_TTL_MS = 60 * 1000;
+var MARKET_CONTEXT_INDICES = ['SPY','QQQ','IWM','DIA'];
+var MARKET_CONTEXT_VIX = '$VIX.X';
+var MARKET_CONTEXT_SECTORS = ['XLK','XLF','XLE','XLV','XLY','XLI','XLP'];
+
+async function computeMarketContext() {
+  if (!ts || !ts.getAccessToken) {
+    return { ok: false, error: 'TS module not loaded', timestamp: new Date().toISOString() };
+  }
+  var token = await ts.getAccessToken();
+  if (!token) return { ok: false, error: 'no TS token', timestamp: new Date().toISOString() };
+  var fetchLib = require('node-fetch');
+  var symbols = MARKET_CONTEXT_INDICES.concat([MARKET_CONTEXT_VIX]).concat(MARKET_CONTEXT_SECTORS);
+  var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + symbols.map(encodeURIComponent).join(',');
+  var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 8000 });
+  if (!r.ok) return { ok: false, error: 'TS quotes failed: ' + r.status, timestamp: new Date().toISOString() };
+  var data = await r.json();
+  var quotes = (data && data.Quotes) ? data.Quotes : [];
+  var bySym = {};
+  quotes.forEach(function(q) {
+    var last = parseFloat(q.Last || q.Close || 0);
+    var prevClose = parseFloat(q.PreviousClose || q.Close || 0);
+    bySym[q.Symbol] = {
+      last: isFinite(last) ? +last.toFixed(2) : null,
+      prevClose: isFinite(prevClose) ? +prevClose.toFixed(2) : null,
+      pctChange: (prevClose > 0 && isFinite(last)) ? +(((last - prevClose) / prevClose) * 100).toFixed(2) : null,
+    };
+  });
+
+  var indices = {};
+  MARKET_CONTEXT_INDICES.forEach(function(s) { indices[s] = bySym[s] || { last: null, prevClose: null, pctChange: null }; });
+  // VIX: surface as 'VIX' in the response for the UI but pull from $VIX.X
+  indices.VIX = bySym[MARKET_CONTEXT_VIX] || { last: null, prevClose: null, pctChange: null };
+
+  var sectors = {};
+  MARKET_CONTEXT_SECTORS.forEach(function(s) {
+    var q = bySym[s] || { last: null, prevClose: null, pctChange: null };
+    sectors[s] = { last: q.last, pctChange: q.pctChange };
+  });
+
+  var spyPct = (indices.SPY && indices.SPY.pctChange != null) ? indices.SPY.pctChange : 0;
+  var qqqPct = (indices.QQQ && indices.QQQ.pctChange != null) ? indices.QQQ.pctChange : 0;
+  var iwmPct = (indices.IWM && indices.IWM.pctChange != null) ? indices.IWM.pctChange : 0;
+  var vixPct = (indices.VIX && indices.VIX.pctChange != null) ? indices.VIX.pctChange : 0;
+
+  // CLASSIFIER (deterministic)
+  var tape;
+  var longBias = false;
+  var shortBias = false;
+  if (spyPct > 0.5 && qqqPct > 0.5 && iwmPct > 0.5) {
+    tape = 'RISK_ON';
+    longBias = true;
+  } else if (spyPct < -0.5 && qqqPct < -0.5 && iwmPct < -0.5) {
+    tape = 'RISK_OFF';
+    shortBias = true;
+  } else if (vixPct > 5 && spyPct < 0) {
+    // VIX spike + SPY red → trumps mixed
+    tape = 'RISK_OFF';
+    shortBias = true;
+  } else {
+    tape = 'MIXED';
+  }
+
+  var verdict = tape === 'RISK_ON' ? '🟢 RISK-ON' :
+                tape === 'RISK_OFF' ? '🔴 RISK-OFF' :
+                '🟡 MIXED';
+
+  // Sector leadership
+  var sectorEntries = Object.keys(sectors).map(function(k) { return { sym: k, pct: sectors[k].pctChange }; })
+    .filter(function(s) { return s.pct != null; });
+  sectorEntries.sort(function(a, b) { return b.pct - a.pct; });
+  var leadingSector = sectorEntries.length ? sectorEntries[0].sym : null;
+  var laggingSector = sectorEntries.length ? sectorEntries[sectorEntries.length - 1].sym : null;
+  var greenSectors = sectorEntries.filter(function(s) { return s.pct > 0; }).length;
+  var redSectors = sectorEntries.filter(function(s) { return s.pct < 0; }).length;
+
+  // Tape read one-liner
+  var tapeRead;
+  if (tape === 'RISK_ON') {
+    tapeRead = greenSectors >= 6 ? 'broad green' : 'leadership narrow but bid';
+  } else if (tape === 'RISK_OFF') {
+    tapeRead = redSectors >= 6 ? 'broad red' : (vixPct > 5 ? 'VIX spike — defensive' : 'leadership cracking');
+  } else {
+    tapeRead = 'mixed — pick spots';
+  }
+  function fmtPct(p) { if (p == null || !isFinite(p)) return '—'; return (p >= 0 ? '+' : '') + p.toFixed(2) + '%'; }
+  var summary = 'SPY ' + fmtPct(spyPct) + ' | QQQ ' + fmtPct(qqqPct) + ' | IWM ' + fmtPct(iwmPct) + ' — ' + tapeRead;
+
+  // Counter-tape warnings
+  var warnings = [];
+  var topSector = sectorEntries[0];
+  var bottomSector = sectorEntries[sectorEntries.length - 1];
+  if (topSector && topSector.pct >= 1.0) {
+    warnings.push(topSector.sym + ' ' + fmtPct(topSector.pct) + ' leading — ' + topSector.sym + ' LONGS aligned; ' + topSector.sym + ' shorts fighting tape');
+  }
+  if (bottomSector && bottomSector.pct <= -1.0) {
+    warnings.push(bottomSector.sym + ' ' + fmtPct(bottomSector.pct) + ' lagging — ' + bottomSector.sym + ' SHORTS aligned; ' + bottomSector.sym + ' longs fighting tape');
+  }
+  if (vixPct > 5) {
+    warnings.push('VIX ' + fmtPct(vixPct) + ' spiking — vol-on regime, longs need extra confluence');
+  } else if (vixPct < -5) {
+    warnings.push('VIX ' + fmtPct(vixPct) + ' crushing — risk-on flow, shorts contracting');
+  }
+  if (tape === 'MIXED' && Math.abs(spyPct) < 0.2 && Math.abs(qqqPct) < 0.2 && Math.abs(iwmPct) < 0.2) {
+    warnings.push('Indices flat (<0.2%) — chop tape, 6/6 clean setups only, smaller size');
+  }
+  warnings = warnings.slice(0, 3);
+
+  return {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    tape: tape,
+    verdict: verdict,
+    summary: summary,
+    indices: indices,
+    sectors: sectors,
+    leadingSector: leadingSector,
+    laggingSector: laggingSector,
+    greenSectors: greenSectors,
+    redSectors: redSectors,
+    longBias: longBias,
+    shortBias: shortBias,
+    warnings: warnings,
+  };
+}
+
+app.get('/api/market-context', async function(req, res) {
+  try {
+    var now = Date.now();
+    if (_marketContextCache.payload && (now - _marketContextCache.ts) < MARKET_CONTEXT_TTL_MS) {
+      return res.json(Object.assign({}, _marketContextCache.payload, { cached: true, cacheAgeMs: now - _marketContextCache.ts }));
+    }
+    var fresh = await computeMarketContext();
+    if (fresh && fresh.ok) {
+      _marketContextCache = { ts: now, payload: fresh };
+    }
+    res.json(Object.assign({}, fresh, { cached: false }));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message, timestamp: new Date().toISOString() }); }
+});
+
 // Cron: hydrate peak returns on UOA log every 5 min during market hours.
 // Fresh alerts (< 5 min old) skipped — peak return ≈ 0 for those.
 cron.schedule('*/5 9-16 * * 1-5', async function() {

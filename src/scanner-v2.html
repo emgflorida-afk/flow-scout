@@ -83,6 +83,37 @@
   }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
+  /* MARKET-CONTEXT BAR (Phase 4.20) */
+  /* Slim 28px persistent strip showing live tape verdict — RISK_ON / RISK_OFF / MIXED.
+     Color by tape, fail-open if /api/market-context errors (bar shows neutral/loading). */
+  .mkt-ctx {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 14px;
+    height: 28px;
+    margin: 0 0 8px 0;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: rgba(120,120,120,0.10);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: var(--txt-2);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3);
+  }
+  .mkt-ctx.tape-on  { background: rgba(76,175,80,0.14); border-color: rgba(76,175,80,0.4); color: #b9efbe; }
+  .mkt-ctx.tape-off { background: rgba(244,67,54,0.14); border-color: rgba(244,67,54,0.4); color: #ffb1b1; }
+  .mkt-ctx.tape-mix { background: rgba(255,193,7,0.10); border-color: rgba(255,193,7,0.35); color: #ffe28a; }
+  .mkt-ctx-main { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; }
+  .mkt-ctx-verdict { font-weight: 800; font-size: 12px; letter-spacing: 0.04em; }
+  .mkt-ctx-summary { color: inherit; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; }
+  .mkt-ctx-warn { color: #ffd166; font-size: 10px; opacity: 0.9; flex-shrink: 0; }
+
   /* STATS */
   .stats {
     display: grid;
@@ -645,6 +676,15 @@
 
   <!-- TAB NAV -->
   <div class="tabs" id="tab-nav"></div>
+
+  <!-- MARKET-CONTEXT BAR (Phase 4.20) — live tape verdict, polled every 60s -->
+  <div class="mkt-ctx" id="market-context-bar" title="Live tape verdict — polled every 60s from /api/market-context">
+    <div class="mkt-ctx-main">
+      <span class="mkt-ctx-verdict" id="mkt-ctx-verdict">⚪ TAPE…</span>
+      <span class="mkt-ctx-summary" id="mkt-ctx-summary">Loading market context…</span>
+    </div>
+    <div class="mkt-ctx-warn" id="mkt-ctx-warn"></div>
+  </div>
 
   <!-- STATS -->
   <div class="stats" id="stats"></div>
@@ -1539,6 +1579,94 @@ function buildTaBadge(ta) {
   return '';
 }
 window.buildTaBadge = buildTaBadge;
+
+// Phase 4.20 — universal counter-tape badge. Drops into any card's tags row.
+// Returns HTML span when card direction fights the live tape verdict (e.g. a
+// SHORT pitched while RISK_ON, or a LONG pitched while RISK_OFF). Empty when
+// aligned, when tape is MIXED, or when window._tape is not yet loaded.
+function buildTapeBadge(tape, dir) {
+  if (!tape || !tape.tape) return '';
+  var s = String(dir || '').toLowerCase();
+  var isLong = /long|call|bull/.test(s);
+  var isShort = /short|put|bear/.test(s);
+  if (tape.tape === 'RISK_ON' && isShort) {
+    return '<span class="tag" style="background:rgba(255,107,107,0.2);color:#ff6b6b;font-size:10px;" title="Tape ' + (tape.summary || '') + '">⚠ COUNTER-TAPE</span>';
+  }
+  if (tape.tape === 'RISK_OFF' && isLong) {
+    return '<span class="tag" style="background:rgba(255,107,107,0.2);color:#ff6b6b;font-size:10px;" title="Tape ' + (tape.summary || '') + '">⚠ COUNTER-TAPE</span>';
+  }
+  return '';
+}
+window.buildTapeBadge = buildTapeBadge;
+
+// Phase 4.20 — market-context fetch + bar render + 60s poll.
+// window._tape is the global tape verdict, read by every card render via
+// buildTapeBadge(window._tape, r.direction). One-shot fetch on first load,
+// auto-refresh every 60s. Fail-open: if endpoint errors, bar shows neutral
+// and cards render without the badge.
+window._tape = null;
+let _tapePollTimer = null;
+
+async function refreshMarketContext() {
+  try {
+    const r = await fetch('/api/market-context', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error(d && d.error ? d.error : 'no payload');
+    window._tape = d;
+    renderMarketContextBar(d);
+  } catch (e) {
+    // Fail-open: leave bar in neutral state, cards still render
+    const bar = document.getElementById('market-context-bar');
+    if (bar) {
+      const v = document.getElementById('mkt-ctx-verdict');
+      const s = document.getElementById('mkt-ctx-summary');
+      if (v) v.textContent = '⚪ TAPE —';
+      if (s) s.textContent = 'tape check unavailable';
+      bar.className = 'mkt-ctx';
+    }
+  }
+}
+
+function renderMarketContextBar(d) {
+  const bar = document.getElementById('market-context-bar');
+  if (!bar) return;
+  const v = document.getElementById('mkt-ctx-verdict');
+  const s = document.getElementById('mkt-ctx-summary');
+  const w = document.getElementById('mkt-ctx-warn');
+  bar.classList.remove('tape-on', 'tape-off', 'tape-mix');
+  if (d.tape === 'RISK_ON')  bar.classList.add('tape-on');
+  else if (d.tape === 'RISK_OFF') bar.classList.add('tape-off');
+  else bar.classList.add('tape-mix');
+  if (v) v.textContent = d.verdict || '⚪ TAPE';
+  // Build short summary line: "SPY +0.8% · QQQ +1.4% · IWM +1.5% · XLK leading"
+  const idx = d.indices || {};
+  const parts = [];
+  if (idx.SPY && idx.SPY.pctChange != null) parts.push('SPY ' + (idx.SPY.pctChange >= 0 ? '+' : '') + idx.SPY.pctChange.toFixed(2) + '%');
+  if (idx.QQQ && idx.QQQ.pctChange != null) parts.push('QQQ ' + (idx.QQQ.pctChange >= 0 ? '+' : '') + idx.QQQ.pctChange.toFixed(2) + '%');
+  if (idx.IWM && idx.IWM.pctChange != null) parts.push('IWM ' + (idx.IWM.pctChange >= 0 ? '+' : '') + idx.IWM.pctChange.toFixed(2) + '%');
+  if (d.leadingSector) parts.push(d.leadingSector + ' leading');
+  if (idx.VIX && idx.VIX.pctChange != null) parts.push('VIX ' + (idx.VIX.pctChange >= 0 ? '+' : '') + idx.VIX.pctChange.toFixed(2) + '%');
+  if (s) s.textContent = parts.join(' · ');
+  if (w) {
+    if (d.warnings && d.warnings.length) {
+      w.textContent = '⚠ ' + d.warnings[0];
+      w.title = d.warnings.join(' | ');
+    } else {
+      w.textContent = '';
+      w.title = '';
+    }
+  }
+  bar.title = (d.summary || '') + (d.warnings && d.warnings.length ? '\n\n' + d.warnings.map(x => '• ' + x).join('\n') : '');
+}
+
+function startMarketContextPoll() {
+  refreshMarketContext();
+  if (_tapePollTimer) return;
+  _tapePollTimer = setInterval(refreshMarketContext, 60000);
+}
+window.refreshMarketContext = refreshMarketContext;
+window.startMarketContextPoll = startMarketContextPoll;
 
 // Bulk-fetch TA verification for a list of rows. Mutates rows in place
 // (sets r.ta = {...}). Used by load functions across tabs.
@@ -2659,6 +2787,7 @@ function renderGridTomorrow() {
           <div class="tags">
             <span class="tag swing">SWING</span>
             ${buildTaBadge(r.ta)}
+            ${buildTapeBadge(window._tape, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
           </div>
@@ -2883,6 +3012,7 @@ function renderGridAction() {
             <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
             ${johnBadge}
             ${taBadge}
+            ${buildTapeBadge(window._tape, r.direction)}
             ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
@@ -3671,7 +3801,7 @@ function renderGridWP() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}</div>` : ''}
+          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildTapeBadge(window._tape, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>` : ''}
 
           ${dailyBreakLine}
 
@@ -3883,7 +4013,7 @@ function renderGridJS() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}</div>
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
 
@@ -5195,6 +5325,7 @@ function renderGridMovers() {
         <div class="tags">
           <span class="tag day">DAY</span>
           ${buildTaBadge(m.ta)}
+          ${buildTapeBadge(window._tape, m.pctChange > 0 ? 'long' : 'short')}
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}
@@ -5226,6 +5357,9 @@ function renderGridMovers() {
 // =============================================================================
 applyAccount();
 renderTabs();
+// Phase 4.20 — kick off market-context bar before tab data so window._tape is
+// available by the time the first card render runs.
+startMarketContextPoll();
 loadActiveTab();
 // Re-poll active tab every 30s
 setInterval(() => loadActiveTab(), 30000);
