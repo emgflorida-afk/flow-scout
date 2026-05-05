@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>🪜 Flow Scout IKEA Trade Guide</title>
+<style>
+  :root {
+    --bg: #0b0e14;
+    --panel: #11161f;
+    --panel2: #182030;
+    --border: #2a3140;
+    --txt: #dde;
+    --txt-2: #aaa;
+    --txt-3: #888;
+    --green: #4caf50;
+    --red: #ff5050;
+    --aqua: #46b4ff;
+    --amber: #ffc107;
+    --purple: #b39ddb;
+    --gold: #ffb86c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--txt);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    margin: 0;
+    padding: 24px 16px;
+    line-height: 1.5;
+  }
+  .container {
+    max-width: 880px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 28px;
+    margin: 0 0 8px;
+    color: #fff;
+  }
+  .subtitle {
+    color: var(--txt-3);
+    font-size: 13px;
+    margin-bottom: 24px;
+  }
+  .step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-bottom: 18px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  }
+  .step-num {
+    display: inline-block;
+    background: linear-gradient(180deg, #3a8fff, #1c64d6);
+    color: #fff;
+    font-weight: 700;
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 4px;
+    margin-right: 8px;
+  }
+  .step h2 {
+    margin: 0 0 12px;
+    font-size: 18px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 10px;
+    font-size: 13px;
+  }
+  th, td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    background: var(--panel2);
+    color: var(--txt-2);
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  tr:last-child td { border-bottom: none; }
+  td.mono { font-family: "JetBrains Mono", monospace; font-size: 12px; }
+  .checklist {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+  .checklist li {
+    padding: 8px 12px;
+    margin-bottom: 6px;
+    background: var(--panel2);
+    border-radius: 6px;
+    border-left: 3px solid var(--aqua);
+    font-size: 13px;
+  }
+  .checklist li.green { border-left-color: var(--green); }
+  .checklist li.red   { border-left-color: var(--red); }
+  .checklist li.amber { border-left-color: var(--amber); }
+  .badge-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .badge-item {
+    background: var(--panel2);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+  }
+  .badge-item .b { font-weight: 700; }
+  .pattern-card {
+    background: var(--panel2);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    border-left: 4px solid;
+  }
+  .pattern-card.fail { border-left-color: var(--red); }
+  .pattern-card.win  { border-left-color: var(--green); }
+  .pattern-card .title {
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+  .pattern-card .desc {
+    color: var(--txt-2);
+    font-size: 12px;
+  }
+  .tldr {
+    background: linear-gradient(180deg, rgba(76,175,80,0.15), rgba(76,175,80,0.05));
+    border: 1px solid var(--green);
+    border-radius: 12px;
+    padding: 18px 22px;
+    margin-bottom: 24px;
+  }
+  .tldr h2 {
+    color: var(--green);
+    margin: 0 0 10px;
+    font-size: 16px;
+  }
+  .tldr ol {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 13px;
+  }
+  .tldr li { margin-bottom: 4px; }
+  code {
+    background: var(--panel2);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--aqua);
+  }
+  .danger {
+    background: rgba(244,67,54,0.1);
+    border: 1px solid var(--red);
+    color: var(--red);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  .ok {
+    background: rgba(76,175,80,0.1);
+    border: 1px solid var(--green);
+    color: var(--green);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-top: 8px;
+  }
+  @media (max-width: 600px) {
+    body { padding: 12px 8px; }
+    .step { padding: 14px; }
+    .badge-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🪜 Flow Scout IKEA Trade Guide</h1>
+<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026</div>
+
+<div class="tldr">
+  <h2>📌 TL;DR</h2>
+  <ol>
+    <li>Check <b>TIME</b> → pick <b>TAB</b></li>
+    <li>Check <b>CARD</b> → 6 boxes ALL green</li>
+    <li>Match <b>SIZE</b> to <b>QUALITY</b></li>
+    <li>Fire button by <b>ACCOUNT</b></li>
+    <li>Stop is <b>STRUCTURAL</b> on stock — never -25% premium</li>
+    <li>Exit when system says, NOT when you panic</li>
+  </ol>
+</div>
+
+<!-- STEP 1 -->
+<div class="step">
+  <h2><span class="step-num">1</span>WHICH TAB? (by time of day)</h2>
+  <table>
+    <thead><tr><th>Time (ET)</th><th>Primary Tab</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">8:00 - 9:25 AM</td><td>🌅 TOMORROW + ⚡ LIVE MOVERS PM</td></tr>
+      <tr><td class="mono">9:30 - 9:45 AM</td><td><span style="color:var(--red)">❌ NOTHING — 9:45 hard gate</span></td></tr>
+      <tr><td class="mono">9:45 - 10:30 AM</td><td>⚡ LIVE MOVERS (opening momentum)</td></tr>
+      <tr><td class="mono">10:30 - 12:00 PM</td><td>🎯 ACTION (UOA flow + V-bottoms)</td></tr>
+      <tr><td class="mono">12:00 - 2:00 PM</td><td>🎯 ACTION (lunch chop, V-bottoms)</td></tr>
+      <tr><td class="mono">2:00 - 3:30 PM</td><td>🎯 ACTION + 🌅 TOMORROW close-up</td></tr>
+      <tr><td class="mono">3:30 - 4:00 PM</td><td><span style="color:var(--red)">❌ NO NEW — manage opens</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- STEP 2 -->
+<div class="step">
+  <h2><span class="step-num">2</span>WHICH CARD? (6-point checklist)</h2>
+  <p style="font-size: 13px; color: var(--txt-2); margin: 0 0 10px;">Card is fire-eligible only when ALL 6 are clean:</p>
+  <ul class="checklist">
+    <li class="green"><b>Status</b> · 🟢 ACTIONABLE (not WATCH, not PASS)</li>
+    <li class="green"><b>Timing tier</b> · 🚀 CONFIRMED (or 🔁 BUILDING) — NOT 🆕 FRESH single-fire</li>
+    <li class="green"><b>Range pos</b> · &lt; 60% — NOT 85%+ exhausted</li>
+    <li class="green"><b>Proximity</b> · ✅ TRIGGERED — NOT "X% away"</li>
+    <li class="green"><b>Affordability</b> · 💰 AFFORDABLE (1ct ≤ BP/2)</li>
+    <li class="green"><b>Score</b> · 12+ (whale tier)</li>
+  </ul>
+  <div class="ok">🎁 <b>BONUS</b>: 🔁 JOHN REPEAT badge → size up, proven track record</div>
+</div>
+
+<!-- STEP 3 -->
+<div class="step">
+  <h2><span class="step-num">3</span>SIZE MATRIX</h2>
+  <table>
+    <thead><tr><th>Trigger Quality</th><th>Main Acct</th><th>Public</th></tr></thead>
+    <tbody>
+      <tr><td>JOHN REPEAT + ALL 6</td><td class="mono"><b style="color:var(--green)">3-5 ct</b></td><td class="mono"><b style="color:var(--green)">2 ct</b></td></tr>
+      <tr><td>ALL 6 (system pitch)</td><td class="mono">1-2 ct trial</td><td class="mono">1 ct</td></tr>
+      <tr><td>FRESH single fire</td><td class="mono"><span style="color:var(--red)">0 (WAIT)</span></td><td class="mono"><span style="color:var(--red)">0 (WAIT)</span></td></tr>
+      <tr><td>Anything &lt; ALL 6</td><td class="mono"><span style="color:var(--red)">0</span></td><td class="mono"><span style="color:var(--red)">0</span></td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- STEP 4 -->
+<div class="step">
+  <h2><span class="step-num">4</span>FIRE BUTTON CHOICE</h2>
+  <table>
+    <thead><tr><th>Account</th><th>Button</th><th>Use</th></tr></thead>
+    <tbody>
+      <tr><td><b>BIG (TS LIVE)</b></td><td><code>⚡ TS FIRE</code></td><td>Immediate market entry, account 11975462</td></tr>
+      <tr><td><b>BIG (TS LIVE)</b></td><td><code>🎯 TS QUEUE</code></td><td>Conditional w/ trigger activation</td></tr>
+      <tr><td><b>PUBLIC.COM</b></td><td><code>📱 PUBLIC</code></td><td>Single 1ct cash account (no PDT)</td></tr>
+      <tr><td><b>PUBLIC.COM</b></td><td><code>📱 BRACKET</code></td><td>Entry + auto stop + auto TP1/TP2</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- STEP 5 -->
+<div class="step">
+  <h2><span class="step-num">5</span>STOPS (enforced in code)</h2>
+  <ul class="checklist">
+    <li class="green"><b>PRIMARY</b> · STRUCTURAL chart level on the STOCK<br><span style="color:var(--txt-2); font-size:11px;">Code computes 5m base low/high · Phase 4.11 cron monitors 60m close</span></li>
+    <li class="amber"><b>TAIL</b> · Option premium -50% (catastrophic gap catch)</li>
+    <li class="red"><b>NEVER</b> · -25% flat premium stop (whipsaw zone — caused ABBV loss)</li>
+    <li class="green"><b>TIME</b> · 2 PM next day (swing not in profit)</li>
+  </ul>
+</div>
+
+<!-- STEP 6 -->
+<div class="step">
+  <h2><span class="step-num">6</span>BADGE LEGEND</h2>
+  <div class="badge-grid">
+    <div class="badge-item"><span class="b" style="color:var(--green)">🟢 ACTIONABLE</span> · fire-eligible</div>
+    <div class="badge-item"><span class="b" style="color:var(--aqua)">🟡 WATCH</span> · near setup, wait for trigger</div>
+    <div class="badge-item"><span class="b" style="color:var(--txt-3)">⛔ PASS</span> · do not enter</div>
+    <div class="badge-item"><span class="b" style="color:var(--amber)">🆕 FRESH</span> · single alert — WAIT 5-10 min</div>
+    <div class="badge-item"><span class="b" style="color:var(--aqua)">🔁 BUILDING</span> · 2-3 alerts — gaining steam</div>
+    <div class="badge-item"><span class="b" style="color:var(--green)">🚀 CONFIRMED</span> · 4+ alerts — go now</div>
+    <div class="badge-item"><span class="b" style="color:var(--green)">💰 Affordable</span> · 1ct ≤ budget</div>
+    <div class="badge-item"><span class="b" style="color:var(--amber)">⚠ Stretch</span> · 1ct ≤ 2× budget</div>
+    <div class="badge-item"><span class="b" style="color:var(--red)">❌ Too rich</span> · SKIP</div>
+    <div class="badge-item"><span class="b" style="color:var(--green)">✅ TRIGGERED</span> · price already broke level</div>
+    <div class="badge-item"><span class="b" style="color:var(--amber)">🎯 AT TRIGGER</span> · within 0.1%</div>
+    <div class="badge-item"><span class="b" style="color:var(--txt-3)">⏳ X% away</span> · NOT YET — wait</div>
+    <div class="badge-item"><span class="b" style="color:var(--purple)">🔁 JOHN REPEAT</span> · proven track record</div>
+    <div class="badge-item"><span class="b" style="color:var(--green)">📊 TA ✅ ALIGNED</span> · 5m bars match direction</div>
+    <div class="badge-item"><span class="b" style="color:var(--red)">📊 TA ❌ OPPOSITE</span> · DANGER, contradicts</div>
+    <div class="badge-item"><span class="b" style="color:var(--amber)">📊 TA ⚠ CHOP</span> · mixed bars, no trend</div>
+  </div>
+</div>
+
+<!-- STEP 7 -->
+<div class="step">
+  <h2><span class="step-num">7</span>EXIT TRIGGERS</h2>
+  <p style="font-size:13px; margin: 0 0 8px;"><b>Exit IMMEDIATELY if:</b></p>
+  <ul class="checklist">
+    <li class="red">Phase 4.11 Discord push: "🛑 STRUCTURAL STOP HIT"</li>
+    <li class="red">Underlying 60m close breaks structural level</li>
+    <li class="red">Time stop (2 PM next day, swing not in profit)</li>
+    <li class="red">Option price drops to -50% (tail-risk catch)</li>
+  </ul>
+  <p style="font-size:13px; margin: 14px 0 8px;"><b>DO NOT exit because:</b></p>
+  <ul class="checklist">
+    <li class="amber">Claude (me) panic-cuts on a counter-flow whale</li>
+    <li class="amber">A 5m bar wiggles against you</li>
+    <li class="amber">Tape rotates to another sector</li>
+    <li class="amber">Anxiety</li>
+  </ul>
+</div>
+
+<!-- STEP 8 -->
+<div class="step">
+  <h2><span class="step-num">8</span>RED-FLAG PATTERNS (today's lessons)</h2>
+  <div class="pattern-card fail">
+    <div class="title" style="color:var(--red)">❌ ABBV pattern</div>
+    <div class="desc">Fired into 9:30 opening 5m bar · Flat -25% premium stop · Result: -$153 in 5 min on noise</div>
+  </div>
+  <div class="pattern-card fail">
+    <div class="title" style="color:var(--red)">❌ INTC pattern</div>
+    <div class="desc">Pitched as A++ while scanner said EXHAUSTED · rangePos 85% · Would have chased gap top</div>
+  </div>
+  <div class="pattern-card fail">
+    <div class="title" style="color:var(--red)">❌ SBUX pattern</div>
+    <div class="desc">Single $2.5M whale fire (FRESH) · No continuation flow · Result: -$30 on tape rotation</div>
+  </div>
+  <div class="pattern-card win">
+    <div class="title" style="color:var(--green)">✅ NTAP pattern</div>
+    <div class="desc">JOHN REPEAT + all 6 checks clean · Fired Public 2ct · Result: profitable exit (only win of day)</div>
+  </div>
+</div>
+
+<!-- STEP 9 -->
+<div class="step">
+  <h2><span class="step-num">9</span>TIMEFRAMES (do not confuse)</h2>
+  <table>
+    <thead><tr><th>Use</th><th>Timeframe</th></tr></thead>
+    <tbody>
+      <tr><td>ENTRY signal</td><td class="mono">5m close confirmation OK</td></tr>
+      <tr><td>STRUCTURAL stop</td><td class="mono"><span style="color:var(--green)">60m close (swing) — NEVER 5m noise</span></td></tr>
+      <tr><td>EXIT alert</td><td class="mono">Phase 4.11 cron → Discord → exit at market</td></tr>
+      <tr><td>TIME stop</td><td class="mono">2 PM next day (swing not in profit)</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- STEP 10 -->
+<div class="step">
+  <h2><span class="step-num">10</span>DAILY DISCIPLINE</h2>
+  <table>
+    <thead><tr><th>When</th><th>What</th></tr></thead>
+    <tbody>
+      <tr><td><b>Morning (8:00-9:30)</b></td><td>Review TOMORROW tab + queued conditionals · Check overnight gap vs triggers</td></tr>
+      <tr><td><b>Open (9:30-9:45)</b></td><td><span style="color:var(--red)">❌ DO NOT FIRE. 9:45 hard gate. Watch tape, don't trade.</span></td></tr>
+      <tr><td><b>Mid-day (10:30-2:00)</b></td><td>ACTION tab primary · Fire only on 6/6 checklist clean · Max 3 fires/day</td></tr>
+      <tr><td><b>Late (3:30-4:00)</b></td><td><span style="color:var(--red)">❌ NO NEW. Manage opens. Trim at TP1 same-day per John spec.</span></td></tr>
+      <tr><td><b>Overnight</b></td><td>Phase 4.11 cron monitors active positions · Discord pushes structural breaks · You sleep. System watches.</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="subtitle" style="margin-top: 24px; text-align: center;">
+  Generated from <code>memory/IKEA_TRADE_GUIDE.md</code> · Flow Scout v4.15
+</div>
+
+</div>
+</body>
+</html>

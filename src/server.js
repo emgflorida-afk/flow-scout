@@ -5180,6 +5180,13 @@ cron.schedule('*/1 9-16 * * 1-5', async function() {
   } catch(e) { console.error('[ACTIVE-POS-CRON]', e.message); }
 }, { timezone: 'America/New_York' });
 
+// Phase 4.15 — Serve the IKEA Trade Guide as HTML
+app.get(['/guide', '/ikea', '/ikea-guide'], function(req, res) {
+  try {
+    res.sendFile(path.join(__dirname, 'ikea_guide.html'));
+  } catch(e) { res.status(500).send('error: ' + e.message); }
+});
+
 // Phase 4.15 — TA Verification endpoint. Pre-fire check: pull last 5 5m bars
 // and confirm they ALIGN with intended trade direction. Prevents AB from
 // firing into a clear counter-trend (e.g. firing LONG when last 5 bars are
