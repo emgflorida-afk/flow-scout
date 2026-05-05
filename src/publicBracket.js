@@ -69,6 +69,30 @@ async function placeBracket(opts) {
   if (!opts.stopPrice)           throw new Error('placeBracket: stopPrice required');
   if (!opts.tp1Price)            throw new Error('placeBracket: tp1Price required');
 
+  // May 5 2026 — flat-percent-stop guard. AB rule from feedback_stop_management.md:
+  // NEVER flat % stops alone. Structural stop = PRIMARY. ABBV stop-out today
+  // ($153 loss) was caused by a flat -25% premium stop fired during opening-5m
+  // volatility. This guard rejects brackets where stopPrice is a naive
+  // -25% / -30% premium stop unless caller explicitly attests with
+  // structuralStopOnUnderlying or acceptsFlatStop=true (acknowledging the risk).
+  var entryP = parseFloat(opts.entryPrice);
+  var stopP  = parseFloat(opts.stopPrice);
+  if (isFinite(entryP) && isFinite(stopP) && entryP > 0) {
+    var stopPctBelow = ((entryP - stopP) / entryP) * 100;
+    var isLikelyFlatPct = stopPctBelow >= 20 && stopPctBelow <= 35;  // -20% to -35% = flat-% pattern
+    var hasStructural = !!opts.structuralStopUnderlying;
+    var explicitOverride = opts.acceptsFlatStop === true;
+    if (isLikelyFlatPct && !hasStructural && !explicitOverride) {
+      return {
+        ok: false,
+        stage: 'pre-entry-validation',
+        error: 'flat-percent-stop-rejected',
+        details: 'Stop ' + stopPctBelow.toFixed(1) + '% below entry looks like a flat-% stop. AB rule: NEVER flat % alone — structural stock-level stop is PRIMARY. Either: (1) pass structuralStopUnderlying:{ticker,price,predicate} to attest the structural level, OR (2) pass acceptsFlatStop:true to override after explicit risk acknowledgment.',
+        guidance: 'Pull 5m chart, identify the lowest swing/base low + buffer, use UNDERLYING price as structural stop. Use option premium stop ONLY at -50% as tail-risk catch.',
+      };
+    }
+  }
+
   var qty = parseInt(opts.quantity || 2);
   if (qty < 1) qty = 1;
 
