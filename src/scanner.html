@@ -1388,7 +1388,8 @@ function switchTab(name) {
   if (name === 'history')  loadHistory();
   if (name === 'starred')  renderStarred();
   if (name === 'flow')     loadFlowCards();
-  if (name === 'tomorrow') renderTomorrowSetups();
+  if (name === 'tomorrow') { renderTomorrowSetups(); startTomorrowSpotPoll(); }
+  else                     stopTomorrowSpotPoll();
   if (name === 'wp')       loadWpScan(false);
   if (name === 'options')  initOptionsTab();
   if (name === 'movers')   { loadLiveMovers(); startLiveMoversPolling(); }
@@ -2007,6 +2008,30 @@ function renderOptionsChain(c) {
 // All entries have createdAt so 24h auto-fade kicks in after Tue 11:55 PM
 // ==================================================================
 var TOMORROW_SETUPS = [
+  // 🟢 NTAP 115C 5/15 (May 5 2026 — JOHN VIP day-trade)
+  {
+    id: 'ntap-call-505', ticker: 'NTAP', label: '🟢 NTAP 115C 5/15 — JOHN DAY TRADE',
+    direction: 'CALL', expiry: '260515', strike: 115, premiumMid: 1.10,
+    triggerSymbol: 'NTAP', triggerPrice: 111.05, triggerPredicate: 'above',
+    alertNote: 'alert at $111.05 (John entry). Pre-mkt $112.23 already cleared. TP at +25% per John spec — take 80% off, leave runner.',
+    entry: 1.10, tp1: 1.38, tp2: 1.65,
+    structuralStop: { symbol: 'NTAP', predicate: 'below', price: 110.80 },
+    structuralStopNote: 'John stop $110.80 — below = invalidate.',
+    setupNote: '[john-confirmed-day] John 5/5 day-trade pick. Entry $111.05 / Stop $110.80. PRE-MKT $112.23 = +$1.18 above trigger (gap). TP1 $1.38 (+25%). 5/15 expiry = 10 days theta runway. WARNING: same-day exit burns 1/3 PDT slot per 5-day rolling.',
+    createdAt: '2026-05-05T08:00:00-04:00',
+  },
+  // 🟢 ALB 205C 5/8 (May 5 2026 — JOHN VIP day-trade — TIGHT EXPIRY)
+  {
+    id: 'alb-call-505', ticker: 'ALB', label: '🟢 ALB 205C 5/8 — JOHN DAY TRADE (5/8 EXP)',
+    direction: 'CALL', expiry: '260508', strike: 205, premiumMid: 1.20,
+    triggerSymbol: 'ALB', triggerPrice: 190.77, triggerPredicate: 'above',
+    alertNote: 'alert at $190.77 (John entry). Pre-mkt $191.57 already cleared. TIGHT EXPIRY — 5/8 = 3 trading days, theta accelerates.',
+    entry: 1.20, tp1: 1.50, tp2: 1.80,
+    structuralStop: { symbol: 'ALB', predicate: 'below', price: 188.93 },
+    structuralStopNote: 'John stop $188.93 — below = invalidate.',
+    setupNote: '[john-confirmed-day] John 5/5 day-trade. Entry $190.77 / Stop $188.93. PRE-MKT $191.57 = +$0.80 above trigger. ⚠ 5/8 EXPIRY = day-trade ONLY, do NOT hold over weekend. Hard exit by Thu 4PM regardless of P&L.',
+    createdAt: '2026-05-05T08:00:00-04:00',
+  },
   // 🥇 PRIMARY — KO 77C 5/1 (John VIP + Failed-2D 6HR Reversal + pre-mkt cleared)
   {
     id: 'ko-call-428', ticker: 'KO', label: '🥇 KO 77C — JOHN VIP + 6HR FAILED-2D',
@@ -2082,6 +2107,81 @@ function isSetupFresh(setup) {
   return ageHours < 24;
 }
 
+// May 6 2026 — live spot cache for Tomorrow tab. Polled every 10s while
+// Tomorrow tab is visible. Allows trigger-proximity indicator.
+window._tomorrowSpots = {};
+
+function refreshTomorrowSpots() {
+  var freshSetups = TOMORROW_SETUPS.filter(isSetupFresh);
+  if (!freshSetups.length) return;
+  var tickers = Array.from(new Set(freshSetups.map(function(s){ return s.ticker; })));
+  fetch('/api/ticker-quote?symbols=' + tickers.join(','))
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (!d || !d.quotes) return;
+      d.quotes.forEach(function(q){ window._tomorrowSpots[q.symbol] = q; });
+      renderTomorrowSetups();
+    })
+    .catch(function(){ /* fail silent */ });
+}
+
+var _tomorrowSpotTimer = null;
+function startTomorrowSpotPoll() {
+  if (_tomorrowSpotTimer) return;
+  refreshTomorrowSpots();
+  _tomorrowSpotTimer = setInterval(refreshTomorrowSpots, 10000);
+}
+function stopTomorrowSpotPoll() {
+  if (_tomorrowSpotTimer) { clearInterval(_tomorrowSpotTimer); _tomorrowSpotTimer = null; }
+}
+
+// Build proximity-to-trigger indicator. Shows spot + distance + visual bar.
+function buildProximityIndicator(spot, trigger, predicate, dirColor) {
+  if (!spot || !trigger) {
+    return '<div style="background:#1a2030;border:1px solid var(--border);border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:11px;color:var(--muted)">Spot loading…</div>';
+  }
+  var diff = spot - trigger;
+  var pctDiff = trigger > 0 ? (diff / trigger * 100) : 0;
+  var isAbove = diff >= 0;
+  // For LONG (above-trigger): green if above trigger, red if below
+  // For SHORT (below-trigger): green if below trigger, red if above
+  var pred = (predicate || 'above').toLowerCase();
+  var triggered = (pred.indexOf('above') >= 0 || pred.indexOf('greater') >= 0) ? isAbove : !isAbove;
+  var atTrigger = Math.abs(pctDiff) < 0.1;
+  var stateLabel, stateColor;
+  if (atTrigger) {
+    stateLabel = '🎯 AT TRIGGER';
+    stateColor = '#ffb86c';
+  } else if (triggered) {
+    stateLabel = '✅ TRIGGERED';
+    stateColor = '#3fb950';
+  } else {
+    stateLabel = '⏳ ' + (Math.abs(pctDiff)).toFixed(2) + '% to trigger';
+    stateColor = '#888';
+  }
+  var arrow = isAbove ? '↑' : '↓';
+  var sign = isAbove ? '+' : '';
+  // Visual bar showing position — center is trigger, left/right is below/above
+  var barWidth = Math.min(50, Math.abs(pctDiff) * 20);  // Cap at 50% of bar
+  var barSide = isAbove ? 'right' : 'left';
+  return (
+    '<div style="background:#0e1420;border:1px solid ' + stateColor + ';border-radius:4px;padding:8px 12px;margin-bottom:8px;font-size:11px">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:4px">' +
+        '<span style="font-size:14px;font-weight:700;color:#fff">SPOT $' + spot.toFixed(2) + '</span>' +
+        '<span style="color:var(--muted)">→</span>' +
+        '<span style="color:var(--muted)">TRIGGER $' + trigger.toFixed(2) + '</span>' +
+        '<span style="color:' + stateColor + ';font-weight:700">' + arrow + ' ' + sign + diff.toFixed(2) + ' (' + sign + pctDiff.toFixed(2) + '%)</span>' +
+        '<span style="margin-left:auto;background:' + stateColor + ';color:#000;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700">' + stateLabel + '</span>' +
+      '</div>' +
+      // Visual bar: center marker (trigger), filled bar to left or right
+      '<div style="position:relative;height:6px;background:#1a2030;border-radius:3px;overflow:hidden">' +
+        '<div style="position:absolute;left:50%;top:0;bottom:0;width:2px;background:#fff;opacity:0.4"></div>' +
+        '<div style="position:absolute;' + barSide + ':50%;top:0;bottom:0;width:' + barWidth + '%;background:' + stateColor + ';opacity:0.7"></div>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
 function renderTomorrowSetups() {
   var armed = window._takeArmed === true;
   document.getElementById('arm-state-tomorrow').textContent = armed ? '⚡ ARMED — clicks WILL fire to broker' : '🔒 DISARMED — preview only';
@@ -2102,6 +2202,15 @@ function renderTomorrowSetups() {
     var liveTag    = window._liveAccount ? ' → LIVE' : ' → SIM';
     var fireLabel  = armed ? '⚡ FIRE NOW' + liveTag : '👁 PREVIEW';
     var queueLabel = armed ? '🎯 QUEUE w/ TRIGGER' + liveTag : '👁 PREVIEW QUEUE';
+    // Live spot proximity indicator (May 6 2026 — AB feedback)
+    var spotData = window._tomorrowSpots && window._tomorrowSpots[s.ticker];
+    var proximityHtml = buildProximityIndicator(
+      spotData ? spotData.last : null,
+      s.triggerPrice,
+      s.triggerPredicate || 'above',
+      dirColor
+    );
+
     return (
       '<div style="background:var(--panel);border:1px solid var(--border);border-left:4px solid ' + dirColor + ';border-radius:6px;padding:14px;margin-bottom:12px">' +
         blacklistBanner +
@@ -2110,6 +2219,7 @@ function renderTomorrowSetups() {
           '<span style="background:' + dirColor + ';color:#000;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:600">' + s.direction + '</span>' +
           '<span style="margin-left:auto;color:var(--muted);font-size:11px;font-family:monospace">' + contractStr + '</span>' +
         '</div>' +
+        proximityHtml +
         '<div style="font-size:11px;color:var(--muted);margin-bottom:10px">' + s.setupNote + '</div>' +
         '<div style="background:#0e1420;border-radius:4px;padding:8px 10px;margin-bottom:10px;font-size:11px">' +
           '<div>Trigger reference: ' + s.triggerSymbol + ' ' + s.triggerPredicate + ' $<b style="color:#fff">' + s.triggerPrice.toFixed(2) + '</b> <span style="color:var(--muted)">(used only if you click QUEUE w/ TRIGGER)</span></div>' +
@@ -2127,8 +2237,11 @@ function renderTomorrowSetups() {
         '<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">' +
           '<label style="font-size:11px;color:var(--muted)">qty</label>' +
           '<input type="number" id="qty-tom-' + s.id + '" min="1" max="5" value="1" style="width:50px;background:#0e1420;color:var(--text);border:1px solid var(--border);padding:3px 6px;border-radius:3px;font-size:12px">' +
-          '<button onclick="onTomorrowFire(\'' + s.id + '\', false)" title="Fire immediately at limit. Use after 5m close confirms." style="background:' + (armed ? dirColor : 'var(--blue)') + ';color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">' + fireLabel + '</button>' +
+          '<button onclick="onTomorrowFire(\'' + s.id + '\', false)" title="Fire immediately at limit at TradeStation. Use after 5m close confirms." style="background:' + (armed ? dirColor : 'var(--blue)') + ';color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">' + fireLabel + '</button>' +
           '<button onclick="onTomorrowFire(\'' + s.id + '\', true)" title="Queue at TS with trigger condition. Auto-fires when underlying crosses (no 5m close discipline)." style="background:#1a2332;color:var(--text);border:1px solid var(--border);padding:6px 12px;border-radius:4px;font-size:11px;cursor:pointer">' + queueLabel + '</button>' +
+          // May 6 — Public broker fire path. Sends synthetic bracket (entry + stop + TP1).
+          // OPTION instrument auto-detected from OPRA pattern in the symbol.
+          '<button onclick="onTomorrowFirePublic(\'' + s.id + '\')" title="Fire to PUBLIC broker (cash account, no PDT). Synthetic bracket: entry + stop + TP1. Auto-detects OPTION from OPRA symbol." style="background:' + (armed ? '#673ab7' : '#3a2a5a') + ';color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;cursor:pointer">' + (armed ? '🟣 FIRE PUBLIC' : '👁 PREVIEW PUBLIC') + '</button>' +
           '<span style="color:var(--muted);font-size:10px;margin-left:auto">premium mid ≈ $' + s.premiumMid.toFixed(2) + ' · expiry ' + s.expiry.slice(2,4) + '/' + s.expiry.slice(4,6) + '</span>' +
         '</div>' +
       '</div>'
@@ -2142,6 +2255,79 @@ function onTomorrowFire(setupId, useTrigger) {
   var qtyEl = document.getElementById('qty-tom-' + setupId);
   var qty = qtyEl ? Math.max(1, Math.min(5, parseInt(qtyEl.value) || 1)) : 1;
   showTomorrowModal(s, qty, useTrigger === true);
+}
+
+// May 6 2026 — Public broker fire path for Tomorrow setups.
+// Builds OPRA option symbol from setup, posts /api/public/bracket which
+// auto-detects OPTION instrumentType (regex match on /\d{6}[CP]\d+/).
+function onTomorrowFirePublic(setupId) {
+  var s = TOMORROW_SETUPS.find(function(x){ return x.id === setupId; });
+  if (!s) return;
+  var armed = window._takeArmed === true;
+  var qtyEl = document.getElementById('qty-tom-' + setupId);
+  var qty = qtyEl ? Math.max(1, Math.min(5, parseInt(qtyEl.value) || 1)) : 1;
+
+  // Build OPRA symbol (no spaces, 8-digit strike): "NTAP260515C00115000"
+  // Strike conversion: $115 → "00115000" (×1000 padded to 8 digits)
+  var typeC = s.direction === 'CALL' ? 'C' : 'P';
+  var opraStrike = String(Math.round(parseFloat(s.strike) * 1000)).padStart(8, '0');
+  var opraSymbol = s.ticker + s.expiry + typeC + opraStrike;
+
+  // Stop / TP1 from setup. Public bracket uses option-premium prices.
+  var entry = s.entry;
+  var stop  = s.entry * 0.75;       // -25% premium stop
+  var tp1   = s.tp1;
+  var tp2   = s.tp2 || (s.entry * 1.50);
+
+  if (!armed) {
+    alert('PUBLIC PREVIEW (DISARMED) — would fire:\n\n' +
+      'Symbol: ' + opraSymbol + '  (OPTION auto-detected)\n' +
+      'Quantity: ' + qty + ' contract(s)\n' +
+      'Entry: $' + entry.toFixed(2) + ' LIMIT BUY\n' +
+      'Stop: $' + stop.toFixed(2) + ' (-25%)\n' +
+      'TP1: $' + tp1.toFixed(2) + '\n' +
+      'TP2: $' + tp2.toFixed(2) + '\n\n' +
+      'ARM the system and click again to actually fire.');
+    return;
+  }
+
+  if (!confirm('🟣 FIRE PUBLIC — ' + s.ticker + ' ' + qty + 'ct ' + s.direction + '?\n\n' +
+    'Symbol: ' + opraSymbol + '\n' +
+    'Entry: $' + entry.toFixed(2) + '  Stop: $' + stop.toFixed(2) + '  TP1: $' + tp1.toFixed(2) + '\n\n' +
+    'Sends to Public.com cash account. Synthetic bracket — TP/Stop fire after entry fills.')) {
+    return;
+  }
+
+  fetch('/api/public/bracket', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      symbol:         opraSymbol,
+      quantity:       qty,
+      entryPrice:     entry,
+      stopPrice:      +stop.toFixed(2),
+      tp1Price:       tp1,
+      tp2Price:       tp2,
+      instrumentType: 'OPTION',  // explicit so there's no ambiguity
+    }),
+  })
+    .then(function(r){ return r.json().then(function(j){ return { status: r.status, body: j }; }); })
+    .then(function(rr) {
+      var st = rr.status, b = rr.body;
+      if (st === 200 && b.ok !== false) {
+        var bid = b.bracketId || (b.bracket && b.bracket.id) || '?';
+        alert('✅ PUBLIC BRACKET FIRED\n\n' +
+          'Bracket ID: ' + bid + '\n' +
+          'Entry order: ' + (b.entry && b.entry.orderId || '?') + '\n' +
+          'Symbol: ' + opraSymbol + '\n\n' +
+          'TP/Stop will auto-place after entry fills.');
+      } else {
+        alert('❌ Public bracket FAILED\n\n' + (b.error || 'HTTP ' + st) + '\n\nCheck Railway logs.');
+      }
+    })
+    .catch(function(e) {
+      alert('❌ Public bracket network error: ' + (e && e.message));
+    });
 }
 
 // Pull live mids from TradeStation API for every card and recompute John's

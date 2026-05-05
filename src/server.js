@@ -5096,6 +5096,35 @@ app.get('/api/backtest/results', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Bulk ticker-quote endpoint — used by Tomorrow tab to compute live distance to trigger
+app.get('/api/ticker-quote', async function(req, res) {
+  try {
+    if (!ts || !ts.getAccessToken) return res.status(500).json({ ok: false, error: 'TS module not loaded' });
+    var symbols = (req.query.symbols || '').split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
+    if (!symbols.length) return res.status(400).json({ ok: false, error: 'symbols= required (comma-separated)' });
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+    var fetchLib = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + symbols.map(encodeURIComponent).join(',');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 8000 });
+    if (!r.ok) return res.status(500).json({ ok: false, error: 'TS quotes failed: ' + r.status });
+    var data = await r.json();
+    var quotes = (data && data.Quotes) ? data.Quotes : [];
+    var out = quotes.map(function(q) {
+      var last = parseFloat(q.Last || q.Close || 0);
+      var prevClose = parseFloat(q.PreviousClose || q.Close || 0);
+      return {
+        symbol: q.Symbol,
+        last: isFinite(last) ? +last.toFixed(2) : null,
+        prevClose: isFinite(prevClose) ? +prevClose.toFixed(2) : null,
+        pctChange: (prevClose > 0 && isFinite(last)) ? +(((last - prevClose) / prevClose) * 100).toFixed(2) : null,
+        marketFlags: q.MarketFlags || null,
+      };
+    });
+    res.json({ ok: true, quotes: out });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Cron: hydrate peak returns on UOA log every 5 min during market hours.
 // Fresh alerts (< 5 min old) skipped — peak return ≈ 0 for those.
 cron.schedule('*/5 9-16 * * 1-5', async function() {
