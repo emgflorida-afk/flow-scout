@@ -5248,6 +5248,94 @@ app.get('/api/action-radar', async function(req, res) {
       });
     });
 
+    // Phase 4.10.4 — bulk-resolve contracts for ACTIONABLE rows that didn't
+    // get one from live-movers. Without this most rows show '—' for contract
+    // and have no fire buttons.
+    var needContract = rows.filter(function(r) {
+      return r.status === 'ACTIONABLE' && !(r.suggested && r.suggested.contract);
+    });
+    if (needContract.length > 0 && ts && ts.getAccessToken) {
+      try {
+        var tsFetchLib = require('node-fetch');
+        var token = await ts.getAccessToken();
+        if (token) {
+          // Bulk pull spots for all missing tickers
+          var symList = needContract.map(function(r){ return r.ticker; }).join(',');
+          var quoteRes = await tsFetchLib('https://api.tradestation.com/v3/marketdata/quotes/' + symList,
+            { headers: { 'Authorization': 'Bearer ' + token }, timeout: 8000 });
+          if (quoteRes.ok) {
+            var quoteData = await quoteRes.json();
+            var quoteMap = {};
+            (quoteData.Quotes || []).forEach(function(q){ quoteMap[q.Symbol] = q; });
+
+            // Find nearest standard Friday expiry (5/15/26 = next standard for today)
+            var expiry = '260515';  // Static for this week — TODO: compute dynamically
+
+            // Build option mid request for ATM call/put per row
+            function nearestStrike(spot) {
+              if (spot >= 200) return Math.round(spot / 5) * 5;
+              if (spot >= 50)  return Math.round(spot / 2.5) * 2.5;
+              if (spot >= 10)  return Math.round(spot);
+              return Math.round(spot * 2) / 2;
+            }
+            var optSymbols = [];
+            var rowKey = {};
+            needContract.forEach(function(r) {
+              var q = quoteMap[r.ticker];
+              if (!q) return;
+              var spot = parseFloat(q.Last || q.Close || 0);
+              if (!spot) return;
+              var isLong = r.direction === 'long';
+              // For long → slightly OTM call; for short → slightly OTM put
+              var atm = nearestStrike(spot);
+              var strike = isLong ? atm : atm;  // ATM for both
+              var optSym = r.ticker + ' ' + expiry + (isLong ? 'C' : 'P') + strike;
+              optSymbols.push(optSym);
+              rowKey[r.ticker] = { spot: spot, strike: strike, optSym: optSym, isLong: isLong, prevClose: parseFloat(q.PreviousClose || q.Close || 0) };
+            });
+
+            // Bulk option mids
+            if (optSymbols.length > 0) {
+              var midUrl = 'http://localhost:' + (process.env.PORT || 3000) + '/api/option-mids?symbols=' + optSymbols.map(encodeURIComponent).join(',');
+              try {
+                var midRes = await tsFetchLib(midUrl, { timeout: 8000 });
+                if (midRes.ok) {
+                  var midData = await midRes.json();
+                  var midMap = {};
+                  (midData.quotes || []).forEach(function(qm){ midMap[qm.symbol] = qm; });
+
+                  needContract.forEach(function(r) {
+                    var info = rowKey[r.ticker];
+                    if (!info) return;
+                    var mid = midMap[info.optSym];
+                    if (!mid || !mid.mid) return;
+                    var contractCost = mid.mid * 100;
+                    var aff = contractCost <= maxBudget ? 'AFFORDABLE'
+                            : contractCost <= maxBudget * 2 ? 'STRETCH' : 'TOO_EXPENSIVE';
+                    // Structural stop: previous close as a default underlying level
+                    // (tighter would be 5m intraday low — for v1 use prev close)
+                    var stopPrice = info.isLong
+                      ? +(info.prevClose * 0.985).toFixed(2)   // -1.5% below prev close
+                      : +(info.prevClose * 1.015).toFixed(2);  // +1.5% above prev close
+                    r.suggested = {
+                      contract: info.optSym,
+                      mid: +mid.mid.toFixed(2),
+                      contractCost: +contractCost.toFixed(0),
+                      affordability: aff,
+                      structuralStop: { symbol: r.ticker, predicate: info.isLong ? 'below' : 'above', price: stopPrice },
+                      stockTrigger: info.isLong ? +(info.prevClose * 1.001).toFixed(2) : +(info.prevClose * 0.999).toFixed(2),
+                    };
+                    r.live = r.live || {};
+                    if (!r.live.last) r.live.last = info.spot;
+                  });
+                }
+              } catch(e) { console.error('[ACTION-RADAR] mid fetch error:', e.message); }
+            }
+          }
+        }
+      } catch(e) { console.error('[ACTION-RADAR] resolve error:', e.message); }
+    }
+
     // Rank: ACTIONABLE first, then by maxScore + V-bottom bonus
     rows.sort(function(a, b) {
       var sa = a.status === 'ACTIONABLE' ? 1000 : (a.status === 'WATCH' ? 500 : 0);
