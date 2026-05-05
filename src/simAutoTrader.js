@@ -53,6 +53,9 @@ try { externalSetups = require('./externalSetups'); } catch (e) {}
 // PRE-FIRE VISION GATE — chart-vision check before fire (returns SKIP today, will gate later)
 var prefireVisionGate = null;
 try { prefireVisionGate = require('./prefireVisionGate'); } catch (e) {}
+// MULTI-TEST BREAKOUT SCANNER — Phase 4.22 detector used as soft gate (Phase 4.27)
+var multiTestBreakoutScanner = null;
+try { multiTestBreakoutScanner = require('./multiTestBreakoutScanner'); } catch (e) {}
 // PDT TRACKER — gates LIVE TS account fires (sim ignored)
 var pdtTracker = null;
 try { pdtTracker = require('./pdtTracker'); } catch (e) {}
@@ -64,6 +67,10 @@ try { ts = require('./tradestation'); } catch (e) {}
 
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var STATE_FILE = path.join(DATA_ROOT, 'sim_auto_state.json');
+// Phase 4.27 — log of all SIM fires that were BLOCKED by gates so AB can audit
+// what's getting filtered. /api/sim-auto/blocked-log surfaces this. Append-only,
+// auto-trim to last 500 entries on each write.
+var BLOCKED_LOG_FILE = path.join(DATA_ROOT, 'sim_blocked_log.json');
 
 var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
@@ -317,6 +324,455 @@ function pickSize(setup) {
   return BASE_SIZE;
 }
 
+// =============================================================================
+// PHASE 4.27 — GATE PIPELINE
+// =============================================================================
+// Runs server-side gates before any SIM fire. Mirrors the manual-fire gate
+// pipeline used by scanner-v2.html (taGateOrAbort, chartVisionGateOrAbort,
+// market-context check, multi-test breakout check) so SIM auto-fires honor
+// the same edge filters AB applies on the manual side.
+//
+// Built May 5 2026 PM after SIM win rate hit 22% (2W/7L closed) — at least
+// 3-4 of the losers (counter-tape INTC put, bearish-TA UNH call, vision-VETO
+// XLE call, vision-VETO ADBE call) would have been blocked by gates that
+// already exist in production for manual fires but were never wired to SIM.
+//
+// FAIL-OPEN POLICY:
+//   - TA gate: if bars unavailable / TS error → ALLOW (don't block on infra)
+//   - Tape gate: if market-context unavailable → ALLOW
+//   - MTB gate: SOFT by default (just logs verdict); set SIM_MTB_GATE=on for hard
+//   - Vision gate: FAIL-CLOSED on VETO, ALLOW on WAIT/SKIP/error
+//
+// ENV OVERRIDES (all optional):
+//   SIM_TA_GATE=off      → skip TA gate (default ON)
+//   SIM_TAPE_GATE=off    → skip tape gate (default ON)
+//   SIM_VISION_GATE=on   → enable vision gate (default OFF — Railway has no Chrome)
+//   SIM_MTB_GATE=on      → make MTB a hard gate for longs (default OFF — soft)
+// =============================================================================
+
+function gateEnabled(envName, defaultOn) {
+  var v = process.env[envName];
+  if (v == null || v === '') return !!defaultOn;
+  v = String(v).toLowerCase();
+  return v !== 'off' && v !== 'false' && v !== '0';
+}
+
+// SERVER-SIDE TA VERIFY — replicates /api/ta-verify logic without an HTTP hop.
+// Pulls last 5 5m bars, returns alignment: 'aligned' | 'opposite' | 'mixed' | 'unknown'.
+async function taVerifyServerSide(ticker, direction) {
+  if (!ts || !ts.getAccessToken) return { alignment: 'unknown', reason: 'no TS module' };
+  var token;
+  try { token = await ts.getAccessToken(); } catch (e) { return { alignment: 'unknown', reason: 'no TS token' }; }
+  if (!token) return { alignment: 'unknown', reason: 'no TS token' };
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  try {
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?interval=5&unit=Minute&barsback=5';
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 });
+    if (!r.ok) return { alignment: 'unknown', reason: 'TS http ' + r.status };
+    var data = await r.json();
+    var bars = (data.Bars || []).map(function(b) {
+      return { open: parseFloat(b.Open), close: parseFloat(b.Close) };
+    });
+    if (bars.length < 3) return { alignment: 'unknown', reason: 'not enough bars' };
+    var greenCount = bars.filter(function(b){ return b.close >= b.open; }).length;
+    var redCount = bars.length - greenCount;
+    var trendUp = greenCount >= 3;
+    var trendDown = redCount >= 3;
+    var lastClose = bars[bars.length - 1].close;
+    var firstOpen = bars[0].open;
+    var pctMove = firstOpen > 0 ? ((lastClose - firstOpen) / firstOpen) * 100 : 0;
+
+    var dirNorm = String(direction || '').toLowerCase();
+    var isLong = (dirNorm === 'long' || dirNorm === 'bullish' || dirNorm === 'call');
+    var alignment;
+    var reason;
+    if (isLong) {
+      if (trendUp) { alignment = 'aligned'; reason = greenCount + '/' + bars.length + ' green +' + pctMove.toFixed(2) + '%'; }
+      else if (trendDown) { alignment = 'opposite'; reason = redCount + '/' + bars.length + ' RED ' + pctMove.toFixed(2) + '% — dumping into LONG'; }
+      else { alignment = 'mixed'; reason = greenCount + '/' + bars.length + ' green ' + pctMove.toFixed(2) + '%'; }
+    } else {
+      if (trendDown) { alignment = 'aligned'; reason = redCount + '/' + bars.length + ' RED ' + pctMove.toFixed(2) + '%'; }
+      else if (trendUp) { alignment = 'opposite'; reason = greenCount + '/' + bars.length + ' GREEN +' + pctMove.toFixed(2) + '% — pumping into SHORT'; }
+      else { alignment = 'mixed'; reason = redCount + '/' + bars.length + ' red ' + pctMove.toFixed(2) + '%'; }
+    }
+    return {
+      alignment: alignment, reason: reason,
+      greenCount: greenCount, redCount: redCount,
+      pctMove5min: +pctMove.toFixed(2),
+      barsChecked: bars.length,
+    };
+  } catch (e) {
+    return { alignment: 'unknown', reason: 'TS fetch error: ' + e.message };
+  }
+}
+
+// SERVER-SIDE MARKET CONTEXT (cached) — calls the local /api/market-context
+// HTTP endpoint instead of duplicating the SPY/QQQ/IWM logic. The endpoint is
+// already cached server-side (60s TTL), so this is cheap. Falls back to
+// 'UNKNOWN' if endpoint unreachable.
+var _gateMarketContextCache = { ts: 0, payload: null };
+var GATE_MC_TTL_MS = 60 * 1000;
+
+async function getMarketContextCached() {
+  var now = Date.now();
+  if (_gateMarketContextCache.payload && (now - _gateMarketContextCache.ts) < GATE_MC_TTL_MS) {
+    return _gateMarketContextCache.payload;
+  }
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
+  try {
+    var r = await fetchLib(serverBase + '/api/market-context', { timeout: 5000 });
+    if (!r.ok) return { tape: 'UNKNOWN', reason: 'http ' + r.status };
+    var data = await r.json();
+    if (data && data.ok) {
+      _gateMarketContextCache = { ts: now, payload: data };
+      return data;
+    }
+    return { tape: 'UNKNOWN', reason: 'no data' };
+  } catch (e) {
+    return { tape: 'UNKNOWN', reason: 'fetch error: ' + e.message };
+  }
+}
+
+// SERVER-SIDE MULTI-TEST BREAKOUT — uses module directly, no HTTP hop.
+// Only meaningful for LONG direction (looking for resistance break upward).
+// Returns { verdict, confidence, level, touchCount } or { verdict: 'UNKNOWN' }.
+async function multiTestBreakoutCheck(ticker, direction, tf) {
+  if (!multiTestBreakoutScanner || !multiTestBreakoutScanner.detect) {
+    return { verdict: 'UNKNOWN', reason: 'scanner not loaded' };
+  }
+  // Only longs use upside-resistance MTB; for shorts we just return UNKNOWN
+  // (would need symmetric support-break detector to gate shorts the same way).
+  if (String(direction).toLowerCase() !== 'long') {
+    return { verdict: 'UNKNOWN', reason: 'MTB only applies to long direction' };
+  }
+  try {
+    var out = await multiTestBreakoutScanner.detect(ticker, tf || '60m');
+    return {
+      verdict: out.verdict || 'NO_PATTERN',
+      confidence: out.confidence,
+      level: out.level,
+      touchCount: out.touchCount,
+      reason: out.reasoning,
+    };
+  } catch (e) {
+    return { verdict: 'UNKNOWN', reason: 'MTB error: ' + e.message };
+  }
+}
+
+// SERVER-SIDE CHART VISION — calls local /api/chart-vision endpoint. On
+// Railway this returns WAIT/'vision unavailable' because no Chrome CDP, which
+// is why SIM_VISION_GATE defaults to off. On AB's local box this works.
+async function chartVisionCheck(ticker, direction, tradeType) {
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
+  try {
+    var r = await fetchLib(serverBase + '/api/chart-vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ticker: ticker,
+        direction: direction,
+        tradeType: tradeType || 'SWING',
+      }),
+      timeout: 90000,
+    });
+    if (!r.ok) return { verdict: 'WAIT', reason: 'http ' + r.status, available: false };
+    var data = await r.json();
+    return {
+      verdict: data.verdict || 'WAIT',
+      confidence: data.confidence,
+      summary: data.summary,
+      higherTf: data.higherTf,
+      lowerTf: data.lowerTf,
+      available: !(data.summary && data.summary.indexOf('vision unavailable') >= 0),
+    };
+  } catch (e) {
+    return { verdict: 'WAIT', reason: 'vision fetch error: ' + e.message, available: false };
+  }
+}
+
+// MAIN GATE PIPELINE — runs all gates and returns a verdict object.
+// On block, also writes to /data/sim_blocked_log.json so AB can audit later.
+async function runGates(setup) {
+  var gates = {
+    ta: 'skipped', tape: 'skipped', mtb: 'skipped', vision: 'skipped',
+  };
+  var diagnostics = {};
+
+  // ---- Gate 1: TA verify (5-bar alignment) ----
+  if (gateEnabled('SIM_TA_GATE', true)) {
+    var ta = await taVerifyServerSide(setup.ticker, setup.direction);
+    diagnostics.ta = ta;
+    gates.ta = ta.alignment;
+    if (ta.alignment === 'opposite') {
+      return {
+        pass: false,
+        gate: 'TA',
+        reason: 'TA OPPOSITE — bars dumping into ' + setup.direction + ' (' + ta.reason + ')',
+        gates: gates,
+        diagnostics: diagnostics,
+      };
+    }
+  }
+
+  // ---- Gate 2: Tape alignment ----
+  if (gateEnabled('SIM_TAPE_GATE', true)) {
+    var tape = await getMarketContextCached();
+    diagnostics.tape = { tape: tape.tape, summary: tape.summary };
+    gates.tape = tape.tape || 'UNKNOWN';
+    var dirNorm = String(setup.direction || '').toLowerCase();
+    var isLong = (dirNorm === 'long' || dirNorm === 'bullish' || dirNorm === 'call');
+    var isShort = (dirNorm === 'short' || dirNorm === 'bearish' || dirNorm === 'put');
+    if (tape.tape === 'RISK_ON' && isShort) {
+      return {
+        pass: false,
+        gate: 'TAPE',
+        reason: 'COUNTER-TAPE — short on RISK_ON tape (' + (tape.summary || '') + ')',
+        gates: gates,
+        diagnostics: diagnostics,
+      };
+    }
+    if (tape.tape === 'RISK_OFF' && isLong) {
+      return {
+        pass: false,
+        gate: 'TAPE',
+        reason: 'COUNTER-TAPE — long on RISK_OFF tape (' + (tape.summary || '') + ')',
+        gates: gates,
+        diagnostics: diagnostics,
+      };
+    }
+  }
+
+  // ---- Gate 3: Multi-test breakout (Phase 4.22) ----
+  // SOFT by default — only blocks if SIM_MTB_GATE=on (and only for longs with NO_PATTERN).
+  var mtb = await multiTestBreakoutCheck(setup.ticker, setup.direction);
+  diagnostics.mtb = mtb;
+  gates.mtb = mtb.verdict;
+  setup._mtbVerdict = mtb.verdict;  // attach for journaling
+  if (gateEnabled('SIM_MTB_GATE', false)) {
+    var dirNorm2 = String(setup.direction || '').toLowerCase();
+    var isLong2 = (dirNorm2 === 'long' || dirNorm2 === 'bullish' || dirNorm2 === 'call');
+    if (isLong2 && (mtb.verdict === 'NO_PATTERN' || mtb.verdict === 'TESTING')) {
+      return {
+        pass: false,
+        gate: 'MTB',
+        reason: 'MTB ' + mtb.verdict + ' — no breakout confirmation on long (' + (mtb.reason || '') + ')',
+        gates: gates,
+        diagnostics: diagnostics,
+      };
+    }
+  }
+
+  // ---- Gate 4: Chart vision (Phase 4.21) ----
+  // FAIL-CLOSED on VETO, fail-open on WAIT/MIXED/SKIP.
+  if (gateEnabled('SIM_VISION_GATE', false)) {
+    var tradeType = setup.tradeType || 'SWING';
+    var vision = await chartVisionCheck(setup.ticker, setup.direction, tradeType);
+    diagnostics.vision = vision;
+    gates.vision = vision.verdict;
+    if (vision.verdict === 'VETO') {
+      return {
+        pass: false,
+        gate: 'VISION',
+        reason: 'VISION VETO — ' + (vision.summary || ''),
+        gates: gates,
+        diagnostics: diagnostics,
+      };
+    }
+  }
+
+  return { pass: true, gates: gates, diagnostics: diagnostics };
+}
+
+// LOG a blocked fire to /data/sim_blocked_log.json (rolling, last 500).
+function logBlockedFire(setup, gateResult, spot) {
+  try {
+    var existing = [];
+    try { existing = JSON.parse(fs.readFileSync(BLOCKED_LOG_FILE, 'utf8')); } catch (e) {}
+    if (!Array.isArray(existing)) existing = [];
+    existing.push({
+      timestamp: new Date().toISOString(),
+      date: todayET(),
+      ticker: setup.ticker,
+      direction: setup.direction,
+      source: setup.source,
+      pattern: setup.pattern,
+      conviction: setup.conviction,
+      spot: spot,
+      trigger: setup.trigger,
+      stop: setup.stop,
+      gate: gateResult.gate,
+      reason: gateResult.reason,
+      gates: gateResult.gates,
+      diagnostics: gateResult.diagnostics,
+    });
+    // Trim to last 500
+    if (existing.length > 500) existing = existing.slice(-500);
+    fs.writeFileSync(BLOCKED_LOG_FILE, JSON.stringify(existing, null, 2));
+  } catch (e) {
+    console.error('[SIM-AUTO] blocked-log write failed:', e.message);
+  }
+}
+
+// Read the blocked-log filtered to last N days. Used by /api/sim-auto/blocked-log.
+function getBlockedLog(daysBack) {
+  daysBack = parseInt(daysBack || 7, 10);
+  try {
+    var existing = JSON.parse(fs.readFileSync(BLOCKED_LOG_FILE, 'utf8'));
+    if (!Array.isArray(existing)) existing = [];
+    var cutoff = Date.now() - (daysBack * 24 * 3600 * 1000);
+    var recent = existing.filter(function(e) {
+      return e.timestamp && new Date(e.timestamp).getTime() >= cutoff;
+    });
+    // Per-gate breakdown
+    var byGate = {};
+    recent.forEach(function(e) {
+      var g = e.gate || 'UNKNOWN';
+      byGate[g] = (byGate[g] || 0) + 1;
+    });
+    return {
+      ok: true,
+      daysBack: daysBack,
+      totalBlocked: recent.length,
+      byGate: byGate,
+      entries: recent.reverse(),  // newest first
+    };
+  } catch (e) {
+    return { ok: true, daysBack: daysBack, totalBlocked: 0, byGate: {}, entries: [] };
+  }
+}
+
+// RETRO REPLAY — runs gates against today's actual fires (or any specified
+// list) using current market data. Used to answer "what would have been
+// blocked if the gates were live?". Writes /data/sim_replay_<date>.json.
+async function runRetroReplay(opts) {
+  opts = opts || {};
+  var fires;
+  // Use provided fires, or fall back to today's dailyFires from sim_auto_state
+  if (Array.isArray(opts.fires) && opts.fires.length) {
+    fires = opts.fires;
+  } else {
+    var state = loadState();
+    fires = (state.dailyFires || []).slice();
+    // Optionally augment with previousDayFires + manually-passed tickers
+    if (opts.includeYesterday && Array.isArray(state.previousDayFires)) {
+      fires = state.previousDayFires.concat(fires);
+    }
+  }
+
+  // Optionally augment from extra tickers (e.g. AB's reference list:
+  // INTC, F, ADBE, RIVN, UNH for the May 5 retro)
+  if (Array.isArray(opts.extraTickers) && opts.extraTickers.length) {
+    opts.extraTickers.forEach(function(t) {
+      // Only add if not already in fires
+      if (!fires.some(function(f) { return f.ticker === t.ticker && f.direction === t.direction; })) {
+        fires.push({
+          ticker: t.ticker,
+          direction: t.direction,
+          source: t.source || 'retro-extra',
+          conviction: t.conviction || 8,
+        });
+      }
+    });
+  }
+
+  var results = [];
+  var stats = { ta: 0, tape: 0, mtb: 0, vision: 0, passed: 0, total: fires.length };
+  for (var i = 0; i < fires.length; i++) {
+    var f = fires[i];
+    var setup = {
+      ticker: f.ticker,
+      direction: f.direction,
+      source: f.source,
+      pattern: f.pattern,
+      conviction: f.conviction,
+      tradeType: f.tradeType || 'SWING',
+    };
+    try {
+      var verdict = await runGates(setup);
+      results.push({
+        ticker: f.ticker,
+        direction: f.direction,
+        source: f.source,
+        firedAt: f.firedAt || null,
+        wouldHaveBlocked: !verdict.pass,
+        gate: verdict.gate || null,
+        reason: verdict.reason || null,
+        gates: verdict.gates,
+      });
+      if (!verdict.pass) {
+        var g = (verdict.gate || '').toLowerCase();
+        if (stats[g] != null) stats[g]++;
+      } else {
+        stats.passed++;
+      }
+    } catch (e) {
+      results.push({
+        ticker: f.ticker,
+        direction: f.direction,
+        source: f.source,
+        wouldHaveBlocked: false,
+        gate: 'ERROR',
+        reason: e.message,
+      });
+    }
+  }
+
+  // Write to file for the day
+  try {
+    var replayFile = path.join(DATA_ROOT, 'sim_replay_' + todayET() + '.json');
+    fs.writeFileSync(replayFile, JSON.stringify({
+      ok: true,
+      generatedAt: new Date().toISOString(),
+      date: todayET(),
+      stats: stats,
+      results: results,
+    }, null, 2));
+  } catch (e) { console.error('[SIM-AUTO] replay write failed:', e.message); }
+
+  return { ok: true, date: todayET(), stats: stats, results: results };
+}
+
+// Push Discord summary of the retro replay (Phase 4.27 deliverable #6).
+async function pushReplaySummary(replay) {
+  var blockedCount = replay.stats.ta + replay.stats.tape + replay.stats.mtb + replay.stats.vision;
+  var byGateLines = [];
+  if (replay.stats.ta) byGateLines.push('TA: ' + replay.stats.ta);
+  if (replay.stats.tape) byGateLines.push('TAPE: ' + replay.stats.tape);
+  if (replay.stats.mtb) byGateLines.push('MTB: ' + replay.stats.mtb);
+  if (replay.stats.vision) byGateLines.push('VISION: ' + replay.stats.vision);
+  var detail = (replay.results || [])
+    .filter(function(r) { return r.wouldHaveBlocked; })
+    .map(function(r) { return '• ' + r.ticker + ' ' + r.direction + ' [' + r.gate + ']: ' + (r.reason || '').slice(0, 100); })
+    .slice(0, 10).join('\n') || 'None blocked.';
+
+  var embed = {
+    username: 'Flow Scout — Phase 4.27 Retro',
+    embeds: [{
+      title: '🛡️ Phase 4.27 — Gate Retro Analysis (' + replay.date + ')',
+      description: 'Replayed today\'s SIM fires through TA + Tape + MTB + Vision gates.\n' +
+        '**' + blockedCount + ' of ' + replay.stats.total + '** would have been blocked.',
+      color: blockedCount > 0 ? 15844367 : 5763719,
+      fields: [
+        { name: '📊 By Gate', value: byGateLines.length ? byGateLines.join(' · ') : 'None', inline: false },
+        { name: '🚫 Blocked Fires', value: detail.slice(0, 1000), inline: false },
+        { name: '⚙️ Live Status',
+          value: 'TA gate: ' + (gateEnabled('SIM_TA_GATE', true) ? 'ON' : 'OFF') +
+                 ' · Tape: ' + (gateEnabled('SIM_TAPE_GATE', true) ? 'ON' : 'OFF') +
+                 ' · Vision: ' + (gateEnabled('SIM_VISION_GATE', false) ? 'ON' : 'OFF') +
+                 ' · MTB hard: ' + (gateEnabled('SIM_MTB_GATE', false) ? 'ON' : 'OFF (soft)'),
+          inline: false },
+      ],
+      footer: { text: 'Flow Scout | Phase 4.27 — SIM Gate Retro' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+  var dp = require('./discordPush');
+  return await dp.send('simAutoReplay', embed, { webhook: DISCORD_WEBHOOK });
+}
+
 // Fire ICS SIM order via the existing ayce-fire path (build → place)
 // ICS rules: 2-3ct, TP1 +50% / TP2 +100%, -25% stop, structural override.
 async function fireSimOrder(setup, spot) {
@@ -548,19 +1004,24 @@ async function runSimAuto(opts) {
 
     firesAttempted++;
 
-    // Pre-fire vision gate (returns SKIP today since chart-img not wired yet,
-    // but if VETO returns block the fire). FAIL-OPEN if unavailable.
-    if (prefireVisionGate && prefireVisionGate.checkBeforeFire) {
-      try {
-        var vision = await prefireVisionGate.checkBeforeFire(setup);
-        if (vision && vision.result === 'VETO') {
-          console.log('[SIM-AUTO] VISION VETO for ' + setup.ticker + ': ' + vision.reason);
-          skips.push(setup.ticker + ' (vision VETO: ' + vision.reason + ')');
-          continue;
-        }
-        console.log('[SIM-AUTO] vision: ' + vision.result + ' ' + (vision.cached ? '(cached)' : '(fresh)'));
-      } catch (e) { console.error('[SIM-AUTO] vision gate error (continuing):', e.message); }
+    // Phase 4.27 — UNIFIED GATE PIPELINE (TA + Tape + MTB + Vision).
+    // Replaces the standalone prefireVisionGate call. Logs blocked fires to
+    // /data/sim_blocked_log.json for audit. Gates fail-open on infra error.
+    var gateResult;
+    try {
+      gateResult = await runGates(setup);
+    } catch (e) {
+      console.error('[SIM-AUTO] gate pipeline exception (continuing):', e.message);
+      gateResult = { pass: true, gates: { error: e.message } };
     }
+    if (!gateResult.pass) {
+      console.log('[SIM-AUTO] BLOCKED ' + setup.ticker + ' ' + setup.direction + ' [' + gateResult.gate + ']: ' + gateResult.reason);
+      skips.push(setup.ticker + ' (' + gateResult.gate + ': ' + (gateResult.reason || '').slice(0, 60) + ')');
+      logBlockedFire(setup, gateResult, spot);
+      continue;
+    }
+    console.log('[SIM-AUTO] gates passed for ' + setup.ticker + ' [TA:' + gateResult.gates.ta +
+      ' TAPE:' + gateResult.gates.tape + ' MTB:' + gateResult.gates.mtb + ' VISION:' + gateResult.gates.vision + ']');
 
     console.log('[SIM-AUTO] FIRING ' + setup.ticker + ' ' + setup.direction + ' from ' + setup.source);
     var fireResult = await fireSimOrder(setup, spot);
@@ -620,7 +1081,8 @@ async function runSimAuto(opts) {
       } catch (e) { console.error('[SIM-AUTO] tracker log error:', e.message); }
     }
 
-    // Update state
+    // Update state — Phase 4.27 attaches gate verdicts so AB can audit which
+    // setups passed each gate when reviewing journal alongside outcomes.
     state.dailyFires.push({
       ticker: setup.ticker,
       source: setup.source,
@@ -630,6 +1092,7 @@ async function runSimAuto(opts) {
       contractSymbol: fireResult.contract.symbol,
       limitPrice: fireResult.limitPrice,
       spotAtFire: spot,
+      gates: gateResult.gates || {},
     });
     state.tickerCooldowns[setup.ticker] = new Date().toISOString();
     state.openPositions.push({
@@ -777,4 +1240,14 @@ module.exports = {
   collectQualifyingSetups: collectQualifyingSetups,  // exposed for inspection
   isEnabled: isEnabled,
   inFireWindow: inFireWindow,
+  // Phase 4.27 — gate pipeline + retro tools
+  runGates: runGates,
+  runRetroReplay: runRetroReplay,
+  pushReplaySummary: pushReplaySummary,
+  getBlockedLog: getBlockedLog,
+  taVerifyServerSide: taVerifyServerSide,
+  getMarketContextCached: getMarketContextCached,
+  multiTestBreakoutCheck: multiTestBreakoutCheck,
+  chartVisionCheck: chartVisionCheck,
+  gateEnabled: gateEnabled,
 };
