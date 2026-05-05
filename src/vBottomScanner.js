@@ -8,22 +8,29 @@
 // PURPOSE: find tickers that had a hard pullback today AND are now climbing
 // back, BEFORE the move is exhausted.
 //
-// PATTERN CRITERIA (per ticker):
-//   1. Currently >50% recovered from intraday low (range position high)
-//   2. Last 3+ 5m bars are GREEN (bullish reaccumulation)
-//   3. Pullback from day high was at least -1.5% (real fade, not flat)
-//   4. Currently above VWAP or 9 EMA (momentum reclaiming)
-//   5. Volume on recovery bars confirming (not dying off)
+// PHASE 4.18 (May 5 PM) — TIER SYSTEM
+// AB's complaint: AAPL surfaced at score 10.5 with rangePosition 70% — the
+// scanner saw "down then up" but the bounce was already 70% done by the time
+// the card appeared. Plain score isn't enough — we need bar-sequence context
+// to distinguish "just turned" from "ride the bounce."
 //
-// SCORING:
+//   🔻 V_TURN     — bottom JUST printed (R-R-R-G or R-R-G-G + engulfing + vol
+//                    1.5× + range pos < 30% + recovery ≤ 2%). FIRE candidate.
+//                    Score boost +5 (max +27).
+//   📈 V_FORMING  — V structure intact, range pos 30-50%, 1-2 green. WATCH.
+//   📊 V_RECOVERED — late, range pos ≥ 50%. SKIP (will WHIPSAW).
+//   ⛔ NO_V        — no clean V structure detected.
+//
+// SCORING (base):
 //   recovery_pct (0-50% of day range)  → 0-5 points
 //   green_bars_last_5                  → 0-5 points (1pt each)
 //   pullback_depth_pct                 → 0-3 points (more pullback = more reversal potential)
 //   uoa_alerts_last_30min              → 0-5 points (flow confluence)
 //   above_vwap                         → 2 points
 //   volume_increasing                  → 2 points
+//   V_TURN tier bonus                  → +5 points (catches the ACTUAL bottom)
 //
-// Total: max 22. Discord push at score >= 12. Auto-flag at >= 15.
+// Total: max 27. Discord push at score >= 12. V_TURN push at any score.
 // =============================================================================
 
 var fs = require('fs');
@@ -52,6 +59,78 @@ var SCAN_UNIVERSE = (process.env.V_BOTTOM_UNIVERSE ||
 function loadLog() {
   try { return JSON.parse(fs.readFileSync(LOG_FILE, 'utf8')); }
   catch (e) { return []; }
+}
+
+// Phase 4.18 — Detect V tier from bar sequence + range position.
+// Returns { tier, isVTurn, sequence, reason }
+function detectVTier(bars, rangePosition, recoveryPct, pullbackDepth) {
+  if (!bars || bars.length < 6) {
+    return { tier: 'INSUFFICIENT', isVTurn: false, sequence: '', reason: 'need 6+ bars' };
+  }
+  // Last 4 bars (oldest first): b4, b3, b2, b1 (b1 = current/most recent)
+  var L = bars.length;
+  var b4 = bars[L - 4], b3 = bars[L - 3], b2 = bars[L - 2], b1 = bars[L - 1];
+  var isRed = function(b) { return b.close < b.open; };
+  var isGreen = function(b) { return b.close >= b.open; };
+
+  // Bar sequence string (oldest first)
+  var seq = (isRed(b4) ? 'R' : 'G') + (isRed(b3) ? 'R' : 'G') + (isRed(b2) ? 'R' : 'G') + (isRed(b1) ? 'R' : 'G');
+
+  // V_TURN patterns: bottom just printed
+  var pattern_RRRG = (seq === 'RRRG');                                  // R-R-R-G — sharpest turn
+  var pattern_RRGG = (seq === 'RRGG');                                  // R-R-G-G — turn confirmed
+  var isTurnPattern = pattern_RRRG || pattern_RRGG;
+
+  // Engulfing trigger: last green bar's close > prior bar's high
+  var engulfing = isGreen(b1) && b1.close > b2.high;
+
+  // Volume confirmation on the turn bar (last green)
+  var greenVol = b1.volume;
+  var redVolAvg = (b3.volume + (isRed(b2) ? b2.volume : b3.volume)) / 2;
+  var volConfirmed = redVolAvg > 0 && greenVol > redVolAvg * 1.5;
+
+  // Real V (not noise): pullback ≥ 3% from day high
+  var realV = pullbackDepth >= 3.0;
+
+  // Early entry zone: range pos < 30% AND recovery ≤ 2%
+  var earlyEntry = rangePosition < 30 && recoveryPct <= 2.0;
+
+  if (isTurnPattern && engulfing && volConfirmed && realV && earlyEntry) {
+    return {
+      tier: 'V_TURN',
+      isVTurn: true,
+      sequence: seq,
+      reason: seq + ' + engulfing + vol ' + (greenVol/redVolAvg).toFixed(1) + 'x + range ' + rangePosition.toFixed(0) + '% < 30',
+    };
+  }
+
+  // V_FORMING: V structure intact, recovery early, range 30-50%
+  var formingTurn = (isGreen(b1) || isGreen(b2));
+  if (realV && rangePosition >= 30 && rangePosition < 50 && formingTurn) {
+    return {
+      tier: 'V_FORMING',
+      isVTurn: false,
+      sequence: seq,
+      reason: 'V intact, range ' + rangePosition.toFixed(0) + '% (30-50) — watch only',
+    };
+  }
+
+  // V_RECOVERED: late, bounce 50%+ done
+  if (realV && rangePosition >= 50) {
+    return {
+      tier: 'V_RECOVERED',
+      isVTurn: false,
+      sequence: seq,
+      reason: 'late entry — range ' + rangePosition.toFixed(0) + '% (most of bounce done)',
+    };
+  }
+
+  return {
+    tier: 'NO_V',
+    isVTurn: false,
+    sequence: seq,
+    reason: 'no clean V structure (pullback ' + pullbackDepth.toFixed(1) + '%, range ' + rangePosition.toFixed(0) + '%)',
+  };
 }
 
 function saveLog(records) {
@@ -116,6 +195,11 @@ async function scanTicker(symbol, token) {
     if (aboveVwap) score += 2;
     if (volIncreasing) score += 2;
 
+    // Phase 4.18 — V tier detection (catches the actual bottom vs late bounce)
+    var vTier = detectVTier(bars, rangePosition * 100, recoveryPct, pullbackDepth);
+    // V_TURN bonus: +5 for catching the actual bottom (R-R-R-G + engulf + vol)
+    if (vTier.isVTurn) score += 5;
+
     return {
       ticker: symbol,
       score: +score.toFixed(1),
@@ -130,6 +214,11 @@ async function scanTicker(symbol, token) {
       aboveVwap: aboveVwap,
       volIncreasing: volIncreasing,
       lastBarClose: current.close,
+      // Phase 4.18 — tier classification
+      tier: vTier.tier,                    // V_TURN | V_FORMING | V_RECOVERED | NO_V | INSUFFICIENT
+      isVTurn: vTier.isVTurn,              // true only for V_TURN — fire-eligible
+      barSequence: vTier.sequence,         // e.g. "RRRG"
+      tierReason: vTier.reason,
       // Quality flag — V-bottom signal strength
       isStrong: score >= 12,
       isVeryStrong: score >= 15,

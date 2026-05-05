@@ -5610,35 +5610,76 @@ app.get('/api/v-bottom-scan', async function(req, res) {
 
 // Cron: run V-bottom scan every 3 min during market hours, push Discord on
 // score >= 12 candidates that weren't already flagged in the last 15 min.
+// PHASE 4.18 — V_TURN candidates push regardless of score (the bottom JUST
+// printed — we want the alert immediately, not gated by score).
 var _vBottomLastFlagged = {};
 cron.schedule('*/3 9-16 * * 1-5', async function() {
   try {
     var vbot = require('./vBottomScanner');
     var dp = require('./discordPush');
-    var result = await vbot.runScan({ minScore: 12 });
+    var result = await vbot.runScan({ minScore: 0 });  // pull all so we catch V_TURN at any score
     if (!result.ok || !result.candidates) return;
     var WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
       'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
-    for (var i = 0; i < Math.min(5, result.candidates.length); i++) {
-      var c = result.candidates[i];
-      var lastFlag = _vBottomLastFlagged[c.ticker] || 0;
-      if (Date.now() - lastFlag < 15 * 60 * 1000) continue;  // 15 min cooldown
+
+    // Split into V_TURN (push regardless of score) and high-score generic (score >= 12)
+    var vTurns = result.candidates.filter(function(c) { return c.tier === 'V_TURN'; });
+    var highScore = result.candidates.filter(function(c) { return c.tier !== 'V_TURN' && c.totalScore >= 12; });
+
+    // Push V_TURN candidates first — these are time-critical (bottom just printed)
+    for (var j = 0; j < Math.min(5, vTurns.length); j++) {
+      var v = vTurns[j];
+      var lastFlag = _vBottomLastFlagged[v.ticker] || 0;
+      if (Date.now() - lastFlag < 15 * 60 * 1000) continue;
+      _vBottomLastFlagged[v.ticker] = Date.now();
+
+      var vEmbed = {
+        username: 'Flow Scout — V-TURN Alert',
+        embeds: [{
+          title: '🔻 V-TURN — ' + v.ticker + ' BOTTOM JUST PRINTED (score ' + v.totalScore + '/27)',
+          description: '**Spot $' + v.spot + '** · Day low $' + v.dayLow + ' / high $' + v.dayHigh +
+                       '\n**Pullback ' + v.pullbackDepth + '% · Recovery only ' + v.recoveryPct + '% — early entry**' +
+                       '\nBar sequence: `' + v.barSequence + '` (turn confirmed)' +
+                       '\nRange position: ' + v.rangePosition + '% — **<30% means just turned**',
+          color: 15158332,  // crimson red 🔻
+          fields: [
+            { name: '🎯 Why this fires NOW', value: v.tierReason, inline: false },
+            { name: '📊 Confluence', value: 'VWAP $' + v.vwap + ' (' + (v.aboveVwap ? '✅ above' : '⚠ below — reclaim setup') + ') | Vol ' + (v.volIncreasing ? '✅ increasing' : '⚠ flat') + (v.uoaBonus > 0 ? ' | UOA +' + v.uoaBonus : ''), inline: false },
+            { name: '💰 Sizing', value: '**1ct trial only** on first turn bar. Scale 2nd ct on bar-2 confirm (next 5m green + holds VWAP). NO 3ct full size on V_TURN — first bar can fail.', inline: false },
+          ],
+          footer: { text: 'V_TURN tier | R-R-R-G or R-R-G-G + engulfing + vol 1.5× + range <30%' },
+          timestamp: new Date().toISOString(),
+        }],
+      };
+      try { await dp.send('vBottomScanner', vEmbed, { webhook: WEBHOOK }); } catch (e) {}
+    }
+
+    // Generic high-score V-Bottom candidates (the late bounces) — keep lower urgency
+    for (var i = 0; i < Math.min(5, highScore.length); i++) {
+      var c = highScore[i];
+      var lastFlag2 = _vBottomLastFlagged[c.ticker] || 0;
+      if (Date.now() - lastFlag2 < 15 * 60 * 1000) continue;
       _vBottomLastFlagged[c.ticker] = Date.now();
 
       var icon = c.totalScore >= 15 ? '🚀🚀' : '📈';
+      var tierLabel = c.tier === 'V_FORMING' ? '📈 V_FORMING (watch)' :
+                      c.tier === 'V_RECOVERED' ? '📊 V_RECOVERED (LATE — bounce mostly done)' :
+                      c.tier;
       var embed = {
         username: 'Flow Scout — V-Bottom Scanner',
         embeds: [{
           title: icon + ' V-BOTTOM CANDIDATE — ' + c.ticker + ' (score ' + c.totalScore + '/27)',
           description: '**Spot $' + c.spot + '** · Day low $' + c.dayLow + ' / high $' + c.dayHigh +
+                       '\nTier: **' + tierLabel + '** · Sequence: `' + (c.barSequence || '') + '`' +
                        '\nPullback depth: ' + c.pullbackDepth + '% · Recovery: ' + c.recoveryPct + '%' +
-                       '\nRange position: ' + c.rangePosition + '% (>50% = recovered past midpoint)',
+                       '\nRange position: ' + c.rangePosition + '% ' + (c.rangePosition >= 50 ? '(>50% = LATE, will whipsaw)' : '(early)'),
           color: c.totalScore >= 15 ? 5763719 : 15844367,
           fields: [
             { name: '📊 Pattern', value: 'Last 5 bars: ' + c.greenLast5 + ' green | VWAP $' + c.vwap + ' (' + (c.aboveVwap ? '✅ above' : '❌ below') + ') | Volume ' + (c.volIncreasing ? '✅ increasing' : '⚠️ flat/falling'), inline: false },
             { name: '🌊 Flow boost', value: c.uoaBonus > 0 ? c.uoaBonus + ' UOA alerts last 30min (+' + c.uoaBonus + ')' : 'No recent UOA — chart-only signal', inline: false },
+            { name: '⚠ Read', value: c.tier === 'V_RECOVERED' ? 'LATE — most of bounce done. Skip unless TA bars still green + above VWAP holds.' : c.tierReason, inline: false },
           ],
-          footer: { text: 'V-Bottom Scanner | catches reversal recoveries before they exhaust' },
+          footer: { text: 'V-Bottom Scanner | tier ' + c.tier + ' — see /api/v-bottom-scan for full data' },
           timestamp: new Date().toISOString(),
         }],
       };
