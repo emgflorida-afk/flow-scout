@@ -415,6 +415,15 @@ var multiTestBreakoutScanner = null;
 try { multiTestBreakoutScanner = require('./multiTestBreakoutScanner'); console.log('[SERVER] multiTestBreakoutScanner loaded OK'); }
 catch(e) { console.log('[SERVER] multiTestBreakoutScanner not loaded:', e.message); }
 
+// DAILY FLOW BACKTEST + MORNING BRIEF (Phase 4.25 — May 5 evening).
+// AB directive: "everyday we should know what is coming in." Computes daily
+// recap of UOA/SIM/scanner activity at 4:30 PM ET, builds morning brief at
+// 8:00 AM ET. Deterministic morning ritual replaces cold-start "what
+// happened yesterday?" question.
+var dailyFlowBacktest = null;
+try { dailyFlowBacktest = require('./dailyFlowBacktest'); console.log('[SERVER] dailyFlowBacktest loaded OK'); }
+catch(e) { console.log('[SERVER] dailyFlowBacktest not loaded:', e.message); }
+
 // CONFLUENCE SCORER — unified 11-layer scoring across all pattern tabs.
 // Stacks pattern detector + WP + John + Sniper + pivots + target + clusters +
 // vol + FTFC + market researcher + chart vision into a 0-13 score and tier.
@@ -6466,6 +6475,118 @@ app.get('/api/sim-auto/qualifying', function(req, res) {
     res.json({ ok: true, count: setups.length, setups: setups });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
+
+// =============================================================================
+// PHASE 4.25 — DAILY FLOW BACKTEST + MORNING BRIEF
+// AB directive: "make sure we run backtest for today's flow" + "everyday we
+// should know what is coming in." Two endpoints + two crons + HTML route.
+// =============================================================================
+
+// GET /api/daily-flow-recap?date=YYYY-MM-DD  (default: today ET)
+//   Returns the full recap structure as JSON. Recomputes if not cached.
+app.get('/api/daily-flow-recap', function(req, res) {
+  if (!dailyFlowBacktest) return res.status(500).json({ ok: false, error: 'dailyFlowBacktest not loaded' });
+  try {
+    var date = req.query.date || dailyFlowBacktest.todayET();
+    var force = req.query.force === 'true';
+    var recap = force ? null : dailyFlowBacktest.loadRecap(date);
+    if (!recap) recap = dailyFlowBacktest.runDailyBacktest(date);
+    res.json(Object.assign({ ok: true }, recap));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/daily-flow-recap/run  body: { date?, push? }
+//   Recomputes (force) and optionally pushes Discord card. Used by the cron
+//   + manual refresh.
+app.post('/api/daily-flow-recap/run', async function(req, res) {
+  if (!dailyFlowBacktest) return res.status(500).json({ ok: false, error: 'dailyFlowBacktest not loaded' });
+  try {
+    var b = req.body || {};
+    var date = b.date || dailyFlowBacktest.todayET();
+    var recap = dailyFlowBacktest.runDailyBacktest(date);
+    var push = null;
+    if (b.push !== false) {
+      push = await dailyFlowBacktest.pushDailyRecapToDiscord(recap);
+    }
+    res.json({ ok: true, recap: recap, push: push });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/morning-brief?date=YYYY-MM-DD
+//   Returns markdown + json for the morning brief. Builds if not cached.
+app.get('/api/morning-brief', async function(req, res) {
+  if (!dailyFlowBacktest) return res.status(500).json({ ok: false, error: 'dailyFlowBacktest not loaded' });
+  try {
+    var date = req.query.date || dailyFlowBacktest.todayET();
+    var force = req.query.force === 'true';
+    var md = force ? null : dailyFlowBacktest.loadMorningBrief(date);
+    var brief;
+    if (!md) {
+      brief = await dailyFlowBacktest.buildMorningBrief(date);
+      md = brief.markdown;
+    }
+    var asText = req.query.format === 'text';
+    if (asText) {
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      return res.send(md);
+    }
+    res.json({ ok: true, date: date, markdown: md, brief: brief || null });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/morning-brief/run  body: { date?, push? }
+//   Forces a rebuild + optionally pushes Discord card. Used by the cron.
+app.post('/api/morning-brief/run', async function(req, res) {
+  if (!dailyFlowBacktest) return res.status(500).json({ ok: false, error: 'dailyFlowBacktest not loaded' });
+  try {
+    var b = req.body || {};
+    var date = b.date || dailyFlowBacktest.todayET();
+    var brief = await dailyFlowBacktest.buildMorningBrief(date);
+    var push = null;
+    if (b.push !== false) {
+      push = await dailyFlowBacktest.pushMorningBriefToDiscord(brief);
+    }
+    res.json({ ok: true, brief: brief, push: push });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// HTML route — styled brief AB can pull up on phone or read aloud.
+app.get('/morning-brief', function(req, res) {
+  if (!dailyFlowBacktest) return res.status(500).send('dailyFlowBacktest not loaded');
+  try {
+    var date = req.query.date || dailyFlowBacktest.todayET();
+    var md = dailyFlowBacktest.loadMorningBrief(date);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(dailyFlowBacktest.renderMorningBriefHtml(date, md));
+  } catch(e) { res.status(500).send('error: ' + e.message); }
+});
+
+// CRON — 4:30 PM ET weekdays — daily flow recap + Discord push (after 4:05 SIM EOD)
+cron.schedule('30 16 * * 1-5', async function() {
+  try {
+    if (!dailyFlowBacktest) return;
+    var date = dailyFlowBacktest.todayET();
+    console.log('[DAILY-RECAP] cron triggered (4:30 PM ET) — running recap for ' + date);
+    var recap = dailyFlowBacktest.runDailyBacktest(date);
+    var push = await dailyFlowBacktest.pushDailyRecapToDiscord(recap);
+    console.log('[DAILY-RECAP] cron complete · uoa=' + (recap.uoa ? recap.uoa.total : 0) +
+                ' simFires=' + (recap.simFires ? recap.simFires.count : 0) +
+                ' push=' + (push && push.ok ? 'OK' : 'FAIL'));
+  } catch(e) { console.error('[DAILY-RECAP] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// CRON — 8:00 AM ET weekdays — morning brief + Discord push
+cron.schedule('0 8 * * 1-5', async function() {
+  try {
+    if (!dailyFlowBacktest) return;
+    var date = dailyFlowBacktest.todayET();
+    console.log('[MORNING-BRIEF] cron triggered (8:00 AM ET) — building brief for ' + date);
+    var brief = await dailyFlowBacktest.buildMorningBrief(date);
+    var push = await dailyFlowBacktest.pushMorningBriefToDiscord(brief);
+    console.log('[MORNING-BRIEF] cron complete · yesterday=' + brief.yesterdayDate +
+                ' push=' + (push && push.ok ? 'OK' : 'FAIL'));
+  } catch(e) { console.error('[MORNING-BRIEF] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
 
 // =============================================================================
 // SIM TRADE JOURNAL endpoints — Phase 4.24
