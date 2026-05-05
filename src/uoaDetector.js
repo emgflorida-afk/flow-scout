@@ -93,15 +93,24 @@ function score(alert) {
 async function handleAlert(alert) {
   if (!alert || !alert.ticker) return { ok: false, error: 'invalid alert' };
 
-  var s = score(alert);
-  alert._uoaScore = s;
+  var baseScore = score(alert);
 
-  // Below threshold = silent log
-  if (s < UOA_THRESHOLD) {
+  // PHASE 4.2.1 (May 5 PM): Custom alerts elevated.
+  // Bullflow custom alerts = AB's saved filters firing — pre-curated by him,
+  // high-signal by definition. Bypass UOA_THRESHOLD (always push) + +5 boost
+  // to score so the Discord card visibly ranks above algo noise.
+  var isCustom = !!alert.isCustomAlert || alert.bullflowAlertCategory === 'custom';
+  var s = isCustom ? baseScore + 5 : baseScore;
+  alert._uoaScore = s;
+  alert._baseScore = baseScore;
+  alert._customBoost = isCustom ? 5 : 0;
+
+  // Below threshold = silent log — UNLESS custom alert (AB curated, always elevate)
+  if (!isCustom && s < UOA_THRESHOLD) {
     return { ok: true, action: 'log', score: s, threshold: UOA_THRESHOLD };
   }
 
-  // UOA threshold hit — log it
+  // UOA threshold hit (or custom alert) — log it
   var log = loadLog();
   log.push({
     timestamp: new Date().toISOString(),
@@ -110,7 +119,10 @@ async function handleAlert(alert) {
     premium: alert.totalPremium || alert.premium,
     size: alert.size,
     score: s,
+    baseScore: baseScore,
     isWhale: s >= WHALE_THRESHOLD,
+    isCustom: isCustom,
+    customAlertName: alert.customAlertName || alert.bullflowAlertName || null,
     contract: alert.contractSymbol,
   });
   saveLog(log);
@@ -132,8 +144,15 @@ async function handleAlert(alert) {
     } catch (e) { console.error('[UOA] enrichment error:', e.message); }
   }
 
-  var icon = s >= WHALE_THRESHOLD ? '🐋🐋' : '🌊';
-  var triggerAutoFire = s >= WHALE_THRESHOLD && stack.fullStack;
+  // Custom alerts get the curated-thesis flag (🎯) so AB sees his own filter fired
+  var icon = isCustom
+    ? '🎯'
+    : (s >= WHALE_THRESHOLD ? '🐋🐋' : '🌊');
+  var titleLabel = isCustom
+    ? 'CUSTOM ALERT FIRED'
+    : (s >= WHALE_THRESHOLD ? 'WHALE' : 'UOA');
+  // Custom alerts can auto-fire on stack alone (don't require whale threshold)
+  var triggerAutoFire = (s >= WHALE_THRESHOLD || isCustom) && stack.fullStack;
 
   // Build stackLine — prefer enriched version (has emoji + tier age info)
   var stackLine = (enriched && enriched.summary && enriched.summary.stackLine)
@@ -187,14 +206,28 @@ async function handleAlert(alert) {
     });
   }
 
+  // Insert custom-alert callout above stack confluence if present
+  if (isCustom) {
+    fields.unshift({
+      name: '🎯 Your saved Bullflow filter',
+      value: '**' + (alert.customAlertName || alert.bullflowAlertName || 'Custom alert') + '** fired — AB-curated thesis · score ' + (alert._baseScore || baseScore) + ' + custom boost +5 = **' + s + '/20**',
+      inline: false,
+    });
+  }
+
+  // Custom alerts get gold color so they stand out in Discord; whale = red; standard UOA = green
+  var embedColor = isCustom ? 15844367 : (s >= WHALE_THRESHOLD ? 15158332 : 5763719);
+
   var embed = {
     username: 'Flow Scout — UOA Detector',
     embeds: [{
-      title: icon + ' ' + (s >= WHALE_THRESHOLD ? 'WHALE' : 'UOA') + ' — ' + ticker + ' ' + direction.toUpperCase() + ' (score ' + s + '/15)',
+      title: icon + ' ' + titleLabel + ' — ' + ticker + ' ' + direction.toUpperCase() +
+             (isCustom ? ' · ' + (alert.customAlertName || 'custom filter') : '') +
+             ' (score ' + s + (isCustom ? '/20' : '/15') + ')',
       description: descParts.join('\n'),
-      color: s >= WHALE_THRESHOLD ? 15158332 : 5763719,
+      color: embedColor,
       fields: fields,
-      footer: { text: 'Flow Scout | UOA Detector | enriched live + scanner + tier' },
+      footer: { text: 'Flow Scout | UOA Detector | ' + (isCustom ? 'CUSTOM ALERT — your saved filter' : 'algo flow + tier') },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -212,7 +245,16 @@ async function handleAlert(alert) {
     } catch (e) { console.error('[UOA] auto-fire intent error:', e.message); }
   }
 
-  return { ok: true, action: triggerAutoFire ? 'auto-fire-intent' : 'discord-push', score: s, stack: stack, enriched: !!enriched };
+  return {
+    ok: true,
+    action: triggerAutoFire ? 'auto-fire-intent' : 'discord-push',
+    score: s,
+    baseScore: baseScore,
+    isCustom: isCustom,
+    customAlertName: alert.customAlertName || null,
+    stack: stack,
+    enriched: !!enriched,
+  };
 }
 
 function getRecentUoa(maxAgeHours) {

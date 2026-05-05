@@ -252,6 +252,15 @@ async function processAlert(alert) {
     var uoaOi   = parseInt(alert.open_interest || alert.openInterest || 0, 10);
     var uoaType = String(alert.alert_type || alert.alertType || alert.alertName || 'unknown').toLowerCase();
 
+    // PHASE 4.2.1 (May 5 PM): Detect Bullflow custom alerts (AB's saved filters).
+    // Bullflow's /v1/streaming/alerts emits both algo alerts AND any custom
+    // alerts matching saved filters in the dashboard. data.alertType is
+    // either "algo" (Bullflow built-in) or "custom" (AB's curated thesis).
+    // Custom = pre-curated by AB → high-signal → bypass score threshold + boost.
+    var rawAlertType = String(alert.alertType || alert.alert_type || '').toLowerCase();
+    var isCustomAlert = rawAlertType === 'custom';
+    var customAlertName = isCustomAlert ? (alert.alertName || alert.alert_name || 'Custom') : null;
+
     // Normalize payload for uoaDetector
     var uoaPayload = {
       ticker:          ticker,
@@ -264,6 +273,10 @@ async function processAlert(alert) {
       velocity:        alert.velocity || 0,
       isWhale:         prem > 10000000,
       alertType:       uoaType,
+      bullflowAlertCategory: isCustomAlert ? 'custom' : 'algo',
+      isCustomAlert:   isCustomAlert,
+      customAlertName: customAlertName,
+      bullflowAlertName: alert.alertName || alert.alert_name || null,
       executionType:   alert.execution_type || alert.executionType || null,
       flowScore:       score,
     };
