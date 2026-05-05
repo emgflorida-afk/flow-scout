@@ -41,8 +41,15 @@ try { uoaEnrichment = require('./uoaEnrichment'); } catch (e) {}
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var LOG_FILE = path.join(DATA_ROOT, 'uoa_log.json');
 
-var UOA_THRESHOLD = 7;
+var UOA_THRESHOLD = 5;            // Lowered from 7 May 5 PM — catches NBIS/DDOG/EBAY-style $1-3M institutional blocks that previously silent-logged
 var WHALE_THRESHOLD = 10;
+var PREMIUM_ALWAYS_PUSH = 1000000; // $1M+ premium ALWAYS pushes Discord regardless of score (institutional block — AB decides)
+var WHALE_PREMIUM = 5000000;       // $5M+ → mark WHALE in card title even if score math underweights
+
+// Standard watchlist — used to flag whether ticker is in AB's tracked universe.
+// Off-watchlist alerts still push but get a "📡 OFF-WATCHLIST" tag so AB knows.
+var WATCHLIST = (process.env.FLOW_TICKERS || 'SPY,QQQ,IWM,NVDA,TSLA,META,GOOGL,AMZN,MSFT,AMD,COIN,PLTR,UBER,ARKK,XLE,GLD,TLT,DIA,KO,WMT,XOM,CVX,JNJ,UNH,JPM,GS,BAC,DAL')
+  .split(',').map(function(s){ return s.trim().toUpperCase(); }).filter(Boolean);
 
 var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
@@ -86,6 +93,18 @@ function score(alert) {
 
   if (isWhale) s += 5;
 
+  // Bullflow algo-name boost — high-quality built-in algos (per Bullflow docs:
+  // Urgent Repeater, Sizable Sweep, Whale Block) catch the trades AB tweets
+  // about: $NBIS 500%, $DDOG +45%, $EBAY pre-GME-news. Boost so they don't
+  // get filtered out when their math is light (small contracts, low velocity).
+  var alertName = String(alert.alertName || alert.bullflowAlertName || '').toLowerCase();
+  if (alertName) {
+    if (alertName.includes('whale') || alertName.includes('block')) s += 4;
+    else if (alertName.includes('urgent repeater') || alertName.includes('repeat')) s += 3;
+    else if (alertName.includes('sizable sweep') || alertName.includes('sweep')) s += 2;
+    else if (alertName.includes('aggressive')) s += 2;
+  }
+
   return s;
 }
 
@@ -120,10 +139,20 @@ async function handleAlert(alert) {
   // Direction-alignment warning — filter says Bullish but OPRA is PUT (or vice versa)
   var alignmentWarning = (isCustom && alert.directionAlignment === 'mismatch');
 
-  // Below threshold = silent log — UNLESS custom alert (AB curated, always elevate)
-  if (!isCustom && s < UOA_THRESHOLD) {
+  // Premium-floor override — institutional blocks ($1M+) ALWAYS push regardless
+  // of score math. We were silent-logging $3.4M leveraged-ETF buys + $10M NOK
+  // calls because Bullflow's algo alertType=algo + small contract size yielded
+  // score < 7. Net effect: we filtered out exactly the trades worth chasing.
+  var premium = parseFloat(alert.totalPremium || alert.premium || 0);
+  var premiumOverride = premium >= PREMIUM_ALWAYS_PUSH;
+
+  // Below threshold = silent log — UNLESS custom alert OR premium override
+  if (!isCustom && !premiumOverride && s < UOA_THRESHOLD) {
     return { ok: true, action: 'log', score: s, threshold: UOA_THRESHOLD };
   }
+  alert._premiumOverride = premiumOverride;
+  alert._whaleByPremium = premium >= WHALE_PREMIUM;
+  alert._offWatchlist = WATCHLIST.indexOf(String(alert.ticker).toUpperCase()) === -1;
 
   // UOA threshold hit (or custom alert) — log it
   var log = loadLog();
@@ -176,13 +205,22 @@ async function handleAlert(alert) {
     } catch (e) { console.error('[UOA] enrichment error:', e.message); }
   }
 
+  // Whale = score >= 10 OR raw premium >= $5M. Latter catches institutional
+  // blocks that sneak under our scoring (small contract count × big premium).
+  var isWhale = s >= WHALE_THRESHOLD || alert._whaleByPremium;
   // Custom alerts get the curated-thesis flag (🎯) so AB sees his own filter fired
   var icon = isCustom
     ? '🎯'
-    : (s >= WHALE_THRESHOLD ? '🐋🐋' : '🌊');
+    : (isWhale ? '🐋🐋' : '🌊');
   var titleLabel = isCustom
     ? 'CUSTOM ALERT FIRED'
-    : (s >= WHALE_THRESHOLD ? 'WHALE' : 'UOA');
+    : (isWhale ? 'WHALE' : 'UOA');
+  // Off-watchlist tag — ticker is being chased outside AB's tracked universe
+  if (alert._offWatchlist) titleLabel = '📡 ' + titleLabel + ' [off-watchlist]';
+  // Premium-floor tag — alert pushed because of $1M+ premium even if score low
+  if (alert._premiumOverride && !isCustom && s < UOA_THRESHOLD) {
+    titleLabel = '💰 ' + titleLabel + ' [premium override]';
+  }
   // Auto-fire eligibility:
   //   - whale (s >= WHALE_THRESHOLD) + full stack always eligible
   //   - custom alert + full stack eligible IFF filter is autoFireEligible
@@ -190,7 +228,9 @@ async function handleAlert(alert) {
   var customAutoEligible = isCustom
     && (alert.filterMeta && alert.filterMeta.autoFireEligible !== false)
     && !alignmentWarning;
-  var triggerAutoFire = ((s >= WHALE_THRESHOLD) || customAutoEligible) && stack.fullStack;
+  // Auto-fire only on standard whale path (not premium-override) — institutional
+  // blocks on off-watchlist tickers get pushed for AB review, not auto-fired.
+  var triggerAutoFire = ((s >= WHALE_THRESHOLD) || customAutoEligible) && stack.fullStack && !alert._offWatchlist;
 
   // Build stackLine — prefer enriched version (has emoji + tier age info)
   var stackLine = (enriched && enriched.summary && enriched.summary.stackLine)
