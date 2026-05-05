@@ -1688,6 +1688,42 @@ async function buildTaForRows(rows, getTicker, getDir) {
 }
 window.buildTaForRows = buildTaForRows;
 
+// Phase 4.22 — Multi-Test Breakout badge helper (May 5 PM ADBE lesson).
+// Returns HTML span when the verdict is BREAKOUT (3+ tests + break + vol +
+// next-bar confirm). NOT shown for BREAK_PENDING / TESTING / NO_PATTERN —
+// only the high-conviction full-confirmation case gets a green pill.
+function buildMultiTestBadge(mtb) {
+  if (!mtb || mtb.verdict !== 'BREAKOUT') return '';
+  const reason = String(mtb.reasoning || 'multi-test breakout confirmed').replace(/"/g, '&quot;');
+  return `<span class="tag" style="background:rgba(76,175,80,0.25);color:#4caf50;font-weight:700;font-size:10px;" title="${reason}">⚡ MULTI-TEST BREAKOUT (${mtb.touchCount}× confirmed)</span>`;
+}
+window.buildMultiTestBadge = buildMultiTestBadge;
+
+// Phase 4.22 — bulk-fetch multi-test-breakout for a list of rows. Mutates
+// rows in place (sets r.mtb = {...}). 30-concurrent cap matches buildTaForRows.
+// Only fetches for LONG-direction rows (the pattern is bullish only).
+async function buildMultiTestBreakoutForRows(rows, getTicker, getDir, tf) {
+  if (!rows || !rows.length) return;
+  const useTf = tf || '60m';
+  const tasks = rows.slice(0, 30).map(async r => {
+    const ticker = getTicker ? getTicker(r) : r.ticker;
+    if (!ticker) return;
+    // Determine direction; only fire for LONG-side setups (multi-test
+    // breakout is a bull pattern by definition)
+    let dir = getDir ? getDir(r) : r.direction;
+    let dirNorm = String(dir || '').toLowerCase();
+    if (dirNorm === 'call' || dirNorm === 'bullish') dirNorm = 'long';
+    else if (dirNorm === 'put' || dirNorm === 'bearish') dirNorm = 'short';
+    if (dirNorm && dirNorm !== 'long') return;  // skip non-long
+    try {
+      const tr = await fetch(`/api/multi-test-breakout?ticker=${encodeURIComponent(ticker)}&tf=${encodeURIComponent(useTf)}`, { cache: 'no-store' });
+      if (tr.ok) r.mtb = await tr.json();
+    } catch (e) { /* fail open */ }
+  });
+  await Promise.all(tasks);
+}
+window.buildMultiTestBreakoutForRows = buildMultiTestBreakoutForRows;
+
 async function taGateOrAbort(ticker, direction) {
   if (!ticker || !direction) return true;  // skip if missing data
   let dirNorm = String(direction).toLowerCase();
@@ -1786,6 +1822,69 @@ function buildVisionPill(v) {
   return `<span class="tag" style="background:${c}22; color:${c}; font-size:10px;" title="${summary}">🔬 VISION ${i} ${v.verdict}</span>`;
 }
 window.buildVisionPill = buildVisionPill;
+
+// =============================================================================
+// VPOC pill — Phase 4.23 (May 5 PM)
+// Renders Volume Profile commitment level on cards. Spot above VPOC = bullish
+// "above value", spot below = bearish "below value", spot at VPOC = magnet
+// (chop expected). Tooltip carries VAH / VAL for full context.
+// =============================================================================
+function buildVpocPill(vp, spot) {
+  if (!vp || vp.vpoc == null) return '';
+  const s = Number(spot);
+  const v = Number(vp.vpoc);
+  if (!isFinite(s) || !isFinite(v)) return '';
+  const bw = Number(vp.bucketWidth) || 0.5;
+  const dist = s - v;
+  let label, bg, color, icon;
+  if (Math.abs(dist) <= bw) {
+    label = 'AT VPOC'; bg = 'rgba(255,193,7,0.18)'; color = '#ffc107'; icon = '🧲';
+  } else if (dist > 0) {
+    label = 'ABOVE VPOC'; bg = 'rgba(76,175,80,0.18)'; color = '#4caf50'; icon = '📊';
+  } else {
+    label = 'BELOW VPOC'; bg = 'rgba(255,80,80,0.18)'; color = '#ff5050'; icon = '📊';
+  }
+  const inVA = (vp.val != null && vp.vah != null && s >= vp.val && s <= vp.vah);
+  const vaTag = inVA ? ' · in VA' : (vp.vah != null && s > vp.vah ? ' · ABOVE VAH' : (vp.val != null && s < vp.val ? ' · BELOW VAL' : ''));
+  const tip = `VPOC $${v.toFixed(2)} · VAH $${(vp.vah||0).toFixed(2)} · VAL $${(vp.val||0).toFixed(2)} · spot $${s.toFixed(2)}${vaTag}`;
+  return `<span class="tag" style="background:${bg};color:${color};font-size:10px;" title="${tip}">${icon} ${label} $${v.toFixed(2)}</span>`;
+}
+window.buildVpocPill = buildVpocPill;
+
+// Lightweight client-side cache of VP fetches. Key = ticker|tf|lookback.
+// Backend already caches 5 min; this avoids repeat round-trips across re-renders.
+window._vpCache = window._vpCache || {};
+async function fetchVpForRows(rows, getTicker, opts) {
+  opts = opts || {};
+  const tf = opts.tf || 'Daily';
+  const lookback = opts.lookback || 20;
+  const queue = rows.slice();
+  async function worker() {
+    while (queue.length) {
+      const row = queue.shift();
+      const t = getTicker(row);
+      if (!t) continue;
+      const ck = t + '|' + tf + '|' + lookback;
+      if (window._vpCache[ck] && (Date.now() - window._vpCache[ck].time) < 5 * 60 * 1000) {
+        row._vp = window._vpCache[ck].payload;
+        continue;
+      }
+      try {
+        const r = await fetch(`/api/volume-profile?ticker=${encodeURIComponent(t)}&tf=${encodeURIComponent(tf)}&lookback=${lookback}`, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (j && j.ok) {
+          window._vpCache[ck] = { time: Date.now(), payload: j };
+          row._vp = j;
+        }
+      } catch (e) { /* silent — pill just won't render */ }
+    }
+  }
+  // 4 concurrent workers — TS endpoint can take this comfortably.
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return rows;
+}
+window.fetchVpForRows = fetchVpForRows;
 
 async function dispatchToPublic(payload, btn) {
   // Phase 4.16 — TA gate before fire on ALL tabs
@@ -2761,7 +2860,19 @@ async function loadTomorrowData() {
         const isLong = (r.target || 0) >= (r.spot || 0);
         return (r.direction || (isLong ? 'long' : 'short'));
       });
+      // Phase 4.22 — multi-test breakout flag (long-only)
+      await buildMultiTestBreakoutForRows(tradable, r => r.ticker, r => {
+        const isLong = (r.target || 0) >= (r.spot || 0);
+        return (r.direction || (isLong ? 'long' : 'short'));
+      }, '60m');
     } catch (e) { /* fail open */ }
+    // Phase 4.23 — bulk VPOC fetch for tradable setups. Async — re-render when ready.
+    try {
+      const tradable = flat.filter(r => r._state !== 'earnings');
+      fetchVpForRows(tradable, r => r.ticker, { tf: 'Daily', lookback: 20 }).then(() => {
+        try { if (activeTab === 'tomorrow') renderGridTomorrow(); } catch (e) {}
+      });
+    } catch (e) {}
     // Kick off live spot poll the moment we have tickers
     startRadarSpotPoll();
   } catch (e) {
@@ -2899,7 +3010,9 @@ function renderGridTomorrow() {
           <div class="tags">
             <span class="tag swing">SWING</span>
             ${buildTaBadge(r.ta)}
+            ${buildMultiTestBadge(r.mtb)}
             ${buildTapeBadge(window._tape, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
+            ${buildVpocPill(r._vp, r.spot)}
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
           </div>
@@ -3026,6 +3139,16 @@ async function loadActionData() {
         if (tr.ok) r.ta = await tr.json();
       } catch (e) {}
     }));
+    // Phase 4.22 — multi-test breakout flag (long-only)
+    try { await buildMultiTestBreakoutForRows(actionable, r => r.ticker, r => r.direction, '60m'); } catch (e) {}
+    // Phase 4.23 — bulk VPOC fetch for ACTIONABLE + WATCH (high-conviction).
+    // Non-blocking: render once now, then re-render with VPOC pills when data lands.
+    try {
+      const vpRows = (actionData.rows || []).filter(r => r.status === 'ACTIONABLE' || r.status === 'WATCH');
+      fetchVpForRows(vpRows, r => r.ticker, { tf: 'Daily', lookback: 20 }).then(() => {
+        try { if (activeTab === 'action') renderGridAction(); } catch (e) {}
+      });
+    } catch (e) {}
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Action radar error: <code style="color:var(--red)">${e.message}</code></div>`;
     return;
@@ -3131,7 +3254,9 @@ function renderGridAction() {
             <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
             ${johnBadge}
             ${taBadge}
+            ${buildMultiTestBadge(r.mtb)}
             ${buildTapeBadge(window._tape, r.direction)}
+            ${buildVpocPill(r._vp, live.last)}
             ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
@@ -3782,6 +3907,8 @@ async function loadWPData() {
   const trial = wpData.trial || [];
   // Phase 4.17 — verify TA on each WP setup (4HR pattern but TA verifies 5m alignment)
   try { await buildTaForRows([...ready, ...trial], r => r.ticker, r => r.direction); } catch (e) {}
+  // Phase 4.22 — multi-test breakout flag (long-only)
+  try { await buildMultiTestBreakoutForRows([...ready, ...trial], r => r.ticker, r => r.direction, '60m'); } catch (e) {}
   document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${ready.length + trial.length} setups · ${(wpData.scanned || 0)} scanned · acct $${(wpData.accountSize || 20000).toLocaleString()}`;
   renderStatsWP();
@@ -3924,7 +4051,7 @@ function renderGridWP() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildTapeBadge(window._tape, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>` : ''}
+          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildMultiTestBadge(r.mtb) || buildTapeBadge(window._tape, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>` : ''}
 
           ${dailyBreakLine}
 
@@ -4012,6 +4139,8 @@ async function loadJSData() {
   const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
   // Phase 4.17 — TA verify each pattern row
   try { await buildTaForRows(all, r => r.ticker, r => r.direction); } catch (e) {}
+  // Phase 4.22 — multi-test breakout flag (long-only)
+  try { await buildMultiTestBreakoutForRows(all, r => r.ticker, r => r.direction, '60m'); } catch (e) {}
   document.getElementById("scan-date").textContent = "JS Pattern Scan · " + new Date(jsData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${all.length} patterns · ${jsData.scanned || 0} scanned · ${Object.keys(jsData.byPattern || {}).length} pattern types`;
   renderStatsJS();
@@ -4136,7 +4265,7 @@ function renderGridJS() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
 
@@ -5279,6 +5408,17 @@ async function loadMoversData() {
     try {
       await buildTaForRows(movers.movers || [], r => r.ticker, r => (r.pctChange > 0 ? 'long' : 'short'));
     } catch (e) { /* fail open */ }
+    // Phase 4.22 — multi-test breakout (only meaningful for up-movers)
+    try {
+      const ups = (movers.movers || []).filter(m => m.pctChange > 0);
+      await buildMultiTestBreakoutForRows(ups, r => r.ticker, () => 'long', '60m');
+    } catch (e) { /* fail open */ }
+    // Phase 4.23 — bulk VPOC fetch for all movers. Async; re-render when data lands.
+    try {
+      fetchVpForRows(movers.movers || [], r => r.ticker, { tf: 'Daily', lookback: 20 }).then(() => {
+        try { if (activeTab === 'movers') renderGridMovers(); } catch (e) {}
+      });
+    } catch (e) {}
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">
       Could not load Live Movers: <code>${e.message}</code>
@@ -5463,7 +5603,9 @@ function renderGridMovers() {
         <div class="tags">
           <span class="tag day">DAY</span>
           ${buildTaBadge(m.ta)}
+          ${buildMultiTestBadge(m.mtb)}
           ${buildTapeBadge(window._tape, m.pctChange > 0 ? 'long' : 'short')}
+          ${buildVpocPill(m._vp, m.last)}
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}

@@ -53,6 +53,23 @@ function detectMediaType(base64) {
 // Build the vision prompt with strict output schema
 function buildVisionPrompt(ticker, direction, tradeContext) {
   return [
+    // Phase 4.22 — May 5 PM ADBE lesson injected at the top so the model reads
+    // it before any other guidance. Today this agent flagged "third rejection
+    // at $255.91 = bear thesis activates" which was INVERTED. AB read it
+    // correctly and fired ADBE despite my VETO; position printed green.
+    'CRITICAL READING GUIDANCE — MULTI-TEST RESISTANCE PATTERNS:\n',
+    'When you see a level tested 3+ times followed by a clean break with ',
+    'volume, that is BULLISH ACCUMULATION COMPLETED (textbook Schabacker / ',
+    'Stan Weinstein), NOT a bear thesis. Each test = sellers absorbed, buyers ',
+    'building. The break is the high-probability buy. Score this as APPROVE ',
+    'when: (a) break candle closes above level, (b) vol on the break >= 1.5x ',
+    'avg of prior touch bars, and (c) the next bar holds above the level. ',
+    'Do NOT call a multi-test break a "third rejection." A third REJECTION ',
+    '(close back under the level) is bear; a third BREAK (close above with ',
+    'vol) is bull. Read the close-vs-level relationship and the volume on the ',
+    'break candle BEFORE invoking rejection language. ADBE just printed this ',
+    'pattern May 5 — ~4 touches at $255.91, then broke clean = correct entry.\n',
+    '\n',
     'You are the chart-vision reviewer for AB\'s trading system. AB is on a ',
     '$20.4K account, swing-only on TS due to PDT. The pattern detector has ',
     'already identified a setup; your job is to qualitatively review the ',

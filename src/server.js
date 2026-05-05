@@ -90,6 +90,10 @@ try { signalTracker = require('./signalTracker'); console.log('[SIGNAL-TRACKER] 
 var positionManager = null;
 try { positionManager = require('./positionManager'); console.log('[POS-MGR] Loaded OK'); } catch(e) { console.log('[POS-MGR] Skipped:', e.message); }
 
+// Phase 4.23 — Custom Volume Profile (free alternative to TV paid VP add-on)
+var volumeProfileCalc = null;
+try { volumeProfileCalc = require('./volumeProfileCalc'); console.log('[VPOC] Loaded OK'); } catch(e) { console.log('[VPOC] Skipped:', e.message); }
+
 // MASTER AUTONOMOUS AGENT -- the brain of the system
 var stratumAgent = null;
 try {
@@ -396,6 +400,13 @@ catch(e) { console.log('[SERVER] uoaDetector not loaded:', e.message); }
 var chartVision = null;
 try { chartVision = require('./chartVision'); console.log('[SERVER] chartVision loaded OK'); }
 catch(e) { console.log('[SERVER] chartVision not loaded:', e.message); }
+
+// MULTI-TEST BREAKOUT (Phase 4.22 — May 5 PM ADBE lesson). Flags textbook
+// bullish accumulation completion: 3+ tests of resistance, then break with
+// vol confirm + next-bar hold. Used as a GREEN badge on scanner cards.
+var multiTestBreakoutScanner = null;
+try { multiTestBreakoutScanner = require('./multiTestBreakoutScanner'); console.log('[SERVER] multiTestBreakoutScanner loaded OK'); }
+catch(e) { console.log('[SERVER] multiTestBreakoutScanner not loaded:', e.message); }
 
 // CONFLUENCE SCORER — unified 11-layer scoring across all pattern tabs.
 // Stacks pattern detector + WP + John + Sniper + pivots + target + clusters +
@@ -5505,6 +5516,40 @@ app.get('/api/ta-verify', async function(req, res) {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Phase 4.22 — MULTI-TEST BREAKOUT endpoint (May 5 PM ADBE lesson).
+// Flags textbook bullish accumulation completion as a GREEN signal.
+//   GET /api/multi-test-breakout?ticker=ADBE&tf=60m
+//   GET /api/multi-test-breakout?ticker=ADBE&tf=5m
+// Returns:
+//   { ok, ticker, tf, verdict, confidence, level, touchCount, ...,
+//     reasoning, tailBars: [...] }
+//
+// Verdict values: BREAKOUT | BREAK_PENDING | TESTING | NO_PATTERN
+// Verdict logic in src/multiTestBreakoutScanner.js. Cached 30s per ticker|tf.
+//
+// CONTEXT: AB caught ADBE today on this pattern. My vision agent flagged
+// "third rejection at $255.91 = bear thesis activates" — INVERTED. Multi-
+// test resistance breaking with vol = bullish accumulation completion
+// (textbook Schabacker / Stan Weinstein), NOT a fade. This endpoint exists
+// so the scanner cards explicitly recognize this pattern as a green signal.
+app.get('/api/multi-test-breakout', async function (req, res) {
+  if (!multiTestBreakoutScanner) {
+    return res.status(500).json({ ok: false, error: 'multiTestBreakoutScanner not loaded' });
+  }
+  try {
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    var tf = String(req.query.tf || '60m');
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    if (tf !== '5m' && tf !== '60m' && tf !== '1HR') {
+      return res.status(400).json({ ok: false, error: 'tf must be 5m or 60m' });
+    }
+    var out = await multiTestBreakoutScanner.detect(ticker, tf);
+    res.json(out);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // John Repeat-Pick Flagger endpoint
 var johnRepeatFlagger = null;
 try { johnRepeatFlagger = require('./johnRepeatFlagger'); console.log('[SERVER] johnRepeatFlagger loaded OK'); }
@@ -8978,6 +9023,98 @@ app.get('/api/news', function(req, res) {
       res.json({ status: 'OK', count: news.length, news: news });
     }).catch(function(e) { res.status(500).json({ error: e.message }); });
   } catch(e) { res.status(500).json({ error: e.message }); }
+});
+
+// =============================================================================
+// VOLUME PROFILE — Phase 4.23 (May 5 PM)
+// Free alternative to TV's paid Volume Profile add-on. Computes
+// VPOC / VAH / VAL / HVN / LVN from TS bar data using uniform-distribution
+// TPO method. Cached 5 min per (ticker, tf, lookback) tuple — VP doesn't
+// change much intraday so 5-min freshness is plenty.
+//
+// GET /api/volume-profile?ticker=CRM&tf=Daily&lookback=20
+// Optional: bucketWidth (auto-scales by spot price by default), valueAreaPct
+// =============================================================================
+var _vpCache = {}; // { 'TICKER|TF|LB': { time, payload } }
+app.get('/api/volume-profile', async function(req, res) {
+  try {
+    if (!volumeProfileCalc) return res.status(500).json({ ok: false, error: 'volumeProfileCalc not loaded' });
+    var ticker = String(req.query.ticker || '').toUpperCase().trim();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/volume-profile?ticker=X&tf=Daily&lookback=20' });
+    var tf = String(req.query.tf || 'Daily');
+    var lookback = parseInt(req.query.lookback, 10) || 20;
+    if (lookback < 5) lookback = 5;
+    if (lookback > 250) lookback = 250;
+    var bucketWidth = req.query.bucketWidth ? parseFloat(req.query.bucketWidth) : null;
+    var valueAreaPct = req.query.valueAreaPct ? parseFloat(req.query.valueAreaPct) : 0.70;
+
+    // Cache check
+    var cacheKey = ticker + '|' + tf + '|' + lookback;
+    var cached = _vpCache[cacheKey];
+    if (cached && (Date.now() - cached.time) < 5 * 60 * 1000) {
+      return res.json(Object.assign({ cached: true, cacheAgeMs: Date.now() - cached.time }, cached.payload));
+    }
+
+    // Fetch bars from TS — same pattern as /api/js-scan/debug
+    var ts = require('./tradestation');
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+    var specs = {
+      'Daily':  { unit: 'Daily',  interval: 1,  barsback: Math.max(lookback, 25), sessiontemplate: null },
+      'Weekly': { unit: 'Weekly', interval: 1,  barsback: Math.max(lookback, 12), sessiontemplate: null },
+      '60m':    { unit: 'Minute', interval: 60, barsback: Math.max(lookback, 80), sessiontemplate: 'Default' },
+      '4HR':    { unit: 'Minute', interval: 60, barsback: Math.max(lookback * 4, 120), sessiontemplate: 'Default' },
+      '6HR':    { unit: 'Minute', interval: 60, barsback: Math.max(lookback * 6, 200), sessiontemplate: 'Default' },
+    };
+    var spec = specs[tf];
+    if (!spec) return res.status(400).json({ ok: false, error: 'tf must be Daily | Weekly | 60m | 4HR | 6HR' });
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+      + '?unit=' + spec.unit + '&interval=' + spec.interval + '&barsback=' + spec.barsback;
+    if (spec.sessiontemplate) url += '&sessiontemplate=' + spec.sessiontemplate;
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 10000 });
+    if (!r.ok) return res.status(502).json({ ok: false, error: 'TS-' + r.status });
+    var data = await r.json();
+    var raw = (data.Bars || data.bars || []);
+    if (!raw.length) return res.status(404).json({ ok: false, error: 'no bars returned for ' + ticker + ' ' + tf });
+
+    // Spot = most recent close
+    var spot = parseFloat(raw[raw.length - 1].Close);
+
+    // Compute profile
+    var vp = volumeProfileCalc.computeVolumeProfile(raw, {
+      bucketWidth: bucketWidth,
+      valueAreaPct: valueAreaPct,
+      lookback: lookback,
+    });
+    var summary = volumeProfileCalc.summariseProfile(vp, spot);
+
+    var payload = {
+      ok: true,
+      ticker: ticker,
+      tf: tf,
+      lookback: lookback,
+      spot: spot,
+      vpoc: vp.vpoc,
+      vah: vp.vah,
+      val: vp.val,
+      hvn: vp.hvn,
+      lvn: vp.lvn,
+      bucketWidth: vp.bucketWidth,
+      barCount: vp.barCount,
+      totalVol: vp.totalVol,
+      priceMin: vp.priceMin,
+      priceMax: vp.priceMax,
+      summary: summary,
+      generatedAt: new Date().toISOString(),
+    };
+    // Cache and return
+    _vpCache[cacheKey] = { time: Date.now(), payload: payload };
+    res.json(payload);
+  } catch(e) {
+    console.error('[VPOC]', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 console.log('[BRAIN] Cron scheduled: every 60s, 9AM-4PM ET, weekdays');
