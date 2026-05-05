@@ -4995,6 +4995,25 @@ app.post('/api/uoa/enrich-test', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// List Bullflow custom filter registry — see how the system interprets each
+// of AB's saved Bullflow alerts (direction, weight, autoFire eligibility)
+app.get('/api/bullflow-filters', function(req, res) {
+  try {
+    var bff = require('./bullflowFilters');
+    res.json({ ok: true, filters: bff.listFilters() });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Test direction resolution against a hypothetical filter+OPRA combo
+app.get('/api/bullflow-filters/resolve', function(req, res) {
+  try {
+    var bff = require('./bullflowFilters');
+    var name = req.query.name || '';
+    var opra = req.query.opraDirection || 'unknown';
+    res.json({ ok: true, resolution: bff.resolveDirection(name, opra) });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // EOD reset cron — clears tier state at end of trading day
 cron.schedule('5 16 * * 1-5', function() {
   try {

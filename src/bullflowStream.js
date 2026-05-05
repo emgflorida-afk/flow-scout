@@ -245,7 +245,23 @@ async function processAlert(alert) {
     // Determine direction from OPRA symbol's C/P character
     var contractMatch = rawSymbol.match(/\d{6}([CP])\d/);
     var optType = contractMatch ? contractMatch[1] : null;
-    var direction = optType === 'C' ? 'long' : optType === 'P' ? 'short' : 'unknown';
+    var opraDirection = optType === 'C' ? 'long' : optType === 'P' ? 'short' : 'unknown';
+    var direction = opraDirection;
+
+    // Phase 4.2.2 (May 5 PM): If this is a custom alert, let the filter name
+    // resolve direction — "AB Bullish Flow" forces long, mismatch with OPRA
+    // gets flagged for downstream warning.
+    var filterDirResolution = null;
+    try {
+      var bff = require('./bullflowFilters');
+      var rawFilterAlertName = alert.alertName || alert.alert_name || null;
+      if (rawFilterAlertName) {
+        filterDirResolution = bff.resolveDirection(rawFilterAlertName, opraDirection);
+        if (filterDirResolution && filterDirResolution.direction !== 'unknown') {
+          direction = filterDirResolution.direction;
+        }
+      }
+    } catch (e) { /* fail open */ }
 
     // Extract local vol/oi/type since they're not in processAlert scope
     var uoaVol  = parseInt(alert.volume || alert.size || 0, 10);
@@ -279,6 +295,10 @@ async function processAlert(alert) {
       bullflowAlertName: alert.alertName || alert.alert_name || null,
       executionType:   alert.execution_type || alert.executionType || null,
       flowScore:       score,
+      // Phase 4.2.2 — propagate filter resolution + meta downstream
+      opraDirection:   opraDirection,
+      filterMeta:      filterDirResolution ? filterDirResolution.filterMeta : null,
+      directionAlignment: filterDirResolution ? filterDirResolution.alignment : null,
     };
     // Fire-and-forget — don't await (don't slow down main flow processing)
     uoaDetector.handleAlert(uoaPayload).catch(function(e) {

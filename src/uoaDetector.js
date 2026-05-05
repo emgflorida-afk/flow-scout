@@ -97,13 +97,28 @@ async function handleAlert(alert) {
 
   // PHASE 4.2.1 (May 5 PM): Custom alerts elevated.
   // Bullflow custom alerts = AB's saved filters firing — pre-curated by him,
-  // high-signal by definition. Bypass UOA_THRESHOLD (always push) + +5 boost
-  // to score so the Discord card visibly ranks above algo noise.
+  // high-signal by definition. Bypass UOA_THRESHOLD (always push) + boost
+  // score so the Discord card visibly ranks above algo noise.
   var isCustom = !!alert.isCustomAlert || alert.bullflowAlertCategory === 'custom';
-  var s = isCustom ? baseScore + 5 : baseScore;
+
+  // Phase 4.2.2 — per-filter weight from registry (replaces flat +5 boost).
+  // If filter is in KNOWN_FILTERS, use its weight; unknown custom = +5 default.
+  var customBoost = 0;
+  var filterWeight = null;
+  if (isCustom) {
+    filterWeight = (alert.filterMeta && typeof alert.filterMeta.weight === 'number')
+      ? alert.filterMeta.weight
+      : 5;
+    customBoost = filterWeight;
+  }
+  var s = baseScore + customBoost;
   alert._uoaScore = s;
   alert._baseScore = baseScore;
-  alert._customBoost = isCustom ? 5 : 0;
+  alert._customBoost = customBoost;
+  alert._filterWeight = filterWeight;
+
+  // Direction-alignment warning — filter says Bullish but OPRA is PUT (or vice versa)
+  var alignmentWarning = (isCustom && alert.directionAlignment === 'mismatch');
 
   // Below threshold = silent log — UNLESS custom alert (AB curated, always elevate)
   if (!isCustom && s < UOA_THRESHOLD) {
@@ -151,8 +166,14 @@ async function handleAlert(alert) {
   var titleLabel = isCustom
     ? 'CUSTOM ALERT FIRED'
     : (s >= WHALE_THRESHOLD ? 'WHALE' : 'UOA');
-  // Custom alerts can auto-fire on stack alone (don't require whale threshold)
-  var triggerAutoFire = (s >= WHALE_THRESHOLD || isCustom) && stack.fullStack;
+  // Auto-fire eligibility:
+  //   - whale (s >= WHALE_THRESHOLD) + full stack always eligible
+  //   - custom alert + full stack eligible IFF filter is autoFireEligible
+  //     AND direction not mismatched
+  var customAutoEligible = isCustom
+    && (alert.filterMeta && alert.filterMeta.autoFireEligible !== false)
+    && !alignmentWarning;
+  var triggerAutoFire = ((s >= WHALE_THRESHOLD) || customAutoEligible) && stack.fullStack;
 
   // Build stackLine — prefer enriched version (has emoji + tier age info)
   var stackLine = (enriched && enriched.summary && enriched.summary.stackLine)
@@ -208,11 +229,25 @@ async function handleAlert(alert) {
 
   // Insert custom-alert callout above stack confluence if present
   if (isCustom) {
+    var filterName = alert.customAlertName || alert.bullflowAlertName || 'Custom alert';
+    var filterDesc = alert.filterMeta && alert.filterMeta.description
+      ? '\n_' + alert.filterMeta.description + '_'
+      : '';
+    var calloutValue = '**' + filterName + '** fired · score ' + baseScore + ' + filter weight +' + customBoost + ' = **' + s + '**' + filterDesc;
     fields.unshift({
       name: '🎯 Your saved Bullflow filter',
-      value: '**' + (alert.customAlertName || alert.bullflowAlertName || 'Custom alert') + '** fired — AB-curated thesis · score ' + (alert._baseScore || baseScore) + ' + custom boost +5 = **' + s + '/20**',
+      value: calloutValue,
       inline: false,
     });
+
+    // Direction-alignment warning if filter direction != OPRA direction
+    if (alignmentWarning) {
+      fields.unshift({
+        name: '⚠️ DIRECTION MISMATCH',
+        value: 'Filter "' + filterName + '" expects **' + (alert.filterMeta && alert.filterMeta.direction || '?').toUpperCase() + '**, but OPRA is **' + (alert.opraDirection || '?').toUpperCase() + '**. Counter-signal — verify chart before action.',
+        inline: false,
+      });
+    }
   }
 
   // Custom alerts get gold color so they stand out in Discord; whale = red; standard UOA = green
