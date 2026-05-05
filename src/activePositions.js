@@ -37,6 +37,9 @@ var ts = null;
 try { ts = require('./tradestation'); } catch (e) {}
 var dp = null;
 try { dp = require('./discordPush'); } catch (e) {}
+// Phase 4.26 — time-stop rules per card type
+var tsr = null;
+try { tsr = require('./timeStopRules'); } catch (e) {}
 
 var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
@@ -81,7 +84,31 @@ function recordPosition(pos) {
     exitedAt: null,
     notes: pos.notes || '',
     source: pos.source || 'manual',
+    // Phase 4.26 — time-stop fields
+    tradeType: null,
+    timeStopExitBy: null,
+    timeStopWarningAt: null,
+    timeStopWarned: false,
+    timeStopExitTriggered: false,
   };
+
+  // Phase 4.26 — classify trade type + compute exitBy/warningAt at entry time
+  if (tsr) {
+    try {
+      entry.tradeType = String(pos.tradeType || tsr.classifyTradeType({
+        source: entry.source,
+        dte: pos.dte,
+        conviction: pos.conviction,
+        pattern: pos.pattern,
+        entryPremium: entry.entryPrice,
+        cardType: pos.cardType,
+      }) || 'SWING').toUpperCase();
+      var rule = tsr.getRule(entry.tradeType);
+      var firedTime = new Date(entry.firedAt);
+      entry.timeStopExitBy = new Date(firedTime.getTime() + rule.maxHoldMinutes * 60 * 1000).toISOString();
+      entry.timeStopWarningAt = new Date(firedTime.getTime() + rule.warningAt * 60 * 1000).toISOString();
+    } catch (e) { console.error('[ACTIVE-POS] timeStopRules classify error:', e.message); }
+  }
   positions.push(entry);
   savePositions(positions);
   return entry;
@@ -148,7 +175,26 @@ async function checkPosition(p, token) {
   }
 }
 
-// Run scan across all open positions, push Discord exit alert if structural stop hit
+// Phase 4.26 — fetch live option-premium mid-price for time-stop "in profit" check
+async function _fetchOptionMid(token, contractSymbol) {
+  if (!contractSymbol) return null;
+  try {
+    var fetchLib = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(contractSymbol);
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 5000 });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var q = (data.Quotes || data.quotes || [])[0];
+    if (!q) return null;
+    var bid = parseFloat(q.Bid || 0);
+    var ask = parseFloat(q.Ask || 0);
+    if (bid > 0 && ask > 0) return (bid + ask) / 2;
+    return parseFloat(q.Last || q.Close || 0) || null;
+  } catch (e) { return null; }
+}
+
+// Run scan across all open positions, push Discord exit alert if structural stop
+// hit OR time stop fires (Phase 4.26). Time stop is SECONDARY to structural stop.
 async function scanAllPositions() {
   if (!ts || !ts.getAccessToken) return { ok: false, error: 'TS not loaded' };
   var token;
@@ -161,12 +207,17 @@ async function scanAllPositions() {
   if (opens.length === 0) return { ok: true, openCount: 0 };
 
   var stopHitCount = 0;
+  var timeStopExitCount = 0;
+  var timeStopWarnCount = 0;
   for (var i = 0; i < opens.length; i++) {
     var p = opens[i];
     var result = await checkPosition(p, token);
     p.lastChecked = new Date().toISOString();
     if (result.skip) continue;
 
+    // ----------------------------------------------------------------------
+    // 1) STRUCTURAL stop (primary, always wins)
+    // ----------------------------------------------------------------------
     if (result.stopHit) {
       p.status = 'STOPPED_OUT';
       p.exitReason = result.reason;
@@ -195,10 +246,81 @@ async function scanAllPositions() {
         };
         try { await dp.send('activePositions', embed, { webhook: DISCORD_WEBHOOK }); } catch (e) {}
       }
+      continue;  // structural stop already handled, skip time-stop check
+    }
+
+    // ----------------------------------------------------------------------
+    // 2) TIME stop (secondary — only fires if structural stop did NOT)
+    // Phase 4.26: per-card-type max-hold window. EXIT if past exitBy AND not in profit.
+    // ----------------------------------------------------------------------
+    if (tsr && p.tradeType) {
+      try {
+        var currentPremium = await _fetchOptionMid(token, p.optionSymbol);
+        var enf = tsr.shouldEnforce(p, new Date(), currentPremium);
+
+        if (enf.action === 'EXIT' && !p.timeStopExitTriggered) {
+          p.timeStopExitTriggered = true;
+          p.status = 'TIME_STOPPED';
+          p.exitReason = enf.reason;
+          p.exitedAt = new Date().toISOString();
+          timeStopExitCount++;
+          if (dp) {
+            try {
+              var exitEmbed = tsr.buildExitEmbed(p, enf);
+              await dp.send('activePositions-timeStop', exitEmbed, { webhook: DISCORD_WEBHOOK });
+            } catch (e) { console.error('[ACTIVE-POS] time-stop EXIT push error:', e.message); }
+          }
+        } else if (enf.action === 'WARN' && !p.timeStopWarned) {
+          p.timeStopWarned = true;
+          timeStopWarnCount++;
+          if (dp) {
+            try {
+              var warnEmbed = tsr.buildWarnEmbed(p, enf);
+              await dp.send('activePositions-timeStop', warnEmbed, { webhook: DISCORD_WEBHOOK });
+            } catch (e) { console.error('[ACTIVE-POS] time-stop WARN push error:', e.message); }
+          }
+        }
+      } catch (e) { console.error('[ACTIVE-POS] time-stop check error:', e.message); }
     }
   }
   savePositions(positions);
-  return { ok: true, openCount: opens.length, stopHitCount: stopHitCount };
+  return {
+    ok: true,
+    openCount: opens.length,
+    stopHitCount: stopHitCount,
+    timeStopExitCount: timeStopExitCount,
+    timeStopWarnCount: timeStopWarnCount,
+  };
+}
+
+// Phase 4.26 — return current time-stop state for an open position by ticker.
+//   { hasPosition, position, timeStop: { tradeType, action, exitBy, warningAt, ... } }
+function getTimeStopStatus(ticker) {
+  var positions = loadPositions();
+  var open = positions.filter(function(p) {
+    return p.status === 'OPEN' && p.ticker === String(ticker || '').toUpperCase();
+  });
+  if (open.length === 0) return { hasPosition: false };
+  var p = open[0];
+  if (!tsr) return { hasPosition: true, position: p, timeStop: null, error: 'timeStopRules not loaded' };
+  try {
+    var enf = tsr.shouldEnforce(p, new Date(), null);
+    return {
+      hasPosition: true,
+      position: p,
+      timeStop: {
+        tradeType: enf.tradeType,
+        action: enf.action,
+        rule: enf.rule,
+        exitBy: enf.exitBy,
+        warningAt: enf.warningAt,
+        minutesElapsed: enf.minutesElapsed,
+        minutesRemaining: enf.minutesRemaining,
+        timeStopWarned: !!p.timeStopWarned,
+        timeStopExitTriggered: !!p.timeStopExitTriggered,
+      },
+    };
+  } catch (e) { return { hasPosition: true, position: p, timeStop: null, error: e.message }; }
 }
 
 module.exports = {
@@ -207,4 +329,5 @@ module.exports = {
   getOpenPositions: getOpenPositions,
   scanAllPositions: scanAllPositions,
   loadPositions: loadPositions,
+  getTimeStopStatus: getTimeStopStatus,
 };

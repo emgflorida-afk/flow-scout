@@ -430,6 +430,19 @@
   .tag.swing     { background: var(--purple-soft); color: var(--purple); border: 1px solid rgba(180,120,255,0.32); }
   .tag.day       { background: var(--aqua-soft); color: var(--aqua); border: 1px solid rgba(77,214,255,0.32); }
   .tag.scalp     { background: var(--amber-soft); color: var(--amber); border: 1px solid rgba(255,184,77,0.32); }
+  /* Phase 4.26 — time-stop pill per card type */
+  .tag.time-stop          { background: rgba(120,120,120,0.18); color: #d4c4ff; border: 1px solid rgba(180,120,255,0.45); font-weight: 700; }
+  .tag.time-stop.day      { background: rgba(77,214,255,0.14); color: #4dd6ff; border: 1px solid rgba(77,214,255,0.45); }
+  .tag.time-stop.scalp    { background: rgba(255,184,77,0.14); color: #ffb84d; border: 1px solid rgba(255,184,77,0.45); }
+  .tag.time-stop.swing    { background: rgba(180,120,255,0.14); color: #b478ff; border: 1px solid rgba(180,120,255,0.45); }
+  .tag.time-stop.lotto    { background: rgba(255,99,99,0.14); color: #ff6363; border: 1px solid rgba(255,99,99,0.45); }
+  .tag.time-stop.overnight{ background: rgba(80,200,150,0.14); color: #50c896; border: 1px solid rgba(80,200,150,0.45); }
+  .tag.time-stop.warn     { background: rgba(255,184,77,0.22); color: #ffd28a; border: 1px solid rgba(255,184,77,0.65); animation: time-stop-pulse 2s ease-in-out infinite; }
+  .tag.time-stop.exit     { background: rgba(255,99,99,0.30); color: #fff; border: 1px solid #ff6363; font-weight: 800; animation: time-stop-pulse 1s ease-in-out infinite; }
+  @keyframes time-stop-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
 
   /* TAB NAV */
   .tabs {
@@ -946,6 +959,63 @@ function scoreClass(s) {
 }
 
 // =============================================================================
+// PHASE 4.26 — TIME-STOP PILLS per card type
+// Renders "🕐 60m DAY" / "🕐 24h SWING" / etc. on every card so AB sees the
+// max-hold window before fire. When a position is open, the pill flips to a
+// live countdown to warningAt (and EXIT on time-stop hit).
+// =============================================================================
+const TIME_STOP_DISPLAY = {
+  'SCALP':     { display: '🕐 30m SCALP',     cssClass: 'scalp',     mins: 30 },
+  'DAY':       { display: '🕐 60m DAY',       cssClass: 'day',       mins: 60 },
+  'LOTTO':     { display: '🕐 6h LOTTO',      cssClass: 'lotto',     mins: 360 },
+  'SWING':     { display: '🕐 24h SWING',     cssClass: 'swing',     mins: 1440 },
+  'OVERNIGHT': { display: '🕐 3d OVERNIGHT',  cssClass: 'overnight', mins: 4320 },
+};
+
+// Returns a pill HTML for a card type (used on render).
+//   tradeType: 'DAY' | 'SCALP' | 'SWING' | 'LOTTO' | 'OVERNIGHT'
+//   tooltip: optional title text
+function timeStopPillHtml(tradeType, tooltip) {
+  const t = String(tradeType || 'SWING').toUpperCase();
+  const cfg = TIME_STOP_DISPLAY[t] || TIME_STOP_DISPLAY['SWING'];
+  const tt = tooltip || `Max-hold: ${cfg.mins} min for ${t} card. If still flat past max-hold, system pushes EXIT alert.`;
+  return `<span class="tag time-stop ${cfg.cssClass}" title="${tt}">${cfg.display}</span>`;
+}
+
+// Cache of /api/time-stop-status?ticker=X results, refreshed every ~30s.
+window.__timeStopStatusCache = window.__timeStopStatusCache || {};
+async function refreshTimeStopForTicker(ticker) {
+  if (!ticker) return null;
+  try {
+    const r = await fetch('/api/time-stop-status?ticker=' + encodeURIComponent(ticker), { cache: 'no-store' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j.ok || !j.hasPosition) return null;
+    window.__timeStopStatusCache[ticker.toUpperCase()] = { fetchedAt: Date.now(), data: j };
+    return j;
+  } catch (e) { return null; }
+}
+
+// Returns countdown pill HTML for an OPEN position (live state).
+// Flips color: HOLD = normal, WARN = amber pulse, EXIT = red pulse.
+function timeStopLivePillHtml(tradeType, action, minutesRemaining) {
+  const t = String(tradeType || 'SWING').toUpperCase();
+  const cfg = TIME_STOP_DISPLAY[t] || TIME_STOP_DISPLAY['SWING'];
+  let label = cfg.display;
+  let extraClass = cfg.cssClass;
+  if (action === 'WARN') {
+    extraClass += ' warn';
+    label = '⏰ ' + (minutesRemaining != null && minutesRemaining > 0 ? minutesRemaining + 'm left' : 'WARN') + ' · ' + t;
+  } else if (action === 'EXIT') {
+    extraClass += ' exit';
+    label = '🕐 TIME STOP HIT · ' + t;
+  } else if (minutesRemaining != null && minutesRemaining >= 0) {
+    label = '🕐 ' + (minutesRemaining < 60 ? minutesRemaining + 'm' : Math.floor(minutesRemaining/60) + 'h ' + (minutesRemaining%60) + 'm') + ' · ' + t;
+  }
+  return `<span class="tag time-stop ${extraClass}" title="Phase 4.26 live time-stop · action=${action}">${label}</span>`;
+}
+
+// =============================================================================
 // ENTRY TIMING ENGINE
 // Computes, per candidate: trigger / stop / TP / where spot is in the move.
 // Returns a verdict that drives the card's prominent timing badge.
@@ -1265,6 +1335,7 @@ function renderGrid() {
         </div>
         <div class="tags">
           <span class="tag swing">SWING</span>
+          ${timeStopPillHtml('SWING')}
           <span class="tag sector">${c.sector || "-"} ${sectorMomDisplay}</span>
           <span class="tag ${sectorTier}">${sectorTier}</span>
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
@@ -2475,6 +2546,7 @@ function openMoverDetail(idx) {
           <span class="ticker mono">${m.ticker}</span>
           <span class="dir-pill ${isCall ? "call" : "put"}">${isCall ? "CALL" : "PUT"}</span>
           <span class="tag day">DAY</span>
+          ${timeStopPillHtml('DAY')}
           ${isEarnings ? '<span class="tag block">⚠ Earnings blocked</span>' : ""}
         </div>
         <div style="font-size: 13px; color: var(--txt-2);">Live Mover · Score <span style="color: ${(m.score||0) >= 10 ? 'var(--green)' : 'var(--amber)'}; font-weight:700;">${fmtNum(m.score, 1)}</span> · ${fmtPct(m.pctChange)} · vol ratio ${m.volRatio ? m.volRatio.toFixed(2) + 'x' : '—'}</div>
@@ -3009,6 +3081,7 @@ function renderGridTomorrow() {
 
           <div class="tags">
             <span class="tag swing">SWING</span>
+            ${timeStopPillHtml('SWING')}
             ${buildTaBadge(r.ta)}
             ${buildMultiTestBadge(r.mtb)}
             ${buildTapeBadge(window._tape, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
@@ -3252,6 +3325,7 @@ function renderGridAction() {
           </div>
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
+            ${timeStopPillHtml('DAY')}
             ${johnBadge}
             ${taBadge}
             ${buildMultiTestBadge(r.mtb)}
@@ -3489,6 +3563,7 @@ function renderGridSniper() {
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">📈 SNIPER</span>
+              ${timeStopPillHtml('SWING')}
               ${p.hasChart ? '<span class="tag preferred" style="font-size:10px;">📊 CHART</span>' : ''}
               ${p.ticker ? `<button onclick="event.stopPropagation();toggleStar('${p.ticker}','sniper')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>` : ''}
             </div>
@@ -3630,6 +3705,7 @@ function renderGridSwingLeap() {
             </div>
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">🚀 SWING/LEAP</span>
+              ${timeStopPillHtml('OVERNIGHT')}
               ${p.hasChart ? `<span class="tag preferred" style="font-size:10px;">📊 ${p.chartCount} CHART${p.chartCount > 1 ? 'S' : ''}</span>` : ''}
               ${p.ticker ? `<button onclick="event.stopPropagation();toggleStar('${p.ticker}','swings')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>` : ''}
             </div>
@@ -3778,6 +3854,7 @@ function renderGridCoil() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="tag" style="background:rgba(180,70,255,0.18); color:#b446ff; font-size:10px;">🌀 COIL</span>
               <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              ${timeStopPillHtml('OVERNIGHT')}
               <button onclick="event.stopPropagation();toggleStar('${r.ticker}','coil')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
           </div>
@@ -4045,6 +4122,7 @@ function renderGridWP() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               <span class="tag" style="background:${tierColor}22; color:${tierColor}; font-weight:700; font-size:11px;">${tier}</span>
               <span class="tag" style="background:${convColor}22; color:${convColor}; font-weight:700; font-size:11px;">⭐ ${r.conviction}/10</span>
+              ${timeStopPillHtml('SWING')}
               <button onclick="event.stopPropagation();toggleStar('${r.ticker}','wp')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
           </div>
@@ -4486,6 +4564,7 @@ function renderGridLotto() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               ${p.direction ? `<span class="dir-pill ${isCall ? 'call' : 'put'}">${p.direction}</span>` : ''}
               <span class="tag" style="background:rgba(155,109,255,0.2); color:#9b6dff; font-size:10px;">🎰 LOTTO</span>
+              ${timeStopPillHtml('LOTTO')}
               ${buildTaBadge(p.ta)}
               <span id="hold-pill-${p.ticker}-lotto" data-hold-ticker="${p.ticker}" data-hold-dir="${p.direction || 'LONG'}"></span>
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
@@ -5195,6 +5274,7 @@ function renderGridLvl() {
         <div class="tags">
           <span class="tag swing">SWING (D)</span>
           <span class="tag day">DAY (1H)</span>
+          ${timeStopPillHtml('SWING')}
           ${aligned ? '<span class="tag preferred">★ Multi-TF Aligned</span>' : ''}
           ${r._anyStopped ? '<span class="tag block">Stopped on a TF</span>' : ''}
         </div>
@@ -5602,6 +5682,7 @@ function renderGridMovers() {
         </div>
         <div class="tags">
           <span class="tag day">DAY</span>
+          ${timeStopPillHtml('DAY')}
           ${buildTaBadge(m.ta)}
           ${buildMultiTestBadge(m.mtb)}
           ${buildTapeBadge(window._tape, m.pctChange > 0 ? 'long' : 'short')}

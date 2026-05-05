@@ -29,6 +29,10 @@
 var fs = require('fs');
 var path = require('path');
 
+// Phase 4.26 — time-stop classifier
+var tsr = null;
+try { tsr = require('./timeStopRules'); } catch (e) {}
+
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var JOURNAL_FILE = path.join(DATA_ROOT, 'sim_trade_journal.json');
 
@@ -143,11 +147,72 @@ function openPosition(args) {
       timeStopHit: false,
       lastChecked: null,
     },
+    // Phase 4.26 — time-stop fields
+    tradeType: null,
+    timeStopExitBy: null,
+    timeStopWarningAt: null,
   };
+
+  // Phase 4.26 — classify trade type, compute exitBy/warningAt
+  if (tsr) {
+    try {
+      pos.tradeType = String(args.tradeType || tsr.classifyTradeType({
+        source: args.source,
+        dte: args.dte,
+        conviction: args.conviction,
+        pattern: args.pattern,
+        entryPremium: pos.entryPrice,
+      }) || 'SWING').toUpperCase();
+      var rule = tsr.getRule(pos.tradeType);
+      var firedTime = new Date(pos.entryTimestamp);
+      pos.timeStopExitBy = new Date(firedTime.getTime() + rule.maxHoldMinutes * 60 * 1000).toISOString();
+      pos.timeStopWarningAt = new Date(firedTime.getTime() + rule.warningAt * 60 * 1000).toISOString();
+    } catch (e) { console.error('[SIM-JOURNAL] timeStopRules classify error:', e.message); }
+  }
+
   j.activePositions.push(pos);
   saveJournal(j);
-  console.log('[SIM-JOURNAL] OPEN ' + pos.ticker + ' ' + pos.direction + ' ' + pos.contractSymbol + ' @ $' + pos.entryPrice);
+  console.log('[SIM-JOURNAL] OPEN ' + pos.ticker + ' ' + pos.direction + ' ' + pos.contractSymbol + ' @ $' + pos.entryPrice +
+              (pos.tradeType ? ' [' + pos.tradeType + ' exitBy=' + pos.timeStopExitBy + ']' : ''));
   return { ok: true, position: pos };
+}
+
+// Phase 4.26 — check ALL active SIM positions for time-stop expiry. Returns
+// list of positions that should be auto-closed via 'TIME' exitReason.
+//
+// Caller (cron in server.js) is responsible for invoking closePosition() with
+// the right exitPrice (currentPrice from mark-to-market). We just return the
+// list here so the cron has a chance to fetch fresh prices first.
+function checkTimeStops() {
+  if (!tsr) return { ok: false, error: 'timeStopRules not loaded', exits: [], warns: [] };
+  var j = loadJournal();
+  var exits = [];
+  var warns = [];
+  var now = new Date();
+  j.activePositions.forEach(function(p) {
+    if (!p.tradeType || !p.entryTimestamp) return;
+    var enf = tsr.shouldEnforce({
+      tradeType: p.tradeType,
+      firedAt: p.entryTimestamp,
+      entryPrice: p.entryPrice,
+    }, now, p.currentPrice);
+    if (enf.action === 'EXIT' && !p.bracketTracker.timeStopHit) {
+      exits.push({ position: p, enforce: enf });
+    } else if (enf.action === 'WARN' && !p._timeStopWarned) {
+      warns.push({ position: p, enforce: enf });
+    }
+  });
+  return { ok: true, exits: exits, warns: warns };
+}
+
+// Mark a position as time-stop-warned so we only push WARN once
+function markTimeStopWarned(contractSymbol) {
+  var j = loadJournal();
+  var p = j.activePositions.find(function(x) { return x.contractSymbol === contractSymbol; });
+  if (!p) return { ok: false, error: 'no position' };
+  p._timeStopWarned = true;
+  saveJournal(j);
+  return { ok: true };
 }
 
 // Update mark-to-market for an active position (called by 5-min cron)
@@ -299,6 +364,9 @@ module.exports = {
   getClosedByDateRange: getClosedByDateRange,
   computeWinRate: computeWinRate,
   getJournalSnapshot: getJournalSnapshot,
+  // Phase 4.26 — time-stop helpers
+  checkTimeStops: checkTimeStops,
+  markTimeStopWarned: markTimeStopWarned,
   // exposed for cron / introspection
   loadJournal: loadJournal,
   saveJournal: saveJournal,

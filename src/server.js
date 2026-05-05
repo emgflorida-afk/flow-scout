@@ -5144,7 +5144,11 @@ async function _fetchStockSpot(token, ticker) {
 // Bracket thresholds (percent of entry)
 var SIM_JOURNAL_STOP_PCT = -50;     // tail-risk catch (matches simAutoTrader)
 var SIM_JOURNAL_TP1_PCT  = 25;      // first profit trim (lighter than +50% to lock smaller wins faster in journal)
-var SIM_JOURNAL_TIME_HRS = 6;       // time stop if no profit
+// Phase 4.26 — TIME stop is now per-card-type via timeStopRules.js
+//   Old hardcoded SIM_JOURNAL_TIME_HRS=6 retired.
+//   DAY: 60min · SCALP: 30min · LOTTO: 6h · SWING: 24h · OVERNIGHT: 3d.
+var timeStopRules = null;
+try { timeStopRules = require('./timeStopRules'); } catch (e) {}
 
 // Mark-to-market + auto-close cron — every 5 min RTH
 cron.schedule('*/5 9-15 * * 1-5', async function() {
@@ -5184,13 +5188,34 @@ cron.schedule('*/5 9-15 * * 1-5', async function() {
             });
             continue;
           }
-          // Time stop — > 6 hrs old AND not in profit
-          var ageHrs = (Date.now() - new Date(pos.entryTimestamp).getTime()) / 3600000;
-          if (ageHrs >= SIM_JOURNAL_TIME_HRS && pnlPct <= 0) {
-            simTradeJournal.closePosition(pos.contractSymbol, {
-              exitPrice: prem, exitSpot: spot, exitReason: 'TIME'
-            });
-            continue;
+          // Phase 4.26 — per-card-type time stop (replaces flat 6hr rule)
+          if (timeStopRules && pos.tradeType) {
+            try {
+              var enf = timeStopRules.shouldEnforce({
+                tradeType: pos.tradeType,
+                firedAt: pos.entryTimestamp,
+                entryPrice: pos.entryPrice,
+              }, new Date(), prem);
+              if (enf.action === 'EXIT') {
+                simTradeJournal.closePosition(pos.contractSymbol, {
+                  exitPrice: prem, exitSpot: spot, exitReason: 'TIME'
+                });
+                console.log('[SIM-JOURNAL] TIME STOP — ' + pos.contractSymbol + ' (' + pos.tradeType + ') ' + enf.minutesElapsed + 'min, not in profit');
+                continue;
+              } else if (enf.action === 'WARN' && !pos._timeStopWarned) {
+                simTradeJournal.markTimeStopWarned(pos.contractSymbol);
+                console.log('[SIM-JOURNAL] TIME WARN — ' + pos.contractSymbol + ' (' + pos.tradeType + ') ' + enf.minutesElapsed + '/' + enf.rule.maxHoldMinutes + 'min');
+              }
+            } catch (e) { console.error('[SIM-JOURNAL] time-stop check error:', e.message); }
+          } else {
+            // Fallback for legacy positions without tradeType field — old 6hr flat rule
+            var ageHrs = (Date.now() - new Date(pos.entryTimestamp).getTime()) / 3600000;
+            if (ageHrs >= 6 && pnlPct <= 0) {
+              simTradeJournal.closePosition(pos.contractSymbol, {
+                exitPrice: prem, exitSpot: spot, exitReason: 'TIME'
+              });
+              continue;
+            }
           }
         }
       } catch (e) { console.error('[SIM-JOURNAL] mark error ' + pos.contractSymbol + ':', e.message); }
@@ -5637,15 +5662,56 @@ app.post('/api/active-positions/scan', async function(req, res) {
 // CRON: scan all open positions every 60s during market hours.
 // Pushes Discord alert ONLY when structural stop hits on the 60m close.
 // No flip-flops. No tape-noise overrides. The stop is the rule.
+// Phase 4.26 — also evaluates per-card-type time stop (DAY/SCALP/SWING/LOTTO/OVERNIGHT).
 cron.schedule('*/1 9-16 * * 1-5', async function() {
   try {
     if (!activePositions) return;
     var result = await activePositions.scanAllPositions();
     if (result.stopHitCount > 0) {
-      console.log('[ACTIVE-POS-CRON] ' + result.stopHitCount + ' position(s) stopped out, alerts pushed');
+      console.log('[ACTIVE-POS-CRON] ' + result.stopHitCount + ' position(s) STRUCTURAL stop hit, alerts pushed');
+    }
+    if (result.timeStopExitCount > 0) {
+      console.log('[ACTIVE-POS-CRON] ' + result.timeStopExitCount + ' position(s) TIME stop hit, alerts pushed');
+    }
+    if (result.timeStopWarnCount > 0) {
+      console.log('[ACTIVE-POS-CRON] ' + result.timeStopWarnCount + ' position(s) approaching time stop, WARN pushed');
     }
   } catch(e) { console.error('[ACTIVE-POS-CRON]', e.message); }
 }, { timezone: 'America/New_York' });
+
+// Phase 4.26 — GET /api/time-stop-status?ticker=X
+// Returns active position's time-stop state if any.
+app.get('/api/time-stop-status', function(req, res) {
+  if (!activePositions || !activePositions.getTimeStopStatus) {
+    return res.status(500).json({ ok: false, error: 'activePositions.getTimeStopStatus not loaded' });
+  }
+  try {
+    var ticker = req.query.ticker;
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker query param required' });
+    var status = activePositions.getTimeStopStatus(ticker);
+    res.json(Object.assign({ ok: true }, status));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Phase 4.26 — GET /api/time-stop/rules
+// Returns the rule table so the front-end can render labels/pills consistently.
+app.get('/api/time-stop/rules', function(req, res) {
+  try {
+    var tsr2 = require('./timeStopRules');
+    res.json({ ok: true, rules: tsr2.TIME_STOP_RULES, inProfitThreshold: tsr2.IN_PROFIT_THRESHOLD });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Phase 4.26 — POST /api/time-stop/classify  body: { source, dte, conviction, pattern }
+// Returns the trade-type classification (DAY/SWING/etc).
+app.post('/api/time-stop/classify', function(req, res) {
+  try {
+    var tsr2 = require('./timeStopRules');
+    var t = tsr2.classifyTradeType(req.body || {});
+    var rule = tsr2.getRule(t);
+    res.json({ ok: true, tradeType: t, rule: rule });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
 
 // Phase 4.15 — Serve the IKEA Trade Guide as HTML
 app.get(['/guide', '/ikea', '/ikea-guide'], function(req, res) {
@@ -6473,6 +6539,68 @@ app.get('/api/sim-auto/qualifying', function(req, res) {
   try {
     var setups = simAutoTrader.collectQualifyingSetups();
     res.json({ ok: true, count: setups.length, setups: setups });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// PHASE 4.27 — SIM gate pipeline endpoints
+// =============================================================================
+
+// GET /api/sim-auto/blocked-log?days=N
+//   Returns the rolling log of SIM fires blocked by gates (TA / TAPE / MTB /
+//   VISION). Default last 7 days. Useful for AB to audit what's getting
+//   filtered and verify gates work as intended.
+app.get('/api/sim-auto/blocked-log', function(req, res) {
+  if (!simAutoTrader || !simAutoTrader.getBlockedLog) {
+    return res.status(500).json({ ok: false, error: 'simAutoTrader.getBlockedLog not loaded' });
+  }
+  try {
+    var days = parseInt(req.query.days || '7', 10);
+    res.json(simAutoTrader.getBlockedLog(days));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/sim-auto/gate-test?ticker=T&direction=long&tradeType=SWING
+//   Runs the gate pipeline against a single setup without firing. Used for
+//   quick verification ("does INTC put really get blocked on RISK_ON tape?").
+app.get('/api/sim-auto/gate-test', async function(req, res) {
+  if (!simAutoTrader || !simAutoTrader.runGates) {
+    return res.status(500).json({ ok: false, error: 'simAutoTrader.runGates not loaded' });
+  }
+  try {
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || 'long').toLowerCase();
+    var tradeType = String(req.query.tradeType || 'SWING').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    if (direction.match(/short|put|bear/)) direction = 'short';
+    else if (direction.match(/long|call|bull/)) direction = 'long';
+    var setup = { ticker: ticker, direction: direction, tradeType: tradeType, source: 'gate-test' };
+    var verdict = await simAutoTrader.runGates(setup);
+    res.json({ ok: true, ticker: ticker, direction: direction, tradeType: tradeType, verdict: verdict });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/sim-auto/replay
+//   Body: { fires?: [...], extraTickers?: [{ticker,direction}], pushDiscord?: bool }
+//   Runs the gate pipeline retrospectively against today's actual fires
+//   (default) or a supplied list. Writes /data/sim_replay_<date>.json and
+//   optionally pushes a Discord summary.
+app.post('/api/sim-auto/replay', async function(req, res) {
+  if (!simAutoTrader || !simAutoTrader.runRetroReplay) {
+    return res.status(500).json({ ok: false, error: 'simAutoTrader.runRetroReplay not loaded' });
+  }
+  try {
+    var b = req.body || {};
+    var replay = await simAutoTrader.runRetroReplay({
+      fires: b.fires,
+      extraTickers: b.extraTickers,
+      includeYesterday: !!b.includeYesterday,
+    });
+    if (b.pushDiscord && simAutoTrader.pushReplaySummary) {
+      try { await simAutoTrader.pushReplaySummary(replay); }
+      catch(e) { console.error('[SIM-AUTO REPLAY] discord push failed:', e.message); }
+    }
+    res.json(replay);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 

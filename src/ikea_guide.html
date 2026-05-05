@@ -402,7 +402,7 @@
     <li class="green"><b>PRIMARY</b> · STRUCTURAL chart level on the STOCK<br><span style="color:var(--txt-2); font-size:11px;">Code computes 5m base low/high · Phase 4.11 cron monitors 60m close</span></li>
     <li class="amber"><b>TAIL</b> · Option premium -50% (catastrophic gap catch)</li>
     <li class="red"><b>NEVER</b> · -25% flat premium stop (whipsaw zone — caused ABBV loss)</li>
-    <li class="green"><b>TIME</b> · 2 PM next day (swing not in profit)</li>
+    <li class="green"><b>TIME</b> · per card type (Phase 4.26) — DAY 60m / SCALP 30m / SWING 24h / LOTTO 6h / OVERNIGHT 3d. See Step 9 matrix.</li>
   </ul>
 </div>
 
@@ -436,7 +436,7 @@
   <ul class="checklist">
     <li class="red">Phase 4.11 Discord push: "🛑 STRUCTURAL STOP HIT"</li>
     <li class="red">Underlying 60m close breaks structural level</li>
-    <li class="red">Time stop (2 PM next day, swing not in profit)</li>
+    <li class="red">Phase 4.26 Discord push: "🕐 TIME STOP HIT" (per card type — DAY 60m / SCALP 30m / SWING 24h / LOTTO 6h / OVERNIGHT 3d)</li>
     <li class="red">Option price drops to -50% (tail-risk catch)</li>
   </ul>
   <p style="font-size:13px; margin: 14px 0 8px;"><b>DO NOT exit because:</b></p>
@@ -482,9 +482,28 @@
       <tr><td>ENTRY signal</td><td class="mono">5m close confirmation OK</td></tr>
       <tr><td>STRUCTURAL stop</td><td class="mono"><span style="color:var(--green)">60m close (swing) — NEVER 5m noise</span></td></tr>
       <tr><td>EXIT alert</td><td class="mono">Phase 4.11 cron → Discord → exit at market</td></tr>
-      <tr><td>TIME stop</td><td class="mono">2 PM next day (swing not in profit)</td></tr>
+      <tr><td>TIME stop</td><td class="mono">Per card type — see matrix below (Phase 4.26)</td></tr>
     </tbody>
   </table>
+
+  <h3 style="margin: 16px 0 8px; font-size:13px; color:var(--txt-1);">⏰ TIME-STOP MATRIX (per card type · Phase 4.26)</h3>
+  <p style="font-size:12px; margin: 0 0 8px; color:var(--txt-2);">
+    Different card types have different optimal hold windows. A <b>DAY</b> trade still flat at 60m IS a losing trade — theta + the thesis was "this moves now". A <b>SWING</b> with same flat P&L is fine — thesis is multi-day. The system enforces the right window per type. <b>"In profit"</b> = option premium ≥ entry × 1.05 (5%+ above entry). If past max-hold but in profit: <span style="color:var(--green)">HOLD — let winners run</span>.
+  </p>
+  <table>
+    <thead><tr><th>Card Type</th><th>Max Hold</th><th>Warn At</th><th>If Not Profit</th><th>Pill</th></tr></thead>
+    <tbody>
+      <tr><td><b>SCALP</b></td><td class="mono">30 min</td><td class="mono">20 min</td><td class="mono">EXIT</td><td class="mono">🕐 30m SCALP</td></tr>
+      <tr><td><b>DAY</b></td><td class="mono">60 min</td><td class="mono">45 min</td><td class="mono">EXIT</td><td class="mono">🕐 60m DAY</td></tr>
+      <tr><td><b>LOTTO</b></td><td class="mono">6 h</td><td class="mono">4 h</td><td class="mono">EXIT (or EOD)</td><td class="mono">🕐 6h LOTTO</td></tr>
+      <tr><td><b>SWING</b></td><td class="mono">24 h (2 PM next day)</td><td class="mono">18 h</td><td class="mono">EXIT_2PM_NEXTDAY</td><td class="mono">🕐 24h SWING</td></tr>
+      <tr><td><b>OVERNIGHT</b></td><td class="mono">3 days (4320 min)</td><td class="mono">2 days</td><td class="mono">EXIT_3DAY</td><td class="mono">🕐 3d OVERNIGHT</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:12px; margin: 10px 0 0; color:var(--txt-2);">
+    <b>One-line summary:</b> DAY trade → 60m max. SCALP → 30m. SWING → 24h or 2 PM next day. LOTTO → 6h. OVERNIGHT → 3 days.<br>
+    <span style="color:var(--amber)">⚠ TIME STOP IS SECONDARY TO STRUCTURAL STOP.</span> If the structural stop fires first, that wins. Time stop only triggers if the structural stop has NOT fired AND position is past max-hold AND not in profit.
+  </p>
 </div>
 
 <!-- STEP 10 -->
