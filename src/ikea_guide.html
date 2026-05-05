@@ -284,6 +284,57 @@
   </div>
 </div>
 
+<!-- STEP 0.5 (Phase 4.21) — CHART VISION GATE — MANDATORY -->
+<div class="step" style="border:2px solid var(--red); background:linear-gradient(180deg, rgba(255,184,108,0.12), rgba(255,80,80,0.06));">
+  <h2 style="color:var(--gold);"><span class="step-num" style="background:linear-gradient(180deg,#ffb86c,#cc3a1a);">0.5</span>CHART VISION GATE — MANDATORY 🔬</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 12px;">
+    <b>Every fire button</b> in the scanner now runs a chart-vision check (<code>POST /api/chart-vision</code>) AFTER the TA gate and BEFORE the order goes out. Two timeframes review the chart in parallel and return one of four verdicts. <b>You cannot bypass it accidentally — it gates every dispatcher.</b>
+  </p>
+  <div class="danger" style="margin:0 0 12px;">
+    <b>Why this exists — May 5 PM (today):</b> AB's CRM call was about to fire on a 5m close &gt; $185.80. The TA gate said GREEN. The 4HR vision agent caught a <b>$186.80 supply shelf</b> with prior rejection — verdict <code>VETO 8/10</code>. Without vision, AB would have fired straight into supply. <b>AB directive: vision mandatory before every fire.</b>
+  </div>
+  <table>
+    <thead><tr><th>Verdict</th><th>Color</th><th>Action</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b style="color:var(--green);">✅ APPROVE</b></td>
+        <td class="mono"><span style="color:var(--green)">green</span></td>
+        <td><b>Fire as planned.</b> Both TFs agree, no major conflicts, targets attainable.</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--amber);">⏳ WAIT</b></td>
+        <td class="mono"><span style="color:var(--amber)">amber</span></td>
+        <td><b>Wait for next bar.</b> Re-run vision in 5-15 min. Don't force it.</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--amber);">⚠ MIXED</b></td>
+        <td class="mono"><span style="color:var(--amber)">amber</span></td>
+        <td><b>Smaller size + tighter stop</b> if firing. One TF approves, the other doesn't.</td>
+      </tr>
+      <tr>
+        <td><b style="color:var(--red);">❌ VETO</b></td>
+        <td class="mono"><span style="color:var(--red)">red</span></td>
+        <td><b style="color:var(--red);">DO NOT FIRE. Period.</b> Re-evaluate the setup. Trust the chart.</td>
+      </tr>
+    </tbody>
+  </table>
+  <p style="font-size:13px; margin:14px 0 8px; color:var(--txt-2);"><b>TF coverage by trade type:</b></p>
+  <ul class="checklist">
+    <li><b>SWING</b> · 6HR (higher) + 4HR (lower) — multi-day position context</li>
+    <li><b>DAY</b> · 1H (higher) + 15m (lower) — intraday momentum + trigger</li>
+    <li><b>LOTTO</b> · 15m (higher) + 5m (lower) — fast scalp window</li>
+  </ul>
+  <div class="ok" style="margin-top:12px;">
+    🔬 <b>Vision toast appears on every fire click</b> while the model reviews (typically 30-80s). Result is cached 90s — re-clicks within that window reuse the verdict.
+  </div>
+  <div class="danger" style="margin-top:8px;">
+    <b>⚡ Power hour (3-4 PM ET) — vision is MORE important, not less.</b> Profit-taking, EOD ramps, and momentum reversals create whipsaws that bar/text data miss. If vision says VETO into the close, listen.
+  </div>
+  <div class="danger" style="margin-top:8px;">
+    <b>Fail-CLOSED:</b> if vision can't run (TV CDP offline, network error, timeout) the dialog asks for an explicit override. <b>Default answer is NO.</b> A trade you can't see the chart for is a trade you shouldn't fire.
+  </div>
+</div>
+
 <!-- STEP 1 -->
 <div class="step">
   <h2><span class="step-num">1</span>WHICH TAB? (by time of day)</h2>

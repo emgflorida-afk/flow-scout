@@ -1709,6 +1709,263 @@ app.post('/api/chart-vision-review', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// =============================================================================
+// PHASE 4.21 — MANDATORY CHART-VISION GATE
+// POST /api/chart-vision
+// Body: { ticker, direction (long|short), tradeType (DAY|SWING|LOTTO),
+//         imageBase64Higher?, imageBase64Lower? }
+//
+// Per-tradeType TF map:
+//   SWING → higher: 6HR, lower: 4HR
+//   DAY   → higher: 1H,  lower: 15m
+//   LOTTO → higher: 15m, lower: 5m
+//
+// Behavior:
+//   1. Cache by (ticker, direction, tradeType) for 90s
+//   2. If imageBase64Higher/Lower provided in body → invoke chartVision.reviewChart
+//      on each, merge verdicts.
+//   3. Else attempt to shell out to scripts/chart-vision.sh (which uses local
+//      TV CDP via TV_CLI). On Railway this will fail (no CDP) — that's
+//      expected and we FAIL-CLOSED to verdict='WAIT' / summary='vision unavailable'.
+//
+// Merge logic:
+//   - either VETO              → overall VETO
+//   - both APPROVE             → APPROVE
+//   - both WAIT or one WAIT    → WAIT
+//   - mixed APPROVE/something  → MIXED
+//
+// AB directive (May 5 PM, CRM rescue): "chart vision should be mandatory."
+// Without vision, AB would have fired CRM long into a $186.80 supply rejection.
+// 4HR vision caught the shelf — VETO 8/10. This endpoint backs scanner-v2.html's
+// chartVisionGateOrAbort() helper which runs BEFORE every fire dispatcher.
+// =============================================================================
+var _chartVisionCache = {};   // key: TICKER|DIR|TT  →  { ts, payload }
+var _chartVisionInflight = {};  // key → Promise (de-dupe concurrent calls)
+
+function _tfMapForTradeType(tt) {
+  var t = String(tt || 'SWING').toUpperCase();
+  if (t === 'DAY')   return { higher: '1H',  lower: '15m' };
+  if (t === 'LOTTO') return { higher: '15m', lower: '5m'  };
+  return { higher: '6HR', lower: '4HR' };  // SWING default
+}
+
+function _mergeVisionVerdicts(higher, lower) {
+  var hv = (higher && higher.verdict) || 'WAIT';
+  var lv = (lower  && lower.verdict)  || 'WAIT';
+  if (hv === 'VETO' || lv === 'VETO') return 'VETO';
+  if (hv === 'APPROVE' && lv === 'APPROVE') return 'APPROVE';
+  if (hv === 'WAIT' && lv === 'WAIT') return 'WAIT';
+  return 'MIXED';
+}
+
+function _pickConfidence(higher, lower) {
+  var h = Number(higher && higher.confidence) || 0;
+  var l = Number(lower  && lower.confidence)  || 0;
+  // Use the higher of the two, but if either VETO'd, use that side's confidence
+  if (higher && higher.verdict === 'VETO') return Math.max(h, 5);
+  if (lower  && lower.verdict  === 'VETO') return Math.max(l, 5);
+  return Math.max(h, l) || 5;
+}
+
+function _toReview(visionResp) {
+  // chartVision.reviewChart returns { ok, ticker, direction, review:{...} }
+  if (!visionResp || !visionResp.ok || !visionResp.review) {
+    return {
+      verdict: 'WAIT',
+      confidence: 5,
+      summary: visionResp && visionResp.error ? ('vision unavailable: ' + String(visionResp.error).slice(0, 80)) : 'vision unavailable',
+      strengths: [],
+      conflicts: [],
+    };
+  }
+  var r = visionResp.review;
+  return {
+    verdict: r.verdict || 'WAIT',
+    confidence: r.confidence || 5,
+    summary: r.primaryReason || r.structuralAlignment || 'no summary',
+    strengths: Array.isArray(r.strengths) ? r.strengths : [],
+    conflicts: Array.isArray(r.conflictsDetected) ? r.conflictsDetected : [],
+  };
+}
+
+// Best-effort: run scripts/chart-vision.sh, parse JSON-ish output if available.
+// On Railway this will fail (no TV CDP), and that's by design — we fail-closed.
+function _tryShellVision(ticker, direction, tf) {
+  return new Promise(function(resolve) {
+    try {
+      var cp = require('child_process');
+      var path = require('path');
+      var script = path.join(process.cwd(), 'scripts', 'chart-vision.sh');
+      var fs = require('fs');
+      if (!fs.existsSync(script)) {
+        return resolve({ ok: false, error: 'chart-vision.sh not present' });
+      }
+      var args = [ticker, direction, tf];
+      var child = cp.spawn('bash', [script].concat(args), {
+        timeout: 60000,
+        env: Object.assign({}, process.env),
+      });
+      var stdout = '';
+      var stderr = '';
+      var killed = false;
+      child.stdout.on('data', function(d) { stdout += String(d); });
+      child.stderr.on('data', function(d) { stderr += String(d); });
+      var killer = setTimeout(function() { killed = true; try { child.kill('SIGKILL'); } catch(e) {} }, 60000);
+      child.on('close', function(code) {
+        clearTimeout(killer);
+        if (killed) return resolve({ ok: false, error: 'shell timeout' });
+        if (code !== 0) return resolve({ ok: false, error: 'shell exit ' + code, stdout: stdout, stderr: stderr });
+        // Try to parse a verdict line from stdout
+        var verdict = (stdout.match(/VERDICT:\s*([A-Z]+)/) || [])[1] || null;
+        var conf    = parseInt((stdout.match(/confidence:\s*(\d+)/) || [])[1] || '0', 10);
+        var primary = (stdout.match(/PRIMARY REASON:\s*(.+)/) || [])[1] || null;
+        if (!verdict) return resolve({ ok: false, error: 'could not parse shell output', stdout: stdout });
+        resolve({
+          ok: true,
+          review: {
+            verdict: verdict,
+            confidence: conf,
+            primaryReason: primary,
+            strengths: [],
+            conflictsDetected: [],
+          },
+        });
+      });
+      child.on('error', function(e) {
+        clearTimeout(killer);
+        resolve({ ok: false, error: e.message });
+      });
+    } catch(e) {
+      resolve({ ok: false, error: e.message });
+    }
+  });
+}
+
+app.post('/api/chart-vision', async function(req, res) {
+  var startTs = Date.now();
+  try {
+    var body = req.body || {};
+    var ticker = String(body.ticker || '').toUpperCase();
+    var direction = String(body.direction || 'long').toLowerCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    if (direction.match(/short|put|bear/)) direction = 'short';
+    else direction = 'long';
+    var tradeType = String(body.tradeType || 'SWING').toUpperCase();
+    if (!['DAY', 'SWING', 'LOTTO'].includes(tradeType)) tradeType = 'SWING';
+
+    var key = ticker + '|' + direction + '|' + tradeType;
+
+    // Cache hit?
+    var cached = _chartVisionCache[key];
+    if (cached && (Date.now() - cached.ts) < 90 * 1000) {
+      var c = Object.assign({}, cached.payload, { cached: true, elapsedMs: Date.now() - startTs });
+      return res.json(c);
+    }
+
+    // De-dupe concurrent inflight calls for the same key
+    if (_chartVisionInflight[key]) {
+      var p = await _chartVisionInflight[key];
+      return res.json(Object.assign({}, p, { cached: true, elapsedMs: Date.now() - startTs }));
+    }
+
+    var tfs = _tfMapForTradeType(tradeType);
+
+    var work = (async function() {
+      var higherResp, lowerResp;
+
+      if (body.imageBase64Higher && chartVision) {
+        higherResp = await chartVision.reviewChart({
+          ticker: ticker,
+          direction: direction,
+          tradeContext: tradeType + ' trade — higher TF (' + tfs.higher + ') structural review',
+          imageBase64: body.imageBase64Higher,
+        });
+      } else {
+        higherResp = await _tryShellVision(ticker, direction, tfs.higher);
+      }
+
+      if (body.imageBase64Lower && chartVision) {
+        lowerResp = await chartVision.reviewChart({
+          ticker: ticker,
+          direction: direction,
+          tradeContext: tradeType + ' trade — lower TF (' + tfs.lower + ') trigger review',
+          imageBase64: body.imageBase64Lower,
+        });
+      } else {
+        lowerResp = await _tryShellVision(ticker, direction, tfs.lower);
+      }
+
+      var hi = _toReview(higherResp);
+      var lo = _toReview(lowerResp);
+      var overall = _mergeVisionVerdicts(hi, lo);
+
+      // Combined summary
+      var summary;
+      if (overall === 'VETO') {
+        var vetoSide = (hi.verdict === 'VETO') ? 'higher TF (' + tfs.higher + ')' : 'lower TF (' + tfs.lower + ')';
+        var vetoSummary = (hi.verdict === 'VETO') ? hi.summary : lo.summary;
+        summary = 'VETO from ' + vetoSide + ': ' + vetoSummary;
+      } else if (overall === 'APPROVE') {
+        summary = 'Both TFs approve: ' + (hi.summary || '') + (lo.summary ? ' / ' + lo.summary : '');
+      } else if (overall === 'WAIT') {
+        if (!higherResp.ok && !lowerResp.ok) summary = 'vision unavailable';
+        else summary = 'Both TFs WAIT: ' + (hi.summary || '');
+      } else {
+        summary = 'MIXED: ' + tfs.higher + ' ' + hi.verdict + ' / ' + tfs.lower + ' ' + lo.verdict + '. Use caution.';
+      }
+
+      // Top 3 concerns / confirmations across both TFs
+      var allConcerns = [].concat(hi.conflicts, lo.conflicts).filter(Boolean).slice(0, 3);
+      var allConfirms = [].concat(hi.strengths, lo.strengths).filter(Boolean).slice(0, 3);
+
+      var payload = {
+        ok: true,
+        ticker: ticker,
+        direction: direction,
+        tradeType: tradeType,
+        verdict: overall,
+        confidence: _pickConfidence(hi, lo),
+        summary: summary,
+        higherTf: { tf: tfs.higher, verdict: hi.verdict, confidence: hi.confidence, summary: hi.summary },
+        lowerTf:  { tf: tfs.lower,  verdict: lo.verdict, confidence: lo.confidence, summary: lo.summary },
+        concerns: allConcerns,
+        confirmations: allConfirms,
+        suggestedTriggerLevel: null,
+        suggestedStop: null,
+        cached: false,
+        elapsedMs: Date.now() - startTs,
+      };
+
+      _chartVisionCache[key] = { ts: Date.now(), payload: payload };
+      delete _chartVisionInflight[key];
+      return payload;
+    })();
+
+    _chartVisionInflight[key] = work;
+    var result = await work;
+    res.json(result);
+  } catch(e) {
+    // FAIL-CLOSED — return WAIT, never APPROVE on error
+    console.error('[CHART-VISION] error:', e.message);
+    res.json({
+      ok: true,
+      ticker: (req.body && req.body.ticker) || null,
+      direction: (req.body && req.body.direction) || null,
+      tradeType: (req.body && req.body.tradeType) || 'SWING',
+      verdict: 'WAIT',
+      confidence: 5,
+      summary: 'vision unavailable: ' + e.message.slice(0, 80),
+      higherTf: { tf: '?', verdict: 'WAIT', confidence: 5, summary: 'error' },
+      lowerTf:  { tf: '?', verdict: 'WAIT', confidence: 5, summary: 'error' },
+      concerns: ['Endpoint error: ' + e.message.slice(0, 80)],
+      confirmations: [],
+      cached: false,
+      elapsedMs: Date.now() - startTs,
+      error: e.message,
+    });
+  }
+});
+
 // SPREAD CHECK — Monday-morning ratio validator. Pulls broker quote into the
 // 5-tier verdict matrix. Works for any debit/credit spread, any underlying.
 //   GET /api/spread-check?debit=2.00&longStrike=715&shortStrike=705&direction=put

@@ -38,7 +38,10 @@ echo ""
 echo "  → Setting TV chart to $TICKER on $TV_TF..."
 node "$TV_CLI" symbol "$TICKER" 2>&1 | tail -1
 node "$TV_CLI" timeframe "$TV_TF" 2>&1 | tail -1
-sleep 2
+
+# Wait for chart data to load — TV needs time to fetch new ticker bars
+echo "  → Waiting 8s for chart data to fully render..."
+sleep 8
 
 # Step 2: Capture screenshot
 echo "  → Capturing screenshot..."

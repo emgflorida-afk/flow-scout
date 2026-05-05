@@ -1705,11 +1705,96 @@ async function taGateOrAbort(ticker, direction) {
 }
 window.taGateOrAbort = taGateOrAbort;
 
+// =============================================================================
+// PHASE 4.21 — MANDATORY CHART-VISION GATE
+// Calls POST /api/chart-vision and shows AB an interactive confirm dialog.
+// Triggered AFTER taGateOrAbort and BEFORE any actual order placement.
+// FAIL-CLOSED: vision unavailable / errored = explicit user override required.
+// AB rule: vision is mandatory because TA gate misses 4HR/6HR supply shelves.
+// =============================================================================
+async function chartVisionGateOrAbort(ticker, direction, tradeType) {
+  if (!ticker || !direction) return true;
+  const dir = String(direction).toLowerCase().match(/short|put|bear/) ? 'short' : 'long';
+  const tt = String(tradeType || 'SWING').toUpperCase();
+  // Lightweight visual cue: a brief toast while vision runs (vision can take 30-80s)
+  let toast = null;
+  try {
+    toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;top:64px;right:16px;background:#1a1f2a;border:1px solid #2a3140;color:#dde;padding:10px 14px;border-radius:6px;z-index:10001;font-size:12px;font-family:monospace;box-shadow:0 4px 12px rgba(0,0,0,0.5);';
+    toast.innerHTML = `🔬 <b>Vision check…</b> ${ticker} ${dir.toUpperCase()} (${tt})<br><span style="color:#888;font-size:10px;">${tt === 'SWING' ? '6HR + 4HR' : tt === 'DAY' ? '1H + 15m' : '15m + 5m'} TFs · cached 90s</span>`;
+    document.body.appendChild(toast);
+  } catch(e) {}
+
+  const removeToast = () => { try { if (toast && toast.parentNode) toast.remove(); } catch(e) {} };
+
+  try {
+    const r = await fetch('/api/chart-vision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ticker, direction: dir, tradeType: tt }),
+    });
+    removeToast();
+    if (!r.ok) {
+      return confirm(`⚠ Chart vision UNAVAILABLE for ${ticker}\n\nServer returned HTTP ${r.status}.\n\nFire WITHOUT vision check? (Recommend NO during power hour — Vision caught CRM May 5 supply shelf at $186.80 that bar/text data missed)`);
+    }
+    const v = await r.json();
+    // Cache the latest verdict on window for buildVisionPill use
+    window._lastVisionByTicker = window._lastVisionByTicker || {};
+    window._lastVisionByTicker[ticker] = v;
+
+    if (v.verdict === 'APPROVE') {
+      // Briefly flash a green confirmation toast
+      try {
+        const ok = document.createElement('div');
+        ok.style.cssText = 'position:fixed;top:64px;right:16px;background:rgba(76,175,80,0.18);border:1px solid #4caf50;color:#4caf50;padding:10px 14px;border-radius:6px;z-index:10001;font-size:12px;font-family:monospace;';
+        ok.innerHTML = `🔬 ✅ Vision <b>APPROVE</b> ${ticker} ${dir.toUpperCase()} (${v.confidence||'?'}/10)`;
+        document.body.appendChild(ok);
+        setTimeout(() => { try { ok.remove(); } catch(e) {} }, 2000);
+      } catch(e) {}
+      return true;
+    }
+
+    const concerns = (v.concerns || []).map(c => '  • ' + c).join('\n') || '  (none reported)';
+    const confirms = (v.confirmations || []).map(c => '  • ' + c).join('\n') || '  (none reported)';
+    const tfDetail = `${(v.higherTf && v.higherTf.tf) || '?'}: ${(v.higherTf && v.higherTf.verdict) || '?'} ${(v.higherTf && v.higherTf.confidence) || '?'}/10\n${(v.lowerTf && v.lowerTf.tf) || '?'}: ${(v.lowerTf && v.lowerTf.verdict) || '?'} ${(v.lowerTf && v.lowerTf.confidence) || '?'}/10`;
+    const suggested = v.suggestedTriggerLevel ? `\n\n💡 Suggested trigger: $${v.suggestedTriggerLevel}` : '';
+    const verdictIcon = v.verdict === 'VETO' ? '❌ VETO' : v.verdict === 'WAIT' ? '⏳ WAIT' : v.verdict === 'MIXED' ? '⚠ MIXED' : '?';
+
+    const recommendation = v.verdict === 'VETO'
+      ? '\n\n🚨 STRONG RECOMMEND: DO NOT FIRE. CRM-May5 pattern.'
+      : v.verdict === 'WAIT'
+      ? '\n\nRecommendation: WAIT for next bar / re-run.'
+      : '\n\nRecommendation: smaller size + tighter stop if firing.';
+
+    const msg = `🔬 CHART VISION ${verdictIcon} for ${ticker} ${dir.toUpperCase()} (${tt})\n\n${v.summary || ''}\n\nPer-TF:\n${tfDetail}\n\nCONCERNS:\n${concerns}\n\nCONFIRMATIONS:\n${confirms}${suggested}${recommendation}\n\nFire anyway?`;
+    return confirm(msg);
+  } catch (e) {
+    removeToast();
+    return confirm(`⚠ Chart vision check ERRORED for ${ticker}: ${e.message}\n\nFire WITHOUT vision check? (Recommend NO)`);
+  }
+}
+window.chartVisionGateOrAbort = chartVisionGateOrAbort;
+
+// Optional UI helper — render a small vision-status pill from the cached verdict
+function buildVisionPill(v) {
+  if (!v || !v.verdict) return '';
+  const colors = {APPROVE:'#4caf50', WAIT:'#ffc107', MIXED:'#ffc107', VETO:'#ff5050'};
+  const icons  = {APPROVE:'✅',      WAIT:'⏳',     MIXED:'⚠',     VETO:'❌'};
+  const c = colors[v.verdict] || '#888';
+  const i = icons[v.verdict]  || '?';
+  const summary = String(v.summary || '').replace(/"/g, '&quot;');
+  return `<span class="tag" style="background:${c}22; color:${c}; font-size:10px;" title="${summary}">🔬 VISION ${i} ${v.verdict}</span>`;
+}
+window.buildVisionPill = buildVisionPill;
+
 async function dispatchToPublic(payload, btn) {
   // Phase 4.16 — TA gate before fire on ALL tabs
   if (payload && payload.ticker && payload.direction) {
     const ok = await taGateOrAbort(payload.ticker, payload.direction);
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate (CRM May 5 PM rescue)
+    const visionOk = await chartVisionGateOrAbort(payload.ticker, payload.direction, payload.tradeType || 'SWING');
+    if (!visionOk) return;
   }
   const orig = btn.textContent;
   // payload contract: { ticker, direction, contract?, optionEntry?, trigger, stop?, tp1?, tp2? }
@@ -1790,6 +1875,9 @@ async function dispatchToTS(payload, btn) {
   if (payload && payload.ticker && payload.direction) {
     const ok = await taGateOrAbort(payload.ticker, payload.direction);
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate
+    const visionOk = await chartVisionGateOrAbort(payload.ticker, payload.direction, payload.tradeType || 'SWING');
+    if (!visionOk) return;
   }
   const orig = btn.textContent;
   const ticker = payload.ticker;
@@ -1894,6 +1982,9 @@ async function dispatchToBracket(payload, btn) {
   if (payload && payload.ticker && payload.direction) {
     const ok = await taGateOrAbort(payload.ticker, payload.direction);
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate
+    const visionOk = await chartVisionGateOrAbort(payload.ticker, payload.direction, payload.tradeType || 'SWING');
+    if (!visionOk) return;
   }
   const orig = btn.textContent;
   const ticker = payload.ticker;
@@ -2068,6 +2159,15 @@ async function dispatchMoverToTSLive(idx, useTrigger, btn) {
 
   const isCall = m.suggestedDirection === 'CALL';
   const direction = isCall ? 'BULLISH' : 'BEARISH';
+
+  // Phase 4.16 — TA gate
+  if (m.ticker) {
+    const taOk = await taGateOrAbort(m.ticker, isCall ? 'long' : 'short');
+    if (!taOk) return;
+    // Phase 4.21 — MANDATORY chart-vision gate (DAY tradeType for live mover)
+    const visionOk = await chartVisionGateOrAbort(m.ticker, isCall ? 'long' : 'short', 'DAY');
+    if (!visionOk) return;
+  }
   const tsSymbol = m.optionSymbol;  // already in TS format with space
 
   const optEntry = parseFloat(m.optionMid) || parseFloat(m.optionEntry) || 0;
@@ -2153,6 +2253,15 @@ window.dispatchRadarToPublic = dispatchRadarToPublic;
 async function dispatchToTitan(idx, btn) {
   const c = scan.candidates[idx];
   const isCall = c.direction === "CALL";
+
+  // Phase 4.16 + 4.21 — TA + chart-vision gate before any Titan fire
+  if (c && c.ticker) {
+    const taOk = await taGateOrAbort(c.ticker, isCall ? 'long' : 'short');
+    if (!taOk) return;
+    const visionOk = await chartVisionGateOrAbort(c.ticker, isCall ? 'long' : 'short', 'SWING');
+    if (!visionOk) return;
+  }
+
   const trigger = isCall ? c.priorHigh : c.priorLow;
   const stop    = isCall ? c.todayLow  : c.todayHigh;
   const r       = Math.abs(trigger - stop);
@@ -2355,6 +2464,9 @@ async function fireMoverOrder(idx, btn) {
   if (m && m.ticker) {
     const ok = await taGateOrAbort(m.ticker, isUp ? 'long' : 'short');
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate (movers fire → DAY tradeType)
+    const visionOk = await chartVisionGateOrAbort(m.ticker, isUp ? 'long' : 'short', 'DAY');
+    if (!visionOk) return;
   }
   const live = account === "LIVE";
   const hasContract = !!m.optionSymbol;
@@ -2820,6 +2932,13 @@ async function dispatchRadarToTS(ticker, useTrigger, btn) {
   const isCall = dirText === 'LONG' || dirText === 'CALL';
   const direction = isCall ? 'BULLISH' : 'BEARISH';
 
+  // Phase 4.16 — TA gate
+  const taOk = await taGateOrAbort(ticker, isCall ? 'long' : 'short');
+  if (!taOk) return;
+  // Phase 4.21 — MANDATORY chart-vision gate (radar swings → SWING TF map)
+  const visionOk = await chartVisionGateOrAbort(ticker, isCall ? 'long' : 'short', 'SWING');
+  if (!visionOk) return;
+
   // Build OPRA contract symbol from preferredContractSymbol (already in OPRA
   // format like NTAP260515C00115000) or fall back to constructing from r.contract
   let contractSym = r.preferredContractSymbol || r.contract;
@@ -3083,6 +3202,10 @@ async function dispatchActionToTS(row, useTrigger, btn) {
       return;
     }
   }
+
+  // Phase 4.21 — MANDATORY chart-vision gate (action rows are intraday → DAY tradeType)
+  const visionOk = await chartVisionGateOrAbort(row.ticker, row.direction, 'DAY');
+  if (!visionOk) return;
 
   // Convert OPRA "TICKER 260515C115" to TS-style (already has space, just normalize)
   const tsSymbol = String(sug.contract).trim();
@@ -4404,6 +4527,9 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
   if (ticker && direction) {
     const ok = await taGateOrAbort(ticker, direction);
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate
+    const visionOk = await chartVisionGateOrAbort(ticker, direction, tradeType || 'DAY');
+    if (!visionOk) return;
   }
   tradeType = tradeType || 'DAY';
   account = account || 'ts';
@@ -4530,6 +4656,9 @@ async function ayceFireAuto(ticker, direction, account, tradeType) {
   if (ticker && direction) {
     const ok = await taGateOrAbort(ticker, direction);
     if (!ok) return;
+    // Phase 4.21 — MANDATORY chart-vision gate (even on auto-fire — vision is non-negotiable)
+    const visionOk = await chartVisionGateOrAbort(ticker, direction, tradeType || 'DAY');
+    if (!visionOk) return;
   }
   tradeType = tradeType || 'DAY';
   account = account || 'sim';
@@ -5052,6 +5181,15 @@ async function fireLvlOrder(idx, tf, btn) {
   const plan = state.plan;
   const isLong = state.direction === 'LONG';
   const live = account === "LIVE";
+
+  // Phase 4.16 + 4.21 — TA + chart-vision gate. LVL TFs map to LOTTO (5m/15m), DAY (1H), or SWING (4HR/Daily).
+  if (r && r.symbol) {
+    const taOk = await taGateOrAbort(r.symbol, isLong ? 'long' : 'short');
+    if (!taOk) return;
+    const lvlTradeType = (tf === '5m' || tf === '15m') ? 'LOTTO' : (tf === '1H' || tf === '60' || tf === '4HR' || tf === '240') ? 'DAY' : 'SWING';
+    const visionOk = await chartVisionGateOrAbort(r.symbol, isLong ? 'long' : 'short', lvlTradeType);
+    if (!visionOk) return;
+  }
 
   const banner = live ? `🚨 LIVE ORDER 🚨\n\n` : `🧪 SIM ORDER\n`;
   if (!confirm(`${banner}\n${isLong?'BUY':'SHORT'} ${r.symbol} 2 ct @ ${fmtNum(plan.entry)} LMT\nStop: ${fmtNum(plan.stop)} | TP1: ${fmtNum(plan.tp1)} | TP2: ${fmtNum(plan.tp2)}\nLVL ${tf} ${state.signal}\n\n${live ? "Confirm LIVE?" : "Place SIM?"}`)) return;
