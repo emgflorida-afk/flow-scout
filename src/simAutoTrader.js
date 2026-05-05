@@ -76,7 +76,12 @@ var BASE_SIZE = 2;                 // ct
 var TOP_TIER_SIZE = 3;            // ct
 var TP1_GAIN_PCT = 50;            // first half exits at +50% same-day
 var TP2_GAIN_PCT = 100;           // second half exits at +100% next-day
-var STOP_LOSS_PCT = 25;           // -25% premium hard stop
+// May 5 2026 — RAISED to -50% per AB rule. Flat -25% premium stop got
+// whipsawed on ABBV during 9:30 opening volatility ($153 loss). The PRIMARY
+// stop is structural (icsTradeManager polls underlying for setup.stop break);
+// the premium stop is now ONLY a tail-risk catch for catastrophic gaps.
+// Reference: feedback_stop_management.md + feedback_abbv_stop_lesson_may5.md
+var STOP_LOSS_PCT = 50;           // -50% premium TAIL-RISK catch only (was -25, whipsaw zone)
 var TIME_STOP_HOUR_ET = 14;       // 2 PM next-day time stop
 
 function isEnabled() {
