@@ -2622,7 +2622,17 @@ app.post('/api/tv-alert', function(req, res) {
         .catch(function(e) { console.error('[CURATOR] error:', e.message); });
     }
 
-    res.json({ ok: true, scanner: scanResult, curator: 'async' });
+    // Phase 4.3.1 (May 5 PM): ALSO route to tvAlertReceiver so the old endpoint
+    // populates the Phase 4 tier framework. This means 81+ existing alerts
+    // pointing at /api/tv-alert (legacy URL) still register tier 1/2/3 stack
+    // state without AB having to update each alert's webhook URL.
+    if (tvAlertReceiver && tvAlertReceiver.processAlert) {
+      tvAlertReceiver.processAlert(body)
+        .then(function(r) { console.log('[TIER-FORWARD]', body.ticker, '->', r && r.action); })
+        .catch(function(e) { console.error('[TIER-FORWARD] error:', e.message); });
+    }
+
+    res.json({ ok: true, scanner: scanResult, curator: 'async', tier: 'async' });
   } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
