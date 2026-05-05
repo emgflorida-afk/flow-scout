@@ -37,6 +37,8 @@ var dp = null;
 try { dp = require('./discordPush'); } catch (e) {}
 var uoaEnrichment = null;
 try { uoaEnrichment = require('./uoaEnrichment'); } catch (e) {}
+var peakReturn = null;
+try { peakReturn = require('./bullflowPeakReturn'); } catch (e) {}
 
 var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
 var LOG_FILE = path.join(DATA_ROOT, 'uoa_log.json');
@@ -205,6 +207,19 @@ async function handleAlert(alert) {
     } catch (e) { console.error('[UOA] enrichment error:', e.message); }
   }
 
+  // PHASE 5.3 — peak return since this alert's trade timestamp
+  // Best-effort. Most UOAs fire near alert time so peak return ≈ 0% initially,
+  // but for backfill / late-arriving UOA cards this surfaces the real signal.
+  var peakReturnInfo = null;
+  if (peakReturn && peakReturn.getPeakReturn && alert.contractSymbol && alert.tradePrice) {
+    try {
+      var ts = alert.tradeTimestamp || Math.floor(Date.now() / 1000);
+      var sym = alert.contractSymbol.startsWith('O:') ? alert.contractSymbol : 'O:' + alert.contractSymbol;
+      var pr = await peakReturn.getPeakReturn(sym, alert.tradePrice, ts);
+      if (pr.ok) peakReturnInfo = pr;
+    } catch (e) { /* fail open */ }
+  }
+
   // Whale = score >= 10 OR raw premium >= $5M. Latter catches institutional
   // blocks that sneak under our scoring (small contract count × big premium).
   var isWhale = s >= WHALE_THRESHOLD || alert._whaleByPremium;
@@ -261,6 +276,21 @@ async function handleAlert(alert) {
   }
   if (enriched && enriched.summary && enriched.summary.levelLine) {
     fields.push({ name: '📍 Level distance', value: enriched.summary.levelLine, inline: false });
+  }
+
+  // Peak return so far — historical max % gain on this contract since alert fired.
+  // Only show on cards where return is meaningful (> 1%) — fresh live alerts
+  // typically have 0% so skip those to avoid clutter.
+  if (peakReturnInfo && peakReturnInfo.peakPercent != null && Math.abs(peakReturnInfo.peakPercent) >= 1) {
+    var prSign = peakReturnInfo.peakPercent >= 0 ? '+' : '';
+    var prEmoji = peakReturnInfo.peakPercent >= 50 ? '🚀'
+                : peakReturnInfo.peakPercent >= 25 ? '✅'
+                : peakReturnInfo.peakPercent >= 0 ? '📈' : '📉';
+    fields.push({
+      name: prEmoji + ' Peak return since alert',
+      value: '**' + prSign + peakReturnInfo.peakPercent.toFixed(1) + '%** · peak price $' + peakReturnInfo.peakPrice.toFixed(2) + ' (entry $' + (alert.tradePrice || 0).toFixed(2) + ')',
+      inline: false,
+    });
   }
 
   fields.push({

@@ -5024,6 +5024,90 @@ app.get('/api/bullflow-filters/resolve', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// =============================================================================
+// PHASE 5.2 BACKTEST + 5.3 PEAK RETURN endpoints
+// =============================================================================
+
+// Peak return for a single contract — manual lookup
+app.get('/api/peak-return', async function(req, res) {
+  try {
+    var pr = require('./bullflowPeakReturn');
+    var sym = req.query.sym;
+    var oldPrice = parseFloat(req.query.old_price);
+    var ts = parseInt(req.query.trade_timestamp, 10);
+    if (!sym || !oldPrice || !ts) return res.status(400).json({ ok: false, error: 'sym, old_price, trade_timestamp required' });
+    var result = await pr.getPeakReturn(sym, oldPrice, ts);
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Backfill peak return on the last N hours of UOA log
+app.post('/api/peak-return/backfill', async function(req, res) {
+  try {
+    var pr = require('./bullflowPeakReturn');
+    var hours = parseInt((req.body && req.body.maxAgeHours) || req.query.maxAgeHours || 24, 10);
+    var result = await pr.backfillUoaLog(hours);
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Run backtest for a single date
+app.post('/api/backtest/run', async function(req, res) {
+  try {
+    var bt = require('./bullflowBacktest');
+    var date = (req.body && req.body.date) || req.query.date;
+    var speed = parseInt((req.body && req.body.speed) || req.query.speed || 60, 10);
+    var skipPeakReturn = !!(req.body && req.body.skipPeakReturn);
+    if (!date) return res.status(400).json({ ok: false, error: 'date required (YYYY-MM-DD)' });
+    var result = await bt.runAndAnalyze(date, { speed: speed, skipPeakReturn: skipPeakReturn });
+    res.json(result);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Multi-day backtest range — runs N days back, aggregates results
+app.post('/api/backtest/range', async function(req, res) {
+  try {
+    var bt = require('./bullflowBacktest');
+    var startDate = req.body && req.body.startDate;
+    var endDate = req.body && req.body.endDate;
+    var speed = parseInt((req.body && req.body.speed) || 60, 10);
+    var skipPeakReturn = !!(req.body && req.body.skipPeakReturn);
+    if (!startDate || !endDate) return res.status(400).json({ ok: false, error: 'startDate + endDate required (YYYY-MM-DD)' });
+    // Long-running — kick off in background, return immediately
+    res.json({ ok: true, message: 'backtest range started in background', startDate: startDate, endDate: endDate });
+    bt.runRange(startDate, endDate, { speed: speed, skipPeakReturn: skipPeakReturn })
+      .then(function(r) { console.log('[BACKTEST RANGE] complete:', JSON.stringify(r).slice(0, 500)); })
+      .catch(function(e) { console.error('[BACKTEST RANGE] error:', e.message); });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// View backtest aggregate results (per-filter hit rates across all runs)
+app.get('/api/backtest/results', function(req, res) {
+  try {
+    var bt = require('./bullflowBacktest');
+    var data = bt.loadResults();
+    var summarized = {
+      totalRuns: data.runs.length,
+      datesRun: data.runs.map(function(r) { return r.date; }),
+      aggregates: data.aggregates,
+      lastRun: data.runs.length ? data.runs[data.runs.length - 1] : null,
+    };
+    res.json({ ok: true, results: summarized });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// Cron: hydrate peak returns on UOA log every 5 min during market hours.
+// Fresh alerts (< 5 min old) skipped — peak return ≈ 0 for those.
+cron.schedule('*/5 9-16 * * 1-5', async function() {
+  try {
+    var pr = require('./bullflowPeakReturn');
+    var result = await pr.backfillUoaLog(8);  // last 8 hours
+    if (result.enriched > 0) {
+      console.log('[PEAK-RETURN-BACKFILL] enriched ' + result.enriched + ' alerts');
+    }
+  } catch(e) { console.error('[PEAK-RETURN-BACKFILL] error:', e.message); }
+}, { timezone: 'America/New_York' });
+
 // Phase 4.3 confluence status — shows tickers with full stack + recent UOA
 // in the last N min, indicating which would auto-fire on next event.
 app.get('/api/uoa/confluence-status', function(req, res) {

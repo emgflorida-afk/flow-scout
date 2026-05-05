@@ -277,6 +277,12 @@ async function processAlert(alert) {
     var isCustomAlert = rawAlertType === 'custom';
     var customAlertName = isCustomAlert ? (alert.alertName || alert.alert_name || 'Custom') : null;
 
+    // Phase 5.3 — compute per-contract trade price for peak return lookup.
+    // Bullflow live stream emits alertPremium (total $) but not per-contract
+    // tradePrice. Equity options × 100 multiplier.
+    var pricePerContract = (uoaVol > 0 && prem > 0) ? prem / (uoaVol * 100) : null;
+    var tradeTimestamp = alert.timestamp ? Math.floor(parseFloat(alert.timestamp)) : Math.floor(Date.now() / 1000);
+
     // Normalize payload for uoaDetector
     var uoaPayload = {
       ticker:          ticker,
@@ -299,6 +305,9 @@ async function processAlert(alert) {
       opraDirection:   opraDirection,
       filterMeta:      filterDirResolution ? filterDirResolution.filterMeta : null,
       directionAlignment: filterDirResolution ? filterDirResolution.alignment : null,
+      // Phase 5.3 — for peakReturn lookup
+      tradePrice:      pricePerContract,
+      tradeTimestamp:  tradeTimestamp,
     };
     // Fire-and-forget — don't await (don't slow down main flow processing)
     uoaDetector.handleAlert(uoaPayload).catch(function(e) {
