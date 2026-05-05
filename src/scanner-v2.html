@@ -2735,6 +2735,24 @@ function renderGridAction() {
     else if (sug.affordability === 'STRETCH') affordBadge = `<span class="tag" style="background:rgba(255,193,7,0.2); color:#ffc107;">⚠ Stretch $${(sug.contractCost||0).toFixed(0)}</span>`;
     else if (sug.affordability === 'TOO_EXPENSIVE') affordBadge = `<span class="tag" style="background:rgba(244,67,54,0.2); color:#f44336;">❌ Too rich $${(sug.contractCost||0).toFixed(0)}</span>`;
 
+    // Phase 4.14 — signal timing badge (when to enter, how confirmed is the flow)
+    const timing = r.timing || {};
+    let timingBadge = '';
+    if (timing.confirmationTier === 'FRESH') {
+      timingBadge = `<span class="tag" style="background:rgba(255,193,7,0.25); color:#ffc107;" title="Single alert — wait 5-10 min for continuation before firing">🆕 FRESH (${timing.signalAgeMin}m, ${timing.continuationCount} alert) — WAIT for confirmation</span>`;
+    } else if (timing.confirmationTier === 'BUILDING') {
+      timingBadge = `<span class="tag" style="background:rgba(70,180,255,0.25); color:#46b4ff;" title="Multiple alerts — building conviction">🔁 BUILDING (${timing.signalAgeMin}m, ${timing.continuationCount} alerts) — gaining steam</span>`;
+    } else if (timing.confirmationTier === 'CONFIRMED') {
+      timingBadge = `<span class="tag" style="background:rgba(76,175,80,0.25); color:#4caf50;" title="4+ alerts sustained — go now">🚀 CONFIRMED (${timing.signalAgeMin}m, ${timing.continuationCount} alerts) — go</span>`;
+    }
+
+    // John repeat flag — is this a ticker John has picked recently?
+    let johnBadge = '';
+    if (r.johnRepeat && r.johnRepeat.isRepeat) {
+      const jr = r.johnRepeat;
+      johnBadge = `<span class="tag" style="background:rgba(124,77,255,0.3); color:#b39ddb; font-weight:700;" title="John picked ${r.ticker} ${jr.daysSinceMostRecent}d ago — proven track record"> 🔁 JOHN REPEAT ×${jr.count} (last ${jr.daysSinceMostRecent}d ago) </span>`;
+    }
+
     return `
       <div class="card" style="background:${statusBg}; border-left:4px solid ${statusColor};">
         <div class="card-head">
@@ -2744,6 +2762,8 @@ function renderGridAction() {
           </div>
           <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
             <span class="tag" style="background:${statusColor}; color:#000; font-weight:700;">${statusLabel}</span>
+            ${johnBadge}
+            ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
           </div>

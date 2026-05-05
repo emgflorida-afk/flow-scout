@@ -5180,6 +5180,22 @@ cron.schedule('*/1 9-16 * * 1-5', async function() {
   } catch(e) { console.error('[ACTIVE-POS-CRON]', e.message); }
 }, { timezone: 'America/New_York' });
 
+// John Repeat-Pick Flagger endpoint
+var johnRepeatFlagger = null;
+try { johnRepeatFlagger = require('./johnRepeatFlagger'); console.log('[SERVER] johnRepeatFlagger loaded OK'); }
+catch (e) { console.log('[SERVER] johnRepeatFlagger not loaded:', e.message); }
+
+app.get('/api/john-repeat', function(req, res) {
+  if (!johnRepeatFlagger) return res.status(500).json({ ok: false, error: 'not loaded' });
+  try {
+    var ticker = req.query.ticker;
+    var direction = req.query.direction || 'long';
+    var daysBack = parseInt(req.query.daysBack || 30, 10);
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    res.json({ ok: true, flag: johnRepeatFlagger.getRepeatFlag(ticker, direction, daysBack) });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // Phase 4.10 — UNIFIED ACTION RADAR
 // Cross-references UOA flow + live-movers + V-bottom + option chain into
 // ONE ranked actionable list. Solves AB feedback May 5: "I don't know
@@ -5244,6 +5260,8 @@ app.get('/api/action-radar', async function(req, res) {
           longCount: 0,
           shortCount: 0,
           customAlertNames: new Set(),
+          firstAlertAt: null,
+          lastAlertAt: null,
         };
       }
       var b = byTicker[t];
@@ -5253,6 +5271,9 @@ app.get('/api/action-radar', async function(req, res) {
       if (a.direction === 'long') b.longCount++;
       else if (a.direction === 'short') b.shortCount++;
       if (a.customAlertName) b.customAlertNames.add(a.customAlertName);
+      var ts = a.timestamp ? new Date(a.timestamp).getTime() : 0;
+      if (ts && (!b.firstAlertAt || ts < b.firstAlertAt)) b.firstAlertAt = ts;
+      if (ts && (!b.lastAlertAt || ts > b.lastAlertAt)) b.lastAlertAt = ts;
     });
 
     // Build action rows
@@ -5298,6 +5319,20 @@ app.get('/api/action-radar', async function(req, res) {
       // Boost actionable rank by V-bottom score
       var vbScore = vb ? vb.totalScore : 0;
 
+      // Phase 4.14 — signal timing for entry decision
+      var signalAgeMin = b.firstAlertAt ? Math.round((Date.now() - b.firstAlertAt) / 60000) : 0;
+      var continuationCount = b.alerts.length;
+      var confirmationTier = continuationCount >= 4 ? 'CONFIRMED'
+                           : continuationCount >= 2 ? 'BUILDING'
+                           : 'FRESH';
+
+      // John repeat flag — does the same ticker:direction match a prior John pick?
+      var johnRepeat = null;
+      if (johnRepeatFlagger) {
+        try { johnRepeat = johnRepeatFlagger.getRepeatFlag(t, direction, 30); }
+        catch (e) {}
+      }
+
       rows.push({
         ticker: t,
         direction: direction,
@@ -5307,6 +5342,14 @@ app.get('/api/action-radar', async function(req, res) {
         customFilters: Array.from(b.customAlertNames),
         status: status,
         reason: reason,
+        timing: {
+          signalAgeMin: signalAgeMin,
+          continuationCount: continuationCount,
+          confirmationTier: confirmationTier,
+          firstAlertAt: b.firstAlertAt ? new Date(b.firstAlertAt).toISOString() : null,
+          lastAlertAt: b.lastAlertAt ? new Date(b.lastAlertAt).toISOString() : null,
+        },
+        johnRepeat: johnRepeat,
         live: {
           last: mover ? mover.last : null,
           pctChange: mover ? mover.pctChange : null,
