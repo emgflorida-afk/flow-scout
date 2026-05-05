@@ -42,7 +42,7 @@ function expectedToken() {
 var TIER_COLORS = { 1: 15158332, 2: 16753920, 3: 5763719, 0: 8359053 };  // red / orange / green / gray
 var TIER_ICONS = { 1: '🚨🚨', 2: '🔶', 3: '🔷', 0: '⚫' };
 
-async function process(payload) {
+async function processAlert(payload) {
   if (!payload || typeof payload !== 'object') {
     return { ok: false, error: 'invalid payload (not object)' };
   }
@@ -123,5 +123,7 @@ function ageMin(iso) {
 }
 
 module.exports = {
-  process: process,
+  processAlert: processAlert,
+  // Backward-compat alias — `process` shadows Node global, only via export
+  process: processAlert,
 };
