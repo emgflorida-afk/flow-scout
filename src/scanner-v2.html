@@ -1846,6 +1846,82 @@ async function dispatchMoverToPublic(idx, btn) {
 }
 window.dispatchMoverToPublic = dispatchMoverToPublic;
 
+// May 5 PM — TS LIVE fire from Live Movers card with STRUCTURAL stop
+// Uses m.structuralStop (underlying-price level) as PRIMARY exit.
+// Option premium stop set to -50% (tail-risk catch only, NEVER -25%).
+async function dispatchMoverToTSLive(idx, useTrigger, btn) {
+  const m = movers && movers.movers && movers.movers[idx];
+  if (!m) return alert('Mover data not found');
+  if (!m.optionSymbol) return alert('No option contract resolved for ' + m.ticker);
+
+  const isCall = m.suggestedDirection === 'CALL';
+  const direction = isCall ? 'BULLISH' : 'BEARISH';
+  const tsSymbol = m.optionSymbol;  // already in TS format with space
+
+  const optEntry = parseFloat(m.optionMid) || parseFloat(m.optionEntry) || 0;
+  if (!optEntry) return alert('No option mid available');
+  const optStop = +(optEntry * 0.5).toFixed(2);   // -50% TAIL-RISK only
+  const optTp1 = parseFloat(m.optionTp1) || +(optEntry * 1.25).toFixed(2);
+  const optTp2 = parseFloat(m.optionTp2) || +(optEntry * 1.50).toFixed(2);
+
+  const sStop = (typeof m.structuralStop === 'object' && m.structuralStop !== null) ? m.structuralStop : null;
+  const stopPriceUnderlying = sStop ? parseFloat(sStop.price) : null;
+
+  const sec = localStorage.getItem('stratum_secret');
+  if (!sec) return alert('STRATUM_SECRET missing — ARM to set it');
+
+  const verb = useTrigger ? 'TS LIVE QUEUE w/ TRIGGER' : 'TS LIVE FIRE NOW';
+  const stopStr = sStop
+    ? `Structural stop: ${sStop.symbol} ${sStop.predicate} $${stopPriceUnderlying.toFixed(2)} (PRIMARY)`
+    : `Stop: option < $${optStop} (-50% tail-risk only — no structural available!)`;
+  const trigStr = useTrigger && m.triggerPrice
+    ? `Trigger: ${m.ticker} ${isCall ? 'above' : 'below'} $${Number(m.triggerPrice).toFixed(2)}`
+    : 'Immediate market entry';
+
+  if (!confirm(`⚡ ${verb} — ${m.ticker} ${direction}?\n\nContract: ${tsSymbol}\nEntry: $${optEntry.toFixed(2)}\nTP1: $${optTp1.toFixed(2)} (+25%)\nTP2: $${optTp2.toFixed(2)} (+50%)\n\n${trigStr}\n${stopStr}\n\nAccount: 11975462 LIVE — REAL MONEY`)) return;
+
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ submitting…'; }
+  const body = {
+    ticker: m.ticker,
+    symbol: tsSymbol,
+    direction,
+    qty: 1,
+    entry: optEntry,
+    stop: optStop,
+    tp1: optTp1,
+    tp2: optTp2,
+    structuralStop: sStop ? {
+      symbol: sStop.symbol || m.ticker,
+      predicate: sStop.predicate || (isCall ? 'below' : 'above'),
+      price: parseFloat(sStop.price),
+    } : null,
+    live: true,    // FORCE LIVE — ignore global account toggle
+    source: 'mover-' + m.ticker + (useTrigger ? '-queued' : '-firenow'),
+  };
+  if (useTrigger && m.triggerPrice) {
+    body.trigger = { symbol: m.ticker, predicate: isCall ? 'above' : 'below', price: parseFloat(m.triggerPrice) };
+  }
+
+  try {
+    const resp = await fetch('/api/take-trade', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Stratum-Secret': sec },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json();
+    if (resp.status === 200) {
+      const ok = (j.brackets || []).filter(x => x.ok).length;
+      alert(`✅ ${ok}/${(j.brackets || []).length} bracket(s) ${useTrigger ? 'QUEUED' : 'FIRED'} on TS LIVE\nDollar risk: $${j.dollarRisk}`);
+    } else {
+      alert(`❌ TS fire failed: ${j.error || 'HTTP ' + resp.status}`);
+    }
+  } catch (e) {
+    alert(`❌ TS network error: ${e.message}`);
+  }
+  if (btn) { btn.disabled = false; btn.textContent = useTrigger ? '🎯 TS QUEUE' : '⚡ TS LIVE'; }
+}
+window.dispatchMoverToTSLive = dispatchMoverToTSLive;
+
 // TOMORROW (radar) dispatcher — fires the setup card
 async function dispatchRadarToPublic(ticker, btn) {
   const setup = (radarData && radarData._flat || []).find(s => s.ticker === ticker);
@@ -4926,7 +5002,8 @@ function renderGridMovers() {
           ${m.optionSymbol ? '<span class="tag neutral">📋 Contract Ready</span>' : ""}
         </div>
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-          <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();fireMoverOrder(${ms.indexOf(m)}, this)" title="Fire on TradeStation immediately (open Fire modal)">⚡ TS FIRE</button>
+          <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchMoverToTSLive(${ms.indexOf(m)}, false, this)" title="Fire on TS LIVE (account 11975462) with STRUCTURAL stop">⚡ TS LIVE</button>
+          <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchMoverToTSLive(${ms.indexOf(m)}, true, this)" title="Queue on TS LIVE with conditional trigger activation">🎯 TS QUEUE</button>
           <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchMoverToPublic(${ms.indexOf(m)}, this)" title="Place 1ct on Public.com">📱 PUBLIC</button>
           <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchMoverToBracket(${ms.indexOf(m)}, this)" title="Place full bracket on Public (entry + stop + TP)">📱 BRACKET</button>
         </div>
