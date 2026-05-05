@@ -678,19 +678,33 @@ let activeTab = (new URLSearchParams(window.location.search).get("tab")) || loca
 let activeFilter = "all";
 let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 
+// Phase 4.17 — tabs reordered by daily usage priority (most-used first):
+//   ACTION    - mid-day primary (UOA flow + V-bottoms + ranked actionable)
+//   TOMORROW  - pre-market + EOD swing planning
+//   LIVE MOVERS - 9:45-10:30 opening momentum
+//   JS        - John picks (proven track record)
+//   WP        - 4HR Failed-2D/Hammer swings
+//   LOTTO     - John VIP cheap calls
+//   COIL      - compression breakouts
+//   AYCE      - multi-strategy
+//   SCAN      - daily Stratum signals (planning)
+//   LVL       - multi-timeframe
+//   SNIPER    - chart-analysis posts
+//   SWINGS    - longer-term holds
+//   STARRED   - your manual watch
 const TABS = [
   { id: "action",   label: "🎯 ACTION",      modeDefault: "WHAT TO DO NOW" },
-  { id: "scan",     label: "📊 SCAN",        modeDefault: "SWING" },
-  { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "DAY" },
+  { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING PLANNING" },
+  { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "OPENING DAY" },
+  { id: "js",       label: "🎯 JS",          modeDefault: "JOHN PICKS" },
+  { id: "wp",       label: "🌊 WP",          modeDefault: "4HR SWING" },
+  { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "JOHN VIP DAY" },
+  { id: "coil",     label: "🌀 COIL",        modeDefault: "COMPRESSION" },
+  { id: "ayce",     label: "🍽️ AYCE",        modeDefault: "MULTI-STRAT" },
+  { id: "scan",     label: "📊 SCAN",        modeDefault: "DAILY SCAN" },
   { id: "lvl",      label: "🎯 LVL",         modeDefault: "MULTI-TF" },
-  { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING" },
-  { id: "lotto",    label: "🎰 LOTTO",       modeDefault: "DAY" },
   { id: "sniper",   label: "📈 SNIPER",      modeDefault: "ANALYSIS" },
   { id: "swings",   label: "🚀 SWINGS",      modeDefault: "SWING/LEAP" },
-  { id: "coil",     label: "🌀 COIL",        modeDefault: "EOD PRE-POS" },
-  { id: "wp",       label: "🌊 WP",          modeDefault: "4HR SWING" },
-  { id: "js",       label: "🎯 JS",          modeDefault: "REVERSAL" },
-  { id: "ayce",     label: "🍽️ AYCE",        modeDefault: "ATH 5-PACK" },
   { id: "starred",  label: "⭐ STARRED",     modeDefault: "—" },
   { id: "options",  label: "💎 OPTIONS",     modeDefault: "DAY",   disabled: true, comingSoon: true },
   { id: "history",  label: "📜 HISTORY",     modeDefault: "—",     disabled: true, comingSoon: true },
@@ -1510,6 +1524,42 @@ function getStratumSecret() {
 // Pulls last 5 5m bars, returns alignment vs intended direction.
 // If 'opposite' (e.g., long entry but bars dumping), shows warning dialog.
 // If user cancels, returns false. Otherwise returns true.
+// Phase 4.17 — universal TA badge helper for ALL card renders.
+// Returns HTML span you can drop into any card. Pulls from r.ta object
+// (set by buildTaForRows).
+function buildTaBadge(ta) {
+  if (!ta || !ta.alignment) return '';
+  if (ta.alignment === 'aligned') {
+    return `<span class="tag" style="background:rgba(76,175,80,0.25); color:#4caf50; font-size:10px;" title="${ta.reason}">📊 TA ✅ ${ta.pctMove5min >= 0 ? '+' : ''}${ta.pctMove5min}%</span>`;
+  } else if (ta.alignment === 'opposite') {
+    return `<span class="tag" style="background:rgba(244,67,54,0.3); color:#ff5050; font-weight:700; font-size:10px;" title="DANGER — ${ta.reason}">📊 TA ❌ ${ta.pctMove5min >= 0 ? '+' : ''}${ta.pctMove5min}% DON'T FIRE</span>`;
+  } else if (ta.alignment === 'mixed') {
+    return `<span class="tag" style="background:rgba(255,193,7,0.25); color:#ffc107; font-size:10px;" title="${ta.reason}">📊 TA ⚠ CHOP ${ta.pctMove5min >= 0 ? '+' : ''}${ta.pctMove5min}%</span>`;
+  }
+  return '';
+}
+window.buildTaBadge = buildTaBadge;
+
+// Bulk-fetch TA verification for a list of rows. Mutates rows in place
+// (sets r.ta = {...}). Used by load functions across tabs.
+async function buildTaForRows(rows, getTicker, getDir) {
+  if (!rows || !rows.length) return;
+  const tasks = rows.slice(0, 30).map(async r => {  // cap at 30 to avoid burst
+    const ticker = getTicker ? getTicker(r) : r.ticker;
+    const dir = getDir ? getDir(r) : r.direction;
+    if (!ticker || !dir) return;
+    let dirNorm = String(dir).toLowerCase();
+    if (dirNorm === 'call' || dirNorm === 'bullish') dirNorm = 'long';
+    else if (dirNorm === 'put' || dirNorm === 'bearish') dirNorm = 'short';
+    try {
+      const tr = await fetch(`/api/ta-verify?ticker=${encodeURIComponent(ticker)}&direction=${encodeURIComponent(dirNorm)}`, { cache: 'no-store' });
+      if (tr.ok) r.ta = await tr.json();
+    } catch (e) {}
+  });
+  await Promise.all(tasks);
+}
+window.buildTaForRows = buildTaForRows;
+
 async function taGateOrAbort(ticker, direction) {
   if (!ticker || !direction) return true;  // skip if missing data
   let dirNorm = String(direction).toLowerCase();
@@ -2464,6 +2514,14 @@ async function loadTomorrowData() {
     (data.forming || []).forEach(x => flat.push(Object.assign({ _state: "forming" }, x)));
     (data.earningsWatch || []).forEach(x => flat.push(Object.assign({ _state: "earnings" }, x)));
     radarData = { ...data, _flat: flat };
+    // Phase 4.17 — verify TA on each setup (skip earnings rows, no trade)
+    try {
+      const tradable = flat.filter(r => r._state !== 'earnings');
+      await buildTaForRows(tradable, r => r.ticker, r => {
+        const isLong = (r.target || 0) >= (r.spot || 0);
+        return (r.direction || (isLong ? 'long' : 'short'));
+      });
+    } catch (e) { /* fail open */ }
     // Kick off live spot poll the moment we have tickers
     startRadarSpotPoll();
   } catch (e) {
@@ -2599,6 +2657,8 @@ function renderGridTomorrow() {
           ${r.why ? `<div style="font-size:12px; color: var(--txt-2); margin-top:8px; line-height:1.5;">${r.why}</div>` : ''}
 
           <div class="tags">
+            <span class="tag swing">SWING</span>
+            ${buildTaBadge(r.ta)}
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
           </div>
@@ -3238,6 +3298,8 @@ async function loadCoilData() {
   const watching = coilData.watching || [];
   const prep = coilData.prep || [];
   const total = ready.length + watching.length + prep.length;
+  // Phase 4.17 — TA verify each coil row
+  try { await buildTaForRows([...ready, ...watching, ...prep], r => r.ticker, r => r.direction); } catch (e) {}
   document.getElementById("scan-date").textContent = "Coil Scan · " + new Date(coilData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${total} coiled · ${(coilData.scanned || 0)} scanned · ${coilData.tookMs || 0}ms`;
   renderStatsCoil();
@@ -3343,6 +3405,8 @@ function renderGridCoil() {
           </div>
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
+
+          ${buildTaBadge(r.ta) ? `<div style="margin-top:8px;">${buildTaBadge(r.ta)}</div>` : ''}
 
           <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -3463,6 +3527,8 @@ async function loadWPData() {
 
   const ready = wpData.ready || [];
   const trial = wpData.trial || [];
+  // Phase 4.17 — verify TA on each WP setup (4HR pattern but TA verifies 5m alignment)
+  try { await buildTaForRows([...ready, ...trial], r => r.ticker, r => r.direction); } catch (e) {}
   document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${ready.length + trial.length} setups · ${(wpData.scanned || 0)} scanned · acct $${(wpData.accountSize || 20000).toLocaleString()}`;
   renderStatsWP();
@@ -3605,7 +3671,7 @@ function renderGridWP() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${confluencePills ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>` : (holdPillHtml ? `<div style="margin-top:8px;">${holdPillHtml}</div>` : '')}
+          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}</div>` : ''}
 
           ${dailyBreakLine}
 
@@ -3691,6 +3757,8 @@ async function loadJSData() {
     return;
   }
   const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
+  // Phase 4.17 — TA verify each pattern row
+  try { await buildTaForRows(all, r => r.ticker, r => r.direction); } catch (e) {}
   document.getElementById("scan-date").textContent = "JS Pattern Scan · " + new Date(jsData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${all.length} patterns · ${jsData.scanned || 0} scanned · ${Object.keys(jsData.byPattern || {}).length} pattern types`;
   renderStatsJS();
@@ -3815,7 +3883,7 @@ function renderGridJS() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}</div>
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
 
@@ -3958,6 +4026,8 @@ async function loadLottoData() {
     return;
   }
   document.getElementById("scan-date").textContent = "Lotto Feed · " + new Date(lottoData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // Phase 4.17 — TA verify each Lotto pick
+  try { await buildTaForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short'); } catch (e) {}
   const picks = lottoData.picks || [];
   const todayPicks = picks.filter(p => {
     const d = new Date(p.postedAt);
@@ -4034,6 +4104,7 @@ function renderGridLotto() {
             <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
               ${p.direction ? `<span class="dir-pill ${isCall ? 'call' : 'put'}">${p.direction}</span>` : ''}
               <span class="tag" style="background:rgba(155,109,255,0.2); color:#9b6dff; font-size:10px;">🎰 LOTTO</span>
+              ${buildTaBadge(p.ta)}
               <span id="hold-pill-${p.ticker}-lotto" data-hold-ticker="${p.ticker}" data-hold-dir="${p.direction || 'LONG'}"></span>
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
@@ -4145,6 +4216,14 @@ async function loadAYCEData() {
   const hits = ayceData.hits || [];
   const stratCount = hits.reduce((acc, h) => acc + (h.strategies||[]).length, 0);
   const armed = hits.reduce((acc, h) => acc + (h.strategies||[]).filter(s => s.status==='armed'||s.status==='live-armed'||s.status==='live-fired').length, 0);
+  // Phase 4.17 — TA verify each AYCE hit (primary armed strategy direction)
+  try {
+    await buildTaForRows(hits, h => h.ticker, h => {
+      const strats = h.strategies || [];
+      const primary = strats.find(s => s.status === 'armed' || s.status === 'live-armed' || s.status === 'live-fired') || strats[0];
+      return primary && primary.direction;
+    });
+  } catch (e) {}
   document.getElementById("scan-date").textContent = "AYCE Scan · " + new Date(ayceData.scannedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${hits.length} tickers · ${stratCount} strategies · ${armed} armed · <button onclick="runAYCEScan()" class="pill-mini" style="background:rgba(92,207,255,0.2);color:#5cf;">↻ Re-scan</button>`;
   renderStatsAYCE();
@@ -4432,6 +4511,7 @@ function renderGridAYCE() {
             <div style="display:flex; flex-direction:column; gap:4px; align-items:flex-end;">
               <span class="tag" style="background:rgba(255,165,0,0.2); color:#ffa500; font-size:10px;">🍽️ AYCE</span>
               <span class="tag" style="font-size:10px;">${strats.length} strat${strats.length === 1 ? '' : 's'}</span>
+              ${buildTaBadge(h.ta)}
             </div>
           </div>
           ${stratHtml}
@@ -4927,6 +5007,10 @@ async function loadMoversData() {
     const data = await r.json();
     if (data.error) throw new Error(data.error);
     movers = data;
+    // Phase 4.17 — TA verify each mover (long if up-mover, short if down-mover)
+    try {
+      await buildTaForRows(movers.movers || [], r => r.ticker, r => (r.pctChange > 0 ? 'long' : 'short'));
+    } catch (e) { /* fail open */ }
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">
       Could not load Live Movers: <code>${e.message}</code>
@@ -5110,6 +5194,7 @@ function renderGridMovers() {
         </div>
         <div class="tags">
           <span class="tag day">DAY</span>
+          ${buildTaBadge(m.ta)}
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}
