@@ -56,6 +56,9 @@ try { prefireVisionGate = require('./prefireVisionGate'); } catch (e) {}
 // PDT TRACKER — gates LIVE TS account fires (sim ignored)
 var pdtTracker = null;
 try { pdtTracker = require('./pdtTracker'); } catch (e) {}
+// SIM TRADE JOURNAL — Phase 4.24, per-position lifecycle for win-rate stats
+var simTradeJournal = null;
+try { simTradeJournal = require('./simTradeJournal'); } catch (e) {}
 var ts = null;
 try { ts = require('./tradestation'); } catch (e) {}
 
@@ -638,6 +641,23 @@ async function runSimAuto(opts) {
     state.totalLifetimeFires = (state.totalLifetimeFires || 0) + 1;
     saveState(state);
 
+    // Phase 4.24: log to SIM Trade Journal so exits get tracked + win-rate stats build up
+    if (simTradeJournal && simTradeJournal.openPosition) {
+      try {
+        simTradeJournal.openPosition({
+          ticker: setup.ticker,
+          direction: setup.direction,
+          contractSymbol: fireResult.contract.symbol,
+          entryPrice: fireResult.limitPrice,
+          entrySpot: spot,
+          conviction: setup.conviction,
+          source: setup.source,
+          contracts: fireResult.qty || 1,
+          structuralStop: setup.stop,
+        });
+      } catch (e) { console.error('[SIM-AUTO] journal openPosition failed:', e.message); }
+    }
+
     // Push Discord
     await pushSimFireCard(setup, spot, fireResult);
   }
@@ -686,6 +706,8 @@ function markPositionClosed(ticker, outcome) {
   state.openPositions = (state.openPositions || []).filter(function(p) { return p.ticker !== ticker; });
   // Outcome logged separately by tradeTracker's close API
   saveState(state);
+  // Phase 4.24: also tear down journal entry. Caller should pass exitPrice/exitSpot via
+  // closeJournalPosition when known. This function (legacy) just returns ticker count.
   return { ok: true, ticker: ticker, openPositions: state.openPositions.length };
 }
 

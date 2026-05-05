@@ -347,6 +347,13 @@ var simAutoTrader = null;
 try { simAutoTrader = require('./simAutoTrader'); console.log('[SERVER] simAutoTrader loaded OK'); }
 catch(e) { console.log('[SERVER] simAutoTrader not loaded:', e.message); }
 
+// SIM TRADE JOURNAL — Phase 4.24. Per-position lifecycle (open → mark → close)
+// with realized P&L on exit. Backed by /data/sim_trade_journal.json. Closes the
+// gap where SIM fires were logged but exits were never tracked.
+var simTradeJournal = null;
+try { simTradeJournal = require('./simTradeJournal'); console.log('[SERVER] simTradeJournal loaded OK'); }
+catch(e) { console.log('[SERVER] simTradeJournal not loaded:', e.message); }
+
 // ICS JOURNAL — 4:05 PM EOD journal + Friday weekly review. Stateless agent
 // memory architecture (per "Claude Code 24/7 Trader" video pattern). Writes
 // /data/journal/YYYY-MM-DD.md + rolling strategy_state.md.
@@ -4440,7 +4447,31 @@ app.get('/sim/status', async function(req, res) {
   try {
     if (simMode) {
       var card = await simMode.buildSimStatus();
-      res.json({ status: 'OK', card });
+      // Phase 4.24: append real journal stats so /sim/status shows actual win-rate
+      var journalStats = null;
+      var openCount = 0;
+      var closedToday = [];
+      if (simTradeJournal) {
+        try {
+          journalStats = simTradeJournal.computeWinRate(30);
+          var active = simTradeJournal.getActivePositions();
+          openCount = active.length;
+          closedToday = simTradeJournal.getClosedPositions(simTradeJournal.todayET());
+        } catch (e) {}
+      }
+      var journalBlock = '';
+      if (journalStats) {
+        journalBlock = '\n-------------------------------\n' +
+          'JOURNAL (last 30d):\n' +
+          '  Decisive trades: ' + (journalStats.wins + journalStats.losses) + ' (' + journalStats.wins + 'W / ' + journalStats.losses + 'L)\n' +
+          '  Flat:            ' + journalStats.flat + '\n' +
+          '  Win rate:        ' + journalStats.winRatePct.toFixed(1) + '%\n' +
+          '  Avg win:         ' + (journalStats.avgWinPct || 0).toFixed(1) + '%\n' +
+          '  Avg loss:        ' + (journalStats.avgLossPct || 0).toFixed(1) + '%\n' +
+          '  Open positions:  ' + openCount + '\n' +
+          '  Closed today:    ' + closedToday.length;
+      }
+      res.json({ status: 'OK', card: card + journalBlock, journal: journalStats });
     } else {
       res.json({ status: 'simMode not loaded' });
     }
@@ -5060,6 +5091,165 @@ cron.schedule('5 16 * * 1-5', async function() {
     console.log('[SIM-AUTO] 4:05 PM EOD recap firing...');
     await simAutoTrader.runEodRecap();
   } catch(e) { console.error('[SIM-AUTO] eod recap error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// =============================================================================
+// SIM TRADE JOURNAL — Phase 4.24
+// Two crons:
+//   1) Every 5 min during RTH: mark-to-market each active SIM position +
+//      auto-close on bracket conditions (STOP / TP1 / TIME).
+//   2) 4:05 PM ET daily: force-close any still-open positions for "EOD" exit,
+//      compute day stats, push Discord recap embed.
+// =============================================================================
+
+// Helper: pull live option premium for an ICS option symbol
+async function _fetchOptionPremium(token, contractSymbol) {
+  try {
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(contractSymbol);
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var q = (data.Quotes || data.quotes || [])[0];
+    if (!q) return null;
+    var bid = parseFloat(q.Bid || 0);
+    var ask = parseFloat(q.Ask || 0);
+    if (bid > 0 && ask > 0) return (bid + ask) / 2;
+    return parseFloat(q.Last || q.Close || 0) || null;
+  } catch (e) { return null; }
+}
+
+async function _fetchStockSpot(token, ticker) {
+  try {
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(ticker);
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var q = (data.Quotes || data.quotes || [])[0];
+    if (!q) return null;
+    return parseFloat(q.Last || q.Close || 0) || null;
+  } catch (e) { return null; }
+}
+
+// Bracket thresholds (percent of entry)
+var SIM_JOURNAL_STOP_PCT = -50;     // tail-risk catch (matches simAutoTrader)
+var SIM_JOURNAL_TP1_PCT  = 25;      // first profit trim (lighter than +50% to lock smaller wins faster in journal)
+var SIM_JOURNAL_TIME_HRS = 6;       // time stop if no profit
+
+// Mark-to-market + auto-close cron — every 5 min RTH
+cron.schedule('*/5 9-15 * * 1-5', async function() {
+  try {
+    if (!simTradeJournal) return;
+    var now = new Date();
+    var etHr = parseInt(now.toLocaleString('en-US', { timeZone: 'America/New_York', hour: 'numeric', hour12: false }), 10);
+    var etMin = now.getMinutes();
+    var inWindow = (etHr === 9 && etMin >= 30) || (etHr >= 10 && etHr < 16);
+    if (!inWindow) return;
+    var ts2 = null;
+    try { ts2 = require('./tradestation'); } catch (e) { return; }
+    if (!ts2 || !ts2.getAccessToken) return;
+    var token; try { token = await ts2.getAccessToken(); } catch (e) { return; }
+    if (!token) return;
+    var active = simTradeJournal.getActivePositions();
+    if (!active.length) return;
+    for (var i = 0; i < active.length; i++) {
+      var pos = active[i];
+      try {
+        var prem = await _fetchOptionPremium(token, pos.contractSymbol);
+        var spot = await _fetchStockSpot(token, pos.ticker);
+        if (prem != null) {
+          simTradeJournal.updateMark(pos.contractSymbol, prem, spot);
+          var pnlPct = ((prem - pos.entryPrice) / pos.entryPrice) * 100;
+          // Bracket checks
+          if (pnlPct <= SIM_JOURNAL_STOP_PCT) {
+            simTradeJournal.closePosition(pos.contractSymbol, {
+              exitPrice: prem, exitSpot: spot, exitReason: 'STOP'
+            });
+            continue;
+          }
+          if (pnlPct >= SIM_JOURNAL_TP1_PCT && !pos.bracketTracker.tp1Hit) {
+            // Mark TP1 hit + close (journal-level — actual exit cutting is per icsTradeManager).
+            simTradeJournal.closePosition(pos.contractSymbol, {
+              exitPrice: prem, exitSpot: spot, exitReason: 'TP1'
+            });
+            continue;
+          }
+          // Time stop — > 6 hrs old AND not in profit
+          var ageHrs = (Date.now() - new Date(pos.entryTimestamp).getTime()) / 3600000;
+          if (ageHrs >= SIM_JOURNAL_TIME_HRS && pnlPct <= 0) {
+            simTradeJournal.closePosition(pos.contractSymbol, {
+              exitPrice: prem, exitSpot: spot, exitReason: 'TIME'
+            });
+            continue;
+          }
+        }
+      } catch (e) { console.error('[SIM-JOURNAL] mark error ' + pos.contractSymbol + ':', e.message); }
+    }
+  } catch (e) { console.error('[SIM-JOURNAL] mark cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// EOD force-close + Discord recap — 4:05 PM ET
+cron.schedule('5 16 * * 1-5', async function() {
+  try {
+    if (!simTradeJournal) return;
+    console.log('[SIM-JOURNAL] EOD force-close + recap firing...');
+    var ts2 = null;
+    try { ts2 = require('./tradestation'); } catch (e) {}
+    var token = null;
+    if (ts2 && ts2.getAccessToken) { try { token = await ts2.getAccessToken(); } catch (e) {} }
+    var active = simTradeJournal.getActivePositions();
+    for (var i = 0; i < active.length; i++) {
+      var pos = active[i];
+      var prem = null, spot = null;
+      if (token) {
+        prem = await _fetchOptionPremium(token, pos.contractSymbol);
+        spot = await _fetchStockSpot(token, pos.ticker);
+      }
+      simTradeJournal.closePosition(pos.contractSymbol, {
+        exitPrice: prem != null ? prem : pos.currentPrice,
+        exitSpot: spot != null ? spot : pos.currentSpot,
+        exitReason: 'EOD',
+      });
+    }
+    // Push Discord recap embed
+    var today = simTradeJournal.todayET();
+    var todayClosed = simTradeJournal.getClosedPositions(today);
+    var stats = simTradeJournal.computeWinRate(1);
+    var dirIcon = function(d) { return d === 'long' ? '🟢' : '🔴'; };
+    var rows = todayClosed.map(function(p, idx) {
+      return (idx + 1) + '. ' + dirIcon(p.direction) + ' ' + p.ticker +
+             ' (' + (p.source || '?') + ', conv ' + (p.conviction || '?') + ') ' +
+             p.exitReason + ' ' + (p.pnlPct != null ? (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(1) + '%' : '?');
+    });
+    var totalPnL = todayClosed.reduce(function(s, p) { return s + (p.pnlDollar || 0); }, 0);
+    var best = todayClosed.slice().sort(function(a, b) { return (b.pnlPct || -999) - (a.pnlPct || -999); })[0];
+    var worst = todayClosed.slice().sort(function(a, b) { return (a.pnlPct || 999) - (b.pnlPct || 999); })[0];
+    var embed = {
+      username: 'Flow Scout — SIM Journal',
+      embeds: [{
+        title: '📊 SIM RECAP — ' + today,
+        description: 'Per-position lifecycle close summary (Phase 4.24 journal).',
+        color: 5763719,
+        fields: [
+          { name: 'Fires', value: String(todayClosed.length), inline: true },
+          { name: 'Wins', value: stats.wins + ' (' + stats.winRatePct.toFixed(0) + '%)', inline: true },
+          { name: 'Losses', value: String(stats.losses), inline: true },
+          { name: 'Flat', value: String(stats.flat), inline: true },
+          { name: 'Net P&L (est)', value: '$' + totalPnL.toFixed(0), inline: true },
+          { name: 'Best', value: best ? (best.ticker + ' ' + (best.pnlPct >= 0 ? '+' : '') + best.pnlPct.toFixed(0) + '%') : '—', inline: true },
+          { name: 'Worst', value: worst ? (worst.ticker + ' ' + (worst.pnlPct >= 0 ? '+' : '') + worst.pnlPct.toFixed(0) + '%') : '—', inline: true },
+          { name: 'Closed positions', value: rows.length ? rows.join('\n').slice(0, 1000) : 'No closes today.', inline: false },
+        ],
+        footer: { text: 'Flow Scout | SIM Trade Journal | Phase 4.24' },
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
+      'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+    var dp = require('./discordPush');
+    await dp.send('simTradeJournal', embed, { webhook: DISCORD_WEBHOOK });
+  } catch (e) { console.error('[SIM-JOURNAL] EOD cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // ICS JOURNAL — 4:05 PM ET daily (Mon-Fri) writes journal file + Discord recap
@@ -6274,6 +6464,97 @@ app.get('/api/sim-auto/qualifying', function(req, res) {
   try {
     var setups = simAutoTrader.collectQualifyingSetups();
     res.json({ ok: true, count: setups.length, setups: setups });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
+// SIM TRADE JOURNAL endpoints — Phase 4.24
+// /api/sim-auto/journal?days=N    → full snapshot (active + closed + win-rate)
+// /api/sim-auto/positions         → active positions w/ live mark-to-market
+// /api/sim-auto/journal/open      → manual open (for backfill or testing)
+// /api/sim-auto/journal/close     → manual close (for backfill or testing)
+// /api/sim-auto/journal/recap     → manually trigger the EOD recap push
+// =============================================================================
+app.get('/api/sim-auto/journal', function(req, res) {
+  if (!simTradeJournal) return res.status(500).json({ ok: false, error: 'simTradeJournal not loaded' });
+  try {
+    var days = parseInt(req.query.days || '30', 10);
+    if (isNaN(days) || days <= 0) days = 30;
+    var snap = simTradeJournal.getJournalSnapshot(days);
+    res.json(Object.assign({ ok: true }, snap));
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/sim-auto/positions', function(req, res) {
+  if (!simTradeJournal) return res.status(500).json({ ok: false, error: 'simTradeJournal not loaded' });
+  try {
+    var active = simTradeJournal.getActivePositions();
+    res.json({ ok: true, count: active.length, positions: active });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/sim-auto/journal/open', function(req, res) {
+  if (!simTradeJournal) return res.status(500).json({ ok: false, error: 'simTradeJournal not loaded' });
+  try {
+    var body = req.body || {};
+    var out = simTradeJournal.openPosition(body);
+    if (!out.ok) return res.status(400).json(out);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/sim-auto/journal/close', function(req, res) {
+  if (!simTradeJournal) return res.status(500).json({ ok: false, error: 'simTradeJournal not loaded' });
+  try {
+    var body = req.body || {};
+    var contractSymbol = body.contractSymbol;
+    if (!contractSymbol) return res.status(400).json({ ok: false, error: 'contractSymbol required' });
+    var out = simTradeJournal.closePosition(contractSymbol, body);
+    if (!out.ok) return res.status(400).json(out);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/sim-auto/journal/recap', async function(req, res) {
+  if (!simTradeJournal) return res.status(500).json({ ok: false, error: 'simTradeJournal not loaded' });
+  try {
+    var today = simTradeJournal.todayET();
+    var todayClosed = simTradeJournal.getClosedPositions(today);
+    var stats = simTradeJournal.computeWinRate(1);
+    var dirIcon = function(d) { return d === 'long' ? '🟢' : '🔴'; };
+    var rows = todayClosed.map(function(p, idx) {
+      return (idx + 1) + '. ' + dirIcon(p.direction) + ' ' + p.ticker +
+             ' (' + (p.source || '?') + ', conv ' + (p.conviction || '?') + ') ' +
+             p.exitReason + ' ' + (p.pnlPct != null ? (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(1) + '%' : '?');
+    });
+    var totalPnL = todayClosed.reduce(function(s, p) { return s + (p.pnlDollar || 0); }, 0);
+    var best = todayClosed.slice().sort(function(a, b) { return (b.pnlPct || -999) - (a.pnlPct || -999); })[0];
+    var worst = todayClosed.slice().sort(function(a, b) { return (a.pnlPct || 999) - (b.pnlPct || 999); })[0];
+    var embed = {
+      username: 'Flow Scout — SIM Journal',
+      embeds: [{
+        title: '📊 SIM RECAP — ' + today,
+        description: 'Per-position lifecycle close summary (Phase 4.24 journal).',
+        color: 5763719,
+        fields: [
+          { name: 'Fires', value: String(todayClosed.length), inline: true },
+          { name: 'Wins', value: stats.wins + ' (' + stats.winRatePct.toFixed(0) + '%)', inline: true },
+          { name: 'Losses', value: String(stats.losses), inline: true },
+          { name: 'Flat', value: String(stats.flat), inline: true },
+          { name: 'Net P&L (est)', value: '$' + totalPnL.toFixed(0), inline: true },
+          { name: 'Best', value: best ? (best.ticker + ' ' + (best.pnlPct >= 0 ? '+' : '') + best.pnlPct.toFixed(0) + '%') : '—', inline: true },
+          { name: 'Worst', value: worst ? (worst.ticker + ' ' + (worst.pnlPct >= 0 ? '+' : '') + worst.pnlPct.toFixed(0) + '%') : '—', inline: true },
+          { name: 'Closed positions', value: rows.length ? rows.join('\n').slice(0, 1000) : 'No closes today.', inline: false },
+        ],
+        footer: { text: 'Flow Scout | SIM Trade Journal | Phase 4.24' },
+        timestamp: new Date().toISOString(),
+      }],
+    };
+    var DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
+      'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+    var dp = require('./discordPush');
+    var pushResult = await dp.send('simTradeJournal', embed, { webhook: DISCORD_WEBHOOK });
+    res.json({ ok: true, today: today, closedCount: todayClosed.length, stats: stats, push: pushResult, embed: embed.embeds[0] });
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 app.get('/api/power-hour-brief/last', function(req, res) {
