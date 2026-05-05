@@ -32,10 +32,12 @@ const MODES = {
   DAY: {
     label: 'DAY TRADE', minPremium: 0.30, maxPremium: 3.50,
     minDTE: 2, maxDTE: 5, stopPct: 0.25, t1Pct: 0.40, maxRisk: 400,
+    minVol: 50, minOI: 50,           // Phase 4.19 — DAY can tolerate slightly thin
   },
   SWING: {
     label: 'SWING TRADE', minPremium: 0.50, maxPremium: 5.00,
     minDTE: 7, maxDTE: 21, stopPct: 0.30, t1Pct: 0.50, maxRisk: 600,
+    minVol: 100, minOI: 200,         // Phase 4.19 — SWING needs real liquidity (May 5 META 55/97 burn)
   },
   // LOTTO mode (May 4 2026 v2) — MAXIMUM PERMISSIVE, last-resort fallback.
   // Goal: never return null when ANY tradable option exists for the ticker.
@@ -45,8 +47,30 @@ const MODES = {
   LOTTO: {
     label: 'LOTTO', minPremium: 0.02, maxPremium: 5.00,
     minDTE: 0, maxDTE: 45, stopPct: 0.40, t1Pct: 0.60, maxRisk: 300,
+    minVol: 25, minOI: 25,           // Phase 4.19 — LOTTO most permissive but still some floor
   },
 };
+
+// Phase 4.19 — STANDARD EXPIRY POLICY for SWING/LOTTO.
+// Tuesday/Thursday weeklies often have thin OI/vol. Friday weeklies + monthlies
+// are the liquid expiries. This filter prevents the resolver from picking a
+// "Tuesday weekly" that auto-resolved to a 50-volume contract. Override only
+// for explicit lotto plays where any expiry is acceptable.
+function isStandardExpiry(dateStr) {
+  if (!dateStr) return false;
+  // YYYY-MM-DD → Date object treated as UTC noon (avoids TZ rollover)
+  var d = new Date(dateStr + 'T12:00:00Z');
+  var dow = d.getUTCDay();    // 0=Sun, 5=Fri
+  return dow === 5;           // Only Friday — covers weekly Fri AND monthly Fri (3rd Fri)
+}
+function isMonthlyExpiry(dateStr) {
+  if (!dateStr) return false;
+  var d = new Date(dateStr + 'T12:00:00Z');
+  // Monthly expiry = 3rd Friday of the month
+  if (d.getUTCDay() !== 5) return false;
+  var dom = d.getUTCDate();
+  return dom >= 15 && dom <= 21;
+}
 
 const MIN_PREMIUM = 0.30;
 const MAX_PREMIUM = 5.00;
@@ -178,6 +202,30 @@ function selectExpiry(expirations, mode) {
     return null;
   }
   var valid = eligible.filter(function(e){ return e.dte <= config.maxDTE; });
+
+  // Phase 4.19 — for SWING/LOTTO, PREFER Friday weeklies + monthlies (skip Tue/Thu
+  // weeklies which often have thin OI). DAY mode picks nearest regardless because
+  // 0-3 DTE has limited choices anyway.
+  if (mode === 'SWING' || mode === 'LOTTO') {
+    var fridays = valid.filter(function(e){ return isStandardExpiry(e.date); });
+    var monthlies = fridays.filter(function(e){ return isMonthlyExpiry(e.date); });
+    // Prefer monthly Friday if within DTE band — most liquid
+    if (monthlies.length > 0) {
+      console.log('[EXPIRY] PREFERRED MONTHLY:', monthlies[0].date+'('+monthlies[0].dte+'DTE)');
+      return monthlies[0];
+    }
+    // Otherwise nearest Friday weekly
+    if (fridays.length > 0) {
+      console.log('[EXPIRY] PREFERRED FRIDAY-WEEKLY:', fridays[0].date+'('+fridays[0].dte+'DTE)');
+      return fridays[0];
+    }
+    // Fallback within band — log warning that we're picking a non-standard weekday
+    if (valid.length > 0) {
+      console.log('[EXPIRY] WARN no Friday in DTE band -- falling back to:', valid[0].date+'('+valid[0].dte+'DTE) day-of-week='+new Date(valid[0].date+'T12:00:00Z').getUTCDay());
+      return valid[0];
+    }
+  }
+
   if (valid.length > 0) { console.log('[EXPIRY] Selected:',valid[0].date+'('+valid[0].dte+'DTE)'); return valid[0]; }
   // Fallback: nearest expiry that still meets minDTE (may be slightly past maxDTE)
   console.log('[EXPIRY] Fallback (past maxDTE but >= minDTE):',eligible[0].date+'('+eligible[0].dte+'DTE)');
@@ -461,17 +509,39 @@ function getEntryMode(confluence, strategy) {
 // -- SELECT BEST CONTRACT -----------------------------------------
 function selectBestContract(contracts, price, config, lvls, type) {
   if (!contracts||!contracts.length) return null;
+
+  // Phase 4.19 — HARD LIQUIDITY FLOOR. May 5 META 5/13 $612.5C handed AB
+  // 55 vol / 97 OI (dead). Now we filter at the gate.
+  var minVol = (config && config.minVol) || 50;
+  var minOI  = (config && config.minOI) || 50;
+
+  // Stage 1: full filter (premium band + delta floor + LIQUIDITY)
   var candidates=contracts.filter(function(c){
-    return c && c.mid>=config.minPremium && c.mid<=config.maxPremium && Math.abs(c.delta)>=0.15;
+    if (!c || c.mid<config.minPremium || c.mid>config.maxPremium) return false;
+    if (Math.abs(c.delta) < 0.15) return false;
+    // Liquidity gate: vol OR OI must clear (one or the other — both ideal)
+    var liqOK = (c.volume >= minVol) || (c.openInterest >= minOI);
+    return liqOK;
   });
+
+  // Stage 2: drop delta floor but KEEP liquidity floor
   if (!candidates.length) {
-    candidates=contracts.filter(function(c){ return c&&c.mid>=config.minPremium&&c.mid<=config.maxPremium; });
+    console.log('[SELECT] Stage 1 empty -- relaxing delta floor (keeping liquidity)');
+    candidates=contracts.filter(function(c){
+      if (!c || c.mid<config.minPremium || c.mid>config.maxPremium) return false;
+      return (c.volume >= minVol) || (c.openInterest >= minOI);
+    });
   }
+
+  // Stage 3: REJECT if no liquid candidates — caller will retry next expiry
   if (!candidates.length) {
-    console.error('[SELECT] No candidates. Range:$'+config.minPremium+'-$'+config.maxPremium,
-      'Mids:',contracts.slice(0,5).map(function(c){return c?'$'+c.mid:'null';}).join(', '));
-    return null;
+    var sample = contracts.slice(0,5).map(function(c){
+      return c ? c.strike+'/$'+c.mid+'/v'+c.volume+'/oi'+c.openInterest : 'null';
+    }).join(', ');
+    console.error('[SELECT] LIQUIDITY REJECT — no contract meets vol≥'+minVol+' OR OI≥'+minOI+'. Sample: '+sample);
+    return { _liquidityReject: true, sample: sample };  // signal caller to retry next expiry
   }
+
   var scored=candidates.map(function(c){
     var score=0, abs=Math.abs(c.delta), dist=Math.abs(c.strike-price)/price;
     if (abs>=0.35&&abs<=0.55) score+=3; else if (abs>=0.25) score+=1;
@@ -487,7 +557,7 @@ function selectBestContract(contracts, price, config, lvls, type) {
   });
   scored.sort(function(a,b){return b.score-a.score;});
   var best=scored[0].contract;
-  console.log('[SELECT] '+best.symbol+' strike:$'+best.strike+' mid:$'+best.mid+' delta:'+best.delta.toFixed(2)+' score:'+scored[0].score+' source:'+best.source);
+  console.log('[SELECT] '+best.symbol+' strike:$'+best.strike+' mid:$'+best.mid+' delta:'+best.delta.toFixed(2)+' vol:'+best.volume+' oi:'+best.openInterest+' score:'+scored[0].score+' source:'+best.source);
   return best;
 }
 
@@ -593,6 +663,38 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   if (!contracts.length) { console.error('[RESOLVE] No parseable contracts from',rawChain.length,'raw'); return { ok:false, stage:'parse', reason:'parseContract dropped all ' + rawChain.length + ' raw contracts (missing mid/strike/delta?)' }; }
 
   var best=selectBestContract(contracts, price, config, lvls, type);
+
+  // Phase 4.19 — if selectBestContract rejects on liquidity, retry with NEXT
+  // expiry that's also a standard (Fri) expiry. Example: META 5/13 (Tue) had
+  // 55 vol / 97 OI on $612.5C — auto-roll to 5/15 (Fri) which has way more flow.
+  if (best && best._liquidityReject) {
+    var rejectedExpiry = expiry;
+    var nextStandard = expirations.filter(function(e){
+      return e.date > rejectedExpiry && e.dte >= config.minDTE && e.dte <= config.maxDTE * 1.5
+        && (mode === 'DAY' ? true : isStandardExpiry(e.date));
+    });
+    for (var k=0; k<Math.min(nextStandard.length, 3); k++) {
+      console.log('[RESOLVE] LIQUIDITY ROLL -- retrying', nextStandard[k].date+'('+nextStandard[k].dte+'DTE)');
+      var newRaw = await getOptionChain(ticker, nextStandard[k].date, type, price, token);
+      if (!newRaw.length) continue;
+      var newContracts = newRaw.map(function(c){ return parseContract(c, nextStandard[k].date, type); }).filter(Boolean);
+      if (!newContracts.length) continue;
+      var attempt = selectBestContract(newContracts, price, config, lvls, type);
+      if (attempt && !attempt._liquidityReject) {
+        console.log('[RESOLVE] LIQUIDITY ROLL SUCCESS at', nextStandard[k].date);
+        best = attempt;
+        expiry = nextStandard[k].date;
+        dte = nextStandard[k].dte;
+        contracts = newContracts;
+        break;
+      }
+    }
+    // Still rejected after all retries — fail with explicit reason
+    if (best && best._liquidityReject) {
+      return { ok:false, stage:'liquidity', reason:'No expiry within DTE band has a contract meeting vol≥'+(config.minVol||50)+' OR OI≥'+(config.minOI||50)+' in the $'+config.minPremium+'-$'+config.maxPremium+' premium band. Tried '+(rejectedExpiry+', then '+nextStandard.slice(0,3).map(function(e){return e.date;}).join(', '))+'. Sample: '+best.sample };
+    }
+  }
+
   if (!best) {
     var midSample = contracts.slice(0,8).map(function(c){return '$'+c.mid.toFixed(2)+'(d'+(c.delta?c.delta.toFixed(2):'?')+')';}).join(', ');
     console.error('[RESOLVE] No contract passed selection -- maxPremium:$'+config.maxPremium+' contracts checked:',contracts.length);
