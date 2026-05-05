@@ -2749,6 +2749,8 @@ function renderGridAction() {
           </div>
         </div>
 
+        ${(live.last && sug.stockTrigger) ? buildProximityHtml(parseFloat(live.last), parseFloat(sug.stockTrigger), r.direction === 'long' ? 'LONG' : 'SHORT') : ''}
+
         <div style="margin-top:10px; display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; font-size:11px;">
           <div><span style="color:var(--txt-3);">Alerts (30m)</span><br><b class="mono">${r.alertCount}</b></div>
           <div><span style="color:var(--txt-3);">Total $</span><br><b class="mono">$${Math.round(r.totalPremium/1000)}K</b></div>
