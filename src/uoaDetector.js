@@ -145,6 +145,23 @@ async function handleAlert(alert) {
   // Stack-check via alertTiers
   var ticker = String(alert.ticker).toUpperCase();
   var direction = String(alert.direction || 'long').toLowerCase();
+
+  // PHASE 4.3 (May 5 PM): Custom Bullflow alerts register as Tier 1 in
+  // alertTiers — they ARE primary signals (AB-curated thesis). This lets
+  // a Bullflow custom alert + a TV Tier 2 confirmation = full stack.
+  // (Previously only TV alerts populated the tier framework.)
+  if (isCustom && !alignmentWarning && alertTiers && alertTiers.recordAlert) {
+    try {
+      alertTiers.recordAlert(ticker, direction, 1, {
+        source: 'bullflow-custom',
+        alertName: alert.customAlertName || alert.bullflowAlertName,
+        filterWeight: filterWeight,
+        premium: alert.totalPremium || alert.premium,
+        contractSymbol: alert.contractSymbol,
+      });
+    } catch (e) { console.error('[UOA] tier1-register error:', e.message); }
+  }
+
   var stack = alertTiers ? alertTiers.getStackStatus(ticker, direction) : { fullStack: false };
 
   // ENRICH — pull live ticker context, scanner setup, level distance, Titan ticket
@@ -269,15 +286,28 @@ async function handleAlert(alert) {
 
   if (dp) await dp.send('uoaDetector', embed, { webhook: DISCORD_WEBHOOK });
 
-  // Trigger SIM auto-fire if conditions stack
+  // Phase 4.3 — confluence auto-fire SIM when stack complete.
+  // Don't wait for next cron tick — fire NOW via simAutoTrader.runSimAuto().
+  // The existing pipeline applies all safety: daily cap, ticker cooldown,
+  // vision gate, fire window, account hardcoded 'sim'. If no scanner setup
+  // matches (no trigger/stop), it skips silently.
   if (triggerAutoFire) {
-    try {
-      var simAutoTrader = require('./simAutoTrader');
-      // Manually inject this UOA-driven setup into qualifying setups
-      // and let simAutoTrader fire it on next cron tick (or directly here)
-      // For tonight's MVP: just log the auto-fire intent. Real fire happens via cron.
-      console.log('[UOA] AUTO-FIRE INTENT: ' + ticker + ' ' + direction + ' score ' + s);
-    } catch (e) { console.error('[UOA] auto-fire intent error:', e.message); }
+    console.log('[UOA] AUTO-FIRE TRIGGER: ' + ticker + ' ' + direction + ' score ' + s + ' (custom=' + isCustom + ', whale=' + (s >= WHALE_THRESHOLD) + ', stack=fullStack)');
+    setImmediate(async function() {
+      try {
+        var simAutoTrader = require('./simAutoTrader');
+        if (!simAutoTrader.isEnabled || !simAutoTrader.isEnabled()) {
+          console.log('[UOA] auto-fire skipped — simAutoTrader disabled');
+          return;
+        }
+        if (simAutoTrader.inFireWindow && !simAutoTrader.inFireWindow()) {
+          console.log('[UOA] auto-fire skipped — outside fire window');
+          return;
+        }
+        var result = await simAutoTrader.runSimAuto({ source: 'uoa-confluence', uoaTicker: ticker, uoaDirection: direction });
+        console.log('[UOA] auto-fire complete:', JSON.stringify({ fired: (result && result.firesSucceeded) || 0, attempted: (result && result.firesAttempted) || 0 }));
+      } catch (e) { console.error('[UOA] auto-fire error:', e.message); }
+    });
   }
 
   return {

@@ -5014,6 +5014,40 @@ app.get('/api/bullflow-filters/resolve', function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Phase 4.3 confluence status — shows tickers with full stack + recent UOA
+// in the last N min, indicating which would auto-fire on next event.
+app.get('/api/uoa/confluence-status', function(req, res) {
+  try {
+    var maxAgeMin = parseInt(req.query.maxAgeMin || 10, 10);
+    var alertTiers = require('./alertTiers');
+    var uoaDetector = require('./uoaDetector');
+    var stacks = (alertTiers.getAllStacks() || {}).stacks || [];
+    var fullStacks = stacks.filter(function(s) { return s.fullStack; });
+    var recentUoa = uoaDetector.getRecentUoa(maxAgeMin / 60);
+    var confluenceMatches = fullStacks.map(function(s) {
+      var match = recentUoa.find(function(u) {
+        var ageMin = (Date.now() - new Date(u.timestamp).getTime()) / 60000;
+        return u.ticker === s.ticker && u.direction === s.direction && ageMin <= maxAgeMin;
+      });
+      return {
+        ticker: s.ticker,
+        direction: s.direction,
+        fullStack: true,
+        recentUoa: match || null,
+        confluence: !!match,
+      };
+    });
+    res.json({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      maxAgeMin: maxAgeMin,
+      fullStackCount: fullStacks.length,
+      confluenceCount: confluenceMatches.filter(function(m) { return m.confluence; }).length,
+      matches: confluenceMatches,
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // EOD reset cron — clears tier state at end of trading day
 cron.schedule('5 16 * * 1-5', function() {
   try {
