@@ -5388,6 +5388,33 @@ app.get('/api/action-radar', async function(req, res) {
                   var midMap = {};
                   (midData.quotes || []).forEach(function(qm){ midMap[qm.symbol] = qm; });
 
+                  // Phase 4.12 — pull 5m bars per ticker IN PARALLEL, derive structural
+                  // stop from real recent base low (NOT ±1.5% prev close default).
+                  // For LONG: structural stop = recent 12-bar 5m low - 5¢ buffer
+                  // For SHORT: structural stop = recent 12-bar 5m high + 5¢ buffer
+                  var barFetches = needContract.filter(function(r){
+                    var info = rowKey[r.ticker];
+                    return info && midMap[info.optSym] && midMap[info.optSym].mid;
+                  }).map(function(r) {
+                    var info = rowKey[r.ticker];
+                    var barUrl = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(r.ticker)
+                      + '?interval=5&unit=Minute&barsback=12';
+                    return tsFetchLib(barUrl, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 6000 })
+                      .then(function(br) { return br.ok ? br.json() : null; })
+                      .then(function(bd) {
+                        if (!bd || !bd.Bars) return { ticker: r.ticker, structural: null };
+                        var bars = bd.Bars.map(function(b){ return { high: parseFloat(b.High), low: parseFloat(b.Low) }; });
+                        var lowest = Math.min.apply(Math, bars.map(function(b){ return b.low; }));
+                        var highest = Math.max.apply(Math, bars.map(function(b){ return b.high; }));
+                        return { ticker: r.ticker, lowest: lowest, highest: highest };
+                      })
+                      .catch(function(){ return { ticker: r.ticker, structural: null }; });
+                  });
+
+                  var barResults = await Promise.all(barFetches);
+                  var barMap = {};
+                  barResults.forEach(function(b){ if (b) barMap[b.ticker] = b; });
+
                   needContract.forEach(function(r) {
                     var info = rowKey[r.ticker];
                     if (!info) return;
@@ -5396,17 +5423,34 @@ app.get('/api/action-radar', async function(req, res) {
                     var contractCost = mid.mid * 100;
                     var aff = contractCost <= maxBudget ? 'AFFORDABLE'
                             : contractCost <= maxBudget * 2 ? 'STRETCH' : 'TOO_EXPENSIVE';
-                    // Structural stop: previous close as a default underlying level
-                    // (tighter would be 5m intraday low — for v1 use prev close)
-                    var stopPrice = info.isLong
-                      ? +(info.prevClose * 0.985).toFixed(2)   // -1.5% below prev close
-                      : +(info.prevClose * 1.015).toFixed(2);  // +1.5% above prev close
+
+                    // CHART-GROUNDED structural stop from real 5m bar data
+                    var bars = barMap[r.ticker];
+                    var stopPrice;
+                    var stopSource = 'chart';
+                    if (bars && bars.lowest && bars.highest && info.isLong) {
+                      stopPrice = +(bars.lowest - 0.05).toFixed(2);  // 5m base low - 5¢ buffer
+                    } else if (bars && bars.highest && bars.lowest && !info.isLong) {
+                      stopPrice = +(bars.highest + 0.05).toFixed(2);  // 5m base high + 5¢ buffer
+                    } else {
+                      // Fallback if bars not available — use prev close ±1.5%
+                      stopPrice = info.isLong
+                        ? +(info.prevClose * 0.985).toFixed(2)
+                        : +(info.prevClose * 1.015).toFixed(2);
+                      stopSource = 'fallback-prev-close';
+                    }
+
                     r.suggested = {
                       contract: info.optSym,
                       mid: +mid.mid.toFixed(2),
                       contractCost: +contractCost.toFixed(0),
                       affordability: aff,
-                      structuralStop: { symbol: r.ticker, predicate: info.isLong ? 'below' : 'above', price: stopPrice },
+                      structuralStop: {
+                        symbol: r.ticker,
+                        predicate: info.isLong ? 'below' : 'above',
+                        price: stopPrice,
+                        source: stopSource,  // 'chart' = 5m base, 'fallback-prev-close' = ±1.5% default
+                      },
                       stockTrigger: info.isLong ? +(info.prevClose * 1.001).toFixed(2) : +(info.prevClose * 0.999).toFixed(2),
                     };
                     r.live = r.live || {};
@@ -7391,9 +7435,12 @@ function liveMoverBuildOSI(ticker, expiryYYMMDD, side, strike) {
 // Used on Live Movers cards so AB can fire directly without recomputing.
 function liveMoverOptionLadder(mid) {
   if (!mid || !isFinite(mid) || mid <= 0) return null;
+  // Phase 4.12 (May 5 PM) — option-level "stop" is now a TAIL-RISK CATCH at -50%,
+  // NOT a flat -25% premium stop. PRIMARY stop is structural on the UNDERLYING.
+  // AB rule from feedback_stop_management.md: NEVER flat % stops alone.
   return {
     entry: +mid.toFixed(2),
-    stop:  +(mid * 0.75).toFixed(2),
+    stop:  +(mid * 0.50).toFixed(2),  // -50% tail-risk catch ONLY (was -25% flat — bug)
     tp1:   +(mid * 1.25).toFixed(2),
     tp2:   +(mid * 1.50).toFixed(2),
     tp3:   +(mid * 2.00).toFixed(2),
