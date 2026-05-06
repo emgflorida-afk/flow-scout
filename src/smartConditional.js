@@ -291,23 +291,257 @@ function isTriggered(spec, currentSpot, lastSpot) {
 }
 
 // =============================================================================
+// PHASE 4.35 — PRE-GATES: PRIME_WINDOW + EXHAUSTION + PREMIUM_EXPANSION
+// -----------------------------------------------------------------------------
+// AB pain (May 5 2026 PM):
+//   When TMO smart conditional triggers, simAutoTrader gates pass on TA/tape/
+//   vision/MTB but the underlying has ALREADY moved 7%+ on the day (chasing
+//   exhausted move) OR option premium has expanded 30%+ past the limit (paying
+//   IV pop — exactly the pattern that bleeds the account).
+//
+// These three guards run BEFORE simAutoTrader.runGates(). They fail-open on
+// infrastructure errors (no quote / no option mid → 'unknown' → treated as
+// pass) so a bad data pull never blocks a legitimate trigger.
+//
+// Each gate has its own env toggle (default ON):
+//   SMART_PRIME_WINDOW_GATE=on|off  (default on)
+//   SMART_EXHAUSTION_GATE=on|off    (default on)
+//   SMART_PREMIUM_GATE=on|off       (default on)
+// =============================================================================
+function phase435Enabled(envName) {
+  var v = process.env[envName];
+  if (v == null || v === '') return true;  // default ON
+  v = String(v).toLowerCase();
+  return v !== 'off' && v !== 'false' && v !== '0';
+}
+
+// ---- Gate: PRIME_WINDOW ----
+// Prime morning window 9:45-11:15 ET = highest historical win rate.
+// Allowed but lower-edge: 11:15-15:00. Outside that = blocked.
+function checkPrimeWindow(now) {
+  if (!phase435Enabled('SMART_PRIME_WINDOW_GATE')) {
+    return { passed: true, gate: 'PRIME_WINDOW', reason: 'gate disabled', skipped: true };
+  }
+  var t = nowET();
+  var totalMin = t.hr * 60 + t.min;
+  var PRIME_START = 9 * 60 + 45;   // 9:45 AM
+  var PRIME_END = 11 * 60 + 15;    // 11:15 AM
+  var ALLOWED_END = 15 * 60;       // 3:00 PM
+
+  if (totalMin >= PRIME_START && totalMin <= PRIME_END) {
+    return { passed: true, gate: 'PRIME_WINDOW',
+      reason: 'Prime window 9:45-11:15 AM ET — highest win rate' };
+  }
+  if (totalMin > PRIME_END && totalMin <= ALLOWED_END) {
+    return { passed: 'partial', gate: 'PRIME_WINDOW',
+      reason: 'Past prime window (' + String(t.hr).padStart(2,'0') + ':' + String(t.min).padStart(2,'0') +
+              ' ET) — allowed but lower win rate, requires stricter gates' };
+  }
+  return { passed: false, gate: 'PRIME_WINDOW',
+    reason: 'Outside trading window (' + String(t.hr).padStart(2,'0') + ':' + String(t.min).padStart(2,'0') +
+            ' ET) — chase risk too high outside 9:45-15:00' };
+}
+
+// ---- Gate: EXHAUSTION ----
+// Per IKEA classifier (scanner-v2.html ~6585): 7%+ move on the day = EXHAUSTED,
+// 4%+ = LATE. Pulls stock prevClose via /api/ticker-quote (existing endpoint).
+// Fail-open on missing quote.
+async function checkExhaustionGate(spec) {
+  if (!phase435Enabled('SMART_EXHAUSTION_GATE')) {
+    return { passed: true, gate: 'EXHAUSTION', reason: 'gate disabled', skipped: true };
+  }
+  var EXHAUST_PCT = 7.0;
+  var LATE_PCT = 4.0;
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
+  try {
+    var r = await fetchLib(serverBase + '/api/ticker-quote?symbols=' + encodeURIComponent(spec.ticker), {
+      timeout: 5000,
+    });
+    if (!r.ok) {
+      return { passed: 'unknown', gate: 'EXHAUSTION', reason: 'ticker-quote ' + r.status + ' — fail-open' };
+    }
+    var data = await r.json();
+    var q = (data && data.quotes && data.quotes[0]) ? data.quotes[0] : null;
+    if (!q || q.last == null || q.prevClose == null || !(q.prevClose > 0)) {
+      return { passed: 'unknown', gate: 'EXHAUSTION', reason: 'no usable quote — fail-open' };
+    }
+    var pctMove = Math.abs((q.last - q.prevClose) / q.prevClose) * 100;
+    if (pctMove >= EXHAUST_PCT) {
+      return {
+        passed: false,
+        gate: 'EXHAUSTION',
+        reason: 'Stock moved ' + pctMove.toFixed(1) + '% on day (>= ' + EXHAUST_PCT + '% threshold) — EXHAUSTED, chase risk too high',
+        pctMove: +pctMove.toFixed(2),
+        last: q.last,
+        prevClose: q.prevClose,
+      };
+    }
+    if (pctMove >= LATE_PCT) {
+      return {
+        passed: 'partial',
+        gate: 'EXHAUSTION',
+        reason: 'Stock moved ' + pctMove.toFixed(1) + '% on day (>= ' + LATE_PCT + '% threshold) — LATE entry zone, allow but warn',
+        pctMove: +pctMove.toFixed(2),
+        last: q.last,
+        prevClose: q.prevClose,
+      };
+    }
+    return {
+      passed: true,
+      gate: 'EXHAUSTION',
+      reason: pctMove.toFixed(1) + '% on day, within healthy range',
+      pctMove: +pctMove.toFixed(2),
+    };
+  } catch (e) {
+    return { passed: 'unknown', gate: 'EXHAUSTION', reason: 'fetch error: ' + e.message + ' — fail-open' };
+  }
+}
+
+// ---- Gate: PREMIUM_EXPANSION ----
+// Pulls option mid via /api/option-mids (existing endpoint). Compares to the
+// spec's limitPrice — if mid has run >30% above limit, BLOCK (chasing IV pop);
+// 15-30% = warn (partial). Fail-open on missing mid.
+async function checkPremiumGate(spec) {
+  if (!phase435Enabled('SMART_PREMIUM_GATE')) {
+    return { passed: true, gate: 'PREMIUM_EXPANSION', reason: 'gate disabled', skipped: true };
+  }
+  if (!spec.contractSymbol || !(spec.limitPrice > 0)) {
+    return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'missing contract / limitPrice — fail-open' };
+  }
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
+  try {
+    var r = await fetchLib(serverBase + '/api/option-mids?symbols=' + encodeURIComponent(spec.contractSymbol), {
+      timeout: 5000,
+    });
+    if (!r.ok) {
+      return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'option-mids ' + r.status + ' — fail-open' };
+    }
+    var data = await r.json();
+    var q = (data && data.quotes && data.quotes[0]) ? data.quotes[0] : null;
+    var mid = q && q.mid != null ? parseFloat(q.mid) : null;
+    if (mid == null || !isFinite(mid) || mid <= 0) {
+      // Try to fall back to last
+      mid = q && q.last != null ? parseFloat(q.last) : null;
+      if (mid == null || !isFinite(mid) || mid <= 0) {
+        return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'no usable option mid — fail-open' };
+      }
+    }
+    var ratio = mid / spec.limitPrice;
+    var aboveLimitPct = (ratio - 1) * 100;
+    if (ratio > 1.30) {
+      return {
+        passed: false,
+        gate: 'PREMIUM_EXPANSION',
+        reason: 'Option mid $' + mid.toFixed(2) + ' is ' + aboveLimitPct.toFixed(0) + '% above your limit $' +
+                spec.limitPrice.toFixed(2) + ' — premium ran past entry, you would be chasing IV pop',
+        mid: +mid.toFixed(2),
+        limitPrice: spec.limitPrice,
+        aboveLimitPct: +aboveLimitPct.toFixed(1),
+      };
+    }
+    if (ratio > 1.15) {
+      return {
+        passed: 'partial',
+        gate: 'PREMIUM_EXPANSION',
+        reason: 'Option mid $' + mid.toFixed(2) + ' is ' + aboveLimitPct.toFixed(0) + '% above limit $' +
+                spec.limitPrice.toFixed(2) + ' — slightly elevated, watch fill price',
+        mid: +mid.toFixed(2),
+        limitPrice: spec.limitPrice,
+        aboveLimitPct: +aboveLimitPct.toFixed(1),
+      };
+    }
+    return {
+      passed: true,
+      gate: 'PREMIUM_EXPANSION',
+      reason: 'Option mid $' + mid.toFixed(2) + ' vs limit $' + spec.limitPrice.toFixed(2) + ' — entry still reasonable',
+      mid: +mid.toFixed(2),
+      limitPrice: spec.limitPrice,
+      aboveLimitPct: +aboveLimitPct.toFixed(1),
+    };
+  } catch (e) {
+    return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'fetch error: ' + e.message + ' — fail-open' };
+  }
+}
+
+// =============================================================================
 // GATE INVOCATION
 // =============================================================================
-// Calls simAutoTrader.runGates() — DOES NOT MODIFY simAutoTrader. We pass the
-// setup with whichever gates the spec requested, and rely on the env-toggle
-// behavior in simAutoTrader to run only the ones we want.
-//
-// To honor `spec.gates` per-conditional, we pass a tradeType that fits the gate
-// list. simAutoTrader's runGates already gates each individually via env vars —
-// for v1, we run them all and just inspect the result against spec.gates.
+// Runs Phase 4.35 pre-gates (PRIME_WINDOW → EXHAUSTION → PREMIUM_EXPANSION)
+// FIRST. Any hard fail short-circuits and does NOT call simAutoTrader.runGates.
+// Then, if pre-gates pass, calls simAutoTrader.runGates() — DOES NOT MODIFY
+// simAutoTrader. We pass the setup with whichever gates the spec requested,
+// and rely on the env-toggle behavior in simAutoTrader to run only the ones
+// we want.
 // =============================================================================
 async function runGatesForSpec(spec) {
+  // Phase 4.35 pre-gates — run BEFORE the simAutoTrader gates so we never
+  // even hit TS API for chasing trades. Order: cheapest-first (no network →
+  // network → network).
+  var preGates = {};
+
+  // Gate A: PRIME_WINDOW (no network)
+  var window = checkPrimeWindow();
+  preGates.primeWindow = window;
+  if (window.passed === false) {
+    return {
+      pass: false,
+      gate: 'PRIME_WINDOW',
+      reason: window.reason,
+      gates: { primeWindow: window.passed },
+      preGates: preGates,
+      diagnostics: { primeWindow: window },
+    };
+  }
+
+  // Gate B: EXHAUSTION (1 quote)
+  var exhaustion = await checkExhaustionGate(spec);
+  preGates.exhaustion = exhaustion;
+  if (exhaustion.passed === false) {
+    return {
+      pass: false,
+      gate: 'EXHAUSTION',
+      reason: exhaustion.reason,
+      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed },
+      preGates: preGates,
+      diagnostics: { primeWindow: window, exhaustion: exhaustion },
+    };
+  }
+
+  // Gate C: PREMIUM_EXPANSION (1 option-mid quote)
+  var premium = await checkPremiumGate(spec);
+  preGates.premium = premium;
+  if (premium.passed === false) {
+    return {
+      pass: false,
+      gate: 'PREMIUM_EXPANSION',
+      reason: premium.reason,
+      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      preGates: preGates,
+      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+    };
+  }
+
+  // Pre-gates passed — chain into existing simAutoTrader gates.
   var simAutoTrader = null;
   try { simAutoTrader = require('./simAutoTrader'); } catch (e) {
-    return { pass: true, gates: {}, reason: 'simAutoTrader not loaded — fail-open', diagnostics: {} };
+    return {
+      pass: true,
+      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      preGates: preGates,
+      reason: 'simAutoTrader not loaded — fail-open',
+      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+    };
   }
   if (!simAutoTrader || !simAutoTrader.runGates) {
-    return { pass: true, gates: {}, reason: 'runGates not available — fail-open', diagnostics: {} };
+    return {
+      pass: true,
+      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      preGates: preGates,
+      reason: 'runGates not available — fail-open',
+      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+    };
   }
   var setup = {
     ticker: spec.ticker,
@@ -321,9 +555,27 @@ async function runGatesForSpec(spec) {
   };
   try {
     var verdict = await simAutoTrader.runGates(setup);
+    // Merge pre-gate results into the verdict so Discord embed can surface them.
+    verdict.preGates = preGates;
+    verdict.gates = Object.assign({
+      primeWindow: window.passed,
+      exhaustion: exhaustion.passed,
+      premium: premium.passed,
+    }, verdict.gates || {});
+    verdict.diagnostics = Object.assign({
+      primeWindow: window,
+      exhaustion: exhaustion,
+      premium: premium,
+    }, verdict.diagnostics || {});
     return verdict;
   } catch (e) {
-    return { pass: true, gates: { error: e.message }, reason: 'gate exception — fail-open' };
+    return {
+      pass: true,
+      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed, error: e.message },
+      preGates: preGates,
+      reason: 'gate exception — fail-open',
+      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+    };
   }
 }
 
@@ -382,6 +634,12 @@ async function placeFireOrder(spec) {
 function buildArmedEmbed(spec) {
   var dirIcon = spec.direction === 'long' ? '🟢' : '🔴';
   var triggerArrow = spec.triggerDirection === 'crossing_up' ? '⬆ crossing UP' : '⬇ crossing DOWN';
+  // Phase 4.35: list the active pre-gates inline so AB sees the full guard set
+  var preGatesList = [];
+  if (phase435Enabled('SMART_PRIME_WINDOW_GATE')) preGatesList.push('PRIME_WINDOW (9:45-11:15 prime, 11:15-15:00 allowed)');
+  if (phase435Enabled('SMART_EXHAUSTION_GATE'))   preGatesList.push('EXHAUSTION (block ≥ 7% day move, warn ≥ 4%)');
+  if (phase435Enabled('SMART_PREMIUM_GATE'))      preGatesList.push('PREMIUM_EXPANSION (block > 30% above limit, warn > 15%)');
+  var allGates = preGatesList.concat(spec.gates.map(function(g) { return g; }));
   return {
     username: 'Flow Scout — Smart Conditional',
     embeds: [{
@@ -404,7 +662,7 @@ function buildArmedEmbed(spec) {
         },
         {
           name: '🛡️ Gates required',
-          value: spec.gates.map(function(g) { return '• ' + g; }).join('\n') +
+          value: allGates.map(function(g) { return '• ' + g; }).join('\n') +
                  (spec.allowOverride ? '\n\n⚠ OVERRIDE: fires even on gate fail' : ''),
           inline: false,
         },
@@ -415,7 +673,7 @@ function buildArmedEmbed(spec) {
           inline: false,
         },
       ],
-      footer: { text: 'Flow Scout | Phase 4.34 Smart Conditional | id: ' + spec.id.slice(-8) },
+      footer: { text: 'Flow Scout | Phase 4.35 Smart Conditional | id: ' + spec.id.slice(-8) },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -426,10 +684,49 @@ function buildFiredEmbed(spec, fireResult, gateVerdict, spot) {
   var passedGates = Object.keys(gateVerdict.gates || {})
     .filter(function(k) {
       var v = gateVerdict.gates[k];
-      return v && v !== 'skipped' && v !== 'opposite' && v !== 'VETO';
+      return v && v !== 'skipped' && v !== 'opposite' && v !== 'VETO' && v !== false;
     })
     .map(function(k) { return k.toUpperCase() + ':' + gateVerdict.gates[k]; })
     .join(' · ') || 'all configured';
+
+  // Phase 4.35: surface pre-gate diagnostics inline for transparency.
+  var pre = (gateVerdict.diagnostics) || {};
+  var preLines = [];
+  if (pre.primeWindow) preLines.push('• PRIME_WINDOW: ' + (pre.primeWindow.passed === true ? '✅' : pre.primeWindow.passed === 'partial' ? '⚠ partial' : pre.primeWindow.passed) + ' — ' + pre.primeWindow.reason);
+  if (pre.exhaustion)  preLines.push('• EXHAUSTION: ' + (pre.exhaustion.passed === true ? '✅' : pre.exhaustion.passed === 'partial' ? '⚠ partial' : pre.exhaustion.passed) + ' — ' + pre.exhaustion.reason);
+  if (pre.premium)     preLines.push('• PREMIUM_EXPANSION: ' + (pre.premium.passed === true ? '✅' : pre.premium.passed === 'partial' ? '⚠ partial' : pre.premium.passed) + ' — ' + pre.premium.reason);
+
+  var fields = [
+    {
+      name: '📊 Trigger Hit',
+      value: '**Spot** $' + (spot != null ? spot.toFixed(2) : '?') +
+             '  ·  **Trigger** $' + spec.triggerPrice.toFixed(2) +
+             ' (' + (spec.triggerDirection === 'crossing_up' ? '⬆' : '⬇') + ')\n' +
+             'Hit at ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
+      inline: false,
+    },
+  ];
+  if (preLines.length) {
+    fields.push({
+      name: '🛡️ Pre-Gates (Phase 4.35)',
+      value: preLines.join('\n').slice(0, 1024),
+      inline: false,
+    });
+  }
+  fields.push({
+    name: '✅ Gates Passed',
+    value: passedGates,
+    inline: false,
+  });
+  fields.push({
+    name: '📋 Order Placed',
+    value: '**' + spec.contractSymbol + '** × ' + spec.qty + 'ct @ $' + spec.limitPrice + ' LMT\n' +
+           'Account: ' + spec.account.toUpperCase() + '\n' +
+           'Stop: $' + (fireResult.stopPremium || '?') + ' (-' + spec.bracket.stopPct + '%)\n' +
+           'TP1: $' + (fireResult.tp1Premium || '?') + ' (+' + spec.bracket.tp1Pct + '%)\n' +
+           'Status: ' + (fireResult.ok ? 'WORKING' : 'PLACE_FAILED — ' + (fireResult.error || 'unknown')),
+    inline: false,
+  });
 
   return {
     username: 'Flow Scout — Smart Conditional',
@@ -437,31 +734,8 @@ function buildFiredEmbed(spec, fireResult, gateVerdict, spot) {
       title: '🤖🚀 SMART CONDITIONAL FIRED — ' + dirIcon + ' ' + spec.ticker + ' ' + spec.direction.toUpperCase(),
       description: 'Trigger hit, gates passed, order placed. Zero-click auto-fire.',
       color: spec.direction === 'long' ? 5763719 : 15158332,
-      fields: [
-        {
-          name: '📊 Trigger Hit',
-          value: '**Spot** $' + (spot != null ? spot.toFixed(2) : '?') +
-                 '  ·  **Trigger** $' + spec.triggerPrice.toFixed(2) +
-                 ' (' + (spec.triggerDirection === 'crossing_up' ? '⬆' : '⬇') + ')\n' +
-                 'Hit at ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
-          inline: false,
-        },
-        {
-          name: '✅ Gates Passed',
-          value: passedGates,
-          inline: false,
-        },
-        {
-          name: '📋 Order Placed',
-          value: '**' + spec.contractSymbol + '** × ' + spec.qty + 'ct @ $' + spec.limitPrice + ' LMT\n' +
-                 'Account: ' + spec.account.toUpperCase() + '\n' +
-                 'Stop: $' + (fireResult.stopPremium || '?') + ' (-' + spec.bracket.stopPct + '%)\n' +
-                 'TP1: $' + (fireResult.tp1Premium || '?') + ' (+' + spec.bracket.tp1Pct + '%)\n' +
-                 'Status: ' + (fireResult.ok ? 'WORKING' : 'PLACE_FAILED — ' + (fireResult.error || 'unknown')),
-          inline: false,
-        },
-      ],
-      footer: { text: 'Flow Scout | Phase 4.34 Smart Conditional | id: ' + spec.id.slice(-8) },
+      fields: fields,
+      footer: { text: 'Flow Scout | Phase 4.35 Smart Conditional | id: ' + spec.id.slice(-8) },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -469,33 +743,73 @@ function buildFiredEmbed(spec, fireResult, gateVerdict, spot) {
 
 function buildBlockedEmbed(spec, gateVerdict, spot) {
   var dirIcon = spec.direction === 'long' ? '🟢' : '🔴';
+  // Phase 4.35: gate-specific guidance so AB knows what to do next per failure.
+  var whatNow;
+  switch (gateVerdict.gate) {
+    case 'PRIME_WINDOW':
+      whatNow = 'Outside trading window. Conditional stays armed but will not fire until 9:45-15:00 ET tomorrow.\n' +
+                'If this is intentional, re-arm with allowOverride=true.';
+      break;
+    case 'EXHAUSTION':
+      whatNow = 'Stock already moved too far on the day. Conditional re-armed — will re-check on next trigger event.\n' +
+                'If the move pulls back below 7% intraday, this will clear naturally. Common with chase setups.\n' +
+                'Cancel: `POST /api/smart-conditional/cancel/' + spec.id + '`';
+      break;
+    case 'PREMIUM_EXPANSION':
+      whatNow = 'Option premium ran past your limit (IV pop). Conditional re-armed — will re-check on next trigger event.\n' +
+                'If you want to chase, edit the spec to bump limitPrice. Otherwise wait for IV to bleed back.\n' +
+                'Cancel: `POST /api/smart-conditional/cancel/' + spec.id + '`';
+      break;
+    default:
+      whatNow = 'Conditional re-armed. Will check next trigger event. Common cause: wick / fakeout into level — gates correctly skipped.\n' +
+                'Cancel: `POST /api/smart-conditional/cancel/' + spec.id + '`';
+  }
+
+  // If pre-gate diagnostics are present, surface a quick summary.
+  var pre = (gateVerdict.diagnostics) || {};
+  var preLines = [];
+  if (pre.primeWindow && pre.primeWindow.passed !== true && pre.primeWindow.passed !== 'partial') preLines.push('• PRIME_WINDOW ❌ ' + pre.primeWindow.reason);
+  else if (pre.primeWindow && pre.primeWindow.passed === 'partial') preLines.push('• PRIME_WINDOW ⚠ ' + pre.primeWindow.reason);
+  if (pre.exhaustion && pre.exhaustion.passed !== true && pre.exhaustion.passed !== 'partial' && pre.exhaustion.passed !== 'unknown') preLines.push('• EXHAUSTION ❌ ' + pre.exhaustion.reason);
+  else if (pre.exhaustion && pre.exhaustion.passed === 'partial') preLines.push('• EXHAUSTION ⚠ ' + pre.exhaustion.reason);
+  if (pre.premium && pre.premium.passed !== true && pre.premium.passed !== 'partial' && pre.premium.passed !== 'unknown') preLines.push('• PREMIUM_EXPANSION ❌ ' + pre.premium.reason);
+  else if (pre.premium && pre.premium.passed === 'partial') preLines.push('• PREMIUM_EXPANSION ⚠ ' + pre.premium.reason);
+
+  var fields = [
+    {
+      name: '📊 Trigger Hit',
+      value: '**Spot** $' + (spot != null ? spot.toFixed(2) : '?') +
+             '  ·  **Trigger** $' + spec.triggerPrice.toFixed(2) + '\n' +
+             'Hit at ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
+      inline: false,
+    },
+    {
+      name: '🛑 Gate FAILED',
+      value: '**' + (gateVerdict.gate || 'UNKNOWN') + '** — ' + (gateVerdict.reason || 'no reason given').slice(0, 800),
+      inline: false,
+    },
+  ];
+  if (preLines.length) {
+    fields.push({
+      name: '🛡️ Pre-Gate Snapshot',
+      value: preLines.join('\n').slice(0, 1024),
+      inline: false,
+    });
+  }
+  fields.push({
+    name: '🔄 What now',
+    value: whatNow,
+    inline: false,
+  });
+
   return {
     username: 'Flow Scout — Smart Conditional',
     embeds: [{
       title: '⚠ SMART CONDITIONAL BLOCKED — ' + dirIcon + ' ' + spec.ticker + ' ' + spec.direction.toUpperCase(),
       description: 'Trigger hit but a gate failed. Order NOT placed. Conditional re-armed for next trigger event.',
       color: 16753920,  // orange
-      fields: [
-        {
-          name: '📊 Trigger Hit',
-          value: '**Spot** $' + (spot != null ? spot.toFixed(2) : '?') +
-                 '  ·  **Trigger** $' + spec.triggerPrice.toFixed(2) + '\n' +
-                 'Hit at ' + new Date().toLocaleTimeString('en-US', { timeZone: 'America/New_York' }) + ' ET',
-          inline: false,
-        },
-        {
-          name: '🛑 Gate FAILED',
-          value: '**' + (gateVerdict.gate || 'UNKNOWN') + '** — ' + (gateVerdict.reason || 'no reason given').slice(0, 800),
-          inline: false,
-        },
-        {
-          name: '🔄 What now',
-          value: 'Conditional re-armed. Will check next trigger event. Common cause: wick / fakeout into level — gates correctly skipped.\n' +
-                 'Cancel: `POST /api/smart-conditional/cancel/' + spec.id + '`',
-          inline: false,
-        },
-      ],
-      footer: { text: 'Flow Scout | Phase 4.34 Smart Conditional | id: ' + spec.id.slice(-8) },
+      fields: fields,
+      footer: { text: 'Flow Scout | Phase 4.35 Smart Conditional | id: ' + spec.id.slice(-8) },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -522,7 +836,7 @@ function buildExpiredEmbed(spec) {
           inline: false,
         },
       ],
-      footer: { text: 'Flow Scout | Phase 4.34 Smart Conditional | id: ' + spec.id.slice(-8) },
+      footer: { text: 'Flow Scout | Phase 4.35 Smart Conditional | id: ' + spec.id.slice(-8) },
       timestamp: new Date().toISOString(),
     }],
   };
@@ -579,6 +893,11 @@ function getHealth() {
     blockedToday: blockedToday,
     expiredToday: expiredToday,
     totalStored: list.length,
+    phase435: {
+      primeWindowGate: phase435Enabled('SMART_PRIME_WINDOW_GATE'),
+      exhaustionGate: phase435Enabled('SMART_EXHAUSTION_GATE'),
+      premiumGate: phase435Enabled('SMART_PREMIUM_GATE'),
+    },
   };
 }
 
@@ -759,4 +1078,9 @@ module.exports = {
   inTimeWindow: inTimeWindow,
   isExpired: isExpired,
   normalizeSpec: normalizeSpec,
+  // Phase 4.35 pre-gates (exposed for testing + manual /api/smart-conditional/preview)
+  checkPrimeWindow: checkPrimeWindow,
+  checkExhaustionGate: checkExhaustionGate,
+  checkPremiumGate: checkPremiumGate,
+  runGatesForSpec: runGatesForSpec,
 };
