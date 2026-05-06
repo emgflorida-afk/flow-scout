@@ -5240,6 +5240,19 @@ async function loadLottoData() {
     return;
   }
   document.getElementById("scan-date").textContent = "Lotto Feed · " + new Date(lottoData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  // Phase 4.36 — pull live spot for each lotto ticker so proximity meter works
+  try {
+    const tickers = (lottoData.picks || []).map(p => p.ticker).filter(Boolean);
+    const unique = [...new Set(tickers)].slice(0, 30);
+    if (unique.length) {
+      const qr = await fetch(`/api/ticker-quote?symbols=${unique.join(',')}`, { cache: 'no-store' });
+      if (qr.ok) {
+        const qd = await qr.json();
+        window._lottoSpots = {};
+        (qd.quotes || []).forEach(q => { window._lottoSpots[q.symbol] = q.last; });
+      }
+    }
+  } catch (e) { /* fail open — meter just shows 'Spot loading' */ }
   // Phase 4.17 — TA verify each Lotto pick
   try { await buildTaForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short'); } catch (e) {}
   // Phase 4.29 — FIRE GRADE composite (LOTTO trade type)
@@ -5326,6 +5339,7 @@ function renderGridLotto() {
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
           </div>
+          ${p.stockEntry != null ? buildProximityHtml((window._lottoSpots && window._lottoSpots[p.ticker]) || null, p.stockEntry, p.direction || 'LONG') : ''}
           <div class="metrics">
             ${p.stockEntry != null ? `<div class="metric"><span class="metric-key">Stock entry</span><span class="metric-val mono aqua">$${fmtNum(p.stockEntry)}</span></div>` : ''}
             ${p.stockStop != null ? `<div class="metric"><span class="metric-key">Stock stop</span><span class="metric-val mono red">$${fmtNum(p.stockStop)}</span></div>` : (p.rawStopText ? `<div class="metric"><span class="metric-key">Stop</span><span class="metric-val mono red">${p.rawStopText}</span></div>` : '')}
