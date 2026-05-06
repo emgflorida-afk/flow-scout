@@ -4065,9 +4065,23 @@ async function loadSniperData() {
   if (!FILTERS_SNIPER.find(f => f.id === activeFilter)) activeFilter = defaultFilterIdFor(FILTERS_SNIPER);
   try {
     if (!sniperData) document.getElementById("grid").innerHTML = `<div class="empty">Loading sniper analysis...</div>`;
-    const r = await fetch("/api/sniper-feed?limit=30", { cache: "no-store" });
-    if (!r.ok) throw new Error("HTTP " + r.status);
-    const data = await r.json();
+    // Phase 4.33 — prefer the vision-joined endpoint (returns posts + cached
+    // verdicts in a single call). Fall back to plain feed if endpoint missing.
+    let data;
+    try {
+      const rv = await fetch("/api/sniper-vision/recent?days=14&limit=30", { cache: "no-store" });
+      if (rv.ok) {
+        data = await rv.json();
+        // Normalize shape: keep updatedAt + posts at top level
+        data.freshnessDays = data.freshnessDays || data.days || 14;
+      } else {
+        throw new Error("vision endpoint HTTP " + rv.status);
+      }
+    } catch (e) {
+      const r = await fetch("/api/sniper-feed?limit=30", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      data = await r.json();
+    }
     sniperData = data;
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Could not load sniper feed: <code>${e.message}</code></div>`;
@@ -4077,7 +4091,8 @@ async function loadSniperData() {
   }
   const posts = sniperData.posts || [];
   document.getElementById("scan-date").textContent = "Sniper Analysis · " + new Date(sniperData.updatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  document.getElementById("meta").textContent = `${posts.length} posts · last ${sniperData.freshnessDays}d`;
+  const visionCount = posts.filter(p => p.vision).length;
+  document.getElementById("meta").textContent = `${posts.length} posts · last ${sniperData.freshnessDays}d` + (visionCount ? ` · 🤖 ${visionCount} w/ vision` : '');
   renderStatsSniper();
   renderFilters();
   renderTabs();
@@ -4118,6 +4133,41 @@ function renderGridSniper() {
       const chartImg = (p.attachmentUrls && p.attachmentUrls[0]) || p.imageUrl || null;
       // Pull out a short level/pivot mention from title or body
       const levelHint = (p.title.match(/\b(\d+(?:\.\d+)?)\s*(?:PIVOT|TARGET|KEY|RESISTANCE|SUPPORT)/i) || [])[0] || '';
+
+      // Phase 4.33 — render vision verdict pill if cached for this post
+      let visionBlock = '';
+      if (p.vision && p.vision.verdict) {
+        const v = p.vision;
+        const verdictColor = v.verdict === 'APPROVE' ? '#4caf50' :
+                             v.verdict === 'VETO'    ? '#ff5050' :
+                             v.verdict === 'MIXED'   ? '#ffc107' : '#888';
+        const verdictBg = v.verdict === 'APPROVE' ? 'rgba(76,175,80,0.12)' :
+                          v.verdict === 'VETO'    ? 'rgba(244,67,54,0.15)' :
+                          v.verdict === 'MIXED'   ? 'rgba(255,193,7,0.12)' : 'rgba(120,120,120,0.1)';
+        const verdictIcon = v.verdict === 'APPROVE' ? '✅' :
+                            v.verdict === 'VETO'    ? '❌' :
+                            v.verdict === 'MIXED'   ? '⚠️' : '⏸️';
+        const hi = v.higherTf || {};
+        const lo = v.lowerTf || {};
+        const ageStr = v.cacheAgeSec != null ? `${Math.round(v.cacheAgeSec / 60)}m ago` : '';
+        const staleLabel = v.isStale ? ' <span style="color:#ff8888;">(stale &gt;1hr)</span>' : '';
+        const summary = (v.summary || '').slice(0, 140);
+        visionBlock = `
+          <div style="margin-top:10px; padding:10px; background:${verdictBg}; border:1px solid ${verdictColor}40; border-radius:8px; font-size:11px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+              <span style="color:${verdictColor}; font-weight:700;">🤖 Vision: ${verdictIcon} ${v.verdict} ${v.confidence || '?'}/10</span>
+              <span style="font-size:10px; color:var(--txt-3);">${ageStr}${staleLabel}</span>
+            </div>
+            <div style="display:flex; gap:8px; font-size:11px; flex-wrap:wrap;">
+              <span><b>${hi.tf || '?'}:</b> ${hi.verdict || '?'} ${hi.confidence || '?'}/10</span>
+              <span>|</span>
+              <span><b>${lo.tf || '?'}:</b> ${lo.verdict || '?'} ${lo.confidence || '?'}/10</span>
+            </div>
+            ${summary ? `<div style="margin-top:6px; color:var(--txt-2); font-size:11px; line-height:1.4;">${summary}</div>` : ''}
+          </div>
+        `;
+      }
+
       return `
         <div class="card" data-sniper-msg="${p.msgId}">
           <div class="card-head">
@@ -4129,12 +4179,14 @@ function renderGridSniper() {
               <span class="tag" style="background:rgba(70,180,255,0.18); color:#46b4ff; font-size:10px;">📈 SNIPER</span>
               ${timeStopPillHtml('SWING')}
               ${p.hasChart ? '<span class="tag preferred" style="font-size:10px;">📊 CHART</span>' : ''}
+              ${p.vision && p.vision.verdict ? `<span class="tag" style="background:${p.vision.verdict === 'APPROVE' ? 'rgba(76,175,80,0.25)' : p.vision.verdict === 'VETO' ? 'rgba(244,67,54,0.3)' : 'rgba(255,193,7,0.25)'}; color:${p.vision.verdict === 'APPROVE' ? '#4caf50' : p.vision.verdict === 'VETO' ? '#ff5050' : '#ffc107'}; font-size:10px; font-weight:700;">🤖 ${p.vision.verdict}</span>` : ''}
               ${p.ticker ? `<button onclick="event.stopPropagation();toggleStar('${p.ticker}','sniper')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>` : ''}
             </div>
           </div>
           ${p.title ? `<div style="font-size:13px; color: var(--txt); font-weight:700; margin-top:8px; line-height:1.4;">${p.title}</div>` : ''}
           ${p.body ? `<div style="font-size:12px; color: var(--txt-2); margin-top:6px; line-height:1.5; max-height:120px; overflow:hidden;">${p.body}</div>` : ''}
           ${levelHint ? `<div style="margin-top:8px;"><span class="tag" style="background:rgba(255,193,7,0.15); color:#ffc107; font-size:11px;">🎯 ${levelHint}</span></div>` : ''}
+          ${visionBlock}
           ${chartImg ? `<div style="margin-top:10px;"><a href="${chartImg}" target="_blank" rel="noopener noreferrer"><img src="${chartImg}" style="width:100%; max-height:240px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.08);"/></a></div>` : ''}
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>` : ''}

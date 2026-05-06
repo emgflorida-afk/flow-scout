@@ -44,6 +44,7 @@ const TV_CLI = process.env.TV_CLI_PATH || '/Users/NinjaMon/Desktop/tradingview-m
 const CANDIDATE_LOOP_MS = 60 * 1000;          // refresh top-10 candidates every 60s
 const POSITION_LOOP_MS = 5 * 60 * 1000;       // recheck open positions every 5 min
 const HEARTBEAT_MS = 30 * 1000;               // beat to Railway every 30s
+const SNIPER_LOOP_MS = 60 * 1000;             // Phase 4.33 — poll Sniper feed every 60s
 
 // Cache TTLs (local memory)
 const CANDIDATE_TTL_MS = 5 * 60 * 1000;       // candidate verdict valid 5 min
@@ -58,6 +59,13 @@ const CONCURRENCY = 2;
 // Cap top-N candidates per loop (Grade A focus)
 const TOP_N_CANDIDATES = 10;
 
+// Phase 4.33 — Sniper freshness gate (default 24hr)
+const SNIPER_FRESH_HOURS = parseInt(process.env.SNIPER_FRESH_HOURS || '24', 10);
+
+// Phase 4.33 — Sniper backfill on first start (one-time, processes last N posts
+// regardless of freshness so AB has fresh verdicts immediately)
+const SNIPER_BACKFILL_COUNT = parseInt(process.env.SNIPER_BACKFILL_COUNT || '5', 10);
+
 // Discord webhook for position-health alerts
 const DISCORD_WEBHOOK = process.env.DISCORD_WEBHOOK_URL ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
@@ -67,6 +75,13 @@ const VISION_RUN_TIMEOUT_MS = 90 * 1000;
 
 // Local log file
 const LOG_FILE = process.env.VISION_DAEMON_LOG || '/tmp/vision-daemon.log';
+
+// Persistence — Sniper "seen msgIds" so we don't re-evaluate already-processed posts.
+// Survives daemon restart. Path resolves to /data when available (Railway-style),
+// otherwise local data dir.
+const DATA_DIR = process.env.DATA_DIR ||
+  (fs.existsSync('/data') ? '/data' : path.join(REPO_ROOT, 'data'));
+const SNIPER_SEEN_FILE = path.join(DATA_DIR, 'sniper_seen.json');
 
 // Whether to run vision against the live TV chart.  If TV CDP is unavailable
 // (no port 9222) the daemon falls back to a "skipped" verdict so it doesn't
@@ -241,6 +256,10 @@ function tfMapForTradeType(tt) {
   const t = String(tt || 'SWING').toUpperCase();
   if (t === 'DAY') return { higher: '1H', lower: '15m' };
   if (t === 'LOTTO') return { higher: '15m', lower: '5m' };
+  // Phase 4.33 — Sniper posts are multi-day swing analysis; use Daily + 4HR
+  // (longer TFs than the standard SWING 6HR + 4HR pairing) to match the
+  // narrative timeframe of Sniper chart-analysis posts.
+  if (t === 'SWING_SNIPER') return { higher: 'Daily', lower: '4HR' };
   return { higher: '6HR', lower: '4HR' }; // SWING default
 }
 
@@ -578,6 +597,331 @@ async function sendPositionHealthAlert(pos, currVerdict, prevVerdict) {
   }
 }
 
+// =============================================================================
+// PHASE 4.33 — SNIPER FEED MONITORING
+// =============================================================================
+// Sniper Trades posts chart analysis (e.g. "QCOM — PARABOLIC BREAKOUT EXTENSION
+// / 174.50 PIVOT KEY") in #free-charts. These are SWING-style multi-day setups —
+// different from John VIP day-trade picks. AB's directive: don't waste cycles on
+// stale posts, but ANY fresh post from today gets immediate vision validation.
+//
+// FLOW:
+//   1. Poll /api/sniper-feed every 60s
+//   2. Compare against /data/sniper_seen.json (msgIds already processed)
+//   3. For each NEW post within SNIPER_FRESH_HOURS:
+//        a. Parse pivot price + direction from title
+//        b. Run vision on Daily + 4HR (SWING_SNIPER trade type)
+//        c. PUT verdict to Railway cache (key: TICKER|dir|SWING_SNIPER)
+//        d. Push Discord notification
+//        e. Mark msgId as seen
+//   4. Older posts: log "skipped (stale)" and mark seen so we don't re-evaluate
+// =============================================================================
+
+// In-memory state, hydrated from disk on startup
+let sniperSeen = { processed: [], lastChecked: null };
+const sniperSeenSet = new Set();
+
+function loadSniperSeen() {
+  try {
+    if (!fs.existsSync(SNIPER_SEEN_FILE)) {
+      log('INFO', `sniper_seen: no file at ${SNIPER_SEEN_FILE}, starting fresh`);
+      return;
+    }
+    const raw = fs.readFileSync(SNIPER_SEEN_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    sniperSeen = {
+      processed: Array.isArray(data.processed) ? data.processed : [],
+      lastChecked: data.lastChecked || null,
+    };
+    sniperSeen.processed.forEach((id) => sniperSeenSet.add(String(id)));
+    log('INFO', `sniper_seen: loaded ${sniperSeenSet.size} processed msgIds (lastChecked ${sniperSeen.lastChecked || 'never'})`);
+  } catch (e) {
+    log('WARN', `sniper_seen load error: ${e.message} — starting fresh`);
+    sniperSeen = { processed: [], lastChecked: null };
+  }
+}
+
+function saveSniperSeen() {
+  try {
+    // Ensure data dir exists
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    // Cap processed list at 500 entries (rolling) so file doesn't grow forever
+    const capped = sniperSeen.processed.slice(-500);
+    sniperSeen.processed = capped;
+    sniperSeen.lastChecked = new Date().toISOString();
+    fs.writeFileSync(SNIPER_SEEN_FILE, JSON.stringify(sniperSeen, null, 2));
+  } catch (e) {
+    log('WARN', `sniper_seen save error: ${e.message}`);
+  }
+}
+
+function markSniperSeen(msgId) {
+  if (!msgId) return;
+  const id = String(msgId);
+  if (sniperSeenSet.has(id)) return;
+  sniperSeenSet.add(id);
+  sniperSeen.processed.push(id);
+}
+
+// Parse pivot price level from Sniper title
+// Example: "QCOM — PARABOLIC BREAKOUT EXTENSION / 174.50 PIVOT KEY" → 174.50
+//          "TSLA — DESCENDING CHANNEL UPPER TEST" → null
+function parseSniperPivot(title) {
+  if (!title) return null;
+  const m = title.match(/([\d,]+(?:\.\d+)?)\s*PIVOT/i);
+  if (!m) return null;
+  const cleaned = m[1].replace(/,/g, '');
+  const v = parseFloat(cleaned);
+  return isFinite(v) ? v : null;
+}
+
+// Determine direction from Sniper title
+function parseSniperDirection(title) {
+  const t = String(title || '').toUpperCase();
+  // Bear keywords first (more specific)
+  if (/(BREAKDOWN|BEAR|REJECTION|REVERSAL|TOP|RESISTANCE\s+TEST|UPPER\s+TEST|FAILED\s+BREAKOUT)/.test(t)) return 'short';
+  // Bull keywords
+  if (/(BREAKOUT|BULL|EXTENSION|SUPPORT\s+BOUNCE|DUAL\s+CHANNEL\s+BOUNCE|RECLAIM)/.test(t)) return 'long';
+  // Channel patterns: descending channel break = bullish (most common Sniper setup)
+  if (/DESCENDING\s+CHANNEL/.test(t)) return 'long';
+  if (/ASCENDING\s+CHANNEL/.test(t)) return 'short';
+  // Default to long (Sniper is mostly bull-biased)
+  return 'long';
+}
+
+function isPostFresh(postedAt, freshHours) {
+  if (!postedAt) return false;
+  const ts = new Date(postedAt).getTime();
+  if (!isFinite(ts)) return false;
+  const ageMs = Date.now() - ts;
+  return ageMs < (freshHours || SNIPER_FRESH_HOURS) * 60 * 60 * 1000;
+}
+
+// Run vision on a single Sniper post and push to Railway cache.
+// Returns the verdict object so callers can build summaries.
+async function processSniperPost(post, opts) {
+  opts = opts || {};
+  const ticker = (post.ticker || '').toUpperCase();
+  if (!ticker) {
+    log('INFO', `sniper post ${post.msgId} has no ticker — skipping`);
+    return null;
+  }
+
+  const direction = parseSniperDirection(post.title);
+  const pivot = parseSniperPivot(post.title);
+
+  log('INFO', `sniper-vision ${ticker} ${direction} pivot=${pivot || 'n/a'} (${post.title || ''})`);
+
+  const verdict = await runVisionForCandidate(ticker, direction, 'SWING_SNIPER');
+
+  // Augment verdict with Sniper-specific metadata
+  verdict.sniperMsgId = post.msgId;
+  verdict.sniperTitle = post.title;
+  verdict.sniperPivot = pivot;
+  verdict.sniperPostedAt = post.postedAt;
+  verdict.source = 'local-daemon-sniper';
+
+  // Cache locally + push to Railway
+  const k = cacheKey(ticker, direction, 'SWING_SNIPER');
+  cacheSet(k, verdict);
+  await pushVerdictToRailway(verdict);
+
+  return verdict;
+}
+
+// Push individual Sniper Discord notification (per fresh post)
+async function sendSniperVisionAlert(post, verdict) {
+  if (!verdict) return;
+
+  const verdictEmoji = verdict.verdict === 'APPROVE' ? 'APPROVE' :
+                       verdict.verdict === 'VETO'    ? 'VETO'    :
+                       verdict.verdict === 'MIXED'   ? 'MIXED'   : 'WAIT';
+  const color = verdict.verdict === 'APPROVE' ? 3066993 :   // green
+                verdict.verdict === 'VETO'    ? 15158332 :  // red
+                verdict.verdict === 'MIXED'   ? 15844367 :  // amber
+                                                10070709;   // grey
+
+  const hi = verdict.higherTf || {};
+  const lo = verdict.lowerTf || {};
+  const concerns = []
+    .concat(hi.verdict === 'VETO' || hi.verdict === 'WAIT' ? [`${hi.tf}: ${hi.summary || ''}`] : [])
+    .concat(lo.verdict === 'VETO' || lo.verdict === 'WAIT' ? [`${lo.tf}: ${lo.summary || ''}`] : [])
+    .slice(0, 2);
+
+  const pivotLine = verdict.sniperPivot ? `Pivot: $${verdict.sniperPivot}` : 'Pivot: not parsed';
+
+  const body = {
+    username: 'Vision Daemon',
+    embeds: [{
+      title: `SNIPER POST — ${post.ticker}`,
+      description:
+        `**${post.title || '(no title)'}**\n\n` +
+        `**Vision verdict:** ${verdictEmoji} ${verdict.confidence}/10\n` +
+        `${pivotLine}\n` +
+        `Daily: ${hi.verdict || '?'} ${hi.confidence || '?'}/10\n` +
+        `4HR: ${lo.verdict || '?'} ${lo.confidence || '?'}/10`,
+      color: color,
+      fields: concerns.length ? [
+        { name: 'Concerns', value: concerns.join('\n').slice(0, 1000), inline: false },
+      ] : [],
+      footer: { text: `Vision Daemon · Phase 4.33 Sniper · ${post.msgId}` },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+
+  try {
+    const r = await fetchLib(DISCORD_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      log('INFO', `sniper-alert pushed for ${post.ticker} (${verdict.verdict})`);
+    } else {
+      const txt = await r.text().catch(() => '');
+      log('WARN', `sniper-alert discord push failed ${r.status}: ${txt.slice(0, 200)}`);
+    }
+  } catch (e) {
+    log('WARN', `sniper-alert discord error: ${e.message}`);
+  }
+}
+
+// Main Sniper poll loop — runs every SNIPER_LOOP_MS
+async function sniperLoop() {
+  // Sniper posts can arrive AH/overnight — process even outside market hours
+  // since we want fresh verdicts ready when AB opens the dashboard at 8 AM.
+  // (Heartbeat still tells us it's running.)
+  try {
+    const r = await getJson(`${RAILWAY_BASE}/api/sniper-feed?limit=20`, { timeoutMs: 8000 });
+    if (!r || !Array.isArray(r.posts)) {
+      log('WARN', 'sniper-loop: no posts returned');
+      return;
+    }
+    const newPosts = r.posts.filter((p) => p.msgId && !sniperSeenSet.has(String(p.msgId)));
+    if (!newPosts.length) {
+      // No new posts — quiet log
+      return;
+    }
+    log('INFO', `sniper-loop: ${newPosts.length} new post(s) detected`);
+
+    let dirty = false;
+    for (const p of newPosts) {
+      // Stale gate
+      if (!isPostFresh(p.postedAt, SNIPER_FRESH_HOURS)) {
+        log('INFO', `sniper-loop: ${p.ticker || 'UNKNOWN'} (${p.msgId}) skipped — stale (>${SNIPER_FRESH_HOURS}h)`);
+        markSniperSeen(p.msgId);
+        dirty = true;
+        continue;
+      }
+
+      // Fresh post — queue vision run
+      visionPool.run(async () => {
+        try {
+          const t0 = Date.now();
+          const verdict = await processSniperPost(p);
+          if (verdict) {
+            await sendSniperVisionAlert(p, verdict);
+            log('INFO', `sniper-fresh ${p.ticker}: ${verdict.verdict} ${verdict.confidence}/10 — ${(Date.now() - t0)}ms`);
+          }
+        } catch (e) {
+          log('ERROR', `sniper post ${p.msgId} processing error: ${e.message}`);
+        } finally {
+          markSniperSeen(p.msgId);
+          saveSniperSeen();
+        }
+      });
+      dirty = true;
+    }
+    if (dirty) saveSniperSeen();
+  } catch (e) {
+    log('ERROR', `sniper-loop fatal: ${e.message}`);
+  }
+}
+
+// One-time startup backfill — process last N posts regardless of freshness
+// so AB has fresh verdicts on the most recent Sniper picks immediately.
+async function sniperBackfill() {
+  try {
+    const r = await getJson(`${RAILWAY_BASE}/api/sniper-feed?limit=${SNIPER_BACKFILL_COUNT}`, { timeoutMs: 8000 });
+    if (!r || !Array.isArray(r.posts)) {
+      log('WARN', 'sniper-backfill: no posts returned');
+      return;
+    }
+    const posts = r.posts.slice(0, SNIPER_BACKFILL_COUNT);
+    log('INFO', `sniper-backfill: processing last ${posts.length} posts (one-time)`);
+
+    const verdicts = [];
+
+    // Process serially through the pool (let the pool gate concurrency)
+    const results = await Promise.all(posts.map((p) => visionPool.run(async () => {
+      try {
+        const t0 = Date.now();
+        const verdict = await processSniperPost(p);
+        markSniperSeen(p.msgId);
+        if (verdict) {
+          log('INFO', `sniper-backfill ${p.ticker}: ${verdict.verdict} ${verdict.confidence}/10 — ${(Date.now() - t0)}ms`);
+          return { post: p, verdict };
+        }
+        return null;
+      } catch (e) {
+        log('ERROR', `sniper-backfill ${p.ticker || p.msgId} error: ${e.message}`);
+        markSniperSeen(p.msgId);
+        return null;
+      }
+    })));
+
+    results.forEach((res) => { if (res) verdicts.push(res); });
+    saveSniperSeen();
+
+    // Single Discord summary embed for backfill
+    if (verdicts.length) {
+      await sendSniperBackfillSummary(verdicts);
+    }
+    log('INFO', `sniper-backfill: complete (${verdicts.length}/${posts.length} verdicts)`);
+  } catch (e) {
+    log('ERROR', `sniper-backfill fatal: ${e.message}`);
+  }
+}
+
+async function sendSniperBackfillSummary(verdictPairs) {
+  const lines = verdictPairs.map(({ post, verdict }) => {
+    const emoji = verdict.verdict === 'APPROVE' ? 'APPROVE' :
+                  verdict.verdict === 'VETO'    ? 'VETO'    :
+                  verdict.verdict === 'MIXED'   ? 'MIXED'   : 'WAIT';
+    const dt = post.postedAt ? new Date(post.postedAt).toISOString().slice(5, 10) : '?';
+    const pivot = verdict.sniperPivot ? `pivot $${verdict.sniperPivot}` : '';
+    const summary = (verdict.summary || '').slice(0, 60);
+    return `**${post.ticker}** (${dt}): vision ${emoji} ${verdict.confidence}/10 — ${pivot}${summary ? ' · ' + summary : ''}`;
+  });
+  const body = {
+    username: 'Vision Daemon',
+    embeds: [{
+      title: `SNIPER VISION BACKFILL (${verdictPairs.length} most recent)`,
+      description: lines.join('\n'),
+      color: 3447003, // blue
+      footer: { text: 'Vision Daemon · Phase 4.33 · One-time startup backfill' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+  try {
+    const r = await fetchLib(DISCORD_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      log('INFO', `sniper-backfill summary embed sent (${verdictPairs.length} entries)`);
+    } else {
+      const txt = await r.text().catch(() => '');
+      log('WARN', `sniper-backfill summary push failed ${r.status}: ${txt.slice(0, 200)}`);
+    }
+  } catch (e) {
+    log('WARN', `sniper-backfill summary error: ${e.message}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MAIN
 // ---------------------------------------------------------------------------
@@ -604,16 +948,20 @@ async function main() {
   log('INFO', 'visionDaemon starting');
   log('INFO', `RAILWAY_BASE=${RAILWAY_BASE}`);
   log('INFO', `REPO_ROOT=${REPO_ROOT}`);
+  log('INFO', `DATA_DIR=${DATA_DIR}`);
   log('INFO', `CHART_VISION_SH=${CHART_VISION_SH}`);
   log('INFO', `TV_CLI=${TV_CLI}`);
-  log('INFO', `CANDIDATE_LOOP=${CANDIDATE_LOOP_MS}ms POSITION_LOOP=${POSITION_LOOP_MS}ms HEARTBEAT=${HEARTBEAT_MS}ms`);
-  log('INFO', `CONCURRENCY=${CONCURRENCY} TOP_N=${TOP_N_CANDIDATES}`);
+  log('INFO', `CANDIDATE_LOOP=${CANDIDATE_LOOP_MS}ms POSITION_LOOP=${POSITION_LOOP_MS}ms HEARTBEAT=${HEARTBEAT_MS}ms SNIPER_LOOP=${SNIPER_LOOP_MS}ms`);
+  log('INFO', `CONCURRENCY=${CONCURRENCY} TOP_N=${TOP_N_CANDIDATES} SNIPER_FRESH_HOURS=${SNIPER_FRESH_HOURS} SNIPER_BACKFILL_COUNT=${SNIPER_BACKFILL_COUNT}`);
   log('INFO', `QUIET_OUTSIDE_MARKET=${QUIET_OUTSIDE_MARKET}`);
 
   // Sanity-check chart-vision.sh exists
   if (!fs.existsSync(CHART_VISION_SH)) {
     log('ERROR', `chart-vision.sh missing — daemon will idle until script is restored`);
   }
+
+  // Phase 4.33 — hydrate Sniper-seen state from disk
+  loadSniperSeen();
 
   // First heartbeat immediately
   sendHeartbeat();
@@ -631,14 +979,37 @@ async function main() {
     if (stopRequested) return;
     try { await sendHeartbeat(); } catch (e) { log('ERROR', 'heartbeat: ' + e.message); }
   };
+  const sniperTick = async () => {
+    if (stopRequested) return;
+    try { await sniperLoop(); } catch (e) { log('ERROR', 'sniper-loop: ' + e.message); }
+  };
 
   // Fire first candidate scan after 5s to let TV settle
   setTimeout(candTick, 5000);
   setTimeout(posTick, 30000);
 
+  // Phase 4.33 — Sniper backfill 60s after start (let TV warm up first).
+  // Skip backfill if we already have a lastChecked within the last 6 hours
+  // (means daemon was just restarted, not a cold install).
+  const lastCheckedAge = sniperSeen.lastChecked
+    ? (Date.now() - new Date(sniperSeen.lastChecked).getTime())
+    : Infinity;
+  const SHOULD_BACKFILL = process.env.SNIPER_FORCE_BACKFILL === 'true' ||
+                          lastCheckedAge > 6 * 60 * 60 * 1000;
+  if (SHOULD_BACKFILL) {
+    log('INFO', `sniper-backfill scheduled (lastChecked age: ${isFinite(lastCheckedAge) ? Math.round(lastCheckedAge / 60000) + 'min' : 'never'})`);
+    setTimeout(() => sniperBackfill().catch((e) => log('ERROR', 'sniper-backfill error: ' + e.message)), 60 * 1000);
+  } else {
+    log('INFO', `sniper-backfill skipped (lastChecked ${Math.round(lastCheckedAge / 60000)}min ago, <6hr)`);
+  }
+
+  // Sniper poll loop starts 90s after backfill (after first backfill cycle ends)
+  setTimeout(sniperTick, SHOULD_BACKFILL ? 90 * 1000 : 30 * 1000);
+
   setInterval(candTick, CANDIDATE_LOOP_MS);
   setInterval(posTick, POSITION_LOOP_MS);
   setInterval(hbTick, HEARTBEAT_MS);
+  setInterval(sniperTick, SNIPER_LOOP_MS);
 }
 
 main().catch((e) => {

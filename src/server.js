@@ -2254,6 +2254,85 @@ app.get('/api/vision/health', function(req, res) {
   }
 });
 
+// =============================================================================
+// PHASE 4.33 — SNIPER VISION JOIN
+// GET /api/sniper-vision/recent?days=N
+//   Returns recent Sniper posts joined with their cached vision verdicts.
+//   Frontend SNIPER tab uses this to render verdict pills on each card.
+//   Verdict source: _chartVisionDaemonCache (pushed by visionDaemon Sniper loop)
+//
+// AB DIRECTIVE (May 5 PM): Sniper posts are SWING chart analysis — fresh ones
+// matter (24hr window), stale ones don't. Daemon validates the fresh posts;
+// this endpoint surfaces those verdicts to the SNIPER tab cards.
+// =============================================================================
+app.get('/api/sniper-vision/recent', function(req, res) {
+  try {
+    if (!sniperFeed) return res.status(500).json({ ok: false, error: 'sniperFeed not loaded' });
+    var days = parseInt(req.query.days || '7');
+    var limit = parseInt(req.query.limit || '30');
+    var feed = sniperFeed.loadFeed({ limit: limit });
+    var cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+
+    var posts = (feed.posts || []).filter(function(p) {
+      var ts = p.postedAt ? new Date(p.postedAt).getTime() : 0;
+      return ts >= cutoffMs;
+    });
+
+    // Join each post with cached vision verdict (if any)
+    var nowMs = Date.now();
+    var enriched = posts.map(function(p) {
+      var ticker = (p.ticker || '').toUpperCase();
+      if (!ticker) return Object.assign({}, p, { vision: null });
+
+      // Sniper posts use SWING_SNIPER trade type with Daily + 4HR TFs
+      // Cache key uses both directions (long preferred since most are bull)
+      var directionGuess = _guessSniperDirection(p.title || '');
+      var key = ticker + '|' + directionGuess + '|SWING_SNIPER';
+      var hit = _chartVisionDaemonCache[key];
+
+      // Fallback: try the standard SWING cache key
+      if (!hit) {
+        var altKey = ticker + '|' + directionGuess + '|SWING';
+        hit = _chartVisionDaemonCache[altKey];
+      }
+
+      var vision = null;
+      if (hit) {
+        vision = Object.assign({}, hit.payload, {
+          cacheAgeSec: Math.round((nowMs - hit.ts) / 1000),
+          isStale: (nowMs - hit.ts) > 60 * 60 * 1000, // >1hr = stale flag
+        });
+      }
+      return Object.assign({}, p, { vision: vision });
+    });
+
+    res.json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      days: days,
+      totalPosts: enriched.length,
+      withVision: enriched.filter(function(p) { return p.vision; }).length,
+      posts: enriched,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Helper: extract direction from Sniper post title (used by /sniper-vision/recent)
+function _guessSniperDirection(title) {
+  var t = String(title || '').toUpperCase();
+  // Bear keywords first (more specific)
+  if (/(BREAKDOWN|BEAR|REJECTION|REVERSAL|TOP|RESISTANCE\s+TEST|UPPER\s+TEST|FAILED\s+BREAKOUT)/.test(t)) return 'short';
+  // Bull keywords
+  if (/(BREAKOUT|BULL|EXTENSION|SUPPORT\s+BOUNCE|DUAL\s+CHANNEL\s+BOUNCE|RECLAIM)/.test(t)) return 'long';
+  // Channel patterns: descending channel break = bullish (most common Sniper setup)
+  if (/DESCENDING\s+CHANNEL/.test(t)) return 'long';
+  if (/ASCENDING\s+CHANNEL/.test(t)) return 'short';
+  // Default to long (Sniper is mostly bull-biased)
+  return 'long';
+}
+
 // SPREAD CHECK — Monday-morning ratio validator. Pulls broker quote into the
 // 5-tier verdict matrix. Works for any debit/credit spread, any underlying.
 //   GET /api/spread-check?debit=2.00&longStrike=715&shortStrike=705&direction=put
