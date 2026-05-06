@@ -256,7 +256,9 @@ var DEFAULT_WATCHLIST = [
 // Blacklisted tickers never show up in scan -- mirrors orderExecutor blacklist.
 // TSLA = SESSION_START_RULES; BTC-correlated = AB personal preference.
 // Apr 25 2026 — AB lifted IREN per next-week watchlist (BTC-miner, but actively traded)
-var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','CIFR','HIVE','SOFI'];
+// May 6 2026 — AB blocked ADBE + CRM after both stopped out same day. "Never again."
+//              Also blocks SBUX (ABBV stays — was good idea, bad execution).
+var SCANNER_BLACKLIST = ['TSLA','MSTR','COIN','MARA','RIOT','WULF','BMNR','CLSK','HUT','BITF','CIFR','HIVE','SOFI','ADBE','CRM','SBUX','MRVL'];
 
 function getWatchlist() {
   var raw;

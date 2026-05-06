@@ -177,10 +177,11 @@ async function placeOrder(params) {
     // and high-IV chop names (UPST/APP/etc.) stay blacklisted.
     // Apr 27 — HOOD removed at AB's request. JSmith VIP 4/27 pick (86C 5/1
     // entry $85.05) gets the option to fire when triggered.
+    // May 6 2026 — AB hard-blocked ADBE + CRM + SBUX after stop-outs. "Never again."
     var BLACKLIST = [
       'TSLA', 'MSTR', 'COIN', 'MARA', 'RIOT', 'WULF', 'BMNR', 'CLSK', 'HUT', 'BITF', 'CIFR', 'HIVE', 'SOFI',
       'UPST', 'RKLB', 'LUNR', 'AFRM', 'HIMS', 'APP', 'SNAP', 'RDDT',
-      'MRVL'
+      'MRVL', 'ADBE', 'CRM', 'SBUX'
     ];
     if (BLACKLIST.indexOf(baseTicker) !== -1) {
       console.log('[EXECUTOR] BLOCKED -- ' + baseTicker + ' is blacklisted');
