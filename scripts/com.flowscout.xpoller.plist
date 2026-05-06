@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  X Trade Poller launchd LaunchAgent (Phase 4.57, May 6 2026)
+  Polls AB's X watchlist every 5 min during RTH. All picks are quarantined
+  (no auto-fire) until 30-trade hit-rate is graded.
+
+  Install:
+    cp scripts/com.flowscout.xpoller.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.flowscout.xpoller.plist
+
+  Verify:
+    launchctl list | grep xpoller
+    tail -f /tmp/xpoller.log
+
+  Unload:
+    launchctl unload -w ~/Library/LaunchAgents/com.flowscout.xpoller.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.flowscout.xpoller</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/NinjaMon/Desktop/flow-scout/scripts/xTradePoller.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/NinjaMon/Desktop/flow-scout</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>FLOW_SCOUT_ROOT</key>
+        <string>/Users/NinjaMon/Desktop/flow-scout</string>
+        <key>FLOW_SCOUT_BASE</key>
+        <string>https://flow-scout-production.up.railway.app</string>
+        <key>XPOLLER_INTERVAL_MS</key>
+        <string>300000</string>
+        <key>QUIET_OUTSIDE_MARKET</key>
+        <string>true</string>
+        <key>CHROME_DEBUG_PORT</key>
+        <string>9222</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/xpoller.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/xpoller.log</string>
+</dict>
+</plist>

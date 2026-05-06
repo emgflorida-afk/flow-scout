@@ -6462,6 +6462,58 @@ app.get('/api/bullflow-filters/resolve', function(req, res) {
 });
 
 // =============================================================================
+// PHASE 4.57 — X TRADE POLLER endpoints
+//
+// /api/x-poller/accounts         GET — return data/x_trade_accounts.json
+// /api/x-poller/seen?n=N         GET — recent seen tweet ids
+// /api/x-poller/ingest           POST — manually inject parsed tweet (skip
+//                                       Chrome/Nitter, useful for testing)
+// =============================================================================
+app.get('/api/x-poller/accounts', function(req, res) {
+  try {
+    var fsLib = require('fs');
+    var p = path.join(__dirname, '..', 'data', 'x_trade_accounts.json');
+    res.json(JSON.parse(fsLib.readFileSync(p, 'utf8')));
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/x-poller/seen', function(req, res) {
+  try {
+    var fsLib = require('fs');
+    var p = path.join(__dirname, '..', 'data', 'x_seen.json');
+    var n = parseInt(req.query.n || '20', 10);
+    if (!fsLib.existsSync(p)) return res.json({ ok: true, ids: {}, count: 0 });
+    var d = JSON.parse(fsLib.readFileSync(p, 'utf8'));
+    var ids = d.ids || {};
+    var keys = Object.keys(ids).sort(function(a, b) { return (ids[b].ts || 0) - (ids[a].ts || 0); }).slice(0, n);
+    var out = {};
+    keys.forEach(function(k) { out[k] = ids[k]; });
+    res.json({ ok: true, count: Object.keys(ids).length, recent: out });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/x-poller/ingest  body: { handle, text, tweetId? }
+//   Manual ingest — bypasses Chrome/Nitter sourcing. Treats text as a tweet
+//   from `handle` and runs the same parse/register/push pipeline. AB can use
+//   this to inject a copy/paste tweet into the system for grading.
+app.post('/api/x-poller/ingest', async function(req, res) {
+  try {
+    var body = req.body || {};
+    if (!body.handle || !body.text) return res.status(400).json({ ok: false, error: 'handle + text required' });
+    var poller = require(path.join(__dirname, '..', 'scripts', 'xTradePoller'));
+    var account = { handle: body.handle, style: body.style || 'mixed' };
+    var tweet = {
+      id: body.tweetId || ('manual-' + Date.now()),
+      text: body.text,
+      url: body.url || ('https://x.com/' + body.handle),
+      date: new Date().toISOString(),
+    };
+    var out = await poller.processTweet(account, tweet);
+    res.json({ ok: true, result: out });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// =============================================================================
 // PHASE 4.49 — A+ scorer. Pulls last-60-min unusual trades for a ticker and
 // returns 0-6 score + per-criterion breakdown. AB extracted this rubric from
 // the Bullflow Agent narrative so we can grade tickers cold without paying
