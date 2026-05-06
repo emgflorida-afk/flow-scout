@@ -3342,6 +3342,8 @@ async function loadActiveTab() {
   }
   if (activeTab !== "tomorrow") stopRadarSpotPoll();
   if (activeTab !== "action") stopActionPoll();
+  // Phase 4.34 — smart conditional poll only runs while ACTION tab active
+  if (activeTab !== "action" && typeof stopSmartCondPoll === 'function') stopSmartCondPoll();
   if (activeTab === "action")   return loadActionData();
   if (activeTab === "scan")     return loadScanData();
   if (activeTab === "movers")   return loadMoversData();
@@ -3793,6 +3795,8 @@ async function loadActionData() {
   document.getElementById("filters").innerHTML = '';
   renderGridAction();
   startActionPoll();
+  // Phase 4.34 — start polling smart conditionals while ACTION tab is active
+  if (typeof startSmartCondPoll === 'function') startSmartCondPoll();
 }
 
 function startActionPoll() {
@@ -3821,11 +3825,14 @@ function renderStatsAction() {
 
 function renderGridAction() {
   const rows = actionData.rows || [];
+  // Phase 4.34 — Active Smart Conditionals list at the top of ACTION tab
+  const smartCondHtml = `<div id="smart-cond-list"></div>`;
   if (!rows.length) {
-    document.getElementById("grid").innerHTML = `<div class="empty">No flow events score 10+ in last 30 min. Quiet tape — wait for the next setup.</div>`;
+    document.getElementById("grid").innerHTML = smartCondHtml + `<div class="empty">No flow events score 10+ in last 30 min. Quiet tape — wait for the next setup.</div>`;
+    if (typeof refreshSmartConditionals === 'function') refreshSmartConditionals();
     return;
   }
-  document.getElementById("grid").innerHTML = rows.map(r => {
+  document.getElementById("grid").innerHTML = smartCondHtml + rows.map(r => {
     const statusBg = r.status === 'ACTIONABLE' ? 'rgba(76,175,80,0.18)' :
                     r.status === 'WATCH' ? 'rgba(70,180,255,0.15)' :
                     'rgba(120,120,120,0.12)';
@@ -3918,6 +3925,7 @@ function renderGridAction() {
           ${r.status === 'ACTIONABLE' && sug.contract ? `
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, false, this)" title="Fire on TradeStation immediately (LIVE 11975462)">⚡ TS FIRE</button>
             <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#fbbf24,#b45309); padding:5px 10px; font-size:11px; color:#000; font-weight:700;" onclick="event.stopPropagation();openSmartConditionalModal(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Phase 4.34 — server-side gated auto-fire on trigger (TA + TAPE + VISION + MTB)">🤖 SMART AUTO</button>
           ` : ''}
           ${r.status === 'ACTIONABLE' && sug.contract && sug.affordability !== 'TOO_EXPENSIVE' ? `
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToPublic(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Place 1ct on Public.com">📱 PUBLIC</button>
@@ -3931,6 +3939,8 @@ function renderGridAction() {
       </div>
     `;
   }).join("");
+  // Phase 4.34 — populate the smart-cond-list section above the grid
+  if (typeof refreshSmartConditionals === 'function') refreshSmartConditionals();
 }
 
 // =============================================================================
@@ -5607,6 +5617,226 @@ async function ayceFireBuild(ticker, direction, account, tradeType) {
   }
 }
 window.ayceFireBuild = ayceFireBuild;
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 4.34 — SMART CONDITIONAL UI
+// Modal opens from "🤖 SMART AUTO" button on ACTION cards. Posts to
+// /api/smart-conditional/add. Server-side cron polls every 30s and runs all
+// configured gates (TA + TAPE + VISION + MTB) before firing the order. This
+// closes the broker-conditional-bracket gap (raw price triggers = wick fakeouts).
+// ═════════════════════════════════════════════════════════════════════════════
+async function openSmartConditionalModal(row, btn) {
+  const ticker = row.ticker;
+  const direction = row.direction;
+  const sug = row.suggested || {};
+  const live = row.live || {};
+  const triggerPrice = parseFloat(sug.stockTrigger) || parseFloat(live.last) || 0;
+  const stopPrice = (sug.structuralStop && parseFloat(sug.structuralStop.price)) || null;
+  const contractSymbol = sug.contract || '';
+  const limitPrice = parseFloat(sug.mid || sug.contractMid || 0);
+  const triggerDirection = direction === 'long' ? 'crossing_up' : 'crossing_down';
+
+  // Defaults — end-of-tomorrow ET expiry
+  const defaultExpiryDate = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().slice(0, 10);
+  })();
+
+  const modal = document.createElement('div');
+  modal.id = 'smart-cond-modal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  document.body.appendChild(modal);
+  modal.innerHTML = `<div style="background:#0e1116;border:1px solid #fbbf24;border-radius:8px;padding:20px;max-width:560px;width:100%;color:#dde">
+    <div style="display:flex;justify-content:space-between;margin-bottom:12px;align-items:center;">
+      <strong style="color:#fbbf24;">🤖 SMART CONDITIONAL — ${ticker} ${direction.toUpperCase()}</strong>
+      <span style="cursor:pointer;color:#888;font-size:18px;" onclick="document.getElementById('smart-cond-modal').remove()">✕</span>
+    </div>
+    <div style="background:#1a1f2a;padding:12px;border-radius:6px;margin-bottom:12px;font-family:monospace;font-size:12px;line-height:1.7;">
+      <div><span style="color:#888;">Trigger:</span> <strong>$${triggerPrice.toFixed(2)}</strong> <span style="color:${direction === 'long' ? '#4caf50' : '#ff5050'};">(${triggerDirection.replace('_', ' ')})</span></div>
+      <div><span style="color:#888;">Stop:</span> ${stopPrice ? '$' + stopPrice.toFixed(2) : '<span style="color:#ffc107;">none — uses bracket-only</span>'}</div>
+      <div><span style="color:#888;">Spot now:</span> <strong>$${live.last ? Number(live.last).toFixed(2) : '?'}</strong></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <label style="font-size:12px;color:#aaa;">Account:
+        <select id="sc-account" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;">
+          <option value="ts-live">TS LIVE (11975462)</option>
+          <option value="ts-sim">TS SIM (paper)</option>
+          <option value="public">Public.com</option>
+        </select>
+      </label>
+      <label style="font-size:12px;color:#aaa;">Quantity:
+        <input id="sc-qty" type="number" min="1" max="10" value="1" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;" />
+      </label>
+      <label style="font-size:12px;color:#aaa;">Contract:
+        <input id="sc-contract" type="text" value="${contractSymbol}" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;font-family:monospace;font-size:11px;" />
+      </label>
+      <label style="font-size:12px;color:#aaa;">Limit price:
+        <input id="sc-limit" type="number" step="0.01" value="${limitPrice.toFixed(2)}" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;" />
+      </label>
+    </div>
+    <div style="background:#1a1f2a;padding:10px;border-radius:6px;margin-bottom:12px;font-size:11px;color:#aaa;">
+      <div style="font-weight:700;color:#dde;margin-bottom:6px;">🛡️ Gates required at trigger:</div>
+      <label style="display:block;margin-bottom:3px;"><input id="sc-gate-ta" type="checkbox" checked /> TA aligned (5m bars match direction)</label>
+      <label style="display:block;margin-bottom:3px;"><input id="sc-gate-tape" type="checkbox" checked /> Tape aligned (RISK_ON/OFF check)</label>
+      <label style="display:block;margin-bottom:3px;"><input id="sc-gate-vision" type="checkbox" /> Vision APPROVE (skipped on Railway — no Chrome)</label>
+      <label style="display:block;margin-bottom:3px;"><input id="sc-gate-mtb" type="checkbox" /> Multi-test breakout (soft, longs only)</label>
+      <label style="display:block;margin-top:6px;color:#ff8080;"><input id="sc-allow-override" type="checkbox" /> ALLOW OVERRIDE — fire even if a gate fails (NOT RECOMMENDED)</label>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <label style="font-size:12px;color:#aaa;">Window start (ET):
+        <input id="sc-window-start" type="text" value="09:45" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;" />
+      </label>
+      <label style="font-size:12px;color:#aaa;">Window end (ET):
+        <input id="sc-window-end" type="text" value="15:00" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;" />
+      </label>
+      <label style="font-size:12px;color:#aaa;grid-column:1/3;">Expires (ET, 4 PM):
+        <input id="sc-expiry" type="date" value="${defaultExpiryDate}" style="width:100%;background:#1a1f2a;color:#dde;border:1px solid #2a3140;padding:6px;border-radius:4px;margin-top:4px;" />
+      </label>
+    </div>
+    <div style="background:rgba(251,191,36,0.08);padding:8px 10px;border-radius:4px;margin-bottom:12px;font-size:11px;color:#fbbf24;">
+      ℹ️ Server polls every 30s. When ${ticker} crosses $${triggerPrice.toFixed(2)} ${direction === 'long' ? 'up' : 'down'}, gates run, order places only if all pass. Wicks/fakeouts are auto-skipped.
+    </div>
+    <div style="display:flex;gap:8px;">
+      <button id="sc-arm" style="flex:1;padding:10px;background:linear-gradient(180deg,#fbbf24,#b45309);color:#000;font-weight:700;border:0;border-radius:4px;cursor:pointer;">✅ Arm Smart Conditional</button>
+      <button onclick="document.getElementById('smart-cond-modal').remove()" style="padding:10px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Cancel</button>
+    </div>
+  </div>`;
+
+  document.getElementById('sc-arm').onclick = async function() {
+    this.disabled = true;
+    this.textContent = 'Arming…';
+    const gates = [];
+    if (document.getElementById('sc-gate-ta').checked) gates.push('TA');
+    if (document.getElementById('sc-gate-tape').checked) gates.push('TAPE');
+    if (document.getElementById('sc-gate-vision').checked) gates.push('VISION');
+    if (document.getElementById('sc-gate-mtb').checked) gates.push('MTB');
+    const expiryDate = document.getElementById('sc-expiry').value;
+    // 16:00 ET = 20:00 UTC (EDT) approx — server uses iso string
+    const expiresAt = new Date(expiryDate + 'T20:00:00Z').toISOString();
+    const body = {
+      ticker: ticker,
+      direction: direction,
+      contractSymbol: document.getElementById('sc-contract').value.trim(),
+      triggerPrice: triggerPrice,
+      triggerDirection: triggerDirection,
+      stopPrice: stopPrice,
+      account: document.getElementById('sc-account').value,
+      qty: parseInt(document.getElementById('sc-qty').value, 10) || 1,
+      limitPrice: parseFloat(document.getElementById('sc-limit').value),
+      gates: gates,
+      allowOverride: document.getElementById('sc-allow-override').checked,
+      bracket: { stopPct: 50, tp1Pct: 25 },
+      timeWindow: {
+        start: document.getElementById('sc-window-start').value,
+        end: document.getElementById('sc-window-end').value,
+      },
+      expiresAt: expiresAt,
+      pattern: row.pattern || (row.suggested && row.suggested.pattern) || null,
+      source: 'scanner-v2-action',
+    };
+    try {
+      const r = await fetch('/api/smart-conditional/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json();
+      if (data.ok) {
+        modal.firstChild.innerHTML = `<div style="color:#4f4;font-size:14px;font-weight:700;margin-bottom:8px;">✅ SMART CONDITIONAL ARMED</div>
+          <div style="font-size:12px;color:#aaa;margin-bottom:10px;">id: <code>${data.id}</code></div>
+          <div style="font-size:12px;color:#aaa;">Server will poll every 30s. Discord embed pushed. Watch ACTION tab → Active Smart Conditionals for live status.</div>
+          <button onclick="document.getElementById('smart-cond-modal').remove(); refreshSmartConditionals();" style="margin-top:14px;padding:8px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Close</button>`;
+      } else {
+        modal.firstChild.innerHTML = `<div style="color:#ff5050;font-size:14px;font-weight:700;">❌ Arm failed</div>
+          <div style="font-size:12px;color:#aaa;margin-top:8px;">${data.error || 'unknown error'}</div>
+          <button onclick="document.getElementById('smart-cond-modal').remove()" style="margin-top:14px;padding:8px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Close</button>`;
+      }
+    } catch(e) {
+      modal.firstChild.innerHTML = `<div style="color:#ff5050;">❌ Network error: ${e.message}</div>
+        <button onclick="document.getElementById('smart-cond-modal').remove()" style="margin-top:12px;padding:8px 16px;background:#2a3140;color:#dde;border:0;border-radius:4px;cursor:pointer;">Close</button>`;
+    }
+  };
+}
+window.openSmartConditionalModal = openSmartConditionalModal;
+
+// Active Smart Conditionals list — rendered into a div above the ACTION grid.
+// Polls /api/smart-conditional/list every 20s on ACTION tab.
+let _smartCondPollTimer = null;
+async function refreshSmartConditionals() {
+  try {
+    const r = await fetch('/api/smart-conditional/list?status=ARMED', { cache: 'no-store' });
+    if (!r.ok) return;
+    const data = await r.json();
+    const container = document.getElementById('smart-cond-list');
+    if (!container) return;
+    if (!data.ok || !data.conditionals || !data.conditionals.length) {
+      container.innerHTML = '';
+      return;
+    }
+    const rows = data.conditionals.map(c => {
+      const dirIcon = c.direction === 'long' ? '🟢' : '🔴';
+      const arrow = c.triggerDirection === 'crossing_up' ? '⬆' : '⬇';
+      const lastSpot = c.lastObservedSpot;
+      const dist = lastSpot != null ? (lastSpot - c.triggerPrice).toFixed(2) : '?';
+      const distPct = lastSpot != null ? (((lastSpot - c.triggerPrice) / c.triggerPrice) * 100).toFixed(2) : '?';
+      const distColor = c.triggerDirection === 'crossing_down'
+        ? (lastSpot && lastSpot - c.triggerPrice < 1 ? '#ffc107' : '#888')
+        : (lastSpot && c.triggerPrice - lastSpot < 1 ? '#ffc107' : '#888');
+      const blockedNote = c.blockHistory && c.blockHistory.length
+        ? `<div style="font-size:10px;color:#ff8080;margin-top:3px;">⚠ blocked ${c.blockHistory.length}× — last: ${(c.blockHistory[c.blockHistory.length-1].gate || '?')}</div>`
+        : '';
+      return `<div style="background:rgba(251,191,36,0.06);border:1px solid rgba(251,191,36,0.3);border-radius:6px;padding:10px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:13px;">${dirIcon} <span style="color:#fbbf24;">${c.ticker}</span> ${c.direction.toUpperCase()} · trigger $${c.triggerPrice.toFixed(2)} ${arrow} · spot $${lastSpot != null ? Number(lastSpot).toFixed(2) : '?'} <span style="color:${distColor};">(${dist >= 0 ? '+' : ''}${dist}, ${distPct}%)</span></div>
+          <div style="font-size:11px;color:#aaa;margin-top:3px;font-family:monospace;">${c.contractSymbol} × ${c.qty}ct @ $${c.limitPrice} LMT · ${c.account.toUpperCase()} · gates: ${(c.gates||[]).join('+')}</div>
+          ${blockedNote}
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;">
+          <button onclick="cancelSmartConditional('${c.id}', this)" style="padding:4px 10px;background:#7a2530;color:#fff;border:0;border-radius:4px;cursor:pointer;font-size:11px;">Cancel</button>
+        </div>
+      </div>`;
+    }).join('');
+    container.innerHTML = `<div style="margin-bottom:10px;">
+      <div style="font-weight:700;color:#fbbf24;font-size:13px;margin-bottom:8px;">🤖 ACTIVE SMART CONDITIONALS (${data.count})</div>
+      ${rows}
+    </div>`;
+  } catch(e) {
+    console.error('[SMART-COND] refresh failed:', e);
+  }
+}
+async function cancelSmartConditional(id, btn) {
+  if (!confirm('Cancel this smart conditional?')) return;
+  btn.disabled = true;
+  btn.textContent = 'Canceling…';
+  try {
+    const r = await fetch('/api/smart-conditional/cancel/' + encodeURIComponent(id), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await r.json();
+    if (data.ok) {
+      refreshSmartConditionals();
+    } else {
+      alert('Cancel failed: ' + (data.error || 'unknown'));
+      btn.disabled = false;
+      btn.textContent = 'Cancel';
+    }
+  } catch(e) {
+    alert('Network error: ' + e.message);
+    btn.disabled = false;
+    btn.textContent = 'Cancel';
+  }
+}
+window.refreshSmartConditionals = refreshSmartConditionals;
+window.cancelSmartConditional = cancelSmartConditional;
+function startSmartCondPoll() {
+  if (_smartCondPollTimer) return;
+  refreshSmartConditionals();
+  _smartCondPollTimer = setInterval(refreshSmartConditionals, 20000);
+}
+function stopSmartCondPoll() {
+  if (_smartCondPollTimer) { clearInterval(_smartCondPollTimer); _smartCondPollTimer = null; }
+}
+window.startSmartCondPoll = startSmartCondPoll;
+window.stopSmartCondPoll = stopSmartCondPoll;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AYCE-FIRE AUTO — skip modal, fire immediately. Used for SIM auto-play

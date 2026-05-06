@@ -191,7 +191,7 @@
 <div class="container">
 
 <h1>🪜 Flow Scout IKEA Trade Guide</h1>
-<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 (Phase 4.30 — JOHN PATTERN REPLICATOR)</div>
+<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 PM (Phase 4.34 — SMART CONDITIONAL WATCHER)</div>
 
 <div class="tldr">
   <h2>📌 TL;DR</h2>
@@ -488,7 +488,8 @@
     <thead><tr><th>Account</th><th>Button</th><th>Use</th></tr></thead>
     <tbody>
       <tr><td><b>BIG (TS LIVE)</b></td><td><code>⚡ TS FIRE</code></td><td>Immediate market entry, account 11975462</td></tr>
-      <tr><td><b>BIG (TS LIVE)</b></td><td><code>🎯 TS QUEUE</code></td><td>Conditional w/ trigger activation</td></tr>
+      <tr><td><b>BIG (TS LIVE)</b></td><td><code>🎯 TS QUEUE</code></td><td>Conditional w/ trigger activation (raw price · NO gate check)</td></tr>
+      <tr><td><b>BIG (TS LIVE)</b></td><td><code style="background:linear-gradient(180deg,#fbbf24,#b45309); color:#000;">🤖 SMART AUTO</code></td><td>Phase 4.34 — server-side gated auto-fire (TA + TAPE + VISION + MTB run at trigger). Wick-resistant.</td></tr>
       <tr><td><b>PUBLIC.COM</b></td><td><code>📱 PUBLIC</code></td><td>Single 1ct cash account (no PDT)</td></tr>
       <tr><td><b>PUBLIC.COM</b></td><td><code>📱 BRACKET</code></td><td>Entry + auto stop + auto TP1/TP2</td></tr>
       <tr><td><b>TS LIVE/SIM</b></td><td><code>🎯 SPREAD (debit)</code></td><td>Phase 4.31 — defined-risk debit spread (max loss capped)</td></tr>
@@ -562,6 +563,77 @@
       <tr><td class="mono">GET /api/spread-builder/eod-suggestions</td><td>Read tomorrow's pre-built income spreads</td></tr>
     </tbody>
   </table>
+</div>
+
+<!-- STEP 4.34 — SMART CONDITIONAL WATCHER -->
+<div class="step" style="border-color:#fbbf24; background:linear-gradient(180deg, #11161f, #1a1310);">
+  <h2 style="color:#fbbf24;"><span class="step-num" style="background:linear-gradient(180deg,#fbbf24,#b45309); color:#000;">4.34</span>🤖 SMART CONDITIONAL (Phase 4.34 — May 5 PM)</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 10px;">
+    Replaces broker conditional brackets. <b>Server-side watcher</b> polls the underlying every 30s. When the trigger hits, it runs <b>ALL gates</b> (TA + TAPE + VISION + MTB) before placing the order — wick fakeouts auto-skipped, gate-protected zero-click auto-fire.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">The problem it solves</h3>
+  <table>
+    <thead><tr><th>Method</th><th>Wick-resistant?</th><th>Gate check?</th><th>Latency</th></tr></thead>
+    <tbody>
+      <tr><td><b>Manual TV alert click</b></td><td class="mono" style="color:var(--green);">✓ AB judges</td><td class="mono" style="color:var(--green);">✓ AB checks</td><td class="mono" style="color:var(--red);">15-90s click</td></tr>
+      <tr><td><b>TS broker conditional</b></td><td class="mono" style="color:var(--red);">✗ raw price</td><td class="mono" style="color:var(--red);">✗ none</td><td class="mono" style="color:var(--green);">&lt; 1s</td></tr>
+      <tr><td><b>🤖 Smart Conditional</b></td><td class="mono" style="color:var(--green);">✓ gate filter</td><td class="mono" style="color:var(--green);">✓ all 4 gates</td><td class="mono" style="color:var(--amber);">&lt; 30s</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">How to arm one</h3>
+  <ol style="font-size:12px; color:var(--txt-2); padding-left: 20px;">
+    <li>Open <b>ACTION tab</b> → find a Grade A/B card</li>
+    <li>Click <code style="background:linear-gradient(180deg,#fbbf24,#b45309); color:#000; padding:2px 6px; border-radius:3px;">🤖 SMART AUTO</code></li>
+    <li>Modal pre-fills trigger + stop + contract from the card</li>
+    <li>Pick account (TS LIVE / SIM / Public), qty, gate set, time window, expiry</li>
+    <li>Click <b>✅ Arm Smart Conditional</b> → Discord embed pushed</li>
+    <li>Server cron polls every 30s during the time window</li>
+    <li>Trigger hits → gates run → fire if pass / re-arm if a gate blocks</li>
+  </ol>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">Default settings</h3>
+  <ul class="checklist">
+    <li><b>Gates:</b> TA + TAPE + VISION + MTB (vision skips on Railway — no Chrome)</li>
+    <li><b>Time window:</b> 9:45 AM – 3:00 PM ET (HARD — outside, watcher skips the tick)</li>
+    <li><b>Expires:</b> end of next session (16:00 ET tomorrow). Auto-cancels if trigger never hits.</li>
+    <li><b>Bracket:</b> stop -50% premium / TP1 +25% premium (light first trim) + structural stock-stop</li>
+    <li><b>Per-ticker cap:</b> max 5 ARMED conditionals per ticker — prevents flood</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">The 3 outcomes (Discord embed per event)</h3>
+  <ul class="checklist">
+    <li class="green"><b>🤖🚀 FIRED</b> — trigger hit, all gates passed, order WORKING. Bracket armed. Done.</li>
+    <li class="amber"><b>⚠ BLOCKED</b> — trigger hit but gate failed (often vision VETO or TA opposite). Order NOT placed. Conditional re-armed for next trigger event — wick recovery handles itself.</li>
+    <li><b>⏰ EXPIRED</b> — expiresAt cutoff reached without trigger. Auto-canceled. Push Discord summary.</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">Active list (ACTION tab top)</h3>
+  <p style="font-size:12px; color:var(--txt-2); margin:0 0 8px;">
+    All armed conditionals appear in a yellow strip above the ACTION grid: ticker · trigger · live spot · distance to trigger · contract · gate set · cancel button. Polled every 20s while ACTION tab is active.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">Endpoints</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">POST /api/smart-conditional/add</td><td>Arm a conditional from any client (UI + scripts use this)</td></tr>
+      <tr><td class="mono">GET /api/smart-conditional/list?status=ARMED</td><td>List all conditionals (filter by status / ticker)</td></tr>
+      <tr><td class="mono">GET /api/smart-conditional/get/:id</td><td>Fetch one conditional</td></tr>
+      <tr><td class="mono">POST /api/smart-conditional/cancel/:id</td><td>Cancel a conditional</td></tr>
+      <tr><td class="mono">GET /api/smart-conditional/health</td><td>Heartbeat — lastTickAt, armedCount, firedToday, blockedToday</td></tr>
+      <tr><td class="mono">POST /api/smart-conditional/tick</td><td>Manually tick the watcher (testing)</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#fbbf24;">Storage + safety</h3>
+  <ul class="checklist">
+    <li><b>Persistence:</b> <code>/data/smart_conditionals.json</code> on Railway volume — survives deploys</li>
+    <li><b>Kill switch:</b> set <code>SMART_CONDITIONAL_ENABLED=false</code> env var to pause all watching</li>
+    <li><b>Override flag:</b> per-spec <code>allowOverride: true</code> fires even on gate fail (NOT recommended — emergency only)</li>
+    <li><b>Order placement:</b> uses <code>/api/ayce-fire/place</code> with <code>manualFire:true</code> — same code path as the modal FIRE button, just gated</li>
+  </ul>
 </div>
 
 <!-- STEP 5 -->

@@ -361,6 +361,13 @@ var simAutoTrader = null;
 try { simAutoTrader = require('./simAutoTrader'); console.log('[SERVER] simAutoTrader loaded OK'); }
 catch(e) { console.log('[SERVER] simAutoTrader not loaded:', e.message); }
 
+// SMART CONDITIONAL — Phase 4.34 (May 5 PM). Server-side watcher with gate
+// validation — replaces broker conditional brackets which fire on raw price.
+// Closes the wick/fakeout gap on John-style entry triggers.
+var smartConditional = null;
+try { smartConditional = require('./smartConditional'); console.log('[SERVER] smartConditional loaded OK'); }
+catch(e) { console.log('[SERVER] smartConditional not loaded:', e.message); }
+
 // SIM TRADE JOURNAL — Phase 4.24. Per-position lifecycle (open → mark → close)
 // with realized P&L on exit. Backed by /data/sim_trade_journal.json. Closes the
 // gap where SIM fires were logged but exits were never tracked.
@@ -7494,6 +7501,95 @@ app.post('/api/sim-auto/replay', async function(req, res) {
     res.json(replay);
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
+
+// =============================================================================
+// PHASE 4.34 — SMART CONDITIONAL WATCHER
+// -----------------------------------------------------------------------------
+// Server-side gated auto-fire. Replaces broker conditional brackets which fire
+// on raw price ticks (vulnerable to wicks). When the underlying crosses the
+// trigger, runs simAutoTrader.runGates() — TA + TAPE + VISION + MTB + FIRE_GRADE.
+// Only places the order if all configured gates pass.
+//
+// Endpoints:
+//   POST   /api/smart-conditional/add          → arm a conditional
+//   GET    /api/smart-conditional/list?status= → list conditionals
+//   GET    /api/smart-conditional/get/:id      → fetch one
+//   POST   /api/smart-conditional/cancel/:id   → mark CANCELED
+//   GET    /api/smart-conditional/health       → cron heartbeat + counts
+//   POST   /api/smart-conditional/tick         → manual tick (for testing)
+//
+// Cron: every 30s, weekdays. Skips silently if outside per-spec timeWindow.
+// =============================================================================
+app.post('/api/smart-conditional/add', function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    var out = smartConditional.addConditional(req.body || {});
+    if (!out.ok) return res.status(400).json(out);
+    // Push armed Discord embed
+    smartConditional.pushEmbed(smartConditional.buildArmedEmbed(out.spec)).catch(function(e) {
+      console.error('[SMART-COND] armed push failed:', e.message);
+    });
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/smart-conditional/list', function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    var status = req.query.status;
+    var ticker = req.query.ticker;
+    var list = smartConditional.listConditionals({ status: status, ticker: ticker });
+    res.json({ ok: true, count: list.length, conditionals: list });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/smart-conditional/get/:id', function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    var spec = smartConditional.getConditional(req.params.id);
+    if (!spec) return res.status(404).json({ ok: false, error: 'not found' });
+    res.json({ ok: true, spec: spec });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/smart-conditional/cancel/:id', function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    var reason = (req.body && req.body.reason) || 'manual cancel';
+    var out = smartConditional.cancelConditional(req.params.id, reason);
+    if (!out.ok) return res.status(404).json(out);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/smart-conditional/health', function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    res.json(smartConditional.getHealth());
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/smart-conditional/tick', async function(req, res) {
+  if (!smartConditional) return res.status(500).json({ ok: false, error: 'smartConditional not loaded' });
+  try {
+    var out = await smartConditional.tick();
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CRON — every 30s during weekdays. Watcher is responsible for its own
+// per-spec time-window check, so we just need to keep ticking. Outside
+// 9:00-16:00 ET we throttle to once a minute to save API calls.
+cron.schedule('*/30 * 9-16 * * 1-5', async function() {
+  try {
+    if (!smartConditional || !smartConditional.isEnabled()) return;
+    var out = await smartConditional.tick();
+    if (out && (out.fired > 0 || out.blocked > 0 || out.expired > 0)) {
+      console.log('[SMART-COND] tick · armed=' + out.armed + ' triggered=' + out.triggered +
+        ' fired=' + out.fired + ' blocked=' + out.blocked + ' expired=' + out.expired);
+    }
+  } catch(e) { console.error('[SMART-COND] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
 
 // =============================================================================
 // PHASE 4.25 — DAILY FLOW BACKTEST + MORNING BRIEF
