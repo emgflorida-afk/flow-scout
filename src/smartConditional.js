@@ -146,6 +146,13 @@ function normalizeSpec(input) {
     expiresAt = t.toISOString();
   }
 
+  // Phase 4.39 — optional timeframe-close confirmation flag (only '60m' for now)
+  var requireTfConfirm = null;
+  if (input.requireTfConfirm) {
+    var rtc = String(input.requireTfConfirm).toLowerCase();
+    if (rtc === '60m' || rtc === '1h' || rtc === '60') requireTfConfirm = '60m';
+  }
+
   return {
     id: input.id || genId(),
     ticker: ticker,
@@ -175,6 +182,7 @@ function normalizeSpec(input) {
     lastTickAt: input.lastTickAt || null,
     triggerEvents: input.triggerEvents || 0,  // how many times the trigger has been hit
     blockHistory: input.blockHistory || [],   // last few block reasons
+    requireTfConfirm: requireTfConfirm,        // Phase 4.39 — '60m' or null
   };
 }
 
@@ -466,20 +474,174 @@ async function checkPremiumGate(spec) {
 }
 
 // =============================================================================
+// PHASE 4.39 — 60M CLOSE CONFIRMATION GATE
+// -----------------------------------------------------------------------------
+// AB pain (May 5 2026): SPY/IWM/QQQ can wick $3 in 30 sec then snap back —
+// that's a stop-hunt, not a real reversal. Phase 4.34/4.35 gates (TA/TAPE/MTB
+// /VISION/PRIME_WINDOW/EXHAUSTION/PREMIUM) all pass on intrabar print and the
+// trigger fires into a fakeout.
+//
+// Fix: when the spec carries `requireTfConfirm: '60m'`, require the LAST
+// CLOSED 60m bar to confirm the directional break:
+//   - SHORT (crossing_down): last 60m close must be BELOW triggerPrice
+//   - LONG  (crossing_up):   last 60m close must be ABOVE triggerPrice
+//
+// Phase 4.38 sets requireTfConfirm: '60m' on auto-created INDEX conditionals.
+// Specs WITHOUT the flag (TMO/META/John picks) are no-ops here.
+//
+// Env toggle: SMART_60M_GATE=on (default) | off
+// =============================================================================
+async function fetchBars(ticker, tf, count) {
+  // Pulls bars directly via TS marketdata barcharts (same pattern as
+  // vBottomScanner.js + server.js debug endpoints).
+  var unit, interval;
+  if (tf === '60m' || tf === '1h' || tf === '60') { unit = 'Minute'; interval = 60; }
+  else if (tf === '5m')  { unit = 'Minute'; interval = 5; }
+  else if (tf === '15m') { unit = 'Minute'; interval = 15; }
+  else if (tf === '30m') { unit = 'Minute'; interval = 30; }
+  else if (tf === 'daily' || tf === '1d') { unit = 'Daily'; interval = 1; }
+  else { unit = 'Minute'; interval = 60; }
+
+  var barsback = Math.max(1, count || 2);
+
+  var ts;
+  try { ts = require('./tradestation'); } catch (e) { return null; }
+  if (!ts || !ts.getAccessToken) return null;
+  var token = await ts.getAccessToken().catch(function() { return null; });
+  if (!token) return null;
+
+  var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+  var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(ticker)
+    + '?unit=' + unit + '&interval=' + interval + '&barsback=' + barsback;
+  try {
+    var r = await fetchLib(url, {
+      headers: { 'Authorization': 'Bearer ' + token },
+      timeout: 8000,
+    });
+    if (!r.ok) return null;
+    var data = await r.json();
+    var raw = data.Bars || data.bars || [];
+    return raw.map(function(b) {
+      return {
+        time: b.TimeStamp,
+        open: parseFloat(b.Open),
+        high: parseFloat(b.High),
+        low: parseFloat(b.Low),
+        close: parseFloat(b.Close),
+        volume: parseInt(b.TotalVolume || 0, 10),
+      };
+    });
+  } catch (e) {
+    return null;
+  }
+}
+
+async function check60mCloseGate(spec, currentSpot) {
+  // Skip if spec doesn't require it — TMO/META/John picks pass through here.
+  if (!spec.requireTfConfirm || spec.requireTfConfirm !== '60m') {
+    return { passed: true, gate: '60M_CLOSE', reason: 'not required', skipped: true };
+  }
+
+  // Skip if env disabled
+  if (!phase435Enabled('SMART_60M_GATE')) {
+    return { passed: true, gate: '60M_CLOSE', reason: 'gate disabled via env', skipped: true };
+  }
+
+  try {
+    // Pull last 2 closed 60m bars
+    var bars = await fetchBars(spec.ticker, '60m', 2);
+    if (!bars || bars.length < 1) {
+      return { passed: 'unknown', gate: '60M_CLOSE', reason: '60m bar data unavailable — fail-open' };
+    }
+
+    var lastBar = bars[bars.length - 1];
+    if (!lastBar || !isFinite(lastBar.close)) {
+      return { passed: 'unknown', gate: '60M_CLOSE', reason: '60m last-bar close malformed — fail-open' };
+    }
+
+    // For SHORT setup (crossing_down trigger): need 60m close BELOW triggerPrice
+    if (spec.direction === 'short' || spec.triggerDirection === 'crossing_down') {
+      if (lastBar.close >= spec.triggerPrice) {
+        return {
+          passed: false,
+          gate: '60M_CLOSE',
+          reason: '60m bar closed at $' + lastBar.close.toFixed(2) +
+                  ' (>= trigger $' + spec.triggerPrice.toFixed(2) +
+                  ') — wick hunt suspected, no confirmed close below',
+          lastClose: +lastBar.close.toFixed(2),
+          triggerPrice: spec.triggerPrice,
+        };
+      }
+      return {
+        passed: true,
+        gate: '60M_CLOSE',
+        reason: '60m closed at $' + lastBar.close.toFixed(2) +
+                ' below trigger $' + spec.triggerPrice.toFixed(2) + ' — confirmed',
+        lastClose: +lastBar.close.toFixed(2),
+        triggerPrice: spec.triggerPrice,
+      };
+    }
+
+    // For LONG setup (crossing_up trigger): need 60m close ABOVE triggerPrice
+    if (spec.direction === 'long' || spec.triggerDirection === 'crossing_up') {
+      if (lastBar.close <= spec.triggerPrice) {
+        return {
+          passed: false,
+          gate: '60M_CLOSE',
+          reason: '60m bar closed at $' + lastBar.close.toFixed(2) +
+                  ' (<= trigger $' + spec.triggerPrice.toFixed(2) +
+                  ') — wick hunt suspected, no confirmed close above',
+          lastClose: +lastBar.close.toFixed(2),
+          triggerPrice: spec.triggerPrice,
+        };
+      }
+      return {
+        passed: true,
+        gate: '60M_CLOSE',
+        reason: '60m closed at $' + lastBar.close.toFixed(2) +
+                ' above trigger $' + spec.triggerPrice.toFixed(2) + ' — confirmed',
+        lastClose: +lastBar.close.toFixed(2),
+        triggerPrice: spec.triggerPrice,
+      };
+    }
+
+    return { passed: 'unknown', gate: '60M_CLOSE', reason: 'unknown direction — fail-open' };
+  } catch (e) {
+    return { passed: 'unknown', gate: '60M_CLOSE', reason: 'fail-open: ' + e.message };
+  }
+}
+
+// =============================================================================
 // GATE INVOCATION
 // =============================================================================
-// Runs Phase 4.35 pre-gates (PRIME_WINDOW → EXHAUSTION → PREMIUM_EXPANSION)
-// FIRST. Any hard fail short-circuits and does NOT call simAutoTrader.runGates.
-// Then, if pre-gates pass, calls simAutoTrader.runGates() — DOES NOT MODIFY
-// simAutoTrader. We pass the setup with whichever gates the spec requested,
-// and rely on the env-toggle behavior in simAutoTrader to run only the ones
-// we want.
+// Runs Phase 4.39 60m-close gate FIRST (blocks wick fakeouts before anything
+// else runs). Then Phase 4.35 pre-gates (PRIME_WINDOW → EXHAUSTION →
+// PREMIUM_EXPANSION). Any hard fail short-circuits and does NOT call
+// simAutoTrader.runGates. Then, if pre-gates pass, calls simAutoTrader
+// .runGates() — DOES NOT MODIFY simAutoTrader. We pass the setup with
+// whichever gates the spec requested, and rely on the env-toggle behavior in
+// simAutoTrader to run only the ones we want.
 // =============================================================================
-async function runGatesForSpec(spec) {
+async function runGatesForSpec(spec, currentSpot) {
+  // Phase 4.39 — 60m close confirmation (FIRST gate, blocks wick fakeouts
+  // before anything else runs). No-op for specs without requireTfConfirm.
+  var preGates = {};
+  var tfClose = await check60mCloseGate(spec, currentSpot);
+  preGates.tfClose = tfClose;
+  if (tfClose.passed === false) {
+    return {
+      pass: false,
+      gate: '60M_CLOSE',
+      reason: tfClose.reason,
+      gates: { tfClose: tfClose.passed },
+      preGates: preGates,
+      diagnostics: { tfClose: tfClose },
+    };
+  }
+
   // Phase 4.35 pre-gates — run BEFORE the simAutoTrader gates so we never
   // even hit TS API for chasing trades. Order: cheapest-first (no network →
   // network → network).
-  var preGates = {};
 
   // Gate A: PRIME_WINDOW (no network)
   var window = checkPrimeWindow();
@@ -489,9 +651,9 @@ async function runGatesForSpec(spec) {
       pass: false,
       gate: 'PRIME_WINDOW',
       reason: window.reason,
-      gates: { primeWindow: window.passed },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed },
       preGates: preGates,
-      diagnostics: { primeWindow: window },
+      diagnostics: { tfClose: tfClose, primeWindow: window },
     };
   }
 
@@ -503,9 +665,9 @@ async function runGatesForSpec(spec) {
       pass: false,
       gate: 'EXHAUSTION',
       reason: exhaustion.reason,
-      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed, exhaustion: exhaustion.passed },
       preGates: preGates,
-      diagnostics: { primeWindow: window, exhaustion: exhaustion },
+      diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion },
     };
   }
 
@@ -517,9 +679,9 @@ async function runGatesForSpec(spec) {
       pass: false,
       gate: 'PREMIUM_EXPANSION',
       reason: premium.reason,
-      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
       preGates: preGates,
-      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+      diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion, premium: premium },
     };
   }
 
@@ -528,19 +690,19 @@ async function runGatesForSpec(spec) {
   try { simAutoTrader = require('./simAutoTrader'); } catch (e) {
     return {
       pass: true,
-      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
       preGates: preGates,
       reason: 'simAutoTrader not loaded — fail-open',
-      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+      diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion, premium: premium },
     };
   }
   if (!simAutoTrader || !simAutoTrader.runGates) {
     return {
       pass: true,
-      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed },
       preGates: preGates,
       reason: 'runGates not available — fail-open',
-      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+      diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion, premium: premium },
     };
   }
   var setup = {
@@ -558,11 +720,13 @@ async function runGatesForSpec(spec) {
     // Merge pre-gate results into the verdict so Discord embed can surface them.
     verdict.preGates = preGates;
     verdict.gates = Object.assign({
+      tfClose: tfClose.passed,
       primeWindow: window.passed,
       exhaustion: exhaustion.passed,
       premium: premium.passed,
     }, verdict.gates || {});
     verdict.diagnostics = Object.assign({
+      tfClose: tfClose,
       primeWindow: window,
       exhaustion: exhaustion,
       premium: premium,
@@ -571,10 +735,10 @@ async function runGatesForSpec(spec) {
   } catch (e) {
     return {
       pass: true,
-      gates: { primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed, error: e.message },
+      gates: { tfClose: tfClose.passed, primeWindow: window.passed, exhaustion: exhaustion.passed, premium: premium.passed, error: e.message },
       preGates: preGates,
       reason: 'gate exception — fail-open',
-      diagnostics: { primeWindow: window, exhaustion: exhaustion, premium: premium },
+      diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion, premium: premium },
     };
   }
 }
@@ -635,7 +799,11 @@ function buildArmedEmbed(spec) {
   var dirIcon = spec.direction === 'long' ? '🟢' : '🔴';
   var triggerArrow = spec.triggerDirection === 'crossing_up' ? '⬆ crossing UP' : '⬇ crossing DOWN';
   // Phase 4.35: list the active pre-gates inline so AB sees the full guard set
+  // Phase 4.39: include 60M_CLOSE if the spec carries requireTfConfirm
   var preGatesList = [];
+  if (spec.requireTfConfirm === '60m' && phase435Enabled('SMART_60M_GATE')) {
+    preGatesList.push('60M_CLOSE (last closed 60m bar must confirm trigger break — blocks wick hunts)');
+  }
   if (phase435Enabled('SMART_PRIME_WINDOW_GATE')) preGatesList.push('PRIME_WINDOW (9:45-11:15 prime, 11:15-15:00 allowed)');
   if (phase435Enabled('SMART_EXHAUSTION_GATE'))   preGatesList.push('EXHAUSTION (block ≥ 7% day move, warn ≥ 4%)');
   if (phase435Enabled('SMART_PREMIUM_GATE'))      preGatesList.push('PREMIUM_EXPANSION (block > 30% above limit, warn > 15%)');
@@ -690,8 +858,10 @@ function buildFiredEmbed(spec, fireResult, gateVerdict, spot) {
     .join(' · ') || 'all configured';
 
   // Phase 4.35: surface pre-gate diagnostics inline for transparency.
+  // Phase 4.39: prepend 60M_CLOSE diagnostic when present.
   var pre = (gateVerdict.diagnostics) || {};
   var preLines = [];
+  if (pre.tfClose && !pre.tfClose.skipped) preLines.push('• 60M_CLOSE: ' + (pre.tfClose.passed === true ? '✅' : pre.tfClose.passed === 'partial' ? '⚠ partial' : pre.tfClose.passed) + ' — ' + pre.tfClose.reason);
   if (pre.primeWindow) preLines.push('• PRIME_WINDOW: ' + (pre.primeWindow.passed === true ? '✅' : pre.primeWindow.passed === 'partial' ? '⚠ partial' : pre.primeWindow.passed) + ' — ' + pre.primeWindow.reason);
   if (pre.exhaustion)  preLines.push('• EXHAUSTION: ' + (pre.exhaustion.passed === true ? '✅' : pre.exhaustion.passed === 'partial' ? '⚠ partial' : pre.exhaustion.passed) + ' — ' + pre.exhaustion.reason);
   if (pre.premium)     preLines.push('• PREMIUM_EXPANSION: ' + (pre.premium.passed === true ? '✅' : pre.premium.passed === 'partial' ? '⚠ partial' : pre.premium.passed) + ' — ' + pre.premium.reason);
@@ -744,8 +914,16 @@ function buildFiredEmbed(spec, fireResult, gateVerdict, spot) {
 function buildBlockedEmbed(spec, gateVerdict, spot) {
   var dirIcon = spec.direction === 'long' ? '🟢' : '🔴';
   // Phase 4.35: gate-specific guidance so AB knows what to do next per failure.
+  // Phase 4.39: 60M_CLOSE wick-hunt explainer added.
   var whatNow;
   switch (gateVerdict.gate) {
+    case '60M_CLOSE':
+      whatNow = 'WICK HUNT detected — price tagged your trigger but the 60m bar closed back ' +
+                (spec.direction === 'long' || spec.triggerDirection === 'crossing_up' ? 'BELOW' : 'ABOVE') +
+                ' it. Classic stop-hunt.\n' +
+                'Conditional re-armed. Will fire next time price + a confirmed 60m close align.\n' +
+                'Cancel: `POST /api/smart-conditional/cancel/' + spec.id + '`';
+      break;
     case 'PRIME_WINDOW':
       whatNow = 'Outside trading window. Conditional stays armed but will not fire until 9:45-15:00 ET tomorrow.\n' +
                 'If this is intentional, re-arm with allowOverride=true.';
@@ -766,8 +944,11 @@ function buildBlockedEmbed(spec, gateVerdict, spot) {
   }
 
   // If pre-gate diagnostics are present, surface a quick summary.
+  // Phase 4.39: include 60M_CLOSE first when present.
   var pre = (gateVerdict.diagnostics) || {};
   var preLines = [];
+  if (pre.tfClose && !pre.tfClose.skipped && pre.tfClose.passed !== true && pre.tfClose.passed !== 'partial' && pre.tfClose.passed !== 'unknown') preLines.push('• 60M_CLOSE ❌ ' + pre.tfClose.reason);
+  else if (pre.tfClose && pre.tfClose.passed === 'partial') preLines.push('• 60M_CLOSE ⚠ ' + pre.tfClose.reason);
   if (pre.primeWindow && pre.primeWindow.passed !== true && pre.primeWindow.passed !== 'partial') preLines.push('• PRIME_WINDOW ❌ ' + pre.primeWindow.reason);
   else if (pre.primeWindow && pre.primeWindow.passed === 'partial') preLines.push('• PRIME_WINDOW ⚠ ' + pre.primeWindow.reason);
   if (pre.exhaustion && pre.exhaustion.passed !== true && pre.exhaustion.passed !== 'partial' && pre.exhaustion.passed !== 'unknown') preLines.push('• EXHAUSTION ❌ ' + pre.exhaustion.reason);
@@ -898,6 +1079,9 @@ function getHealth() {
       exhaustionGate: phase435Enabled('SMART_EXHAUSTION_GATE'),
       premiumGate: phase435Enabled('SMART_PREMIUM_GATE'),
     },
+    phase439: {
+      tfCloseGate: phase435Enabled('SMART_60M_GATE') ? 'on' : 'off',
+    },
   };
 }
 
@@ -988,7 +1172,7 @@ async function tick() {
       // 5) run gates (unless allowOverride)
       var gateVerdict = { pass: true, gates: {}, reason: 'override' };
       if (!spec.allowOverride) {
-        gateVerdict = await runGatesForSpec(spec);
+        gateVerdict = await runGatesForSpec(spec, spot);
       }
 
       if (!gateVerdict.pass) {
@@ -1082,5 +1266,8 @@ module.exports = {
   checkPrimeWindow: checkPrimeWindow,
   checkExhaustionGate: checkExhaustionGate,
   checkPremiumGate: checkPremiumGate,
+  // Phase 4.39 — 60m close confirmation gate
+  check60mCloseGate: check60mCloseGate,
+  fetchBars: fetchBars,
   runGatesForSpec: runGatesForSpec,
 };
