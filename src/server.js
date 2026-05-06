@@ -7699,6 +7699,46 @@ app.get('/api/quick-fire/status', function(req, res) {
 });
 
 // =============================================================================
+// PHASE 4.56 — UNIFIED SIM AUTO-TRADER endpoints + 60s cron
+// =============================================================================
+var _usat = null;
+try { _usat = require('./unifiedSimAutoTrader'); console.log('[USAT] Loaded OK'); }
+catch (e) { console.log('[USAT] Skipped:', e.message); }
+
+app.get('/api/unified-sim/status', function(req, res) {
+  if (!_usat) return res.status(500).json({ ok: false, error: 'unifiedSimAutoTrader not loaded' });
+  res.json(Object.assign({ ok: true }, _usat.getStatus()));
+});
+
+// POST /api/unified-sim/tick  → manual single-shot run (force=true bypasses RTH gate)
+app.post('/api/unified-sim/tick', async function(req, res) {
+  if (!_usat) return res.status(500).json({ ok: false, error: 'unifiedSimAutoTrader not loaded' });
+  try {
+    var force = req.query.force === 'true' || (req.body && req.body.force === true);
+    var out = await _usat.tick({ force: force });
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/unified-sim/clear-today  → reset today's slot allocation
+app.post('/api/unified-sim/clear-today', function(req, res) {
+  if (!_usat) return res.status(500).json({ ok: false, error: 'unifiedSimAutoTrader not loaded' });
+  res.json(_usat.clearTodaySlots());
+});
+
+// 60-second cron — only acts if UNIFIED_SIM_AUTO_FIRE=true env set on Railway
+cron.schedule('*/1 * * * *', async function() {
+  if (!_usat) return;
+  if (process.env.UNIFIED_SIM_AUTO_FIRE !== 'true') return;
+  try {
+    var out = await _usat.tick();
+    if (out && out.attempts && out.attempts.length > 0) {
+      console.log('[USAT] cron tick: ' + out.attempts.length + ' attempts · ' + out.fires + '/' + out.cap + ' fires today');
+    }
+  } catch (e) { console.error('[USAT] cron error:', e.message); }
+});
+
+// =============================================================================
 // PHASE 4.27 — SIM gate pipeline endpoints
 // =============================================================================
 
