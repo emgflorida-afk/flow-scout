@@ -148,6 +148,9 @@ function saveState(s) {
 }
 
 function isEnabled() {
+  // Hard mute switch — set WEEKLY_ORCHESTRATOR=off to silence all auto-runs.
+  // Default ON. Backwards-compat with WEEKLY_ORCH_ENABLED=false.
+  if (process.env.WEEKLY_ORCHESTRATOR === 'off') return false;
   var v = process.env.WEEKLY_ORCH_ENABLED;
   if (v == null || v === '') return true;  // default ON
   return String(v).toLowerCase() !== 'false';

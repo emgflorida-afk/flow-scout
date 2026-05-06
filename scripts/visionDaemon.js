@@ -1418,6 +1418,13 @@ async function main() {
   log('INFO', `INDEX_WATCHLIST=${INDEX_WATCHLIST.join(',')} INDEX_REVERSAL_DEDUP_HOURS=${INDEX_REVERSAL_DEDUP_HOURS}`);
   log('INFO', `QUIET_OUTSIDE_MARKET=${QUIET_OUTSIDE_MARKET}`);
 
+  // Mute-noise env gates — default ON. Flip to 'off' via Railway env to
+  // silence a loop without redeploying or editing code.
+  const indexReversalGate = process.env.INDEX_REVERSAL_LOOP === 'off' ? 'OFF (env)' : 'ON';
+  const sniperGate = process.env.SNIPER_LOOP === 'off' ? 'OFF (env)' : 'ON';
+  log('INFO', `[VISION-DAEMON] index-reversal-loop: ${indexReversalGate}`);
+  log('INFO', `[VISION-DAEMON] sniper-loop: ${sniperGate}`);
+
   // Sanity-check chart-vision.sh exists
   if (!fs.existsSync(CHART_VISION_SH)) {
     log('ERROR', `chart-vision.sh missing — daemon will idle until script is restored`);
@@ -1445,12 +1452,30 @@ async function main() {
     if (stopRequested) return;
     try { await sendHeartbeat(); } catch (e) { log('ERROR', 'heartbeat: ' + e.message); }
   };
+  let _sniperGateMuteLogged = false;
+  let _indexReversalGateMuteLogged = false;
   const sniperTick = async () => {
     if (stopRequested) return;
+    if (process.env.SNIPER_LOOP === 'off') {
+      if (!_sniperGateMuteLogged) {
+        log('INFO', '[VISION-DAEMON] sniper-loop: tick skipped (env=off)');
+        _sniperGateMuteLogged = true;
+      }
+      return;
+    }
+    _sniperGateMuteLogged = false;
     try { await sniperLoop(); } catch (e) { log('ERROR', 'sniper-loop: ' + e.message); }
   };
   const indexReversalTick = async () => {
     if (stopRequested) return;
+    if (process.env.INDEX_REVERSAL_LOOP === 'off') {
+      if (!_indexReversalGateMuteLogged) {
+        log('INFO', '[VISION-DAEMON] index-reversal-loop: tick skipped (env=off)');
+        _indexReversalGateMuteLogged = true;
+      }
+      return;
+    }
+    _indexReversalGateMuteLogged = false;
     try { await indexReversalLoop(); } catch (e) { log('ERROR', 'index-reversal-loop: ' + e.message); }
   };
 

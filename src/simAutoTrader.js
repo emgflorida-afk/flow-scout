@@ -991,6 +991,13 @@ async function runSimAuto(opts) {
     return { ok: false, skipped: true, reason: 'SIM_AUTO_ENABLED=false' };
   }
 
+  // Mute-noise gate — scanner-pivot-pattern fire path. Default ON; AB flips
+  // off via Railway env var (SCANNER_FIRES_ENABLED=off) when scanner is too
+  // noisy without redeploy.
+  if (process.env.SCANNER_FIRES_ENABLED === 'off' && !force) {
+    return { ok: false, skipped: true, reason: 'SCANNER_FIRES_ENABLED=off' };
+  }
+
   // Time window
   if (!inFireWindow() && !force) {
     return { ok: false, skipped: true, reason: 'outside fire window (9:45 AM - 3:30 PM ET)' };

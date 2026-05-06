@@ -5492,6 +5492,10 @@ cron.schedule('* 9-15 * * 1-5', async function() {
 cron.schedule('30 16 * * 1-5', async function() {
   try {
     if (!morningSetupScanner) return;
+    if (process.env.AUTOQUEUE_TOMORROW === 'off') {
+      console.log('[MSS] cron skipped (AUTOQUEUE_TOMORROW=off)');
+      return;
+    }
     console.log('[MSS] cron triggered — building tomorrow SETUP_RADAR');
     var out = await morningSetupScanner.runScan();
     if (out && !out.error) {
@@ -5518,6 +5522,10 @@ cron.schedule('0 16 * * 1-5', async function() {
   try {
     if (!spreadBuilder) return console.log('[SPREAD-EOD] spreadBuilder not loaded, skip');
     if (!ts || !ts.getAccessToken) return console.log('[SPREAD-EOD] TS not loaded, skip');
+    if (process.env.AUTOQUEUE_TOMORROW === 'off') {
+      console.log('[SPREAD-EOD] cron skipped (AUTOQUEUE_TOMORROW=off)');
+      return;
+    }
 
     console.log('[SPREAD-EOD] cron triggered (4:00 PM ET) — building tomorrow INCOME spread suggestions');
     var mc = await computeMarketContext();
@@ -5690,6 +5698,10 @@ app.get('/api/spread-builder/eod-suggestions', function(req, res) {
 cron.schedule('30 17 * * 1-5', async function() {
   try {
     if (!johnLikePicker) return;
+    if (process.env.AUTOQUEUE_TOMORROW === 'off') {
+      console.log('[JLP] cron skipped (AUTOQUEUE_TOMORROW=off)');
+      return;
+    }
     console.log('[JLP] cron triggered (5:30 PM ET) — generating tomorrow JOHN-LIKE picks');
     // Ensure profiles exist; rebuild if not
     if (johnPatternProfiler) {
@@ -7981,6 +7993,10 @@ app.get('/api/power-hour-brief/last', function(req, res) {
 cron.schedule('15 16 * * 1-5', async function() {
   try {
     if (!johnPatternScanner) return;
+    if (process.env.AUTOQUEUE_TOMORROW === 'off') {
+      console.log('[JS] cron skipped (AUTOQUEUE_TOMORROW=off)');
+      return;
+    }
     console.log('[JS] cron triggered (4:15 PM ET) — daily reversal pattern scan');
     var out = await johnPatternScanner.runScan({ tfs: ['Daily', '6HR'], cron: true });
     if (out && out.ok) {
@@ -8089,6 +8105,10 @@ cron.schedule('30 8 * * 1-5', async function() {
 cron.schedule('30 16 * * 1-5', async function() {
   try {
     if (!wpSwingScanner) return;
+    if (process.env.AUTOQUEUE_TOMORROW === 'off') {
+      console.log('[WP] cron skipped (AUTOQUEUE_TOMORROW=off)');
+      return;
+    }
     console.log('[WP] cron triggered (4:30 PM ET) — 4HR/EMA swing scan');
     var out = await wpSwingScanner.runScan({ cron: true });
     if (out && out.ok) {
@@ -10841,6 +10861,15 @@ console.log('[BRAIN] Cron scheduled: every 60s, 9AM-4PM ET, weekdays');
 // -- START ------------------------------------------------------
 app.listen(PORT, function() {
   console.log('Flow Scout v8.2 running on port ' + PORT);
+  // Mute-noise gates boot log (single source of truth)
+  var aqGate = process.env.AUTOQUEUE_TOMORROW === 'off' ? 'OFF (env)' : 'ON';
+  var weeklyGate = process.env.WEEKLY_ORCHESTRATOR === 'off' ? 'OFF (env)' : 'ON';
+  var scannerFiresGate = process.env.SCANNER_FIRES_ENABLED === 'off' ? 'OFF (env)' : 'ON';
+  var simAutoGate = process.env.SIM_AUTO_START === 'off' ? 'OFF (env)' : 'ON';
+  console.log('[SERVER] AUTOQUEUE_TOMORROW: ' + aqGate);
+  console.log('[SERVER] WEEKLY_ORCHESTRATOR: ' + weeklyGate);
+  console.log('[SERVER] SCANNER_FIRES_ENABLED: ' + scannerFiresGate);
+  console.log('[SERVER] SIM_AUTO_START: ' + simAutoGate);
   bullflow.startBullflowStream();
   discordBot.startDiscordBot();
 });
