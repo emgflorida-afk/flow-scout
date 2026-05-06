@@ -3513,6 +3513,11 @@ async function loadActiveTab() {
   if (activeTab !== "action") stopActionPoll();
   // Phase 4.34 — smart conditional poll only runs while ACTION tab active
   if (activeTab !== "action" && typeof stopSmartCondPoll === 'function') stopSmartCondPoll();
+  // MAY 6 PM — stop MEGA poll when leaving MEGA tab (AB caught the grid-overwrite bug)
+  if (activeTab !== "mega" && _megaPollTimer) {
+    clearInterval(_megaPollTimer);
+    _megaPollTimer = null;
+  }
   if (activeTab === "mega")     return loadMegaData();
   if (activeTab === "action")   return loadActionData();
   if (activeTab === "scan")     return loadScanData();
@@ -4014,6 +4019,13 @@ let megaData = { tickers: [], generatedAt: null };
 let _megaPollTimer = null;
 
 async function loadMegaData() {
+  // MAY 6 PM — guard against MEGA poll firing on a different active tab.
+  // AB caught grid-overwrite bug: switch from MEGA → Coil/AYCE/etc → 20s
+  // later MEGA poll fires and repaints the grid with MEGA cards.
+  if (activeTab !== 'mega') {
+    if (_megaPollTimer) { clearInterval(_megaPollTimer); _megaPollTimer = null; }
+    return;
+  }
   document.getElementById("grid").innerHTML = `<div class="empty">Loading MEGA watch...</div>`;
   try {
     const symbols = MEGA_WATCHLIST.join(',');
@@ -4021,6 +4033,8 @@ async function loadMegaData() {
       fetch('/api/ticker-quote?symbols=' + symbols).then(r => r.json()).catch(() => ({ quotes: [] })),
       fetch('/api/chart-vision/cache?tickers=' + symbols).then(r => r.json()).catch(() => ({ verdicts: [] })),
     ]);
+    // Re-check tab after async fetch — user may have switched while awaiting
+    if (activeTab !== 'mega') return;
     const quotes = (quotesRes.quotes || []);
     const verdicts = (visionRes.verdicts || []);
     const visionByTicker = {};
@@ -4034,7 +4048,9 @@ async function loadMegaData() {
     renderGridMega();
     renderStatsMega();
   } catch (e) {
-    document.getElementById("grid").innerHTML = `<div class="empty">MEGA load error: ${e.message}</div>`;
+    if (activeTab === 'mega') {
+      document.getElementById("grid").innerHTML = `<div class="empty">MEGA load error: ${e.message}</div>`;
+    }
   }
   if (_megaPollTimer) clearInterval(_megaPollTimer);
   _megaPollTimer = setInterval(loadMegaData, 20000);
