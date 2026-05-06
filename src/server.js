@@ -7914,6 +7914,74 @@ app.get('/api/quick-fire', async function(req, res) {
   }
 });
 
+// MAY 6 PM — /api/tv-fire — auto-fire from TV alert webhook.
+// AB ask: "have a hyperlink on chart" — TV chart text isn't clickable, BUT
+// TV alerts can webhook → POST a URL when they fire. This endpoint receives
+// that POST and auto-fires SIM (or LIVE if explicitly enabled per env).
+//
+// TV alert setup:
+//   Condition: 5m close crossing UP $32.98 (or your trigger)
+//   Once Per Bar Close
+//   Notifications → Webhook URL:
+//     https://flow-scout-production.up.railway.app/api/tv-fire
+//   Webhook message body (JSON):
+//     {"ticker":"CELH","strike":33,"expiry":"2026-05-15","dir":"long","qty":1,"acct":"sim","secret":"YOUR_SECRET"}
+//
+// Set env TV_FIRE_SECRET=<your-secret> on Railway. Webhook bodies without
+// matching secret are rejected — prevents anyone POSTing the URL from
+// firing your account.
+//
+// ZERO HUMAN TAPS REQUIRED. Trigger fires → SIM order placed → Discord ping.
+app.post('/api/tv-fire', async function(req, res) {
+  try {
+    var body = req.body || {};
+    // Body might be a string from TV (TV sends raw text) — try parse
+    if (typeof body === 'string') {
+      try { body = JSON.parse(body); } catch (e) { /* leave as string */ }
+    }
+    if (!body || typeof body !== 'object') {
+      return res.status(400).json({ ok: false, message: 'invalid body — expected JSON object' });
+    }
+    var secret = process.env.TV_FIRE_SECRET;
+    if (secret && body.secret !== secret) {
+      console.log('[TV-FIRE] REJECTED — secret mismatch (expected env TV_FIRE_SECRET)');
+      return res.status(403).json({ ok: false, message: 'secret mismatch' });
+    }
+    var ticker = String(body.ticker || '').toUpperCase();
+    var strike = body.strike ? parseFloat(body.strike) : null;
+    var expiry = String(body.expiry || '');
+    var dir = String(body.dir || body.direction || 'long').toLowerCase();
+    var qty = body.qty ? parseInt(body.qty, 10) : 1;
+    var acct = String(body.acct || body.account || 'sim').toLowerCase();
+    if (!ticker || !strike || !expiry) {
+      return res.status(400).json({ ok: false, message: 'required: ticker + strike + expiry' });
+    }
+    if (acct === 'live' && process.env.LIVE_AUTO_FIRE !== 'on') {
+      console.log('[TV-FIRE] LIVE blocked — LIVE_AUTO_FIRE env not on');
+      return res.status(403).json({ ok: false, message: 'LIVE auto-fire disabled. Set LIVE_AUTO_FIRE=on env to enable.' });
+    }
+
+    // Forward to internal /api/quick-fire (uses strike+expiry override path)
+    var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+    var url = 'http://localhost:' + (process.env.PORT || 3000)
+            + '/api/quick-fire?ticker=' + encodeURIComponent(ticker)
+            + '&direction=' + encodeURIComponent(dir)
+            + '&tier=swing'
+            + '&acct=' + encodeURIComponent(acct)
+            + '&strike=' + strike
+            + '&expiry=' + encodeURIComponent(expiry)
+            + '&qty=' + qty
+            + '&source=tv-alert';
+    var fr = await fetchLib(url);
+    var fdata = await fr.json();
+    console.log('[TV-FIRE] ' + ticker + ' ' + strike + dir.charAt(0).toUpperCase() + ' ' + expiry + ' acct=' + acct + ' result=' + JSON.stringify(fdata).slice(0, 200));
+    return res.json(fdata);
+  } catch (e) {
+    console.error('[TV-FIRE] error:', e.message);
+    return res.status(500).json({ ok: false, message: 'tv-fire error: ' + e.message });
+  }
+});
+
 // MAY 6 PM — /fire-link — bookmarkable HTML page that fires SIM on tap.
 // AB explicit ask: "create a link that opens directly these contracts when I
 // click on it." For John-style picks where you know exact strike + expiry.
