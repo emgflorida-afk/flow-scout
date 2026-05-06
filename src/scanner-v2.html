@@ -834,7 +834,15 @@ let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 //   SNIPER    - chart-analysis posts
 //   SWINGS    - longer-term holds
 //   STARRED   - your manual watch
+// MAY 6 2026 — MEGA WATCHLIST (AB explicit ask)
+// "1 tab with only meta, appl, googl, amzn, msft, nvda, iwm, spy, and amd
+//  dont have it on any other card. 1 agent that focuses on A+ set up for this"
+// These 9 names are filtered OUT of every other tab so MEGA is the single
+// source of truth for the highest-liquidity universe.
+const MEGA_WATCHLIST = ['META','AAPL','GOOGL','GOOG','AMZN','MSFT','NVDA','IWM','SPY','AMD'];
+
 const TABS = [
+  { id: "mega",     label: "🐋 MEGA",        modeDefault: "9 NAMES ONLY" },
   { id: "action",   label: "🎯 ACTION",      modeDefault: "WHAT TO DO NOW" },
   { id: "tomorrow", label: "🌅 TOMORROW",    modeDefault: "SWING PLANNING" },
   { id: "movers",   label: "⚡ LIVE MOVERS", modeDefault: "OPENING DAY" },
@@ -3476,6 +3484,7 @@ async function loadActiveTab() {
   if (activeTab !== "action") stopActionPoll();
   // Phase 4.34 — smart conditional poll only runs while ACTION tab active
   if (activeTab !== "action" && typeof stopSmartCondPoll === 'function') stopSmartCondPoll();
+  if (activeTab === "mega")     return loadMegaData();
   if (activeTab === "action")   return loadActionData();
   if (activeTab === "scan")     return loadScanData();
   if (activeTab === "movers")   return loadMoversData();
@@ -3955,6 +3964,161 @@ function stopActionPoll() {
   if (_actionPollTimer) { clearInterval(_actionPollTimer); _actionPollTimer = null; }
 }
 
+// ============================================================================
+// MAY 6 2026 — MEGA TAB (AB explicit ask)
+// "1 tab with only meta, appl, googl, amzn, msft, nvda, iwm, spy, and amd
+//  dont have it on any other card. 1 agent that focuses on A+ set up"
+//
+// V1 — pulls live quotes + cached vision + GEX for the 9 names, renders one
+// card per ticker with A+ go/no-go. Polls every 20s while tab active.
+// V2 (tonight) — dedicated vision agent runs every 5 min on ONLY these 9.
+// ============================================================================
+let megaData = { tickers: [], generatedAt: null };
+let _megaPollTimer = null;
+
+async function loadMegaData() {
+  document.getElementById("grid").innerHTML = `<div class="empty">Loading MEGA watch...</div>`;
+  try {
+    const symbols = MEGA_WATCHLIST.join(',');
+    const [quotesRes, visionRes] = await Promise.all([
+      fetch('/api/ticker-quote?symbols=' + symbols).then(r => r.json()).catch(() => ({ quotes: [] })),
+      fetch('/api/chart-vision/cache?tickers=' + symbols).then(r => r.json()).catch(() => ({ verdicts: [] })),
+    ]);
+    const quotes = (quotesRes.quotes || []);
+    const verdicts = (visionRes.verdicts || []);
+    const visionByTicker = {};
+    for (const v of verdicts) visionByTicker[(v.ticker || '').toUpperCase()] = v;
+    megaData.tickers = MEGA_WATCHLIST.map(t => {
+      const q = quotes.find(x => x.symbol === t) || {};
+      const v = visionByTicker[t] || null;
+      return { ticker: t, quote: q, vision: v };
+    });
+    megaData.generatedAt = new Date().toISOString();
+    renderGridMega();
+    renderStatsMega();
+  } catch (e) {
+    document.getElementById("grid").innerHTML = `<div class="empty">MEGA load error: ${e.message}</div>`;
+  }
+  if (_megaPollTimer) clearInterval(_megaPollTimer);
+  _megaPollTimer = setInterval(loadMegaData, 20000);
+}
+
+function renderStatsMega() {
+  const t = megaData.tickers || [];
+  const greens = t.filter(x => Number((x.quote || {}).pctChange || 0) > 0).length;
+  const reds = t.filter(x => Number((x.quote || {}).pctChange || 0) < 0).length;
+  const approves = t.filter(x => x.vision && x.vision.verdict === 'APPROVE').length;
+  const stats = [
+    { k: "🟢 GREEN", v: greens, cls: "green" },
+    { k: "🔴 RED",   v: reds,   cls: "red" },
+    { k: "✅ Vision APPROVE", v: approves, cls: "aqua" },
+    { k: "Universe", v: t.length, cls: "" },
+  ];
+  const el = document.getElementById("stats");
+  if (el) el.innerHTML = stats.map(s =>
+    `<div class="stat"><span class="stat-key">${s.k}</span><span class="stat-val ${s.cls} mono">${s.v}</span></div>`
+  ).join("");
+}
+
+function renderGridMega() {
+  const t = megaData.tickers || [];
+  if (!t.length) {
+    document.getElementById("grid").innerHTML = `<div class="empty">MEGA watch loading…</div>`;
+    return;
+  }
+  const tape = window._tape || {};
+  const spyPct = Number(tape.spyPct || tape.spy?.pctChange || 0);
+  const tapeBull = spyPct > 0.5;
+  const tapeBear = spyPct < -0.5;
+  const tapeLabel = tapeBull ? '🟢 TAPE BULL' : tapeBear ? '🔴 TAPE BEAR' : '⚪ TAPE FLAT';
+
+  // Sort: Vision APPROVE first, then strongest direction with tape
+  const sorted = t.slice().sort((a, b) => {
+    const aV = a.vision && a.vision.verdict === 'APPROVE' ? 2 : a.vision && a.vision.verdict === 'VETO' ? -1 : 0;
+    const bV = b.vision && b.vision.verdict === 'APPROVE' ? 2 : b.vision && b.vision.verdict === 'VETO' ? -1 : 0;
+    if (aV !== bV) return bV - aV;
+    return Math.abs(Number((b.quote || {}).pctChange || 0)) - Math.abs(Number((a.quote || {}).pctChange || 0));
+  });
+
+  const headerHtml = `
+    <div style="background:rgba(124,77,255,0.10); border:1px solid rgba(124,77,255,0.35); border-radius:10px; padding:14px; margin-bottom:14px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+        <div style="font-size:14px; font-weight:700;">🐋 MEGA Watch — 9 names only · ${tapeLabel} ${spyPct >= 0 ? '+' : ''}${spyPct.toFixed(2)}%</div>
+        <div style="font-size:11px; color:var(--txt-3);">Updated ${megaData.generatedAt ? new Date(megaData.generatedAt).toLocaleTimeString() : '—'}</div>
+      </div>
+      <div style="margin-top:6px; font-size:11px; color:var(--txt-3);">META · AAPL · GOOGL · AMZN · MSFT · NVDA · IWM · SPY · AMD — these tickers do NOT appear on any other tab. V2 (tonight) adds dedicated vision agent every 5m.</div>
+    </div>`;
+
+  const cardsHtml = sorted.map(x => {
+    const q = x.quote || {};
+    const v = x.vision || {};
+    const last = q.last != null ? '$' + Number(q.last).toFixed(2) : '$—';
+    const pct = q.pctChange != null ? Number(q.pctChange) : 0;
+    const pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(2) + '%';
+    const pctColor = pct > 0.5 ? '#4caf50' : pct < -0.5 ? '#f44336' : '#888';
+
+    // Direction-vs-tape verdict
+    const tickerBull = pct > 0.3;
+    const tickerBear = pct < -0.3;
+    let verdict = '⚪ NO READ';
+    let verdictColor = '#888';
+    let verdictBg = 'rgba(120,120,120,0.12)';
+    if (v && v.verdict === 'APPROVE' && tickerBull && (tapeBull || !tapeBear)) {
+      verdict = '🚀 A+ LONG SETUP';
+      verdictColor = '#4caf50';
+      verdictBg = 'rgba(76,175,80,0.18)';
+    } else if (v && v.verdict === 'APPROVE' && tickerBear && (tapeBear || !tapeBull)) {
+      verdict = '📉 A+ SHORT SETUP';
+      verdictColor = '#ff5050';
+      verdictBg = 'rgba(244,67,54,0.18)';
+    } else if (v && v.verdict === 'VETO') {
+      verdict = '❌ VISION VETO';
+      verdictColor = '#f44336';
+      verdictBg = 'rgba(244,67,54,0.10)';
+    } else if (tickerBull && tapeBull) {
+      verdict = '🟢 BULL WATCH';
+      verdictColor = '#4caf50';
+      verdictBg = 'rgba(76,175,80,0.10)';
+    } else if (tickerBear && tapeBear) {
+      verdict = '🔴 BEAR WATCH';
+      verdictColor = '#ff5050';
+      verdictBg = 'rgba(244,67,54,0.10)';
+    } else if (tickerBull && tapeBear) {
+      verdict = '⚠ TICKER UP / TAPE DOWN — counter-tape';
+      verdictColor = '#ffc107';
+      verdictBg = 'rgba(255,193,7,0.10)';
+    } else if (tickerBear && tapeBull) {
+      verdict = '⚠ TICKER DOWN / TAPE UP — counter-tape';
+      verdictColor = '#ffc107';
+      verdictBg = 'rgba(255,193,7,0.10)';
+    }
+
+    const visionLine = v && v.summary
+      ? `<div style="font-size:11px; color:var(--txt-2); margin-top:8px; line-height:1.4;">📊 ${v.verdict} (${v.confidence || '?'}/10) — ${(v.summary || '').slice(0, 200)}</div>`
+      : `<div style="font-size:11px; color:var(--txt-3); margin-top:8px;">📊 No vision yet — daemon will analyze on next loop</div>`;
+
+    return `
+      <div class="card" style="background:${verdictBg}; border-left:4px solid ${verdictColor};">
+        <div class="card-head">
+          <div>
+            <div class="ticker mono" style="font-size:18px;">${x.ticker}</div>
+            <div style="font-size:13px; color:${pctColor}; margin-top:4px; font-weight:700;">${last} <span style="font-weight:400;">${pctStr}</span></div>
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end;">
+            <span class="tag" style="background:${verdictColor}; color:#000; font-weight:700; font-size:12px;">${verdict}</span>
+          </div>
+        </div>
+        ${visionLine}
+        <div style="margin-top:10px; display:flex; gap:6px;">
+          <button class="btn-sm" onclick="window.open('https://www.tradingview.com/chart/?symbol=${x.ticker}','_blank')" style="background:rgba(70,180,255,0.2); color:#46b4ff; border:1px solid rgba(70,180,255,0.4); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">📈 Chart</button>
+          <button class="btn-sm" onclick="window.open('https://www.bullflow.io/gex?ticker=${x.ticker}','_blank')" style="background:rgba(124,77,255,0.2); color:#b39ddb; border:1px solid rgba(124,77,255,0.4); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">🐋 GEX</button>
+        </div>
+      </div>`;
+  }).join('');
+
+  document.getElementById("grid").innerHTML = headerHtml + cardsHtml;
+}
+
 function renderStatsAction() {
   const rows = actionData.rows || [];
   const actionable = rows.filter(r => r.status === 'ACTIONABLE').length;
@@ -4001,6 +4165,8 @@ function renderGridAction() {
       const live = r.live || {};
       const tickerPct = Number(live.pctChange || 0);
       const dir = r.direction;
+      // MAY 6 2026 — MEGA tickers are EXCLUSIVE to the MEGA tab
+      if (MEGA_WATCHLIST.indexOf((r.ticker || '').toUpperCase()) !== -1) return false;
       // Rule 5 — no live data, can't act
       if (!live.last) return false;
       // Rule 1+2 — counter-tape hard filter
