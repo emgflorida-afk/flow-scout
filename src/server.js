@@ -2929,6 +2929,279 @@ app.get('/api/iron-condor/:ticker', async function(req, res) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// =============================================================================
+// PHASE 4.31 — SPREAD ORDER BUILDER (May 5 2026 PM)
+//
+// Multi-leg spread tickets for one-click TS MCP fire. Endpoints:
+//   POST /api/spread-builder/build              → cache ticket, return id
+//   POST /api/spread-builder/confirm/:ticketId  → preview via TS confirm-order
+//   POST /api/spread-builder/place/:ticketId    → fire via TS place-order
+//   GET  /api/spread-builder/templates          → suggest spread types per setup
+//   GET  /api/spread-builder/types              → list supported spread types
+//
+// Cache: in-memory keyed by ticketId, 5-min TTL. Reduces double-build cost
+// when AB clicks Preview then Confirm.
+// =============================================================================
+var spreadBuilder = null;
+try { spreadBuilder = require('./spreadBuilder'); console.log('[SERVER] spreadBuilder loaded OK'); }
+catch(e) { console.log('[SERVER] spreadBuilder not loaded:', e.message); }
+
+var _spreadTicketCache = {};   // { id: { ts, payload } } — 5min TTL
+var SPREAD_TICKET_TTL = 5 * 60 * 1000;
+
+function _spreadTicketGc() {
+  var now = Date.now();
+  Object.keys(_spreadTicketCache).forEach(function(k) {
+    if (now - _spreadTicketCache[k].ts > SPREAD_TICKET_TTL) delete _spreadTicketCache[k];
+  });
+}
+function _spreadTicketId() {
+  return 'sp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// GET /api/spread-builder/types
+//   Lists supported spread types + meta (label, direction, leg count, debit/credit).
+app.get('/api/spread-builder/types', function(req, res) {
+  if (!spreadBuilder) return res.status(500).json({ ok: false, error: 'spreadBuilder not loaded' });
+  var types = spreadBuilder.getSpreadTypes().map(function(t) {
+    return spreadBuilder.getTypeMeta(t);
+  });
+  res.json({ ok: true, types: types });
+});
+
+// GET /api/spread-builder/templates?ticker=META&direction=long&strategyType=BREAKOUT&spot=617
+//   Returns suggested spread types for the setup (primary + secondary).
+//   Reads tape via computeMarketContext() so suggestions are tape-aware.
+app.get('/api/spread-builder/templates', async function(req, res) {
+  if (!spreadBuilder) return res.status(500).json({ ok: false, error: 'spreadBuilder not loaded' });
+  try {
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    var direction = String(req.query.direction || '').toLowerCase();
+    var strategyType = String(req.query.strategyType || '').toUpperCase();
+    var spot = parseFloat(req.query.spot || 0);
+    var atmIV = req.query.atmIV != null ? parseFloat(req.query.atmIV) : null;
+
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+
+    // Pull live spot if not provided
+    if (!spot && ts && ts.getAccessToken) {
+      try {
+        var token = await ts.getAccessToken();
+        if (token) {
+          var fetchLib = require('node-fetch');
+          var qr = await fetchLib('https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(ticker), {
+            headers: { 'Authorization': 'Bearer ' + token }, timeout: 5000,
+          });
+          var qd = await qr.json();
+          var q = (qd && qd.Quotes && qd.Quotes[0]) || {};
+          spot = parseFloat(q.Last || q.Close || 0) || 0;
+        }
+      } catch (e) { /* soft fail */ }
+    }
+
+    // Pull market tape context
+    var ctx = { tape: 'MIXED', atmIV: atmIV };
+    try {
+      var mc = (await computeMarketContext()) || {};
+      if (mc.ok) {
+        ctx.tape = mc.tape;
+        ctx.vix = (mc.indices && mc.indices.VIX && mc.indices.VIX.last) || null;
+      }
+    } catch (e) { /* soft fail */ }
+
+    var sug = spreadBuilder.suggestSpreadForCard(
+      { ticker: ticker, direction: direction, strategyType: strategyType, spot: spot },
+      ctx
+    );
+    res.json({ ok: true, ticker: ticker, spot: spot, context: ctx, suggestions: sug });
+  } catch(e) {
+    console.error('[SPREAD-BUILDER:templates]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/spread-builder/build
+//   Body: { ticker, type, expiry, strikes, qty, netLimit, account, brackets, live, trigger, backExpiry }
+//   Returns: { ok, ticketId, summary, riskReward, ticket, expiresAt }
+//   Caches the built ticket for 5 min so /confirm and /place can reference it by id.
+app.post('/api/spread-builder/build', async function(req, res) {
+  if (!spreadBuilder) return res.status(500).json({ ok: false, error: 'spreadBuilder not loaded' });
+  try {
+    _spreadTicketGc();
+    var b = req.body || {};
+
+    // If netLimit not provided, try to estimate from chain mid prices
+    if (b.netLimit == null && optionsChain && ts && b.ticker && b.type && b.expiry && b.strikes) {
+      try {
+        var token2 = await ts.getAccessToken();
+        if (token2) {
+          var chainRes = await optionsChain.fetchChain(String(b.ticker).toUpperCase(), b.expiry, null, token2);
+          if (chainRes && chainRes.rows) {
+            var legs = spreadBuilder.SPREAD_TYPES[b.type] && spreadBuilder.SPREAD_TYPES[b.type].legs;
+            if (legs) {
+              var net = 0;
+              legs.forEach(function(L) {
+                var k = b.strikes[L.strikeKey];
+                var row = chainRes.rows.find(function(r) { return r.strike === k; });
+                if (!row) return;
+                var leg = (L.type === 'CALL') ? row.call : row.put;
+                var mid = leg && (leg.mid || (leg.bid + leg.ask) / 2) || 0;
+                if (L.side === 'BUYTOOPEN')  net += mid * (L.qtyMult || 1);
+                if (L.side === 'SELLTOOPEN') net -= mid * (L.qtyMult || 1);
+              });
+              // For credit spreads, net is negative — flip sign so netLimit is always positive
+              if (net < 0) net = -net;
+              if (net > 0) b.netLimit = Math.round(net * 100) / 100;
+            }
+          }
+        }
+      } catch (estErr) { /* soft fail — caller must pass netLimit */ }
+    }
+
+    var built = spreadBuilder.buildSpreadTicket(b);
+    if (!built.ok) {
+      return res.status(400).json({ ok: false, errors: built.errors || ['build failed'] });
+    }
+
+    var id = _spreadTicketId();
+    _spreadTicketCache[id] = { ts: Date.now(), payload: built };
+
+    res.json({
+      ok:        true,
+      ticketId:  id,
+      type:      built.type,
+      label:     built.label,
+      direction: built.direction,
+      netSign:   built.netSign,
+      ticker:    built.ticker,
+      qty:       built.qty,
+      expiry:    built.expiry,
+      strikes:   built.strikes,
+      netLimit:  built.netLimit,
+      account:   built.account,
+      legs:      built.legs.map(function(L) { return { Symbol: L.Symbol, Quantity: L.Quantity, TradeAction: L.TradeAction }; }),
+      riskReward: built.riskReward,
+      summary:    built.summary,
+      ticket:     built.ticket,
+      confirmUrl: '/api/spread-builder/confirm/' + id,
+      fireUrl:    '/api/spread-builder/place/' + id,
+      expiresAt:  new Date(Date.now() + SPREAD_TICKET_TTL).toISOString(),
+    });
+  } catch(e) {
+    console.error('[SPREAD-BUILDER:build]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/spread-builder/confirm/:ticketId
+//   Calls TS /orderexecution/orderconfirm with the cached ticket.
+//   Returns: { ok, status, estimatedCost, marginRequired, errors, raw }
+//   This is the PREVIEW — no actual order placed.
+app.post('/api/spread-builder/confirm/:ticketId', async function(req, res) {
+  if (!spreadBuilder) return res.status(500).json({ ok: false, error: 'spreadBuilder not loaded' });
+  if (!ts || !ts.getAccessToken) return res.status(500).json({ ok: false, error: 'TS not loaded' });
+  try {
+    _spreadTicketGc();
+    var id = req.params.ticketId;
+    var entry = _spreadTicketCache[id];
+    if (!entry) return res.status(404).json({ ok: false, error: 'ticket not found or expired (5min TTL)' });
+    var built = entry.payload;
+
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'TS token unavailable' });
+
+    var isLive = !String(built.account).toUpperCase().startsWith('SIM');
+    var base = isLive ? 'https://api.tradestation.com/v3' : 'https://sim-api.tradestation.com/v3';
+
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib(base + '/orderexecution/orderconfirm', {
+      method:  'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(built.ticket),
+      timeout: 10000,
+    });
+    var data = await r.json();
+
+    var firstConfirm = (data && data.Confirmations && data.Confirmations[0]) || data || {};
+    res.json({
+      ok:               r.ok && !data.Error && !data.Errors,
+      status:           r.status,
+      account:          built.account,
+      ticketId:         id,
+      estimatedCost:    firstConfirm.EstimatedCost || firstConfirm.EstimatedCommission || null,
+      marginRequired:   firstConfirm.InitialMarginDisplay || firstConfirm.InitialMargin || null,
+      buyingPowerEffect: firstConfirm.BuyingPowerEffect || null,
+      message:          firstConfirm.Message || null,
+      summaryMessage:   firstConfirm.SummaryMessage || null,
+      raw:              data,
+    });
+  } catch(e) {
+    console.error('[SPREAD-BUILDER:confirm]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/spread-builder/place/:ticketId
+//   Fires the cached ticket via TS /orderexecution/orders.
+//   Requires x-stratum-secret header (gates same as /api/scanner-fire).
+//   Returns: { ok, orderID, account, fillStatus, raw }
+app.post('/api/spread-builder/place/:ticketId', async function(req, res) {
+  if (!spreadBuilder) return res.status(500).json({ ok: false, error: 'spreadBuilder not loaded' });
+  if (!ts || !ts.getAccessToken) return res.status(500).json({ ok: false, error: 'TS not loaded' });
+  try {
+    var secret = req.headers['x-stratum-secret'];
+    if (secret !== process.env.STRATUM_SECRET) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized — set x-stratum-secret header' });
+    }
+    _spreadTicketGc();
+    var id = req.params.ticketId;
+    var entry = _spreadTicketCache[id];
+    if (!entry) return res.status(404).json({ ok: false, error: 'ticket not found or expired (5min TTL)' });
+    var built = entry.payload;
+
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'TS token unavailable' });
+
+    var isLive = !String(built.account).toUpperCase().startsWith('SIM');
+    var base = isLive ? 'https://api.tradestation.com/v3' : 'https://sim-api.tradestation.com/v3';
+
+    console.log('[SPREAD-FIRE]', built.type, built.ticker, built.qty + 'ct', '@ $' + built.netLimit, '→', built.account);
+
+    var fetchLib = require('node-fetch');
+    var r = await fetchLib(base + '/orderexecution/orders', {
+      method:  'POST',
+      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body:    JSON.stringify(built.ticket),
+      timeout: 12000,
+    });
+    var data = await r.json();
+    var orders = data.Orders || [data];
+    var orderID = (orders[0] && (orders[0].OrderID || orders[0].orderId)) || null;
+    var firstError = orders[0] && (orders[0].Error || orders[0].Message);
+
+    // Free up cache slot — ticket has been used
+    if (r.ok && orderID) delete _spreadTicketCache[id];
+
+    res.json({
+      ok:        r.ok && !!orderID && !firstError,
+      status:    r.status,
+      account:   built.account,
+      isLive:    isLive,
+      orderID:   orderID,
+      type:      built.type,
+      ticker:    built.ticker,
+      titanCard: built.summary && built.summary.titanCard,
+      fillStatus: 'WORKING',     // TS submits as WORKING; broker will fill or reject
+      message:   firstError || (orders[0] && orders[0].Message) || null,
+      raw:       data,
+    });
+  } catch(e) {
+    console.error('[SPREAD-BUILDER:place]', e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 var stratumScanner = null;
 try { stratumScanner = require('./stratumScanner'); console.log('[SERVER] stratumScanner loaded OK'); }
 catch(e) { console.log('[SERVER] stratumScanner not loaded:', e.message); }
@@ -4962,6 +5235,184 @@ cron.schedule('30 16 * * 1-5', async function() {
     }
   } catch(e) { console.error('[MSS] cron error:', e.message); }
 }, { timezone: 'America/New_York' });
+
+// =============================================================================
+// PHASE 4.31 — EOD INCOME SPREAD SUGGESTIONS — 4:00 PM ET weekdays
+// =============================================================================
+// Auto-builds tomorrow's bull-put-credit-spread suggestions on RISK_ON tape
+// (or bear-call-credit-spreads on RISK_OFF). Output saved to /data/eod_income_
+// suggestions.json + Discord push embed.
+// AB wakes up to a 3-pick income menu ready for one-click fire on next-day open.
+//
+// Logic:
+//   tape == RISK_ON  → BULL_PUT_CREDIT  on SPY/QQQ/IWM (1% OTM short, 0.5% wider)
+//   tape == RISK_OFF → BEAR_CALL_CREDIT on SPY/QQQ/IWM (1% OTM short, 0.5% wider)
+//   tape == MIXED    → skip (don't sell vol when chop is unpredictable)
+cron.schedule('0 16 * * 1-5', async function() {
+  try {
+    if (!spreadBuilder) return console.log('[SPREAD-EOD] spreadBuilder not loaded, skip');
+    if (!ts || !ts.getAccessToken) return console.log('[SPREAD-EOD] TS not loaded, skip');
+
+    console.log('[SPREAD-EOD] cron triggered (4:00 PM ET) — building tomorrow INCOME spread suggestions');
+    var mc = await computeMarketContext();
+    if (!mc || !mc.ok) {
+      console.log('[SPREAD-EOD] no market context, skip');
+      return;
+    }
+    var tape = mc.tape;
+    var spreadType, dirLabel;
+    if (tape === 'RISK_ON')        { spreadType = 'BULL_PUT_CREDIT';  dirLabel = 'bullish'; }
+    else if (tape === 'RISK_OFF')  { spreadType = 'BEAR_CALL_CREDIT'; dirLabel = 'bearish'; }
+    else {
+      console.log('[SPREAD-EOD] tape MIXED — no income spreads on chop tape');
+      return;
+    }
+
+    // Compute next Friday expiry
+    var expiry = (function() {
+      var d = new Date();
+      var dow = d.getUTCDay();
+      var dToFri = (5 - dow + 7) % 7;
+      if (dToFri === 0) dToFri = 7;
+      d.setUTCDate(d.getUTCDate() + dToFri);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    var token = await ts.getAccessToken();
+    if (!token) return console.log('[SPREAD-EOD] no TS token, skip');
+
+    var fetchLib = require('node-fetch');
+    var tickers = ['SPY', 'QQQ', 'IWM'];
+    var suggestions = [];
+
+    for (var i = 0; i < tickers.length; i++) {
+      var tk = tickers[i];
+      try {
+        var qr = await fetchLib('https://api.tradestation.com/v3/marketdata/quotes/' + tk, {
+          headers: { 'Authorization': 'Bearer ' + token }, timeout: 5000,
+        });
+        var qd = await qr.json();
+        var q = (qd && qd.Quotes && qd.Quotes[0]) || {};
+        var spot = parseFloat(q.Last || q.Close || 0);
+        if (!spot) continue;
+
+        // Strike grid: SPY/QQQ/IWM use $1 strikes mostly
+        var pct = 0.01;          // 1% OTM short
+        var widenPct = 0.005;    // +0.5% beyond → long
+        var strikes;
+        if (spreadType === 'BULL_PUT_CREDIT') {
+          var shortK = Math.round((spot * (1 - pct)));        // 1% OTM put
+          var longK  = Math.round((spot * (1 - pct - widenPct)));
+          strikes = { short: shortK, long: longK };
+        } else {
+          var shortK2 = Math.round((spot * (1 + pct)));       // 1% OTM call
+          var longK2  = Math.round((spot * (1 + pct + widenPct)));
+          strikes = { short: shortK2, long: longK2 };
+        }
+
+        var built = spreadBuilder.buildSpreadTicket({
+          ticker:   tk,
+          type:     spreadType,
+          expiry:   expiry,
+          strikes:  strikes,
+          qty:      1,
+          netLimit: 0.50,    // placeholder credit; AB tunes on confirm
+          live:     false,   // SIM by default for auto-suggestions
+          brackets: { stopPct: 100, tp1Pct: 50 }, // -100% (premium doubles) / +50% (capture half)
+        });
+        if (built.ok) {
+          suggestions.push({
+            ticker:    tk,
+            spot:      spot,
+            type:      spreadType,
+            label:     built.label,
+            strikes:   strikes,
+            expiry:    expiry,
+            riskReward: built.riskReward,
+            titanCard: built.summary && built.summary.titanCard,
+            ticketPreview: built.ticket,
+          });
+        }
+      } catch (e) {
+        console.error('[SPREAD-EOD] error for ' + tk + ':', e.message);
+      }
+    }
+
+    // Save to /data/eod_income_suggestions.json
+    try {
+      var fs = require('fs');
+      var path = require('path');
+      var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+      var fp = path.join(DATA_ROOT, 'eod_income_suggestions.json');
+      fs.writeFileSync(fp, JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        tape: tape,
+        forSession: expiry,
+        suggestions: suggestions,
+      }, null, 2));
+      console.log('[SPREAD-EOD] saved ' + suggestions.length + ' suggestions to ' + fp);
+    } catch (we) {
+      console.error('[SPREAD-EOD] save error:', we.message);
+    }
+
+    // Discord push
+    try {
+      var dp = require('./discordPush');
+      if (suggestions.length === 0) {
+        await dp.send('spreadEod', {
+          embeds: [{
+            title: 'EOD INCOME SPREADS · ' + expiry,
+            description: 'Tape: ' + (mc.verdict || tape) + ' — but no qualifying suggestions for tomorrow.',
+            color: 0x888888,
+          }],
+          username: 'Phase 4.31 Spread Builder',
+        });
+      } else {
+        var lines = suggestions.map(function(s, idx) {
+          var rr = s.riskReward || {};
+          var beTxt = (rr.breakeven && typeof rr.breakeven === 'object')
+            ? '$' + rr.breakeven.lower + ' / $' + rr.breakeven.upper
+            : ('$' + (rr.breakeven || '—'));
+          return (idx + 1) + '. **' + s.ticker + '** ($' + s.spot.toFixed(2) + ') · ' + s.label + '\n' +
+            '   ' + (s.titanCard || '') + '\n' +
+            '   MaxP $' + (rr.maxProfit || '—') + ' / MaxL $' + (rr.maxLoss || '—') + ' · BE ' + beTxt;
+        });
+        await dp.send('spreadEod', {
+          embeds: [{
+            title: '💸 PHASE 4.31 INCOME SPREADS · for ' + expiry,
+            description: 'Tape: ' + (mc.verdict || tape) + '\n' +
+              '*Auto-built ' + (dirLabel === 'bullish' ? 'bull-put credit spreads (collect on rallies)' : 'bear-call credit spreads (collect on dumps)') + '*\n\n' +
+              lines.join('\n\n') +
+              '\n\nFire via scanner-v2 spread modal · brackets armed: -100% premium stop / +50% TP1',
+            color: dirLabel === 'bullish' ? 0x16e39d : 0xff6b6b,
+            footer: { text: 'Phase 4.31 · NETLIMIT placeholder — confirm via /api/spread-builder/confirm' },
+          }],
+          username: 'Phase 4.31 Spread Builder',
+        });
+        console.log('[SPREAD-EOD] Discord push complete');
+      }
+    } catch (de) {
+      console.error('[SPREAD-EOD] Discord push error:', de.message);
+    }
+  } catch(e) {
+    console.error('[SPREAD-EOD] cron error:', e.message);
+  }
+}, { timezone: 'America/New_York' });
+
+// GET /api/spread-builder/eod-suggestions — read tomorrow's pre-built income spreads
+app.get('/api/spread-builder/eod-suggestions', function(req, res) {
+  try {
+    var fs = require('fs');
+    var path = require('path');
+    var DATA_ROOT = process.env.DATA_DIR || (fs.existsSync('/data') ? '/data' : path.join(__dirname, '..', 'data'));
+    var fp = path.join(DATA_ROOT, 'eod_income_suggestions.json');
+    if (!fs.existsSync(fp)) return res.json({ ok: true, suggestions: [], reason: 'not yet generated (cron 4 PM ET)' });
+    var data = JSON.parse(fs.readFileSync(fp, 'utf8'));
+    res.json(Object.assign({ ok: true }, data));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // =============================================================================
 // PHASE 4.30G — JOHN-LIKE PICKER — 5:30 PM ET weekdays (after MSS at 4:30)

@@ -2469,6 +2469,240 @@ async function dispatchToBracket(payload, btn) {
 }
 window.dispatchToBracket = dispatchToBracket;
 
+// =============================================================================
+// PHASE 4.31 — SPREAD ORDER BUILDER (May 5 2026 PM)
+//
+// One-click multi-leg spread fire. Replaces 30s of manual Titan ticket setup
+// with 8s preview-then-fire flow. AB hits 🎯 SPREAD, sees risk/reward modal,
+// confirms, ticket fires through TS MCP with auto-bracket OSOs attached.
+//
+// Flow:
+//   1. Card has button "🎯 SPREAD (debit)" or "📊 INCOME (credit)"
+//   2. dispatchToSpread(card, type) → POST /api/spread-builder/build
+//   3. Modal renders with both legs + risk/reward + brackets preview
+//   4. AB clicks 🔥 FIRE → POST /api/spread-builder/place/{ticketId}
+//   5. Toast: "✓ SPREAD ORDER WORKING (auto-bracket armed)"
+// =============================================================================
+async function dispatchToSpread(card, type, btn) {
+  if (!card || !type) { alert('Spread fire: missing card or type'); return; }
+
+  // Phase 4.16 + 4.21 — same gates as single-leg dispatchers
+  if (card.ticker && card.direction) {
+    const ok = await taGateOrAbort(card.ticker, card.direction);
+    if (!ok) return;
+    const visionOk = await chartVisionGateOrAbort(card.ticker, card.direction, 'SWING');
+    if (!visionOk) return;
+  }
+
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.textContent = "Building spread..."; btn.disabled = true; }
+
+  // Step 1: pull suggestion to get strikes (or use card-supplied strikes)
+  let strikes = card._spreadStrikes;
+  let netLimit = card._spreadNetLimit;
+  let expiry = card._spreadExpiry || _nextFridayISO();
+  if (!strikes) {
+    try {
+      const tparams = new URLSearchParams({
+        ticker: card.ticker, direction: card.direction || 'long',
+        strategyType: card.strategyType || '', spot: card.spot || 0,
+      });
+      const tr = await fetch('/api/spread-builder/templates?' + tparams.toString());
+      const td = await tr.json();
+      const sug = (td.suggestions && (td.suggestions.primary && td.suggestions.primary.type === type ? td.suggestions.primary :
+                  (td.suggestions.secondary && td.suggestions.secondary.type === type ? td.suggestions.secondary : null))) || null;
+      if (sug && sug.strikes) strikes = sug.strikes;
+    } catch (e) { /* fall through */ }
+  }
+  if (!strikes) {
+    if (btn) { btn.textContent = '❌ no strikes'; btn.disabled = false; setTimeout(()=>{btn.textContent=orig;}, 3000); }
+    return alert('No strikes available — pass card._spreadStrikes manually');
+  }
+
+  // Step 2: build the ticket (server estimates netLimit from chain mid if not provided)
+  let buildPayload = {
+    ticker: card.ticker, type: type, expiry: expiry, strikes: strikes,
+    qty: card._spreadQty || 1,
+    netLimit: netLimit,                 // optional — server will estimate
+    live: card._spreadLive !== false,   // default LIVE for real fires
+    brackets: { stopPct: 50, tp1Pct: 25 },  // -50% stop / +25% TP1 default
+  };
+  let buildResp;
+  try {
+    const r = await fetch('/api/spread-builder/build', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(buildPayload),
+    });
+    buildResp = await r.json();
+    if (!buildResp.ok) {
+      const e = (buildResp.errors || ['build failed']).join('; ');
+      if (btn) { btn.textContent = '❌ ' + e.slice(0,40); btn.disabled = false; setTimeout(()=>{btn.textContent=orig;}, 5000); }
+      return alert('Spread build failed: ' + e);
+    }
+  } catch (e) {
+    if (btn) { btn.textContent = '❌ ' + e.message.slice(0,30); btn.disabled = false; }
+    return;
+  }
+
+  // Step 3: render preview modal
+  showSpreadPreviewModal(buildResp, async function() {
+    // User confirmed → fire
+    if (btn) btn.textContent = "Firing spread...";
+    const secret = getStratumSecret();
+    if (!secret) {
+      if (btn) { btn.textContent = '❌ no secret'; btn.disabled = false; }
+      return;
+    }
+    try {
+      const fr = await fetch('/api/spread-builder/place/' + buildResp.ticketId, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-stratum-secret': secret },
+      });
+      const fd = await fr.json();
+      if (fd.ok && fd.orderID) {
+        if (btn) {
+          btn.textContent = `✓ SPREAD ${String(fd.orderID).slice(0,8)}`;
+          btn.style.background = "linear-gradient(180deg, #14e87a, #0fb960)";
+          btn.style.color = "#07090f";
+          btn.disabled = false;
+        }
+        console.log('Spread fired:', fd);
+      } else {
+        const e = fd.message || fd.error || 'unknown';
+        if (btn) { btn.textContent = '❌ ' + String(e).slice(0,40); btn.disabled = false; setTimeout(()=>{btn.textContent=orig;}, 6000); }
+      }
+    } catch (e) {
+      if (btn) { btn.textContent = '❌ ' + e.message.slice(0,30); btn.disabled = false; }
+    }
+  }, function() {
+    // User cancelled
+    if (btn) { btn.textContent = orig; btn.disabled = false; }
+  });
+}
+window.dispatchToSpread = dispatchToSpread;
+
+// =============================================================================
+// SPREAD PREVIEW MODAL — shows legs, risk/reward, brackets, fire button
+// =============================================================================
+function showSpreadPreviewModal(buildResp, onConfirm, onCancel) {
+  // Remove any existing modal
+  const existing = document.getElementById('spread-preview-modal');
+  if (existing) existing.remove();
+
+  const rr = buildResp.riskReward || {};
+  const beTxt = (rr.breakeven && typeof rr.breakeven === 'object')
+    ? `Lower $${rr.breakeven.lower} · Upper $${rr.breakeven.upper}`
+    : (rr.breakeven != null ? `$${rr.breakeven}` : '—');
+  const popPct = rr.pop != null ? Math.round(rr.pop * 100) + '%' : '—';
+
+  const legsHtml = (buildResp.legs || []).map(L => {
+    const isBuy = String(L.TradeAction).startsWith('BUY');
+    return `<tr style="border-bottom: 1px solid #2a3140;">
+      <td style="color:${isBuy ? '#16e39d' : '#ff6b6b'}; padding:6px 8px; font-weight:600;">${L.TradeAction}</td>
+      <td style="color:#dde; padding:6px 8px; font-family:monospace;">${L.Symbol}</td>
+      <td style="color:#aaa; padding:6px 8px; text-align:right;">${L.Quantity}</td>
+    </tr>`;
+  }).join('');
+
+  const isCredit = buildResp.netSign === 'credit';
+  const bracketsTxt = (buildResp.summary && buildResp.summary.brackets)
+    ? `Stop -${buildResp.summary.brackets.stopPct}% · TP1 ${isCredit ? '-' : '+'}${buildResp.summary.brackets.tp1Pct}%`
+    : '(none)';
+
+  const account = buildResp.account || '';
+  const isLive = !String(account).toUpperCase().startsWith('SIM');
+
+  const html = `
+<div id="spread-preview-modal" style="position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.85); z-index:99999; display:flex; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:#0f1219; border:1px solid #2a3140; border-radius:12px; padding:20px; max-width:640px; width:100%; max-height:90vh; overflow-y:auto;">
+    <h3 style="margin:0 0 12px; color:#fff; font-size:18px;">🎯 Spread Preview — ${buildResp.label}</h3>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px 14px; font-size:13px; margin-bottom:14px;">
+      <div><span style="color:#888;">Ticker:</span> <b>${buildResp.ticker}</b></div>
+      <div><span style="color:#888;">Expiry:</span> ${buildResp.expiry}</div>
+      <div><span style="color:#888;">Net:</span> <b style="color:${isCredit ? '#16e39d' : '#ffc107'};">$${buildResp.netLimit} ${buildResp.netSign}</b></div>
+      <div><span style="color:#888;">Qty:</span> ${buildResp.qty}ct</div>
+      <div><span style="color:#888;">Account:</span> <b style="color:${isLive ? '#ff6b6b' : '#46b4ff'};">${account}${isLive ? ' (LIVE)' : ' (SIM)'}</b></div>
+      <div><span style="color:#888;">Direction:</span> ${buildResp.direction}</div>
+    </div>
+
+    <div style="margin-bottom:14px;">
+      <div style="color:#888; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px;">Legs</div>
+      <table style="width:100%; border-collapse:collapse; font-size:12px; background:rgba(255,255,255,0.02); border-radius:6px;">
+        <thead><tr style="color:#888; border-bottom: 1px solid #2a3140;">
+          <th style="text-align:left; padding:6px 8px;">Action</th>
+          <th style="text-align:left; padding:6px 8px;">Symbol</th>
+          <th style="text-align:right; padding:6px 8px;">Qty</th>
+        </tr></thead>
+        <tbody>${legsHtml}</tbody>
+      </table>
+    </div>
+
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:8px 14px; font-size:13px; padding:10px; background:rgba(255,255,255,0.03); border-radius:6px; margin-bottom:14px;">
+      <div><span style="color:#888;">Max Profit:</span> <b style="color:#16e39d;">$${rr.maxProfit != null ? rr.maxProfit : '—'}</b></div>
+      <div><span style="color:#888;">Max Loss:</span> <b style="color:#ff6b6b;">$${rr.maxLoss != null ? rr.maxLoss : '—'}</b></div>
+      <div><span style="color:#888;">Breakeven:</span> ${beTxt}</div>
+      <div><span style="color:#888;">POP (rough):</span> ${popPct}</div>
+      <div><span style="color:#888;">Cost basis:</span> $${rr.costBasis != null ? rr.costBasis : '—'}</div>
+      <div><span style="color:#888;">Auto-bracket:</span> ${bracketsTxt}</div>
+    </div>
+
+    <div style="font-size:11px; color:#888; margin-bottom:12px; line-height:1.5;">
+      ${buildResp.summary && buildResp.summary.titanCard ? buildResp.summary.titanCard : ''}
+    </div>
+
+    <div id="spread-preview-confirm-output" style="display:none; padding:8px; background:rgba(70,180,255,0.1); border:1px solid #46b4ff; border-radius:6px; font-size:11px; color:#46b4ff; margin-bottom:10px;"></div>
+
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button id="spread-preview-cancel" style="padding:8px 16px; background:#333; color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px;">Cancel</button>
+      <button id="spread-preview-precheck" style="padding:8px 16px; background:linear-gradient(180deg,#46b4ff,#1c64d6); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px;">📋 Confirm (preview)</button>
+      <button id="spread-preview-fire" style="padding:8px 18px; background:linear-gradient(180deg,#ff5e3a,#cc3a1a); color:#fff; border:none; border-radius:6px; cursor:pointer; font-size:12px; font-weight:700;">🔥 FIRE SPREAD</button>
+    </div>
+  </div>
+</div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+
+  const modal = document.getElementById('spread-preview-modal');
+  document.getElementById('spread-preview-cancel').onclick = function() {
+    modal.remove();
+    if (onCancel) onCancel();
+  };
+  document.getElementById('spread-preview-precheck').onclick = async function() {
+    const out = document.getElementById('spread-preview-confirm-output');
+    out.style.display = 'block';
+    out.innerHTML = 'Confirming via TS preview...';
+    try {
+      const r = await fetch('/api/spread-builder/confirm/' + buildResp.ticketId, { method: 'POST' });
+      const d = await r.json();
+      if (d.ok) {
+        out.innerHTML = `<b>✓ TS preview OK</b> · cost: ${d.estimatedCost || '—'} · margin: ${d.marginRequired || '—'} · ${d.summaryMessage || d.message || 'no message'}`;
+      } else {
+        out.style.borderColor = '#ff6b6b'; out.style.color = '#ff6b6b';
+        out.innerHTML = `<b>✗ TS preview rejected</b>: ${d.message || d.error || JSON.stringify(d.raw).slice(0,200)}`;
+      }
+    } catch (e) {
+      out.style.borderColor = '#ff6b6b'; out.style.color = '#ff6b6b';
+      out.innerHTML = '✗ confirm error: ' + e.message;
+    }
+  };
+  document.getElementById('spread-preview-fire').onclick = async function() {
+    if (!confirm(`🔥 FIRE ${buildResp.label} on ${buildResp.ticker}\n\nAccount: ${account}${isLive ? ' (LIVE — REAL $$$)' : ' (SIM)'}\nNet ${buildResp.netSign}: $${buildResp.netLimit}\nMax loss: $${rr.maxLoss || '—'}\n\nProceed?`)) return;
+    modal.remove();
+    if (onConfirm) await onConfirm();
+  };
+}
+window.showSpreadPreviewModal = showSpreadPreviewModal;
+
+// Helper: yyyy-mm-dd of next Friday (used for default expiry)
+function _nextFridayISO() {
+  const d = new Date();
+  const dow = d.getDay();
+  let daysToFri = (5 - dow + 7) % 7;
+  if (daysToFri === 0) daysToFri = 7;
+  d.setDate(d.getDate() + daysToFri);
+  return d.toISOString().slice(0, 10);
+}
+
 async function dispatchScanToBracket(idx, btn) {
   const c = scan.candidates[idx];
   if (!c) return;
@@ -3348,6 +3582,14 @@ function renderGridTomorrow() {
             <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 PUBLIC</button>
             <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 BRACKET</button>
           </div>
+
+          ${(gradeLetter === 'A' || gradeLetter === 'B') ? `
+          <div style="margin-top:6px; padding:6px 8px; background:rgba(155,109,255,0.08); border-left:2px solid #9b6dff; border-radius:4px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+            <span style="font-size:10px; color:#aaa; text-transform:uppercase; letter-spacing:0.5px; margin-right:4px;">🪜 Phase 4.31 Spread</span>
+            <button class="btn btn-spread" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; color:#fff; border:none; border-radius:4px; cursor:pointer;" onclick="event.stopPropagation();dispatchToSpread({ticker:'${r.ticker}',direction:'${(r.direction || ((r.target||0)>=(r.spot||0)?'long':'short')).toLowerCase()}',strategyType:'${(r.fireGrade && r.fireGrade.strategyType) || ''}',spot:${r.spot || 0}}, '${(r.direction === 'short' || (r.target||0) < (r.spot||0)) ? 'BEAR_PUT_DEBIT' : 'BULL_CALL_DEBIT'}', this)" title="Build defined-risk debit spread (max profit and loss capped)">🎯 SPREAD (debit)</button>
+            <button class="btn btn-spread-credit" style="background:linear-gradient(180deg,#fbbf24,#b45309); padding:5px 10px; font-size:11px; color:#fff; border:none; border-radius:4px; cursor:pointer;" onclick="event.stopPropagation();dispatchToSpread({ticker:'${r.ticker}',direction:'${(r.direction || ((r.target||0)>=(r.spot||0)?'long':'short')).toLowerCase()}',strategyType:'${(r.fireGrade && r.fireGrade.strategyType) || ''}',spot:${r.spot || 0}}, '${(r.direction === 'short' || (r.target||0) < (r.spot||0)) ? 'BEAR_CALL_CREDIT' : 'BULL_PUT_CREDIT'}', this)" title="Sell credit spread for income (collect premium, defined risk)">📊 INCOME (credit)</button>
+          </div>
+          ` : ''}
         </div>
       `;
     }).join("");
@@ -3616,6 +3858,10 @@ function renderGridAction() {
           ${r.status === 'ACTIONABLE' && sug.contract && sug.affordability !== 'TOO_EXPENSIVE' ? `
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToPublic(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Place 1ct on Public.com">📱 PUBLIC</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToBracket(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Place full synthetic bracket on Public">📱 BRACKET</button>
+          ` : ''}
+          ${r.status === 'ACTIONABLE' && r.fireGrade && (r.fireGrade.grade === 'A' || r.fireGrade.grade === 'B') ? `
+            <button class="btn btn-spread" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToSpread({ticker:'${r.ticker}',direction:'${r.direction}',strategyType:'${(r.fireGrade && r.fireGrade.strategyType) || ''}',spot:${parseFloat(sug.stockTrigger) || 0}}, '${r.direction === 'short' ? 'BEAR_PUT_DEBIT' : 'BULL_CALL_DEBIT'}', this)" title="Phase 4.31 — Defined-risk debit spread (capped max loss)">🎯 SPREAD</button>
+            <button class="btn btn-spread-credit" style="background:linear-gradient(180deg,#fbbf24,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToSpread({ticker:'${r.ticker}',direction:'${r.direction}',strategyType:'${(r.fireGrade && r.fireGrade.strategyType) || ''}',spot:${parseFloat(sug.stockTrigger) || 0}}, '${r.direction === 'short' ? 'BEAR_CALL_CREDIT' : 'BULL_PUT_CREDIT'}', this)" title="Phase 4.31 — Sell credit spread for income">📊 INCOME</button>
           ` : ''}
         </div>
       </div>

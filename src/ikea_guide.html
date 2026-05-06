@@ -491,6 +491,75 @@
       <tr><td><b>BIG (TS LIVE)</b></td><td><code>🎯 TS QUEUE</code></td><td>Conditional w/ trigger activation</td></tr>
       <tr><td><b>PUBLIC.COM</b></td><td><code>📱 PUBLIC</code></td><td>Single 1ct cash account (no PDT)</td></tr>
       <tr><td><b>PUBLIC.COM</b></td><td><code>📱 BRACKET</code></td><td>Entry + auto stop + auto TP1/TP2</td></tr>
+      <tr><td><b>TS LIVE/SIM</b></td><td><code>🎯 SPREAD (debit)</code></td><td>Phase 4.31 — defined-risk debit spread (max loss capped)</td></tr>
+      <tr><td><b>TS LIVE/SIM</b></td><td><code>📊 INCOME (credit)</code></td><td>Phase 4.31 — sell credit spread for premium income</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- STEP 4.31 — SPREAD STRATEGIES -->
+<div class="step" style="border-color:#9b6dff; background:linear-gradient(180deg, #11161f, #161224);">
+  <h2><span class="step-num" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8);">4.31</span>💸 SPREAD STRATEGIES (Phase 4.31)</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 10px;">
+    Multi-leg spread tickets in Titan UI take ~30s of careful strike + side entry — error-prone, leaks edge during fast tape. Phase 4.31 turns it into <b>8s preview-then-fire</b> via TS MCP one-click.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">When to use each spread type</h3>
+  <table>
+    <thead><tr><th>Setup</th><th>Recommended Spread</th><th>Why</th></tr></thead>
+    <tbody>
+      <tr><td><b>BREAKOUT + bullish</b></td><td class="mono"><span style="color:var(--green)">🎯 BULL CALL DEBIT</span></td><td>Defined cost · capped premium · ~2x leverage on directional move · low-IV environment</td></tr>
+      <tr><td><b>BREAKOUT + bearish</b></td><td class="mono"><span style="color:var(--red)">🎯 BEAR PUT DEBIT</span></td><td>Same defined-risk logic on the put side · catches dump moves cheaply</td></tr>
+      <tr><td><b>RISK_ON tape + directional long</b></td><td class="mono"><span style="color:var(--amber)">📊 BULL PUT CREDIT</span></td><td>Sell vol + collect premium · POP often 70%+ on 1% OTM short · max loss capped by long wing</td></tr>
+      <tr><td><b>RISK_OFF tape + directional short</b></td><td class="mono"><span style="color:var(--amber)">📊 BEAR CALL CREDIT</span></td><td>Mirror of above — sell vol on rallies for income</td></tr>
+      <tr><td><b>COIL + neutral + low VIX</b></td><td class="mono"><span style="color:var(--purple)">📦 IRON CONDOR</span></td><td>4-leg theta capture · profit zone between short strikes · max loss = wider wing - credit</td></tr>
+      <tr><td><b>HIGH IV (>45%) + bullish</b></td><td class="mono"><span style="color:var(--amber)">📊 BULL PUT CREDIT</span></td><td>SELL vol when it's expensive · IV crush works in your favor</td></tr>
+      <tr><td><b>LOW IV (<22%) + directional</b></td><td class="mono"><span style="color:var(--green)">🎯 DEBIT SPREAD</span></td><td>BUY vol when it's cheap · IV expansion + directional move both pay</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">One-click fire flow</h3>
+  <ol style="font-size:12px; color:var(--txt-2); padding-left: 20px;">
+    <li>Card has FIRE GRADE A or B → spread row appears under main fire row</li>
+    <li>Click <code>🎯 SPREAD (debit)</code> or <code>📊 INCOME (credit)</code></li>
+    <li>TA gate + chart-vision gate run (same as single-leg)</li>
+    <li>Server pulls live chain, picks 2-leg vertical, computes net premium</li>
+    <li>Modal renders with both legs + max profit + max loss + breakeven + POP + bracket preview</li>
+    <li>Click <code>📋 Confirm (preview)</code> → TS MCP confirm-order returns margin/cost without firing</li>
+    <li>Click <code>🔥 FIRE SPREAD</code> → confirmation prompt → TS MCP place-order with auto-bracket OSO</li>
+    <li>Order WORKING in TS · brackets armed (-50% premium stop / +25% TP1 default)</li>
+  </ol>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">Sizing rules</h3>
+  <ul class="checklist">
+    <li class="amber"><b>1ct trial first</b> — even on Grade A. Spreads bid-ask wider than singles · confirm fill quality before scaling</li>
+    <li class="green"><b>Defined-risk advantage</b> — max loss = costBasis. AB equity at risk per spread is fixed at fire time</li>
+    <li class="green"><b>Scale on confirmation</b> — second fire of 2ct only after first leg fills + price moves intended direction</li>
+    <li class="red"><b>NEVER size up on credit spreads</b> — POP can be 70%+ but max loss is 4-5× max profit. One blow-up = month gone</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">Account routing</h3>
+  <ul class="checklist">
+    <li class="green"><b>Public.com</b> — <span style="color:var(--red)">single-leg only</span>. Spreads cannot route to Public</li>
+    <li class="green"><b>TS LIVE 11975462</b> — primary spread destination · margin-approved · OSO brackets supported</li>
+    <li class="amber"><b>TS SIM SIM3142118M</b> — paper test new spread types here first · same price action, no risk</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">EOD income spread cron (4:00 PM ET)</h3>
+  <p style="font-size:12px; color:var(--txt-2); margin:0 0 6px;">
+    Auto-builds tomorrow's <code>BULL_PUT_CREDIT</code> (RISK_ON tape) or <code>BEAR_CALL_CREDIT</code> (RISK_OFF tape) suggestions on SPY/QQQ/IWM at 1% OTM short / 0.5% wider long. Output saved to <code>/data/eod_income_suggestions.json</code> + Discord push embed. AB wakes up to a 3-pick income menu pre-built for one-click fire on next-day open.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#9b6dff;">Endpoints</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /api/spread-builder/types</td><td>List all 8 supported spread types</td></tr>
+      <tr><td class="mono">GET /api/spread-builder/templates?ticker=X</td><td>Auto-suggest primary + secondary spread for the setup</td></tr>
+      <tr><td class="mono">POST /api/spread-builder/build</td><td>Build ticket → cache 5min → returns ticketId</td></tr>
+      <tr><td class="mono">POST /api/spread-builder/confirm/:id</td><td>TS confirm-order preview (margin, cost, no fire)</td></tr>
+      <tr><td class="mono">POST /api/spread-builder/place/:id</td><td>TS place-order fire (requires x-stratum-secret)</td></tr>
+      <tr><td class="mono">GET /api/spread-builder/eod-suggestions</td><td>Read tomorrow's pre-built income spreads</td></tr>
     </tbody>
   </table>
 </div>
