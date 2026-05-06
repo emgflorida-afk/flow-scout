@@ -375,6 +375,8 @@ async function pushVerdictToRailway(payload) {
 // ---------------------------------------------------------------------------
 // DISCORD ALERT
 // ---------------------------------------------------------------------------
+// MAY 6 2026 PM — buildDiscordCard now emits a Discord EMBED payload too.
+// SWING profile (full A+ stack confirmation: vision + GEX + tape + king node).
 async function buildDiscordCard(ctx) {
   const {
     ticker, direction, spot, pctChange,
@@ -383,71 +385,116 @@ async function buildDiscordCard(ctx) {
   const dirLabel = direction === 'long' ? 'LONG' : 'SHORT';
   const optType = direction === 'long' ? 'C' : 'P';
   const triggerOp = direction === 'long' ? 'above' : 'below';
-
-  // Trigger price = current candle direction extension (5m structural)
   const triggerStep = spot * 0.0015;
   const triggerPrice = direction === 'long' ? spot + triggerStep : spot - triggerStep;
 
   const gexLine = gex.available
-    ? `${gex.regime} ${gex.totalNetGex != null ? ((gex.totalNetGex >= 0 ? '+' : '') + '$' + (gex.totalNetGex/1e6).toFixed(1) + 'M') : '?'}, magnet $${gex.kingNode} (${gex.distPct >= 0 ? '+' : ''}${gex.distPct}% from spot)`
+    ? `${gex.regime} ${gex.totalNetGex != null ? ((gex.totalNetGex >= 0 ? '+' : '') + '$' + (gex.totalNetGex/1e6).toFixed(1) + 'M') : '?'}\nmagnet $${gex.kingNode} (${gex.distPct >= 0 ? '+' : ''}${gex.distPct}% from spot)`
     : 'GEX unavailable';
 
+  const tapeAgrees = (direction === 'long' && spyPct > 0) || (direction === 'short' && spyPct < 0);
   const tapeLine = (spyPct != null)
-    ? `SPY ${spyPct >= 0 ? '+' : ''}${spyPct}% (${(direction === 'long' && spyPct > 0) || (direction === 'short' && spyPct < 0) ? 'with you' : 'against you'})`
+    ? `SPY ${spyPct >= 0 ? '+' : ''}${spyPct}%\n${tapeAgrees ? '✅ with you' : '⚠ against you'}`
     : 'SPY tape unknown';
 
-  const hiSummary = String(higher.summary || '').slice(0, 100);
-  const loSummary = String(lower.summary || '').slice(0, 100);
+  const hiSummary = String(higher.summary || '').slice(0, 200);
+  const loSummary = String(lower.summary || '').slice(0, 200);
 
-  // MAY 6 2026 PM — REAL CONTRACT NUMBERS + SWING bracket (full stack signal,
-  // 3-10 day hold time → wider stop/target makes sense)
-  let contractLines = [`Suggested: ${ticker} 5/22 ATM ${optType} delta ~0.40`];
-  const sc = await getSuggestedContract(ticker, direction, spot, 9);
+  let sc = null;
+  try { sc = await getSuggestedContract(ticker, direction, spot, 9); } catch (e) {}
+
+  const fields = [
+    { name: '💰 Spot',           value: `$${spot.toFixed(2)} (${pctChange >= 0 ? '+' : ''}${pctChange}%)`, inline: true },
+    { name: '🌊 Tape',           value: tapeLine, inline: true },
+    { name: '⚡ GEX',            value: gexLine, inline: true },
+    { name: `📊 Vision ${higher.tf || '6HR'}`, value: `${higher.verdict} ${higher.confidence}/10\n${hiSummary}`, inline: false },
+    { name: `📊 Vision ${lower.tf || '4HR'}`,  value: `${lower.verdict} ${lower.confidence}/10\n${loSummary}`,  inline: false },
+  ];
   if (sc) {
     const cost1ct = (sc.mid * 100).toFixed(0);
-    const stop = (sc.mid * 0.80).toFixed(2);   // -20% stop (swing)
-    const tp1 = (sc.mid * 1.30).toFixed(2);    // +30% trim 1
-    const tp2 = (sc.mid * 1.60).toFixed(2);    // +60% trim 2
-    contractLines = [
-      `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType}**`,
-      `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
-      `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
-      `**SWING bracket**: TP1 $${tp1} (+30%) · TP2 $${tp2} (+60%) · Stop $${stop} (-20%)`,
-      `Hold: 3-10 days · cut at 0.5 ATR break of trigger level`,
-    ];
+    const stop = (sc.mid * 0.80).toFixed(2);
+    const tp1 = (sc.mid * 1.30).toFixed(2);
+    const tp2 = (sc.mid * 1.60).toFixed(2);
+    fields.push(
+      { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
+      { name: '🎯 SWING bracket', value: `Cost: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** (+30%) · TP2 **$${tp2}** (+60%) · Stop **$${stop}** (-20%)\nHold 3-10 days · cut at 0.5 ATR break`, inline: false }
+    );
   }
+  fields.push(
+    { name: '🚀 Trigger', value: `5m close ${triggerOp} $${triggerPrice.toFixed(2)} with vol > 1.5x`, inline: false },
+    { name: '🔗 Open in TradingView', value: `[${ticker} 5m chart](${tvChartUrl(ticker)})`, inline: false },
+  );
 
-  const lines = [
-    `🐋 **MEGA A+ — ${ticker} ${dirLabel}**`,
-    `Spot: $${spot.toFixed(2)} (${pctChange >= 0 ? '+' : ''}${pctChange}%)  ·  Tape: ${tapeLine}`,
-    `Vision 6HR: ${higher.verdict} ${higher.confidence}/10 — ${hiSummary}`,
-    `Vision 4HR: ${lower.verdict} ${lower.confidence}/10 — ${loSummary}`,
-    `GEX: ${gexLine}`,
-    ...contractLines,
-    `Trigger: 5m close ${triggerOp} $${triggerPrice.toFixed(2)} with vol > 1.5x`,
-  ];
-  let content = lines.join('\n');
-  if (content.length > 1900) content = content.slice(0, 1900) + '...';
-  return content;
+  return {
+    title: `🐋 MEGA A+ SWING — ${ticker} ${dirLabel}`,
+    description: 'Full stack confirmed: vision APPROVE both TFs · GEX agrees · tape agrees · within 1% of king node',
+    color: direction === 'long' ? 0x4caf50 : 0xf44336,
+    fields: fields,
+    chartUrl: chartImageUrl(ticker, '60'),  // 1H for swing context
+    footer: 'one-stop swing card · scanner not needed · fire 1ct from here',
+  };
 }
 
-// MAY 6 2026 PM — channel-aware send.
+// MAY 6 2026 PM — channel-aware send. Now supports Discord EMBED format (rich
+// card with chart image + structured fields) so Discord IS the one-stop trade
+// surface. AB explicit ask: "this needs to replace the chart … one source of truth."
+//
 // type='bar-close'  → STRATUMBREAK channel  (scalps, anytime)
 // type='day-trade'  → STRATUMBAR channel    (9:30-10:30 ET only, exit 3:30 PM)
 // type='a-plus'     → STRATUMSWING channel  (full stack swing)
-async function sendDiscordCard(content, type) {
+//
+// payload can be either a string (legacy plain text) OR an object
+// { content, embed, ticker, title, color, fields, chartUrl }
+async function sendDiscordCard(payload, type) {
   const t = (type || 'a-plus').toLowerCase();
   let hook, username;
   if (t === 'bar-close')      { hook = DISCORD_BAR_WEBHOOK;   username = 'MEGA Bar-Close Trigger'; }
   else if (t === 'day-trade') { hook = DISCORD_DAY_WEBHOOK;   username = 'MEGA Day Trade'; }
   else                        { hook = DISCORD_APLUS_WEBHOOK; username = 'MEGA A+ Agent'; }
   if (!hook) return false;
-  const r = await postJson(hook, { content: content, username: username }, { timeoutMs: 8000 });
+
+  let body;
+  if (typeof payload === 'string') {
+    body = { content: payload, username: username };
+  } else {
+    // Rich embed format
+    body = {
+      username: username,
+      content: payload.content || '',
+      embeds: [{
+        title: payload.title || 'MEGA Alert',
+        description: payload.description || '',
+        color: payload.color || 0x4caf50,
+        fields: payload.fields || [],
+        // Chart image — finviz public 5m chart PNG, free + reliable
+        image: payload.chartUrl ? { url: payload.chartUrl } : undefined,
+        footer: { text: payload.footer || 'one-stop trade card · scanner not needed · fire from here' },
+        timestamp: new Date().toISOString(),
+      }],
+    };
+  }
+
+  const r = await postJson(hook, body, { timeoutMs: 8000 });
   if (!r.ok) {
     log('WARN', `discord send fail (${t}): ${r.error || r.status}`);
     return false;
   }
   return true;
+}
+
+// MAY 6 2026 PM — chart image source for embeds.
+// finviz returns a free PNG of the live chart. Format options:
+//   p=i5 → 5-minute interval (intraday)
+//   p=d  → daily
+//   ta=1 → with technical indicators (MA + volume)
+function chartImageUrl(ticker, interval) {
+  const i = interval === '60' ? 'i60' : interval === 'd' ? 'd' : 'i5';
+  return `https://finviz.com/chart.ashx?t=${encodeURIComponent(ticker)}&ty=c&ta=1&p=${i}&s=l`;
+}
+
+// TradingView deep link with 5m + studies for the click-through "open chart"
+function tvChartUrl(ticker) {
+  return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(ticker)}&interval=5`;
 }
 
 // MAY 6 2026 PM — DAY TRADE WINDOW
@@ -550,7 +597,9 @@ function detectBarCloseTrigger(bars) {
   };
 }
 
-// MAY 6 2026 PM — buildBarCloseCard now branches by alertTier:
+// MAY 6 2026 PM — buildBarCloseCard now emits a Discord EMBED payload
+// (rich card w/ chart image + structured fields). AB explicit ask: Discord
+// IS the one-stop surface — no scanner, no chart-app round-trip.
 //   alertTier='scalp'     → fast in/out 60-min profile     → STRATUMBREAK channel
 //   alertTier='day-trade' → 9:30-10:30 ET, exit 3:30 PM    → STRATUMBAR channel
 async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
@@ -564,48 +613,63 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     ? `${quote.pctChange >= 0 ? '+' : ''}${quote.pctChange}%`
     : '?';
   const spot = (quote && quote.last != null) ? Number(quote.last) : null;
-  let contractLine = `Action: consider 1ct ATM ${optType}`;
+
+  // Pull contract math
+  let sc = null;
   if (spot) {
-    const sc = await getSuggestedContract(ticker, trig.direction, spot, 9);
-    if (sc) {
-      const cost1ct = (sc.mid * 100).toFixed(0);
-      let stop, tp1, tp2, profileLabel, holdRule;
-      if (tier === 'day-trade') {
-        // DAY TRADE bracket: TP +20%/+40%, Stop -15%, exit 3:30 PM
-        stop = (sc.mid * 0.85).toFixed(2);   // -15%
-        tp1 = (sc.mid * 1.20).toFixed(2);    // +20% trim
-        tp2 = (sc.mid * 1.40).toFixed(2);    // +40% runner
-        profileLabel = '☀️ DAY TRADE bracket (9:30-10:30 entry)';
-        holdRule = '**Hard exit by 3:30 PM ET — no overnight hold**';
-      } else {
-        // SCALP bracket: TP +10%/+20%, Stop -8%, 60-min cut
-        stop = (sc.mid * 0.92).toFixed(2);   // -8%
-        tp1 = (sc.mid * 1.10).toFixed(2);    // +10% trim
-        tp2 = (sc.mid * 1.20).toFixed(2);    // +20% runner
-        profileLabel = '⚡ SCALP bracket (fast in/out)';
-        holdRule = 'Time stop: cut after 60 min if no progress';
-      }
-      contractLine = [
-        `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**`,
-        `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
-        `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
-        `${profileLabel}: TP1 $${tp1} · TP2 $${tp2} · Stop $${stop}`,
-        holdRule,
-      ].join('\n');
+    try { sc = await getSuggestedContract(ticker, trig.direction, spot, 9); } catch (e) {}
+  }
+
+  let stop, tp1, tp2, profileLabel, holdRule;
+  if (tier === 'day-trade') {
+    profileLabel = '☀️ DAY TRADE (9:30-10:30 entry)';
+    holdRule = 'Hard exit by 3:30 PM ET · no overnight';
+  } else {
+    profileLabel = '⚡ SCALP (fast in/out)';
+    holdRule = 'Time stop: cut after 60 min if no progress';
+  }
+  if (sc) {
+    if (tier === 'day-trade') {
+      stop = (sc.mid * 0.85).toFixed(2); tp1 = (sc.mid * 1.20).toFixed(2); tp2 = (sc.mid * 1.40).toFixed(2);
+    } else {
+      stop = (sc.mid * 0.92).toFixed(2); tp1 = (sc.mid * 1.10).toFixed(2); tp2 = (sc.mid * 1.20).toFixed(2);
     }
   }
+
   const titleEmoji = tier === 'day-trade' ? '☀️' : '⚡';
   const titleLabel = tier === 'day-trade' ? 'DAY TRADE' : 'BAR-CLOSE TRIGGER';
-  const lines = [
-    `${titleEmoji} **${titleLabel} — ${ticker} ${dirLabel}**`,
-    `5m close: $${trig.latestClose.toFixed(2)} (${aboveBelow} $${ref.toFixed(2)})`,
-    `Volume: ${trig.volMult}× avg (prior 10 bars)`,
-    `Spot: $${(spot != null ? spot.toFixed(2) : '?')} (${tickerPctStr})  ·  Tape: ${spyLine}`,
-    contractLine,
+  const color = tier === 'day-trade'
+    ? (trig.direction === 'long' ? 0xffa500 : 0xff5722)   // orange / deep-orange
+    : (trig.direction === 'long' ? 0x4caf50 : 0xf44336);  // green / red
+
+  // Build structured fields
+  const fields = [
+    { name: '📊 5m Close',   value: `$${trig.latestClose.toFixed(2)}\n${aboveBelow} $${ref.toFixed(2)}`, inline: true },
+    { name: '📈 Volume',     value: `${trig.volMult}× avg`, inline: true },
+    { name: '🌊 Tape',       value: spyLine, inline: true },
+    { name: '💰 Spot',       value: `$${(spot != null ? spot.toFixed(2) : '?')} (${tickerPctStr})`, inline: true },
   ];
-  let content = lines.join('\n');
-  if (content.length > 1900) content = content.slice(0, 1900) + '...';
-  return content;
+  if (sc) {
+    fields.push(
+      { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
+      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**\n${holdRule}`, inline: false }
+    );
+  }
+  // Click-through chart link
+  fields.push({
+    name: '🔗 Open in TradingView',
+    value: `[${ticker} 5m chart](${tvChartUrl(ticker)})`,
+    inline: false,
+  });
+
+  return {
+    title: `${titleEmoji} ${titleLabel} — ${ticker} ${dirLabel}`,
+    description: profileLabel,
+    color: color,
+    fields: fields,
+    chartUrl: chartImageUrl(ticker, '5'),
+    footer: `${tier === 'day-trade' ? 'EXIT BY 3:30 PM' : 'ONE WIN, walk away'} · scanner not needed · fire from this card`,
+  };
 }
 
 async function checkBarCloseTrigger(ticker, quote, spyPct) {
