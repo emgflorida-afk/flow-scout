@@ -1,0 +1,30 @@
+{
+  "_comment": "X / Twitter accounts polled by xTradePoller (Phase 4.57). All accounts default to QUARANTINED — Action tab + Discord display only, no SIM auto-fire until 30-trade hit-rate is graded.",
+  "_format": "Each account has style ('contract' for Raven-style direct contracts, 'bias' for Sniper-style narrative, 'mixed' for both), pollIntervalMin, and notes.",
+  "_lastUpdated": "2026-05-06T19:43:00Z",
+  "accounts": [
+    {
+      "handle": "TheMarketRaven",
+      "url": "https://x.com/TheMarketRaven",
+      "style": "contract",
+      "quarantined": true,
+      "pollIntervalMin": 5,
+      "notes": "Direct contract posts: '$TICKER MM/DD STRIKEc/p @ PRICE'. Also posts trim/exit lifecycle as 'from X.XX SPTP'. ~20yr trader."
+    },
+    {
+      "handle": "ProblemSniper",
+      "url": "https://x.com/ProblemSniper",
+      "style": "mixed",
+      "quarantined": true,
+      "pollIntervalMin": 5,
+      "notes": "Narrative bias posts with PT + levels. Sometimes drops specific contracts. Has monthly performance post pattern."
+    }
+  ],
+  "_promotionRule": {
+    "winRateThreshold": 0.5,
+    "minTradesForGrade": 30,
+    "autoMuteThreshold": 0.4,
+    "shadowSimEnabled": true,
+    "_note": "After 30 graded trades from a source: ≥50% win rate → manual unquarantine via /api/source/promote · <40% → auto-mute · 40-50% → stays quarantined indefinitely."
+  }
+}
