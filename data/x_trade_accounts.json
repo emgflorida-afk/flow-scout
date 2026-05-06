@@ -18,6 +18,14 @@
       "quarantined": true,
       "pollIntervalMin": 5,
       "notes": "Narrative bias posts with PT + levels. Sometimes drops specific contracts. Has monthly performance post pattern."
+    },
+    {
+      "handle": "GaaOptions",
+      "url": "https://x.com/GaaOptions",
+      "style": "mixed",
+      "quarantined": true,
+      "pollIntervalMin": 5,
+      "notes": "30K followers. Bio: 'Stock Options Trader, Sharing my real-time entries & exits, @GAAoptionsVIP'. Free account leaks setups; VIP gets first-look. Style TBD until first parsed posts arrive — start with mixed parser."
     }
   ],
   "_promotionRule": {
