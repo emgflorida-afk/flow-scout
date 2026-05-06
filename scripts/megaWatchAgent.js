@@ -754,6 +754,33 @@ async function checkBarCloseTrigger(ticker, quote, spyPct) {
   if (!bars) return { fired: false, reason: 'no-bars' };
   const trig = detectBarCloseTrigger(bars);
   if (!trig) return { fired: false, reason: 'no-trigger' };
+
+  // MAY 6 PM — COUNTER-TAPE FILTER (AB May 5 journal rule)
+  // "Counter-tape on multiple TFs = bad RR"
+  // If SPY is trending strong (>0.7%) and the trigger direction opposes tape,
+  // suppress the alert. Today's SPY SHORT fire on +1.41% tape was a textbook
+  // fakeout that AB would have lost on. Never auto-fire counter-trend on
+  // strong-tape days.
+  if (Math.abs(spyPct || 0) > 0.7) {
+    const tapeBull = (spyPct || 0) > 0;
+    const tapeBear = (spyPct || 0) < 0;
+    if (tapeBull && trig.direction === 'short') {
+      return { fired: false, reason: 'counter-tape-suppressed: short on bull tape +' + spyPct + '%', direction: trig.direction };
+    }
+    if (tapeBear && trig.direction === 'long') {
+      return { fired: false, reason: 'counter-tape-suppressed: long on bear tape ' + spyPct + '%', direction: trig.direction };
+    }
+  }
+
+  // MAY 6 PM — MINIMUM BREAK FILTER (AB caught the $0.01 SPY noise fire)
+  // Bar close must break the level by at least 0.05% of spot, not just $0.01.
+  // Below that = inside the typical bid/ask spread = noise, not signal.
+  const ref = trig.direction === 'long' ? trig.priorHigh : trig.priorLow;
+  const breakPct = Math.abs((trig.latestClose - ref) / ref) * 100;
+  if (breakPct < 0.05) {
+    return { fired: false, reason: `weak-break-suppressed: only ${breakPct.toFixed(3)}% past level (need >=0.05%)`, direction: trig.direction };
+  }
+
   if (isBarDeduped(ticker, trig.direction)) return { fired: false, reason: 'dedup', direction: trig.direction };
   // MAY 6 2026 PM — tier branching:
   //   9:30-10:30 ET window + strong follow-through (vol >= 1.8x) = DAY TRADE
