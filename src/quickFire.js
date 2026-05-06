@@ -180,6 +180,22 @@ async function placeQuickFire(opts) {
   var t1 = roundOptPrice(bracket.tp1 != null ? Number(bracket.tp1) : (limit * 1.10));
   var t2 = bracket.tp2 != null ? roundOptPrice(Number(bracket.tp2)) : null;
 
+  // MAY 6 PM — auto-detect market session and use GTC outside RTH so SIM
+  // testing works after-hours. AB hit "STOP: session closed" rejection on
+  // every test because DAY orders can't have stops outside RTH.
+  // RTH = Mon-Fri 9:30-16:00 ET. Outside that window → GTC.
+  var nowEt = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  var etMatch = nowEt.match(/(\d{1,2})\/(\d{1,2})\/\d+,?\s+(\d{1,2}):(\d{2})/);
+  var inRTH = false;
+  if (etMatch) {
+    var dow = new Date(nowEt).getDay();
+    var et_h = parseInt(etMatch[3], 10);
+    var et_m = parseInt(etMatch[4], 10);
+    var et_total = et_h * 60 + et_m;
+    inRTH = dow >= 1 && dow <= 5 && et_total >= 570 && et_total < 960; // 9:30-16:00 Mon-Fri
+  }
+  var sessionDuration = inRTH ? 'DAY' : 'GTC';
+
   var orderParams = {
     account: account,
     symbol: contract.osi,
@@ -189,8 +205,8 @@ async function placeQuickFire(opts) {
     stop: stop,
     t1: t1,
     t2: t2,
-    duration: 'DAY',
-    note: 'quick-fire ' + signal.source + '/' + (signal.tier || 'scalp') + ' sid=' + sid,
+    duration: sessionDuration,
+    note: 'quick-fire ' + signal.source + '/' + (signal.tier || 'scalp') + ' sid=' + sid + ' rth=' + (inRTH ? 'yes' : 'no-using-GTC'),
     manualFire: true, // bypass time-based gates — AB tapped the button intentionally
   };
 
