@@ -63,10 +63,65 @@ const BAR_BODY_FRAC = 0.5;         // body in upper/lower 50% of bar range
 const BAR_DEDUP_MIN = 15;          // 15-min dedup per ticker+direction
 const BAR_DEDUP_MS = BAR_DEDUP_MIN * 60 * 1000;
 
-// Discord webhook — separate channel for MEGA A+ alerts. Falls back to the
-// stratum-swing channel if MEGA-specific webhook isn't set.
-const DISCORD_WEBHOOK = process.env.DISCORD_MEGA_WEBHOOK ||
+// MAY 6 2026 PM — SPLIT CHANNELS (AB: "everything going into one channel")
+// BAR-CLOSE TRIGGERS  → STRATUMBREAK channel (live break-of-structure)
+// MEGA A+ ALERTS      → STRATUMSWING channel (full-stack swing entries)
+// Each can be overridden via env. Default fallbacks point to AB's existing
+// real Stratum channels so nothing crashes if env not set.
+const DISCORD_BAR_WEBHOOK = process.env.DISCORD_BAR_WEBHOOK ||
+  process.env.DISCORD_STRATUMBREAK_WEBHOOK ||
+  'https://discord.com/api/webhooks/1494836833778008205/j4x9WUFHV1mwUz2SndnxgAFLHhCrUcClU-2AJEGjojy_0i6yHgyFt5QuHxmBLZeUiiPI';
+const DISCORD_APLUS_WEBHOOK = process.env.DISCORD_MEGA_WEBHOOK ||
+  process.env.DISCORD_STRATUMSWING_WEBHOOK ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+// Backward-compat alias used by older callsites in this file
+const DISCORD_WEBHOOK = DISCORD_APLUS_WEBHOOK;
+const RAILWAY_BASE_FOR_QUOTES = process.env.RAILWAY_BASE_URL ||
+  'https://flow-scout-production.up.railway.app';
+
+// MAY 6 2026 PM — REAL NUMBERS (AB: "it needs to have real numbers")
+// Pull live bid/ask/mid for the suggested option contract at trade time so
+// cards show actual fills, not estimates. Returns { strike, mid, bid, ask, last, vol, oi }
+// or null if unavailable.
+async function getSuggestedContract(ticker, direction, spot, dteDays) {
+  try {
+    // Pick strike: ATM for delta ~0.45, +5 for ~0.30, +10 for ~0.18
+    const isLong = String(direction || '').toLowerCase() === 'long' || String(direction || '').toLowerCase() === 'call';
+    const strikeStep = spot < 50 ? 1 : spot < 100 ? 1 : spot < 250 ? 2.5 : spot < 500 ? 5 : 10;
+    const baseStrike = Math.round(spot / strikeStep) * strikeStep;
+    const wantStrikes = isLong
+      ? [baseStrike, baseStrike + strikeStep, baseStrike + 2 * strikeStep]
+      : [baseStrike, baseStrike - strikeStep, baseStrike - 2 * strikeStep];
+    // Build OSI symbols — find next Friday at least dteDays out
+    const target = new Date(Date.now() + (dteDays || 9) * 24 * 60 * 60 * 1000);
+    while (target.getDay() !== 5) target.setDate(target.getDate() + 1);
+    const yymmdd = target.getFullYear().toString().slice(2) + String(target.getMonth() + 1).padStart(2, '0') + String(target.getDate()).padStart(2, '0');
+    const cp = isLong ? 'C' : 'P';
+    const syms = wantStrikes.map(s => `${ticker} ${yymmdd}${cp}${Math.round(s)}`);
+    const url = `${RAILWAY_BASE_FOR_QUOTES}/api/option-mids?symbols=${encodeURIComponent(syms.join(','))}`;
+    const r = await getJson(url, { timeoutMs: 8000 });
+    if (!r || !r.quotes || !r.quotes.length) return null;
+    // Pick the one with valid bid/ask AND mid > 0.50 (avoid worthless contracts)
+    const valid = r.quotes.find(q => q.mid && Number(q.mid) > 0.5 && q.bid && q.ask);
+    if (!valid) return null;
+    const strikeMatch = (valid.symbol || '').match(/[CP](\d+)$/);
+    const strike = strikeMatch ? Number(strikeMatch[1]) : null;
+    return {
+      symbol: valid.symbol,
+      strike: strike,
+      expiry: target.toISOString().slice(0, 10),
+      mid: Number(valid.mid),
+      bid: Number(valid.bid),
+      ask: Number(valid.ask),
+      last: Number(valid.last),
+      vol: valid.volume,
+      oi: valid.openInterest,
+      breakeven: isLong ? (strike + Number(valid.mid)) : (strike - Number(valid.mid)),
+    };
+  } catch (e) {
+    return null;
+  }
+}
 
 // kingNodeComputer — pull GEX context. Fail-open if module missing.
 let kingNodeComputer = null;
@@ -314,7 +369,7 @@ async function pushVerdictToRailway(payload) {
 // ---------------------------------------------------------------------------
 // DISCORD ALERT
 // ---------------------------------------------------------------------------
-function buildDiscordCard(ctx) {
+async function buildDiscordCard(ctx) {
   const {
     ticker, direction, spot, pctChange,
     higher, lower, gex, spyPct,
@@ -322,10 +377,6 @@ function buildDiscordCard(ctx) {
   const dirLabel = direction === 'long' ? 'LONG' : 'SHORT';
   const optType = direction === 'long' ? 'C' : 'P';
   const triggerOp = direction === 'long' ? 'above' : 'below';
-
-  // Crude strike suggestion — ATM rounded to nearest 5 (or 1 for sub-50 names)
-  const strikeStep = spot < 50 ? 1 : (spot < 200 ? 5 : 10);
-  const atmStrike = Math.round(spot / strikeStep) * strikeStep;
 
   // Trigger price = current candle direction extension (5m structural)
   const triggerStep = spot * 0.0015;
@@ -342,14 +393,28 @@ function buildDiscordCard(ctx) {
   const hiSummary = String(higher.summary || '').slice(0, 100);
   const loSummary = String(lower.summary || '').slice(0, 100);
 
+  // MAY 6 2026 PM — REAL CONTRACT NUMBERS (AB explicit ask)
+  let contractLines = [`Suggested: ${ticker} 5/22 ATM ${optType} delta ~0.40`];
+  const sc = await getSuggestedContract(ticker, direction, spot, 9);
+  if (sc) {
+    const cost1ct = (sc.mid * 100).toFixed(0);
+    const stop = (sc.mid * 0.80).toFixed(2);
+    const tp = (sc.mid * 1.50).toFixed(2);
+    contractLines = [
+      `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType}**`,
+      `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
+      `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
+      `Bracket: TP $${tp} (+50%) / Stop $${stop} (-20%)`,
+    ];
+  }
+
   const lines = [
     `🐋 **MEGA A+ — ${ticker} ${dirLabel}**`,
-    `Spot: $${spot.toFixed(2)} (${pctChange >= 0 ? '+' : ''}${pctChange}%)`,
+    `Spot: $${spot.toFixed(2)} (${pctChange >= 0 ? '+' : ''}${pctChange}%)  ·  Tape: ${tapeLine}`,
     `Vision 6HR: ${higher.verdict} ${higher.confidence}/10 — ${hiSummary}`,
     `Vision 4HR: ${lower.verdict} ${lower.confidence}/10 — ${loSummary}`,
     `GEX: ${gexLine}`,
-    `Tape: ${tapeLine}`,
-    `Suggested: ${ticker} 5/22 $${atmStrike}${optType} delta ~0.40`,
+    ...contractLines,
     `Trigger: 5m close ${triggerOp} $${triggerPrice.toFixed(2)} with vol > 1.5x`,
   ];
   let content = lines.join('\n');
@@ -357,11 +422,16 @@ function buildDiscordCard(ctx) {
   return content;
 }
 
-async function sendDiscordCard(content) {
-  if (!DISCORD_WEBHOOK) return false;
-  const r = await postJson(DISCORD_WEBHOOK, { content: content, username: 'MEGA A+ Agent' }, { timeoutMs: 8000 });
+// MAY 6 2026 PM — channel-aware send. type='bar-close' → STRATUMBREAK channel,
+// type='a-plus' (default) → STRATUMSWING/MEGA channel.
+async function sendDiscordCard(content, type) {
+  const t = (type || 'a-plus').toLowerCase();
+  const hook = t === 'bar-close' ? DISCORD_BAR_WEBHOOK : DISCORD_APLUS_WEBHOOK;
+  const username = t === 'bar-close' ? 'MEGA Bar-Close Trigger' : 'MEGA A+ Agent';
+  if (!hook) return false;
+  const r = await postJson(hook, { content: content, username: username }, { timeoutMs: 8000 });
   if (!r.ok) {
-    log('WARN', `discord send fail: ${r.error || r.status}`);
+    log('WARN', `discord send fail (${t}): ${r.error || r.status}`);
     return false;
   }
   return true;
@@ -451,7 +521,7 @@ function detectBarCloseTrigger(bars) {
   };
 }
 
-function buildBarCloseCard(ticker, trig, quote, spyPct) {
+async function buildBarCloseCard(ticker, trig, quote, spyPct) {
   const dirLabel = trig.direction === 'long' ? 'LONG' : 'SHORT';
   const optType = trig.direction === 'long' ? 'call' : 'put';
   const aboveBelow = trig.direction === 'long' ? 'above prior high' : 'below prior low';
@@ -460,13 +530,29 @@ function buildBarCloseCard(ticker, trig, quote, spyPct) {
   const tickerPctStr = (quote && quote.pctChange != null)
     ? `${quote.pctChange >= 0 ? '+' : ''}${quote.pctChange}%`
     : '?';
+  const spot = (quote && quote.last != null) ? Number(quote.last) : null;
+  // MAY 6 2026 PM — REAL CONTRACT NUMBERS (AB explicit ask)
+  let contractLine = `Action: consider 1ct ATM ${optType}`;
+  if (spot) {
+    const sc = await getSuggestedContract(ticker, trig.direction, spot, 9);
+    if (sc) {
+      const cost1ct = (sc.mid * 100).toFixed(0);
+      const stop = (sc.mid * 0.80).toFixed(2);  // -20% stop default
+      const tp = (sc.mid * 1.50).toFixed(2);    // +50% TP default
+      contractLine = [
+        `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**`,
+        `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
+        `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
+        `Bracket: TP $${tp} (+50%) / Stop $${stop} (-20%)`,
+      ].join('\n');
+    }
+  }
   const lines = [
     `⚡ **BAR-CLOSE TRIGGER — ${ticker} ${dirLabel}**`,
     `5m close: $${trig.latestClose.toFixed(2)} (${aboveBelow} $${ref.toFixed(2)})`,
     `Volume: ${trig.volMult}× avg (prior 10 bars)`,
-    `Spot: $${(quote && quote.last != null ? quote.last.toFixed(2) : '?')} (${tickerPctStr})`,
-    `Tape: ${spyLine}`,
-    `Action: consider 1ct ATM ${optType}`,
+    `Spot: $${(spot != null ? spot.toFixed(2) : '?')} (${tickerPctStr})  ·  Tape: ${spyLine}`,
+    contractLine,
   ];
   let content = lines.join('\n');
   if (content.length > 1900) content = content.slice(0, 1900) + '...';
@@ -484,8 +570,8 @@ async function checkBarCloseTrigger(ticker, quote, spyPct) {
   const trig = detectBarCloseTrigger(bars);
   if (!trig) return { fired: false, reason: 'no-trigger' };
   if (isBarDeduped(ticker, trig.direction)) return { fired: false, reason: 'dedup', direction: trig.direction };
-  const card = buildBarCloseCard(ticker, trig, quote, spyPct);
-  const sent = await sendDiscordCard(card);
+  const card = await buildBarCloseCard(ticker, trig, quote, spyPct);
+  const sent = await sendDiscordCard(card, 'bar-close');
   if (sent) {
     markBarFired(ticker, trig.direction);
     return { fired: true, direction: trig.direction, volMult: trig.volMult };
@@ -601,11 +687,11 @@ async function processTicker(ticker, spyPct) {
     if (isDeduped(ticker, direction)) {
       aPlusFire = 'dedup';
     } else {
-      const card = buildDiscordCard({
+      const card = await buildDiscordCard({
         ticker, direction, spot: quote.last, pctChange: pct,
         higher, lower, gex, spyPct,
       });
-      const sent = await sendDiscordCard(card);
+      const sent = await sendDiscordCard(card, 'a-plus');
       if (sent) {
         markFired(ticker, direction);
         aPlusFire = 'yes';
