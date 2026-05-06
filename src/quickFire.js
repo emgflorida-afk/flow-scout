@@ -167,8 +167,18 @@ async function placeQuickFire(opts) {
   var qty = opts.qty || computeQty(equity, signal.tier || 'scalp', contract.mid);
 
   // Order params — limit at mid + small slip; OSO bracket
-  var limit = Number(contract.mid);
-  if (bracket.entry != null) limit = Number(bracket.entry);
+  // MAY 6 PM — round all prices to 2 decimals (TS rejects $0.5700000000000001).
+  // For options >= $3, TS uses $0.05 increments; otherwise $0.01.
+  function roundOptPrice(p) {
+    if (!isFinite(p) || p <= 0) return p;
+    if (p >= 3) return Math.round(p * 20) / 20;   // 0.05 increments
+    return Math.round(p * 100) / 100;             // 0.01 increments
+  }
+  var limit = roundOptPrice(Number(contract.mid));
+  if (bracket.entry != null) limit = roundOptPrice(Number(bracket.entry));
+  var stop = roundOptPrice(bracket.stop != null ? Number(bracket.stop) : (limit * 0.75));
+  var t1 = roundOptPrice(bracket.tp1 != null ? Number(bracket.tp1) : (limit * 1.10));
+  var t2 = bracket.tp2 != null ? roundOptPrice(Number(bracket.tp2)) : null;
 
   var orderParams = {
     account: account,
@@ -176,9 +186,9 @@ async function placeQuickFire(opts) {
     action: 'BUYTOOPEN',
     qty: qty,
     limit: limit,
-    stop: bracket.stop != null ? Number(bracket.stop) : (limit * 0.75),
-    t1:   bracket.tp1  != null ? Number(bracket.tp1)  : (limit * 1.10),
-    t2:   bracket.tp2  != null ? Number(bracket.tp2)  : null,
+    stop: stop,
+    t1: t1,
+    t2: t2,
     duration: 'DAY',
     note: 'quick-fire ' + signal.source + '/' + (signal.tier || 'scalp') + ' sid=' + sid,
     manualFire: true, // bypass time-based gates — AB tapped the button intentionally
