@@ -598,15 +598,21 @@ async function placeOrder(params) {
 
     // EMBEDDED REJECTION CHECK: TS can return 200 with rejection details
     // in data.Errors[] or orders[0].Error/Message
+    // MAY 6 PM — verbose: include FULL message + detail (was swallowing
+    // the actual rejection reason — AB hit "TS_REJ: FAILED" with no detail).
     var embeddedError = null;
     if (data.Errors && data.Errors.length > 0) {
       embeddedError = 'TS_REJ: ' + JSON.stringify(data.Errors);
     } else if (orders[0] && (orders[0].Error || orders[0].error)) {
-      embeddedError = 'TS_REJ: ' + (orders[0].Error || orders[0].error);
+      // INCLUDE Message + full orders[0] dump for diagnosis
+      var errCode = orders[0].Error || orders[0].error;
+      var errMsg  = orders[0].Message || orders[0].message || '';
+      var orderJson = JSON.stringify(orders[0]).slice(0, 400);
+      embeddedError = 'TS_REJ: ' + errCode + (errMsg ? ' - ' + errMsg : '') + ' [order=' + orderJson + ']';
     } else if (!orderId && orders[0] && orders[0].Message) {
       embeddedError = 'TS_REJ: ' + orders[0].Message;
     } else if (!orderId) {
-      embeddedError = 'TS_REJ: No OrderID returned: ' + JSON.stringify(data);
+      embeddedError = 'TS_REJ: No OrderID returned: ' + JSON.stringify(data).slice(0, 500);
     }
     if (embeddedError) {
       console.error('[EXECUTOR] REJECTED --', embeddedError);
