@@ -7196,6 +7196,40 @@ app.get('/api/ticker-quote', async function(req, res) {
   } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// Bar proxy — used by megaWatchAgent bar-close-trigger detection.
+// Thin wrapper over TS marketdata/barcharts so the agent doesn't need a TS
+// token directly. Returns { ok, ticker, bars: [{ open, close, high, low, volume, ts }] }
+// in chronological order (oldest first → latest last).
+app.get('/api/ticker-bars', async function(req, res) {
+  try {
+    if (!ts || !ts.getAccessToken) return res.status(500).json({ ok: false, error: 'TS module not loaded' });
+    var symbol = String(req.query.symbol || '').toUpperCase().trim();
+    if (!symbol) return res.status(400).json({ ok: false, error: 'symbol= required' });
+    var interval = parseInt(req.query.interval || '5', 10);
+    var unit = String(req.query.unit || 'Minute');
+    var barsback = Math.min(parseInt(req.query.barsback || '20', 10), 200);
+    var token = await ts.getAccessToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'no TS token' });
+    var fetchLib = require('node-fetch');
+    var url = 'https://api.tradestation.com/v3/marketdata/barcharts/' + encodeURIComponent(symbol)
+      + '?interval=' + interval + '&unit=' + encodeURIComponent(unit) + '&barsback=' + barsback;
+    var r = await fetchLib(url, { headers: { 'Authorization': 'Bearer ' + token }, timeout: 8000 });
+    if (!r.ok) return res.status(500).json({ ok: false, error: 'TS http ' + r.status });
+    var data = await r.json();
+    var bars = (data.Bars || []).map(function(b) {
+      return {
+        open: parseFloat(b.Open),
+        close: parseFloat(b.Close),
+        high: parseFloat(b.High),
+        low: parseFloat(b.Low),
+        volume: parseInt(b.TotalVolume || b.Volume || 0, 10),
+        ts: b.TimeStamp || b.Time || null,
+      };
+    });
+    res.json({ ok: true, ticker: symbol, interval: interval, unit: unit, bars: bars });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // ===========================================================================
 // Phase 4.20 — MARKET-CONTEXT AUTO-CHECK
 // ---------------------------------------------------------------------------
