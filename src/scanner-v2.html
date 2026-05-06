@@ -1517,7 +1517,7 @@ function openDetail(idx) {
       </div>
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
-        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}' + '&interval=5', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchScanToPublic(${idx}, this)" title="Place on Public.com (cash account, no PDT)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchScanToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
@@ -3251,7 +3251,7 @@ function openMoverDetail(idx) {
       </div>
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
-        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}' + '&interval=5', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
@@ -3268,7 +3268,7 @@ function openMoverDetail(idx) {
       </div>
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
-        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}', '_blank')">Open Chart</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}' + '&interval=5', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
@@ -4110,7 +4110,7 @@ function renderGridMega() {
         </div>
         ${visionLine}
         <div style="margin-top:10px; display:flex; gap:6px;">
-          <button class="btn-sm" onclick="window.open('https://www.tradingview.com/chart/?symbol=${x.ticker}','_blank')" style="background:rgba(70,180,255,0.2); color:#46b4ff; border:1px solid rgba(70,180,255,0.4); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">📈 Chart</button>
+          <button class="btn-sm" onclick="window.open('https://www.tradingview.com/chart/?symbol=${x.ticker}&interval=5','_blank')" style="background:rgba(70,180,255,0.2); color:#46b4ff; border:1px solid rgba(70,180,255,0.4); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">📈 Chart</button>
           <button class="btn-sm" onclick="window.open('https://www.bullflow.io/gex?ticker=${x.ticker}','_blank')" style="background:rgba(124,77,255,0.2); color:#b39ddb; border:1px solid rgba(124,77,255,0.4); padding:6px 10px; border-radius:6px; font-size:11px; cursor:pointer;">🐋 GEX</button>
         </div>
       </div>`;
@@ -4285,7 +4285,7 @@ function renderGridAction() {
         </div>
 
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">📈 TV chart</button>
+          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">📈 TV chart</button>
           ${r.status === 'ACTIONABLE' && sug.contract ? `
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, false, this)" title="Fire on TradeStation immediately (LIVE 11975462)">⚡ TS FIRE</button>
             <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
@@ -4563,7 +4563,7 @@ function renderGridSniper() {
           ${visionBlock}
           ${chartImg ? `<div style="margin-top:10px;"><a href="${chartImg}" target="_blank" rel="noopener noreferrer"><img src="${chartImg}" style="width:100%; max-height:240px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.08);"/></a></div>` : ''}
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>` : ''}
+            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>` : ''}
             ${p.ticker ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'CALL',trigger:0},this)" title="Place on Public.com">📱 Public</button>` : ''}
           </div>
         </div>
@@ -4705,7 +4705,7 @@ function renderGridSwingLeap() {
           ${verdictBlock}
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             ${p.hasChart && !a ? `<button class="btn btn-secondary swing-analyze-btn" style="background:rgba(70,180,255,0.18); color:#46b4ff; padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();analyzeSwingLeap('${p.msgId}',this)">🤖 Analyze chart</button>` : ''}
-            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>` : ''}
+            ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>` : ''}
             ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0}},this)" title="Place on Public.com">📱 Public</button>` : ''}
             ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0},stop:${a.stop || 0},tp1:${a.target1 || 0},tp2:${a.target2 || 0}},this)" title="Place bracket OCO">📱 Bracket</button>` : ''}
           </div>
@@ -4882,7 +4882,7 @@ function renderGridCoil() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0}},this)" title="Place 1ct on Public.com">📱 Public 1ct</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0},qty:2,tradeType:'SWING',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="Place 2ct on TradeStation (auto-resolves option, queues for next-day open)">📱 TS 2ct</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0}},this)" title="Place bracket OCO on Public with full plan">📱 Public Bracket</button>
@@ -5184,7 +5184,7 @@ function renderGridWP() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             ${allowSizeUp ? `
               <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="Public 1ct (cash leg)">📱 Public 1ct</button>
               <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0},stop:${plan.stop||0},tp1:${plan.tp1||0},tp2:${plan.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'SWING',pattern:'${r.signal}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct (margin/no-PDT, swing)">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
@@ -5452,7 +5452,7 @@ function renderGridJS() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}', '_blank')">Open chart</button>
+            <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             ${allowSizeUp ? `
               <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0}},this)" title="Public 1ct trial">📱 Public 1ct</button>
               <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0},stop:${pp.stop||0},tp1:${pp.tp1||0},tp2:${pp.tp2||0},qty:${r.conviction >= 9 ? 3 : 2},tradeType:'JS',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="TS ${r.conviction >= 9 ? '3' : '2'}ct bracket">📱 TS ${r.conviction >= 9 ? '3' : '2'}ct</button>
@@ -5539,7 +5539,7 @@ function renderJohnLikePicksSection() {
         </div>
 
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}', '_blank')">Open chart</button>
+          <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>
           <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','ts','SWING')" style="padding:5px 10px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
           <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','public','SWING')" style="padding:5px 10px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
           <button onclick="event.stopPropagation();dispatchToTS({ticker:'${p.ticker}',direction:'${optDir}',trigger:${c.triggerPrice || 0},stop:${c.stopPrice || 0},tp1:${(c.triggerPrice || 0) * 1.05},tp2:${(c.triggerPrice || 0) * 1.10},qty:1,tradeType:'JOHN_LIKE',pattern:'${p.structuralLabel}',conviction:8},this)" style="padding:5px 10px;background:rgba(245,158,11,0.18);color:#f59e0b;border:1px solid #f59e0b;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">📱 TS BRACKET 1ct</button>
@@ -6757,7 +6757,7 @@ function openLvlDetail(idx) {
       </div>
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="navigator.clipboard.writeText('${(isLong?'BUY':'SHORT') + ' ' + r.symbol + ' @ ' + firePlan.entry + ' | stop ' + firePlan.stop + ' | tp ' + firePlan.tp1 + ' | LVL ' + fireTf + ' ' + fireState.signal}'); this.textContent='Copied ✓'; setTimeout(()=>this.textContent='Copy', 1500)">Copy</button>
-        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${r.symbol}', '_blank')">Open Chart</button>
+        <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${r.symbol}' + '&interval=5', '_blank')">Open Chart</button>
         <button class="btn btn-primary ${isLong ? '' : 'short'}" onclick="fireLvlOrder(${idx}, '${fireTf}', this)">⚡ Fire ${fireTf} ${account}</button>
       </div>
     </div>
