@@ -448,21 +448,24 @@ async function placeOrder(params) {
       // because the option itself has to trade at the stop price.
       if (stop) {
         // Option-premium StopLimit (wick-resistant, AB-preferred).
+        // MAY 6 PM — round StopLimit to $0.05 (above $3) or $0.01 increments.
+        // Was rounding to $0.01 only, TS rejects: "StopLimit = 4.91 not rounded to a valid increment".
         var stopOffsetPct = parseFloat(process.env.STOP_LIMIT_OFFSET_PCT || '0.10');
-        var stopLimitPrice = Math.max(0.01, parseFloat(stop) * (1 - stopOffsetPct));
-        stopLimitPrice = Math.round(stopLimitPrice * 100) / 100;
+        var stopLimitRaw = Math.max(0.01, parseFloat(stop) * (1 - stopOffsetPct));
+        var stopLimitPrice = roundToIncrement(stopLimitRaw);
+        var stopTriggerRounded = roundToIncrement(parseFloat(stop));
         bracketOrders.push({
           AccountID:   account,
           Symbol:      symbol,
           Quantity:    String(qty),
           OrderType:   'StopLimit',
-          StopPrice:   String(stop),
+          StopPrice:   String(stopTriggerRounded),
           LimitPrice:  String(stopLimitPrice),
           TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
           TimeInForce: { Duration: duration || 'GTC' },
           Route:       'Intelligent',
         });
-        console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stop + ' limit $' + stopLimitPrice + ' (preferred over structural)');
+        console.log('[EXECUTOR] Stop=StopLimit ' + symbol + ' trigger $' + stopTriggerRounded + ' limit $' + stopLimitPrice + ' (preferred over structural)');
       } else if (structuralStop && structuralStop.symbol && structuralStop.price) {
         // Apr 29 2026: Fixed bad-fills bug. AB SIM account showed GE/GM stops
         // coming in as Market orders -> bad fills. Now: prefer StopLimit on
@@ -520,12 +523,14 @@ async function placeOrder(params) {
       }
 
       if (t1) {
+        // MAY 6 PM — round TP to $0.05 (above $3) or $0.01 (TS rejection: "not rounded to a valid increment")
+        var t1Rounded = roundToIncrement(parseFloat(t1));
         bracketOrders.push({
           AccountID:   account,
           Symbol:      symbol,
           Quantity:    String(qty),
           OrderType:   'Limit',
-          LimitPrice:  String(t1),        // already round2'd above
+          LimitPrice:  String(t1Rounded),
           TradeAction: action === 'BUYTOOPEN' ? 'SELLTOCLOSE' : 'BUYTOCLOSE',
           TimeInForce: { Duration: duration || 'GTC' },
           Route:       'Intelligent',
