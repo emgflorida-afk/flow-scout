@@ -191,7 +191,7 @@
 <div class="container">
 
 <h1>🪜 Flow Scout IKEA Trade Guide</h1>
-<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 PM (Phase 4.34 — SMART CONDITIONAL WATCHER)</div>
+<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 PM (Phase 4.37 — KING NODE MAGNET)</div>
 
 <div class="tldr">
   <h2>📌 TL;DR</h2>
@@ -633,6 +633,85 @@
     <li><b>Kill switch:</b> set <code>SMART_CONDITIONAL_ENABLED=false</code> env var to pause all watching</li>
     <li><b>Override flag:</b> per-spec <code>allowOverride: true</code> fires even on gate fail (NOT recommended — emergency only)</li>
     <li><b>Order placement:</b> uses <code>/api/ayce-fire/place</code> with <code>manualFire:true</code> — same code path as the modal FIRE button, just gated</li>
+  </ul>
+</div>
+
+<!-- STEP 4.37 — KING NODE MAGNET -->
+<div class="step" style="border-color:#ffd700; background:linear-gradient(180deg, #11161f, #1a1610);">
+  <h2 style="color:#ffd700;"><span class="step-num" style="background:linear-gradient(180deg,#ffd700,#b8860b); color:#000;">4.37</span>🧲 KING NODE MAGNET (Phase 4.37 — May 5 PM)</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 10px;">
+    The unified gravity level a stock is being pulled toward. We <b>fuse three independent magnet signals</b> — GEX (gamma), VPOC (volume profile), and UOA flow clusters (institutional positioning) — into <b>one verdict</b> shown as a 🧲 KING pill on every scanner card. Replaces "look at GEX, then VPOC, then flow separately" with one number you can act on.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">The 3 magnet signals (and their weights)</h3>
+  <table>
+    <thead><tr><th>Signal</th><th>Weight</th><th>What it represents</th></tr></thead>
+    <tbody>
+      <tr><td><b>GEX peak</b></td><td class="mono">0.40</td><td>Strike with peak |netGex| — where dealer hedging pulls price (strongest near-term magnet)</td></tr>
+      <tr><td><b>VPOC</b></td><td class="mono">0.35</td><td>Volume Point of Control from 20-bar Daily profile — structural commitment level</td></tr>
+      <tr><td><b>UOA cluster</b></td><td class="mono">0.25</td><td>Highest-premium strike from /data/uoa_log.json over last 30 days — smart-money positioning</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">Strength tiers (how tight the 3 signals agree)</h3>
+  <table>
+    <thead><tr><th>Tier</th><th>Color</th><th>Condition</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td><b>STRONG</b></td><td><code style="background:#ffd70022; color:#ffd700;">🟡 GOLD</code></td><td>All 3 sources within ~1% of each other</td><td>Highest-gravity zone — price will magnetize hard. Trade with the gravity.</td></tr>
+      <tr><td><b>MODERATE</b></td><td><code style="background:#ffa50022; color:#ffa500;">🟠 ORANGE</code></td><td>2 of 3 align (1 outlier)</td><td>Real magnet but less sticky. Use as soft target / soft stop.</td></tr>
+      <tr><td><b>WEAK</b></td><td><code style="background:#88888822; color:#888;">⚪ GRAY</code></td><td>All 3 differ widely OR only 1 signal available</td><td>Scattered magnets — gravity unclear. De-emphasize king-node bias.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">How to USE it</h3>
+  <ul class="checklist">
+    <li class="green"><b>Spot ABOVE king node</b> → wind at back for <b>SHORTS</b> (gravity pulls DOWN). Don't fade longs without good reason.</li>
+    <li class="green"><b>Spot BELOW king node</b> → wind at back for <b>LONGS</b> (gravity pulls UP). Don't fade shorts without good reason.</li>
+    <li class="amber"><b>Within 0.5% of king node</b> → TIGHT MAGNET zone. Price likely to consolidate / whip. Avoid initiating directional bets here.</li>
+    <li class="red"><b>Spot extended &gt;2% from king node</b> → mean-reversion risk. Long &gt;2% above STRONG king = late entry. Short &gt;2% below STRONG king = late entry.</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">Pill display on every card</h3>
+  <p style="font-size:12px; color:var(--txt-2); margin:0 0 8px;">
+    Each scanner card (ACTION / MOVERS / TOMORROW / JS / WP / COIL / LOTTO) now carries a 🧲 KING pill:
+  </p>
+  <pre style="background:rgba(0,0,0,0.4); padding:10px; border-radius:6px; font-size:12px; color:#ffd700; overflow-x:auto;">🧲 KING $498.40 (STRONG, 0.7% ↓)</pre>
+  <ul class="checklist">
+    <li><b>$498.40</b> = the king node price (weighted average of the 3 sources)</li>
+    <li><b>STRONG / MODERATE / WEAK</b> = agreement tier</li>
+    <li><b>0.7% ↓</b> = spot is 0.7% above the king (gravity pulls DOWN)</li>
+    <li><b>0.7% ↑</b> = spot is 0.7% below the king (gravity pulls UP)</li>
+    <li>Tooltip carries per-source breakdown: <code>GEX+VPOC+UOA · conf 8/10 · spot ABOVE king — gravity pulls DOWN (short tailwind)</code></li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">Fire Grade interaction (soft signal — Phase 4.37)</h3>
+  <p style="font-size:12px; color:var(--txt-2); margin:0 0 8px;">
+    King node is a <b>soft signal</b> on the 6-gate Fire Grade — adjusts conviction by ±1 (not a hard gate):
+  </p>
+  <ul class="checklist">
+    <li class="green"><b>+1 boost:</b> direction-aligned and within 0.5% of king (price near magnet, will be pulled in your direction)</li>
+    <li class="red"><b>−1 penalty:</b> direction-aligned but extended &gt;2% past king (mean-reversion risk against you)</li>
+    <li><b>0 neutral:</b> all other distances — king node mapped but not applying a tailwind/headwind</li>
+    <li>Adjustment shown in card warnings: <code>GRADE ↑ B → A via KING NODE (+1): LONG within 0.5% BELOW king $498.40 — gravity pulls UP</code></li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">Endpoints</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /api/king-node?ticker=SPY</td><td>Returns kingNode + strength + per-source breakdown + spot distance + verdict</td></tr>
+      <tr><td class="mono">GET /api/king-node?ticker=SPY&amp;force=1</td><td>Bypass 5-min cache, recompute fresh</td></tr>
+      <tr><td class="mono">GET /api/king-node?ticker=SPY&amp;uoaDaysBack=14</td><td>Tighter UOA lookback (default 30d)</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#ffd700;">Fail-open behavior</h3>
+  <ul class="checklist">
+    <li><b>Missing GEX:</b> drops to 2-source (VPOC + UOA), strength downgrades to MODERATE/WEAK, confidence reduced</li>
+    <li><b>Missing VPOC:</b> drops to 2-source, GEX dominates the average</li>
+    <li><b>Missing UOA log:</b> drops to 2-source, no flow-cluster contribution (common for small caps with no recent alerts)</li>
+    <li><b>All 3 missing:</b> pill hides — card behaves as if Phase 4.37 weren't installed</li>
+    <li><b>Cache:</b> 5-min TTL per ticker (king node doesn't move much intraday). Both server and client cache.</li>
   </ul>
 </div>
 

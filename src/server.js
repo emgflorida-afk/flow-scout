@@ -483,6 +483,12 @@ var gexCalculator = null;
 try { gexCalculator = require('./gexCalculator'); console.log('[SERVER] gexCalculator loaded OK'); }
 catch(e) { console.log('[SERVER] gexCalculator not loaded:', e.message); }
 
+// KING NODE COMPUTER — Phase 4.37 (May 5 PM 2026). Unified gravity level
+// fusing GEX + VPOC + UOA flow into one verdict per ticker. Cached 5 min.
+var kingNodeComputer = null;
+try { kingNodeComputer = require('./kingNodeComputer'); console.log('[SERVER] kingNodeComputer loaded OK'); }
+catch(e) { console.log('[SERVER] kingNodeComputer not loaded:', e.message); }
+
 // PANEL DATA — aggregator for the smart auto-updating TradingView floating panel
 var panelData = null;
 try { panelData = require('./panelData'); console.log('[SERVER] panelData loaded OK'); }
@@ -10630,6 +10636,34 @@ app.get('/api/volume-profile', async function(req, res) {
     res.json(payload);
   } catch(e) {
     console.error('[VPOC]', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =============================================================================
+// KING NODE MAGNET — Phase 4.37 (May 5 PM 2026)
+// Unified gravity level per ticker: weighted fusion of GEX (0.40) + VPOC (0.35)
+// + UOA flow cluster (0.25). Returns kingNode price + STRONG/MODERATE/WEAK
+// strength + 1-10 confidence + per-source breakdown + support/resistance HVNs
+// + spot distance. Fail-open: any source missing degrades confidence but still
+// returns a verdict. Module owns its own 5-min cache per ticker.
+//
+// GET /api/king-node?ticker=SPY [&uoaDaysBack=30] [&vpLookback=20] [&force=1]
+// =============================================================================
+app.get('/api/king-node', async function(req, res) {
+  try {
+    if (!kingNodeComputer) return res.status(500).json({ ok: false, error: 'kingNodeComputer not loaded' });
+    var ticker = String(req.query.ticker || '').toUpperCase().trim();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'usage: /api/king-node?ticker=X' });
+    var opts = {
+      uoaDaysBack: parseInt(req.query.uoaDaysBack, 10) || 30,
+      vpLookback: parseInt(req.query.vpLookback, 10) || 20,
+      force: req.query.force === '1' || req.query.force === 'true',
+    };
+    var out = await kingNodeComputer.computeKingNode(ticker, opts);
+    res.json(out);
+  } catch (e) {
+    console.error('[KING-NODE]', e.message);
     res.status(500).json({ ok: false, error: e.message });
   }
 });

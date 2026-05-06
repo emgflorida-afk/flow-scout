@@ -2066,6 +2066,68 @@ function buildVpocPill(vp, spot) {
 }
 window.buildVpocPill = buildVpocPill;
 
+// =============================================================================
+// KING NODE pill — Phase 4.37 (May 5 PM 2026)
+// Renders the unified gravity level on a card. Fuses GEX + VPOC + UOA flow.
+//   STRONG  = all 3 within ~1% (gold)
+//   MODERATE= 2 of 3 align (orange)
+//   WEAK    = scattered / single source (gray)
+// Tooltip carries per-source breakdown + spot distance + verdict.
+// =============================================================================
+function buildKingNodePill(king, spot) {
+  if (!king || king.kingNode == null) return '';
+  const k = Number(king.kingNode);
+  const s = Number(spot != null ? spot : king.spot);
+  if (!isFinite(k)) return '';
+  const distPct = (isFinite(s) && s !== 0) ? Math.abs(((s - k) / s) * 100) : null;
+  const above = isFinite(s) ? (s > k) : null;
+  const arrow = above === null ? '' : (above ? ' ↓' : ' ↑');
+  const colors = { STRONG: '#ffd700', MODERATE: '#ffa500', WEAK: '#888' };
+  const bgColors = { STRONG: 'rgba(255,215,0,0.18)', MODERATE: 'rgba(255,165,0,0.18)', WEAK: 'rgba(136,136,136,0.18)' };
+  const c = colors[king.strength] || '#888';
+  const bg = bgColors[king.strength] || 'rgba(136,136,136,0.18)';
+  const sourceLbl = (king.sources || []).map(x => x.source).join('+') || (king.sourceLabel || '?');
+  const distStr = distPct != null ? ` (${king.strength}, ${distPct.toFixed(1)}%${arrow})` : ` (${king.strength})`;
+  const verdict = String(king.verdict || '').replace(/"/g, '&quot;');
+  const tip = `King Node fuses GEX + VPOC + UOA flow. Sources: ${sourceLbl} · conf ${king.confidence || '?'}/10 · ${verdict}`;
+  return `<span class="tag" style="background:${bg};color:${c};font-weight:700;font-size:10px;" title="${tip}">🧲 KING $${k.toFixed(2)}${distStr}</span>`;
+}
+window.buildKingNodePill = buildKingNodePill;
+
+// Lightweight client-side cache of king-node fetches. Backend caches 5 min;
+// this avoids repeat round-trips across re-renders inside the same tab.
+window._kingCache = window._kingCache || {};
+async function buildKingNodeForRows(rows, getTicker, opts) {
+  if (!rows || !rows.length) return rows;
+  opts = opts || {};
+  const queue = rows.slice(0, 30); // cap at 30 per render
+  async function worker() {
+    while (queue.length) {
+      const row = queue.shift();
+      const t = getTicker ? getTicker(row) : row.ticker;
+      if (!t) continue;
+      const ck = String(t).toUpperCase();
+      if (window._kingCache[ck] && (Date.now() - window._kingCache[ck].time) < 5 * 60 * 1000) {
+        row.kingNode = window._kingCache[ck].payload;
+        continue;
+      }
+      try {
+        const r = await fetch(`/api/king-node?ticker=${encodeURIComponent(ck)}`, { cache: 'no-store' });
+        if (!r.ok) continue;
+        const j = await r.json();
+        if (j && j.ok) {
+          window._kingCache[ck] = { time: Date.now(), payload: j };
+          row.kingNode = j;
+        }
+      } catch (e) { /* silent — pill just won't render */ }
+    }
+  }
+  // 4 concurrent workers — endpoint runs GEX + VPOC + UOA in parallel internally.
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  return rows;
+}
+window.buildKingNodeForRows = buildKingNodeForRows;
+
 // Lightweight client-side cache of VP fetches. Key = ticker|tf|lookback.
 // Backend already caches 5 min; this avoids repeat round-trips across re-renders.
 window._vpCache = window._vpCache || {};
@@ -3479,6 +3541,13 @@ async function loadTomorrowData() {
         try { if (activeTab === 'tomorrow') renderGridTomorrow(); } catch (e) {}
       });
     } catch (e) {}
+    // Phase 4.37 — bulk KING NODE fetch (GEX + VPOC + UOA fusion). Async re-render.
+    try {
+      const tradable = flat.filter(r => r._state !== 'earnings');
+      buildKingNodeForRows(tradable, r => r.ticker).then(() => {
+        try { if (activeTab === 'tomorrow') renderGridTomorrow(); } catch (e) {}
+      });
+    } catch (e) {}
     // Kick off live spot poll the moment we have tickers
     startRadarSpotPoll();
   } catch (e) {
@@ -3638,6 +3707,7 @@ function renderGridTomorrow() {
             ${buildMultiTestBadge(r.mtb)}
             ${buildTapeBadge(window._tape, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
             ${buildVpocPill(r._vp, r.spot)}
+            ${buildKingNodePill(r.kingNode, r.spot)}
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
           </div>
@@ -3784,6 +3854,13 @@ async function loadActionData() {
         try { if (activeTab === 'action') renderGridAction(); } catch (e) {}
       });
     } catch (e) {}
+    // Phase 4.37 — bulk KING NODE fetch (GEX + VPOC + UOA fusion). Async re-render.
+    try {
+      const knRows = (actionData.rows || []).filter(r => r.status === 'ACTIONABLE' || r.status === 'WATCH');
+      buildKingNodeForRows(knRows, r => r.ticker).then(() => {
+        try { if (activeTab === 'action') renderGridAction(); } catch (e) {}
+      });
+    } catch (e) {}
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">Action radar error: <code style="color:var(--red)">${e.message}</code></div>`;
     return;
@@ -3898,6 +3975,7 @@ function renderGridAction() {
             ${buildMultiTestBadge(r.mtb)}
             ${buildTapeBadge(window._tape, r.direction)}
             ${buildVpocPill(r._vp, live.last)}
+            ${buildKingNodePill(r.kingNode, live.last)}
             ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
@@ -4382,6 +4460,12 @@ async function loadCoilData() {
   try { await buildTaForRows([...ready, ...watching, ...prep], r => r.ticker, r => r.direction); } catch (e) {}
   // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
   try { await buildFireGradeForRows([...ready, ...watching, ...prep], r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
+  // Phase 4.37 — KING NODE magnet (GEX + VPOC + UOA fusion). Async re-render.
+  try {
+    buildKingNodeForRows([...ready, ...watching, ...prep], r => r.ticker).then(() => {
+      try { if (activeTab === 'coil') renderGridCoil(); } catch (e) {}
+    });
+  } catch (e) {}
   document.getElementById("scan-date").textContent = "Coil Scan · " + new Date(coilData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${total} coiled · ${(coilData.scanned || 0)} scanned · ${coilData.tookMs || 0}ms`;
   renderStatsCoil();
@@ -4489,7 +4573,7 @@ function renderGridCoil() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${buildTaBadge(r.ta) ? `<div style="margin-top:8px;">${buildTaBadge(r.ta)}</div>` : ''}
+          ${(buildTaBadge(r.ta) || buildKingNodePill(r.kingNode, r.lastClose)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${buildTaBadge(r.ta) || ''}${buildKingNodePill(r.kingNode, r.lastClose) || ''}</div>` : ''}
 
           <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -4616,6 +4700,12 @@ async function loadWPData() {
   try { await buildMultiTestBreakoutForRows([...ready, ...trial], r => r.ticker, r => r.direction, '60m'); } catch (e) {}
   // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
   try { await buildFireGradeForRows([...ready, ...trial], r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
+  // Phase 4.37 — KING NODE magnet (GEX + VPOC + UOA fusion). Async re-render.
+  try {
+    buildKingNodeForRows([...ready, ...trial], r => r.ticker).then(() => {
+      try { if (activeTab === 'wp') renderGridWP(); } catch (e) {}
+    });
+  } catch (e) {}
   document.getElementById("scan-date").textContent = "WP Swing Scan · " + new Date(wpData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${ready.length + trial.length} setups · ${(wpData.scanned || 0)} scanned · acct $${(wpData.accountSize || 20000).toLocaleString()}`;
   renderStatsWP();
@@ -4770,7 +4860,7 @@ function renderGridWP() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildMultiTestBadge(r.mtb) || buildTapeBadge(window._tape, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>` : ''}
+          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildMultiTestBadge(r.mtb) || buildTapeBadge(window._tape, r.direction) || buildKingNodePill(r.kingNode, r.spot || r.last)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.spot || r.last) ? ' ' + buildKingNodePill(r.kingNode, r.spot || r.last) : ''}</div>` : ''}
 
           ${dailyBreakLine}
 
@@ -4875,6 +4965,12 @@ async function loadJSData() {
   try { await buildMultiTestBreakoutForRows(all, r => r.ticker, r => r.direction, '60m'); } catch (e) {}
   // Phase 4.29 — FIRE GRADE composite (replaces broken conviction score)
   try { await buildFireGradeForRows(all, r => r.ticker, r => r.direction, 'SWING'); } catch (e) {}
+  // Phase 4.37 — KING NODE magnet (GEX + VPOC + UOA fusion). Async re-render.
+  try {
+    buildKingNodeForRows(all, r => r.ticker).then(() => {
+      try { if (activeTab === 'js') renderGridJS(); } catch (e) {}
+    });
+  } catch (e) {}
   document.getElementById("scan-date").textContent = "JS Pattern Scan · " + new Date(jsData.generatedAt || Date.now()).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   document.getElementById("meta").textContent = `${all.length} patterns · ${jsData.scanned || 0} scanned · ${Object.keys(jsData.byPattern || {}).length} pattern types`;
   renderStatsJS();
@@ -5005,7 +5101,7 @@ function renderGridJS() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}</div>
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.lastClose) ? ' ' + buildKingNodePill(r.kingNode, r.lastClose) : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
 
@@ -5257,6 +5353,12 @@ async function loadLottoData() {
   try { await buildTaForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short'); } catch (e) {}
   // Phase 4.29 — FIRE GRADE composite (LOTTO trade type)
   try { await buildFireGradeForRows(lottoData.picks || [], r => r.ticker, r => (r.direction || 'CALL').toLowerCase() === 'call' ? 'long' : 'short', 'LOTTO'); } catch (e) {}
+  // Phase 4.37 — KING NODE magnet (GEX + VPOC + UOA fusion). Async re-render.
+  try {
+    buildKingNodeForRows(lottoData.picks || [], r => r.ticker).then(() => {
+      try { if (activeTab === 'lotto') renderGridLotto(); } catch (e) {}
+    });
+  } catch (e) {}
   const picks = lottoData.picks || [];
   const todayPicks = picks.filter(p => {
     const d = new Date(p.postedAt);
@@ -5335,6 +5437,7 @@ function renderGridLotto() {
               <span class="tag" style="background:rgba(155,109,255,0.2); color:#9b6dff; font-size:10px;">🎰 LOTTO</span>
               ${timeStopPillHtml('LOTTO')}
               ${buildTaBadge(p.ta)}
+              ${buildKingNodePill(p.kingNode, (window._lottoSpots && window._lottoSpots[p.ticker]) || p.stockEntry)}
               <span id="hold-pill-${p.ticker}-lotto" data-hold-ticker="${p.ticker}" data-hold-dir="${p.direction || 'LONG'}"></span>
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
@@ -6501,6 +6604,12 @@ async function loadMoversData() {
         try { if (activeTab === 'movers') renderGridMovers(); } catch (e) {}
       });
     } catch (e) {}
+    // Phase 4.37 — bulk KING NODE fetch (GEX + VPOC + UOA fusion). Async re-render.
+    try {
+      buildKingNodeForRows(movers.movers || [], r => r.ticker).then(() => {
+        try { if (activeTab === 'movers') renderGridMovers(); } catch (e) {}
+      });
+    } catch (e) {}
   } catch (e) {
     document.getElementById("grid").innerHTML = `<div class="empty">
       Could not load Live Movers: <code>${e.message}</code>
@@ -6689,6 +6798,7 @@ function renderGridMovers() {
           ${buildMultiTestBadge(m.mtb)}
           ${buildTapeBadge(window._tape, m.pctChange > 0 ? 'long' : 'short')}
           ${buildVpocPill(m._vp, m.last)}
+          ${buildKingNodePill(m.kingNode, m.last)}
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}

@@ -56,6 +56,11 @@ var johnLikePicker = null;
 try { johnLikePicker = require('./johnLikePicker'); }
 catch (e) { console.log('[FIRE-GRADE] johnLikePicker not loaded:', e.message); }
 
+// Phase 4.37 — KING NODE soft signal (gravity adjustment from GEX+VPOC+UOA fusion)
+var kingNodeComputer = null;
+try { kingNodeComputer = require('./kingNodeComputer'); }
+catch (e) { console.log('[FIRE-GRADE] kingNodeComputer not loaded:', e.message); }
+
 // --- 60s cache keyed by ticker|direction|tradeType --------------------------
 var _cache = {};
 var CACHE_TTL_MS = 60 * 1000;
@@ -401,6 +406,59 @@ async function checkJohnLikeBonus(ticker, direction, setup) {
 }
 
 // =============================================================================
+// PHASE 4.37 — KING NODE SOFT SIGNAL
+// =============================================================================
+// NOT a hard gate — adjusts conviction by +/- 1.
+//   LONG, spot BELOW king node within 0.5%   → +1  (price near magnet, pulled up)
+//   LONG, spot ABOVE king node by > 2%        → -1  (extended, gravity pulls down)
+//   SHORT, spot ABOVE king node within 0.5%   → +1  (price near magnet, pulled down)
+//   SHORT, spot BELOW king node by > 2%       → -1  (extended, gravity pulls up)
+// All other distances → 0 (neutral).
+//
+// Fail-open: if kingNodeComputer not loaded or returns null, returns 0 silently.
+async function checkKingNodeSignal(ticker, direction) {
+  try {
+    if (!kingNodeComputer || !kingNodeComputer.computeKingNode) {
+      return { adjust: 0, reason: 'kingNodeComputer not loaded', applied: false };
+    }
+    var king = await kingNodeComputer.computeKingNode(ticker);
+    if (!king || king.kingNode == null || king.spot == null) {
+      return { adjust: 0, reason: 'no king node mapped', applied: false };
+    }
+    var dir = normDir(direction);
+    var spot = Number(king.spot);
+    var k = Number(king.kingNode);
+    if (!isFinite(spot) || !isFinite(k) || k === 0) {
+      return { adjust: 0, reason: 'invalid spot/king', applied: false };
+    }
+    var distPct = ((spot - k) / k) * 100;          // signed % above king
+    var absDist = Math.abs(distPct);
+    var above = spot > k;
+    var below = spot < k;
+
+    if (dir === 'long') {
+      if (below && absDist <= 0.5) {
+        return { adjust: 1, reason: 'LONG within 0.5% BELOW king $' + k.toFixed(2) + ' — gravity pulls UP', applied: true, kingNode: k, spot: spot, distPct: +distPct.toFixed(2) };
+      }
+      if (above && absDist > 2) {
+        return { adjust: -1, reason: 'LONG extended ' + absDist.toFixed(1) + '% ABOVE king $' + k.toFixed(2) + ' — gravity pulls DOWN', applied: true, kingNode: k, spot: spot, distPct: +distPct.toFixed(2) };
+      }
+    }
+    if (dir === 'short') {
+      if (above && absDist <= 0.5) {
+        return { adjust: 1, reason: 'SHORT within 0.5% ABOVE king $' + k.toFixed(2) + ' — gravity pulls DOWN', applied: true, kingNode: k, spot: spot, distPct: +distPct.toFixed(2) };
+      }
+      if (below && absDist > 2) {
+        return { adjust: -1, reason: 'SHORT extended ' + absDist.toFixed(1) + '% BELOW king $' + k.toFixed(2) + ' — gravity pulls UP', applied: true, kingNode: k, spot: spot, distPct: +distPct.toFixed(2) };
+      }
+    }
+    return { adjust: 0, reason: 'neutral zone (' + (distPct >= 0 ? '+' : '') + distPct.toFixed(1) + '% from king $' + k.toFixed(2) + ')', applied: false, kingNode: k, spot: spot, distPct: +distPct.toFixed(2) };
+  } catch (e) {
+    return { adjust: 0, reason: 'king-node soft error: ' + e.message, applied: false };
+  }
+}
+
+// =============================================================================
 // STRATEGY TYPE DETECTION
 // =============================================================================
 function detectStrategyType(setup, gates) {
@@ -514,8 +572,8 @@ async function computeFireGrade(setup) {
   var cached = fromCache(key);
   if (cached) return Object.assign({}, cached, { cached: true });
 
-  // Run all 6 gates + John-like bonus in parallel
-  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG, johnBonus] = await Promise.all([
+  // Run all 6 gates + John-like bonus + king-node soft signal in parallel
+  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG, johnBonus, kingSignal] = await Promise.all([
     checkTrendGate(ticker, direction),
     checkBreakoutGate(ticker, direction, setup),
     checkTapeGate(direction),
@@ -523,6 +581,7 @@ async function computeFireGrade(setup) {
     checkLiquidityGate(ticker, direction, tradeType),
     checkVisionGate(ticker, direction, tradeType),
     checkJohnLikeBonus(ticker, direction, setup),
+    checkKingNodeSignal(ticker, direction),
   ]);
 
   var gates = {
@@ -558,6 +617,28 @@ async function computeFireGrade(setup) {
     }
   }
 
+  // Phase 4.37 — KING NODE soft signal (+/- 1 to score, max 1 grade-step)
+  if (kingSignal && kingSignal.applied && kingSignal.adjust !== 0) {
+    var kOldScore = graded.score;
+    var kOldGrade = graded.grade;
+    graded.score = Math.max(0, Math.min(graded.denominator, graded.score + kingSignal.adjust));
+    if (graded.denominator === 6) {
+      if (graded.score >= 5) { graded.grade = 'A'; graded.fireRecommendation = 'FIRE_FULL'; }
+      else if (graded.score === 4) { graded.grade = 'B'; graded.fireRecommendation = 'TRIAL_1CT'; }
+      else if (graded.score === 3) { graded.grade = 'C'; graded.fireRecommendation = 'WATCH'; }
+      else { graded.grade = 'D'; graded.fireRecommendation = 'SKIP'; }
+    } else {
+      if (graded.score >= 4) { graded.grade = 'A'; graded.fireRecommendation = 'FIRE_FULL'; }
+      else if (graded.score === 3) { graded.grade = 'B'; graded.fireRecommendation = 'TRIAL_1CT'; }
+      else if (graded.score === 2) { graded.grade = 'C'; graded.fireRecommendation = 'WATCH'; }
+      else { graded.grade = 'D'; graded.fireRecommendation = 'SKIP'; }
+    }
+    if (graded.grade !== kOldGrade) {
+      var arrow = kingSignal.adjust > 0 ? '↑' : '↓';
+      warnings.unshift('GRADE ' + arrow + ' ' + kOldGrade + ' → ' + graded.grade + ' via KING NODE (' + (kingSignal.adjust > 0 ? '+' : '') + kingSignal.adjust + '): ' + kingSignal.reason);
+    }
+  }
+
   // COIL detection override — never grant FIRE on a coil (wait for break)
   if (strategyType === 'COIL') {
     if (graded.grade === 'A' || graded.grade === 'B') {
@@ -580,6 +661,7 @@ async function computeFireGrade(setup) {
     warnings: warnings,
     fireRecommendation: graded.fireRecommendation,
     johnLike: johnBonus,  // Phase 4.30E — surface to UI
+    kingNode: kingSignal,  // Phase 4.37 — surface soft signal to UI
     timestamp: new Date().toISOString(),
   };
 
@@ -612,5 +694,6 @@ module.exports = {
   checkLiquidityGate: checkLiquidityGate,
   checkVisionGate: checkVisionGate,
   checkJohnLikeBonus: checkJohnLikeBonus,  // Phase 4.30E
+  checkKingNodeSignal: checkKingNodeSignal,  // Phase 4.37
   detectStrategyType: detectStrategyType,
 };
