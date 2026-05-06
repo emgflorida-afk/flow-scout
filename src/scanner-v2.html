@@ -841,6 +841,21 @@ let account = localStorage.getItem("account") || "SIM";  // SIM | LIVE
 // source of truth for the highest-liquidity universe.
 const MEGA_WATCHLIST = ['META','AAPL','GOOGL','GOOG','AMZN','MSFT','NVDA','IWM','SPY','AMD'];
 
+// MAY 6 2026 PM — global helper called at the top of EVERY render function
+// (except renderGridMega itself) to strip MEGA tickers from the displayed list.
+// Looks for a `.ticker` / `.symbol` field on each row.
+function _excludeMegaTickers(rows) {
+  if (window.activeTab === 'mega') return rows; // MEGA tab keeps them
+  if (localStorage.getItem('actionRawMode') === '1') return rows; // debug toggle
+  if (!Array.isArray(rows)) return rows;
+  return rows.filter(r => {
+    const t = (r && (r.ticker || r.symbol || r.Symbol || '')).toString().toUpperCase();
+    return MEGA_WATCHLIST.indexOf(t) === -1;
+  });
+}
+// Expose for debug from console
+window._excludeMegaTickers = _excludeMegaTickers;
+
 const TABS = [
   { id: "mega",     label: "🐋 MEGA",        modeDefault: "9 NAMES ONLY" },
   { id: "action",   label: "🎯 ACTION",      modeDefault: "WHAT TO DO NOW" },
@@ -1364,6 +1379,14 @@ function dedupByTicker(cands) {
 }
 
 function renderGrid() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   const cands = dedupByTicker(scan.candidates || []);
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
   const filtered = cands.filter((c, i) => filter.test(c, i));
@@ -3679,6 +3702,14 @@ const RADAR_TYPE_LABELS = {
 };
 
 function renderGridTomorrow() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     const all = radarData._flat || [];
     const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
@@ -4496,6 +4527,14 @@ function renderStatsSniper() {
 }
 
 function renderGridSniper() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_SNIPER;
     const posts = sniperData.posts || [];
@@ -4647,6 +4686,14 @@ async function analyzeSwingLeap(msgId, btnEl) {
 window.analyzeSwingLeap = analyzeSwingLeap;
 
 function renderGridSwingLeap() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_SWINGS;
     const posts = swingLeapData.posts || [];
@@ -4811,6 +4858,14 @@ const COIL_PATTERN_INFO = {
 };
 
 function renderGridCoil() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_COIL;
     const all = [].concat(coilData.ready || [], coilData.watching || [], coilData.prep || []);
@@ -5064,6 +5119,14 @@ const WP_SIGNAL_INFO = {
 };
 
 function renderGridWP() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_WP;
     const all = [].concat(wpData.ready || [], wpData.trial || []);
@@ -5324,6 +5387,14 @@ const JS_PATTERN_INFO = {
 };
 
 function renderGridJS() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_JS;
     const all = [].concat(jsData.ready || [], jsData.watching || [], jsData.prep || []);
@@ -5684,6 +5755,14 @@ function renderStatsLotto() {
 }
 
 function renderGridLotto() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     // Defensive: re-pin LOTTO filters in case auto-poll/tab-switch race left FILTERS pointing elsewhere
     FILTERS = FILTERS_LOTTO;
@@ -6317,6 +6396,14 @@ async function ayceFireAuto(ticker, direction, account, tradeType) {
 window.ayceFireAuto = ayceFireAuto;
 
 function renderGridAYCE() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     FILTERS = FILTERS_AYCE;
     const hits = ayceData.hits || [];
@@ -6463,6 +6550,14 @@ function renderStatsStarred() {
 }
 
 function renderGridStarred() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
     const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
     const filtered = starredCache.filter(r => filter.test(r));
@@ -6602,6 +6697,14 @@ const SIGNAL_PILLS = {
 };
 
 function renderGridLvl() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
   const rs = lvlData.results || [];
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
@@ -6976,6 +7079,14 @@ function renderStats() {
 // LIVE MOVERS GRID
 // =============================================================================
 function renderGridMovers() {
+  // MAY 6 2026 PM — strip MEGA tickers (they live exclusively on the MEGA tab)
+  try { if (typeof actionData !== "undefined" && actionData && actionData.rows) actionData.rows = _excludeMegaTickers(actionData.rows); } catch(e){}
+  try { if (typeof lvlData !== "undefined" && lvlData && lvlData.results) lvlData.results = _excludeMegaTickers(lvlData.results); } catch(e){}
+  try { if (typeof tomorrowData !== "undefined" && tomorrowData && tomorrowData.cards) tomorrowData.cards = _excludeMegaTickers(tomorrowData.cards); } catch(e){}
+  try { if (typeof scanData !== "undefined" && scanData && scanData.candidates) scanData.candidates = _excludeMegaTickers(scanData.candidates); } catch(e){}
+  try { if (typeof moversData !== "undefined" && moversData && moversData.rows) moversData.rows = _excludeMegaTickers(moversData.rows); } catch(e){}
+  try { if (typeof lottoData !== "undefined" && lottoData && lottoData.rows) lottoData.rows = _excludeMegaTickers(lottoData.rows); } catch(e){}
+  try { if (typeof swingsData !== "undefined" && swingsData && swingsData.rows) swingsData.rows = _excludeMegaTickers(swingsData.rows); } catch(e){}
   try {
   const ms = movers.movers || [];
   const filter = FILTERS.find(f => f.id === activeFilter) || FILTERS[0];
