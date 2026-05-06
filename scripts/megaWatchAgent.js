@@ -721,10 +721,10 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
   if (sc) {
     fields.push(
       { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
-      // COPY-PASTE block — AB explicit ask after entering wrong GOOGL contract.
-      // Triple-click to select, paste into broker symbol field. No typing.
-      { name: '📑 Copy-paste symbol (no typos)', value: `**TS Titan:** \`${sc.tsSymbol}\`\n**Public.com:** \`${sc.publicSymbol || sc.tsSymbol}\``, inline: false },
-      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false }
+      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false },
+      // MAY 6 PM — placeholder for Phase 4.52 button-fire URL.
+      // Real link replaces this on the next deploy after /api/quick-fire ships.
+      { name: '⚡ FIRE (Phase 4.52 builds tonight)', value: `Auto-sized · 1ct ${tier === 'day-trade' ? '($' + (sc.mid * 100).toFixed(0) + ')' : '($' + (sc.mid * 100).toFixed(0) + ')'} · button-link incoming Thu AM`, inline: false }
     );
   }
   // Click-through chart link
