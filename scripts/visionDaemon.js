@@ -45,6 +45,7 @@ const CANDIDATE_LOOP_MS = 60 * 1000;          // refresh top-10 candidates every
 const POSITION_LOOP_MS = 5 * 60 * 1000;       // recheck open positions every 5 min
 const HEARTBEAT_MS = 30 * 1000;               // beat to Railway every 30s
 const SNIPER_LOOP_MS = 60 * 1000;             // Phase 4.33 — poll Sniper feed every 60s
+const INDEX_REVERSAL_LOOP_MS = 5 * 60 * 1000; // Phase 4.38 — index reversal watch every 5 min
 
 // Cache TTLs (local memory)
 const CANDIDATE_TTL_MS = 5 * 60 * 1000;       // candidate verdict valid 5 min
@@ -82,6 +83,15 @@ const LOG_FILE = process.env.VISION_DAEMON_LOG || '/tmp/vision-daemon.log';
 const DATA_DIR = process.env.DATA_DIR ||
   (fs.existsSync('/data') ? '/data' : path.join(REPO_ROOT, 'data'));
 const SNIPER_SEEN_FILE = path.join(DATA_DIR, 'sniper_seen.json');
+
+// Phase 4.38 — Index reversal watch state file (per-ticker last-alert timestamps)
+const INDEX_REVERSAL_FILE = path.join(DATA_DIR, 'index_reversal_alerts.json');
+
+// Phase 4.38 — index watchlist & dedup window
+const INDEX_WATCHLIST = ['SPY', 'QQQ', 'IWM'];
+const INDEX_REVERSAL_DEDUP_HOURS = parseInt(process.env.INDEX_REVERSAL_DEDUP_HOURS || '4', 10);
+// Bearish reversal pattern keywords — substring search on Daily/4HR summary
+const BEARISH_REVERSAL_RE = /(hanging\s+man|shooting\s+star|distribution|failed[\s-]2U|bearish\s+(divergence|reversal|engulf)|lower\s+high|rejection|exhaustion|topping)/i;
 
 // Whether to run vision against the live TV chart.  If TV CDP is unavailable
 // (no port 9222) the daemon falls back to a "skipped" verdict so it doesn't
@@ -922,6 +932,327 @@ async function sendSniperBackfillSummary(verdictPairs) {
   }
 }
 
+// =============================================================================
+// PHASE 4.38 — INDEX REVERSAL WATCH (SPY / QQQ / IWM)
+// -----------------------------------------------------------------------------
+// AB's directive (May 5 2026 PM): SPY ATH $720→$730 in 24hr, IWM +1.80%, vol
+// indices rolling — "vision-on-watch BEFORE the reversal so I don't miss the
+// entry." Persistent loop independent of scanner candidates: every 5 min during
+// RTH, run vision on Daily + 4HR for SHORT bias on each index. If a bearish
+// reversal pattern fires:
+//   1. Push Discord alert with Daily + 4HR reasoning + spot + suggested PUT
+//      trigger.
+//   2. Auto-create an ARMED smart conditional with TA + TAPE + VISION gates so
+//      it won't fire on wicks — has to clear all gates at trigger break.
+//   3. 4-hour per-ticker dedup so we don't spam.
+// =============================================================================
+
+// In-memory + on-disk dedup state
+let indexReversalState = { lastAlertedAt: {} };
+
+function loadIndexReversalState() {
+  try {
+    if (!fs.existsSync(INDEX_REVERSAL_FILE)) {
+      log('INFO', `index-reversal: no file at ${INDEX_REVERSAL_FILE}, starting fresh`);
+      return;
+    }
+    const raw = fs.readFileSync(INDEX_REVERSAL_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    indexReversalState = {
+      lastAlertedAt: (data && typeof data.lastAlertedAt === 'object') ? data.lastAlertedAt : {},
+    };
+    const counts = Object.keys(indexReversalState.lastAlertedAt).length;
+    log('INFO', `index-reversal: loaded ${counts} ticker dedup entries`);
+  } catch (e) {
+    log('WARN', `index-reversal load error: ${e.message} — starting fresh`);
+    indexReversalState = { lastAlertedAt: {} };
+  }
+}
+
+function saveIndexReversalState() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(INDEX_REVERSAL_FILE, JSON.stringify(indexReversalState, null, 2));
+  } catch (e) {
+    log('WARN', `index-reversal save error: ${e.message}`);
+  }
+}
+
+function indexRecentlyAlerted(ticker, hours) {
+  const last = indexReversalState.lastAlertedAt[ticker];
+  if (!last) return false;
+  const ageMs = Date.now() - new Date(last).getTime();
+  if (!isFinite(ageMs)) return false;
+  return ageMs < (hours || INDEX_REVERSAL_DEDUP_HOURS) * 60 * 60 * 1000;
+}
+
+function markIndexAlerted(ticker) {
+  indexReversalState.lastAlertedAt[ticker] = new Date().toISOString();
+  saveIndexReversalState();
+}
+
+// Pull live spot for one or many tickers via /api/ticker-quote.
+async function fetchIndexQuote(ticker) {
+  const url = `${RAILWAY_BASE}/api/ticker-quote?symbols=${encodeURIComponent(ticker)}`;
+  const r = await getJson(url, { timeoutMs: 6000 });
+  if (!r || !r.ok || !Array.isArray(r.quotes) || !r.quotes.length) return null;
+  const q = r.quotes[0];
+  if (!q || !isFinite(q.last)) return null;
+  return { last: q.last, prevClose: q.prevClose, pctChange: q.pctChange };
+}
+
+// Pull recent 6HR low for trigger calculation. Falls back to a % buffer below
+// spot if the bars endpoint is not reachable.
+async function fetchRecentSwingLow(ticker, spot) {
+  try {
+    const url = `${RAILWAY_BASE}/api/js-scan/debug/${encodeURIComponent(ticker)}?tf=6HR`;
+    const r = await getJson(url, { timeoutMs: 8000 });
+    if (r && r.ok && Array.isArray(r.classified) && r.classified.length) {
+      // Use the lowest L of the last 6 classified bars (covers the recent swing)
+      const recentLows = r.classified.slice(-6).map((b) => parseFloat(b.L)).filter((v) => isFinite(v));
+      if (recentLows.length) return Math.min.apply(null, recentLows);
+    }
+  } catch (e) {
+    log('WARN', `fetchRecentSwingLow ${ticker} error: ${e.message}`);
+  }
+  // Fallback: 0.5% below spot
+  return spot * 0.995;
+}
+
+// Compute the suggested PUT trigger for a bearish reversal.
+// = 0.3% below the recent swing low (break = confirmed reversal).
+function computeReversalTrigger(spot, swingLow) {
+  const base = isFinite(swingLow) ? swingLow : spot * 0.995;
+  const trigger = base * 0.997;
+  return Math.round(trigger * 100) / 100;
+}
+
+// Pick a put strike: 1 strike OTM (below spot) for SPY/QQQ ($1 strikes), IWM
+// ($1 strikes too). Round down to nearest dollar.
+function pickPutStrike(ticker, spot) {
+  if (!isFinite(spot)) return null;
+  // ETF strikes are mostly $1 increments — use floor(spot)-strikeStep for OTM
+  // but stay close enough that mid is meaningful.
+  const offset = ticker === 'SPY' || ticker === 'QQQ' ? 5 : 2;
+  return Math.floor(spot) - offset;
+}
+
+// Compute next standard Friday at least minDTE days out, formatted YYMMDD.
+function nextFridayYYMMDD(minDTE) {
+  const base = new Date();
+  const targetMs = base.getTime() + (minDTE || 7) * 86400000;
+  let d = new Date(base.getTime());
+  while (true) {
+    d = new Date(d.getTime() + 86400000);
+    if (d.getDay() === 5 && d.getTime() >= targetMs) break;
+    if (d.getTime() - base.getTime() > 45 * 86400000) break;
+  }
+  const yy = String(d.getFullYear()).slice(-2);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return yy + mm + dd;
+}
+
+// Build TS-format option symbol: "SPY 260515P730"
+function pickPutContract(ticker, spot) {
+  const strike = pickPutStrike(ticker, spot);
+  if (!isFinite(strike) || strike <= 0) return null;
+  // Aim for ~10 day DTE — next Friday at least 7 days out.
+  const yymmdd = nextFridayYYMMDD(7);
+  return { symbol: `${ticker} ${yymmdd}P${strike}`, strike: strike, expiry: yymmdd };
+}
+
+// Approximate put mid for the auto-armed conditional limit. Real mid pulled at
+// fire time via /api/option-mids — this is just a sane initial bound that won't
+// be obviously wrong at trigger time.
+function estimatedPutMid(ticker, spot, strike) {
+  if (!isFinite(spot) || !isFinite(strike)) return null;
+  // For a put OTM by a few %, intrinsic is ~0; rough premium = max(0.5, spot*0.005)
+  const intrinsic = Math.max(0, strike - spot);
+  const extrinsic = Math.max(0.5, spot * 0.005);
+  const mid = intrinsic + extrinsic;
+  return Math.round(mid * 100) / 100;
+}
+
+// One-shot: check ticker for bearish reversal pattern. Returns the verdict
+// object plus a flag indicating whether a reversal was detected.
+async function checkIndexForReversal(ticker) {
+  // Run vision on Daily + 4HR for SHORT setup
+  const verdict = await runVisionForCandidate(ticker, 'short', 'SWING_SNIPER');
+  // SWING_SNIPER → tfMapForTradeType returns Daily + 4HR (see line ~262)
+
+  const hi = verdict.higherTf || {};
+  const lo = verdict.lowerTf || {};
+  const hiText = String(hi.summary || '');
+  const loText = String(lo.summary || '');
+
+  // Reversal detected if either TF approves a SHORT setup OR either TF summary
+  // mentions a bearish reversal keyword.
+  const isBearishReversal = (
+    hi.verdict === 'APPROVE' ||
+    lo.verdict === 'APPROVE' ||
+    BEARISH_REVERSAL_RE.test(hiText) ||
+    BEARISH_REVERSAL_RE.test(loText)
+  );
+
+  return { verdict: verdict, isBearishReversal: isBearishReversal };
+}
+
+// Build + push Discord embed for an index reversal signal.
+async function pushIndexReversalAlert(ticker, verdict, quote, trigger, contract, putMid) {
+  const hi = verdict.higherTf || {};
+  const lo = verdict.lowerTf || {};
+  const hiText = (hi.summary || '').slice(0, 200);
+  const loText = (lo.summary || '').slice(0, 200);
+
+  const dailyConf = hi.confidence || 5;
+  const fourConf = lo.confidence || 5;
+
+  const fields = [
+    { name: 'Spot', value: `$${quote.last}` + (quote.pctChange != null ? ` (${quote.pctChange >= 0 ? '+' : ''}${quote.pctChange}%)` : ''), inline: true },
+    { name: 'Suggested PUT trigger', value: `$${trigger} crossing_down`, inline: true },
+    { name: 'Suggested contract', value: contract ? `${contract.symbol}` : '(skipped — no strike)', inline: false },
+    { name: 'Estimated cost', value: contract && putMid ? `1ct ~ $${(putMid * 100).toFixed(0)}` : 'n/a', inline: true },
+    { name: `Reasoning (${hi.tf || 'Daily'})`, value: hiText || `${hi.verdict || '?'} ${dailyConf}/10`, inline: false },
+    { name: `Reasoning (${lo.tf || '4HR'})`, value: loText || `${lo.verdict || '?'} ${fourConf}/10`, inline: false },
+    { name: 'Action', value: 'Auto-armed smart conditional fires PUT 1ct if ' + ticker + ' drops thru $' + trigger + ' + 7 gates pass (TA + TAPE + VISION). Cancel: POST /api/smart-conditional/cancel/<id>', inline: false },
+  ];
+
+  const body = {
+    username: 'Vision Daemon',
+    embeds: [{
+      title: `INDEX REVERSAL SIGNAL — ${ticker}`,
+      description:
+        `Vision detected bearish reversal pattern.\n\n` +
+        `**Daily:** ${hi.verdict || '?'} ${dailyConf}/10\n` +
+        `**4HR:** ${lo.verdict || '?'} ${fourConf}/10`,
+      color: 15158332, // red
+      fields: fields,
+      footer: { text: 'Vision Daemon · Phase 4.38 · Index Reversal Watch' },
+      timestamp: new Date().toISOString(),
+    }],
+  };
+
+  try {
+    const r = await fetchLib(DISCORD_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (r.ok) {
+      log('INFO', `index-reversal alert pushed for ${ticker} (Daily ${hi.verdict || '?'} / 4HR ${lo.verdict || '?'})`);
+    } else {
+      const txt = await r.text().catch(() => '');
+      log('WARN', `index-reversal discord push failed ${r.status}: ${txt.slice(0, 200)}`);
+    }
+  } catch (e) {
+    log('WARN', `index-reversal discord error: ${e.message}`);
+  }
+}
+
+// Auto-create the smart conditional. ARMED with TA + TAPE + VISION gates so
+// trigger break alone doesn't fire — gates have to pass too.
+async function armReversalConditional(ticker, quote, trigger, contract, putMid) {
+  if (!contract || !contract.symbol || !isFinite(putMid) || putMid <= 0) {
+    log('WARN', `index-reversal arm skipped for ${ticker} — missing contract or mid`);
+    return null;
+  }
+
+  // 24-hour expiry from now
+  const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+
+  // Stop = 1% above current spot (i.e., if SPY pulls back to trigger but
+  // recovers higher, the structural short thesis is invalidated)
+  const stopPrice = Math.round(quote.last * 1.01 * 100) / 100;
+
+  const body = {
+    ticker: ticker,
+    direction: 'short',
+    contractSymbol: contract.symbol,
+    triggerPrice: trigger,
+    triggerDirection: 'crossing_down',
+    stopPrice: stopPrice,
+    account: 'ts-live',
+    qty: 1,
+    limitPrice: putMid,
+    gates: ['TA', 'TAPE', 'VISION'],
+    allowOverride: false,
+    bracket: { stopPct: 50, tp1Pct: 25 },
+    timeWindow: { start: '09:45', end: '15:00' },
+    expiresAt: expiresAt,
+    pattern: 'index-reversal-watch',
+    source: 'index-reversal-watch',
+    notes: `Auto-armed by Phase 4.38 daemon — bearish reversal pattern on ${ticker} Daily/4HR. Strike ${contract.strike}, expiry ${contract.expiry}.`,
+  };
+
+  const url = `${RAILWAY_BASE}/api/smart-conditional/add`;
+  const r = await postJson(url, body, { timeoutMs: 10000 });
+  if (!r.ok) {
+    log('WARN', `index-reversal arm failed for ${ticker}: ${r.error || r.status} ${r.data && r.data.error ? '— ' + r.data.error : ''}`);
+    return null;
+  }
+  if (r.data && r.data.id) {
+    log('INFO', `index-reversal armed smart conditional ${r.data.id} for ${ticker} short ${contract.symbol}`);
+  }
+  return r.data;
+}
+
+// Main loop — runs every 5 min during RTH (and a +30 min buffer either side
+// per isMarketHours).
+async function indexReversalLoop() {
+  if (!isMarketHours()) return;
+
+  for (const ticker of INDEX_WATCHLIST) {
+    try {
+      // Gate 1: dedup window
+      if (indexRecentlyAlerted(ticker, INDEX_REVERSAL_DEDUP_HOURS)) {
+        // Quiet skip — no log spam every 5 min
+        continue;
+      }
+
+      log('INFO', `index-reversal check ${ticker}`);
+      const t0 = Date.now();
+
+      // Gate 2: vision verdict
+      let res;
+      try {
+        res = await checkIndexForReversal(ticker);
+      } catch (e) {
+        log('WARN', `index-reversal vision error ${ticker}: ${e.message}`);
+        continue;
+      }
+
+      if (!res || !res.isBearishReversal) {
+        log('INFO', `index-reversal ${ticker}: no reversal pattern (Daily ${res && res.verdict.higherTf && res.verdict.higherTf.verdict || '?'} / 4HR ${res && res.verdict.lowerTf && res.verdict.lowerTf.verdict || '?'}) — ${(Date.now() - t0)}ms`);
+        continue;
+      }
+
+      // Gate 3: live spot
+      const quote = await fetchIndexQuote(ticker);
+      if (!quote || !isFinite(quote.last) || quote.last <= 0) {
+        log('WARN', `index-reversal ${ticker}: no live quote — skipping`);
+        continue;
+      }
+
+      // Compute trigger + contract
+      const swingLow = await fetchRecentSwingLow(ticker, quote.last);
+      const trigger = computeReversalTrigger(quote.last, swingLow);
+      const contract = pickPutContract(ticker, quote.last);
+      const putMid = contract ? estimatedPutMid(ticker, quote.last, contract.strike) : null;
+
+      // Push Discord + arm smart conditional (mark dedup BEFORE either so a
+      // partial failure still suppresses spam)
+      markIndexAlerted(ticker);
+      await pushIndexReversalAlert(ticker, res.verdict, quote, trigger, contract, putMid);
+      await armReversalConditional(ticker, quote, trigger, contract, putMid);
+
+      log('INFO', `index-reversal ${ticker}: REVERSAL signal handled — trigger $${trigger}, contract ${contract ? contract.symbol : 'n/a'} — ${(Date.now() - t0)}ms`);
+    } catch (e) {
+      log('ERROR', `index-reversal ${ticker}: ${e.message}`);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // MAIN
 // ---------------------------------------------------------------------------
@@ -951,8 +1282,9 @@ async function main() {
   log('INFO', `DATA_DIR=${DATA_DIR}`);
   log('INFO', `CHART_VISION_SH=${CHART_VISION_SH}`);
   log('INFO', `TV_CLI=${TV_CLI}`);
-  log('INFO', `CANDIDATE_LOOP=${CANDIDATE_LOOP_MS}ms POSITION_LOOP=${POSITION_LOOP_MS}ms HEARTBEAT=${HEARTBEAT_MS}ms SNIPER_LOOP=${SNIPER_LOOP_MS}ms`);
+  log('INFO', `CANDIDATE_LOOP=${CANDIDATE_LOOP_MS}ms POSITION_LOOP=${POSITION_LOOP_MS}ms HEARTBEAT=${HEARTBEAT_MS}ms SNIPER_LOOP=${SNIPER_LOOP_MS}ms INDEX_REVERSAL_LOOP=${INDEX_REVERSAL_LOOP_MS}ms`);
   log('INFO', `CONCURRENCY=${CONCURRENCY} TOP_N=${TOP_N_CANDIDATES} SNIPER_FRESH_HOURS=${SNIPER_FRESH_HOURS} SNIPER_BACKFILL_COUNT=${SNIPER_BACKFILL_COUNT}`);
+  log('INFO', `INDEX_WATCHLIST=${INDEX_WATCHLIST.join(',')} INDEX_REVERSAL_DEDUP_HOURS=${INDEX_REVERSAL_DEDUP_HOURS}`);
   log('INFO', `QUIET_OUTSIDE_MARKET=${QUIET_OUTSIDE_MARKET}`);
 
   // Sanity-check chart-vision.sh exists
@@ -962,6 +1294,9 @@ async function main() {
 
   // Phase 4.33 — hydrate Sniper-seen state from disk
   loadSniperSeen();
+
+  // Phase 4.38 — hydrate index reversal dedup state from disk
+  loadIndexReversalState();
 
   // First heartbeat immediately
   sendHeartbeat();
@@ -983,10 +1318,17 @@ async function main() {
     if (stopRequested) return;
     try { await sniperLoop(); } catch (e) { log('ERROR', 'sniper-loop: ' + e.message); }
   };
+  const indexReversalTick = async () => {
+    if (stopRequested) return;
+    try { await indexReversalLoop(); } catch (e) { log('ERROR', 'index-reversal-loop: ' + e.message); }
+  };
 
   // Fire first candidate scan after 5s to let TV settle
   setTimeout(candTick, 5000);
   setTimeout(posTick, 30000);
+  // Phase 4.38 — first index reversal sweep 2 min after start (after candidate
+  // + position loops have warmed up TV CDP)
+  setTimeout(indexReversalTick, 2 * 60 * 1000);
 
   // Phase 4.33 — Sniper backfill 60s after start (let TV warm up first).
   // Skip backfill if we already have a lastChecked within the last 6 hours
@@ -1010,6 +1352,7 @@ async function main() {
   setInterval(posTick, POSITION_LOOP_MS);
   setInterval(hbTick, HEARTBEAT_MS);
   setInterval(sniperTick, SNIPER_LOOP_MS);
+  setInterval(indexReversalTick, INDEX_REVERSAL_LOOP_MS);
 }
 
 main().catch((e) => {
