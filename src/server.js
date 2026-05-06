@@ -7748,6 +7748,12 @@ app.get('/api/quick-fire', async function(req, res) {
   var tier = String(req.query.tier || 'swing').toLowerCase();
   var acct = String(req.query.acct || 'sim').toLowerCase();
   var source = String(req.query.source || 'card');
+  // MAY 6 PM — explicit strike/expiry overrides (AB: "fire link for John picks")
+  // When AB knows the EXACT contract from a source (John's pick = $35C 5/15),
+  // skip resolveContract and build the OSI directly.
+  var strikeOverride = req.query.strike ? parseFloat(req.query.strike) : null;
+  var expiryOverride = req.query.expiry ? String(req.query.expiry) : null; // YYYY-MM-DD
+  var qtyOverride = req.query.qty ? parseInt(req.query.qty, 10) : null;
 
   if (!ticker) return res.status(400).json({ ok: false, message: 'ticker required' });
   if (acct === 'live') return res.status(400).json({ ok: false, message: 'LIVE not allowed via this helper — use /quick-fire?sid=X&acct=live for confirm flow' });
@@ -7755,13 +7761,69 @@ app.get('/api/quick-fire', async function(req, res) {
   try {
     var contractResolver = require('./contractResolver');
     var optType = (direction === 'long' || direction === 'call' || direction === 'bullish') ? 'call' : 'put';
-    var resolved = await contractResolver.resolveContract(ticker, optType, tier.toUpperCase(), {});
-    if (!resolved || !(resolved.contractSymbol || resolved.symbol) || resolved.ok === false) {
-      return res.status(500).json({ ok: false, message: 'contract resolve failed: ' + ((resolved && resolved.reason) || 'unknown'), stage: (resolved && resolved.stage) || null });
+    var resolved;
+    var contractSymbol, optMid, stockSpot;
+
+    // EXPLICIT-CONTRACT PATH (when AB passes strike + expiry in URL)
+    // Skips resolveContract auto-pick — used for John's-style fire links.
+    if (strikeOverride && expiryOverride) {
+      // Build OSI: TICKER YYMMDDCSTRIKE
+      var dt = new Date(expiryOverride + 'T12:00:00Z');
+      if (isNaN(dt.getTime())) {
+        return res.status(400).json({ ok: false, message: 'invalid expiry format (use YYYY-MM-DD)' });
+      }
+      var yymmdd = String(dt.getUTCFullYear()).slice(2)
+                + String(dt.getUTCMonth() + 1).padStart(2, '0')
+                + String(dt.getUTCDate()).padStart(2, '0');
+      var cp = optType === 'call' ? 'C' : 'P';
+      var strikeStr = String(strikeOverride).replace(/\.0+$/, ''); // trim trailing .0
+      contractSymbol = ticker + ' ' + yymmdd + cp + strikeStr;
+
+      // Fetch live quote for THIS exact symbol via /api/option-mids style
+      var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+      var ts = require('./tradestation');
+      var token = await ts.getAccessToken();
+      if (!token) return res.status(500).json({ ok: false, message: 'no TS token' });
+      var quoteUrl = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(contractSymbol);
+      var qr = await fetchLib(quoteUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+      var qdata = qr.ok ? await qr.json() : null;
+      var qts = (qdata && qdata.Quotes) || [];
+      if (!qts.length) return res.status(500).json({ ok: false, message: 'contract not found: ' + contractSymbol });
+      var bid = parseFloat(qts[0].Bid || 0);
+      var ask = parseFloat(qts[0].Ask || 0);
+      optMid = (isFinite(bid) && isFinite(ask) && bid > 0 && ask > 0) ? +((bid + ask) / 2).toFixed(2) : 0;
+      if (optMid <= 0) return res.status(500).json({ ok: false, message: 'no live mid for ' + contractSymbol });
+
+      // Pull stock spot for structural-stop calc
+      var spotUrl = 'https://api.tradestation.com/v3/marketdata/quotes/' + encodeURIComponent(ticker);
+      var sr = await fetchLib(spotUrl, { headers: { 'Authorization': 'Bearer ' + token } });
+      var sdata = sr.ok ? await sr.json() : null;
+      stockSpot = parseFloat((sdata && sdata.Quotes && sdata.Quotes[0] && sdata.Quotes[0].Last) || 0);
+
+      resolved = {
+        contractSymbol: contractSymbol,
+        symbol: contractSymbol,
+        midPrice: optMid,
+        mid: optMid,
+        bid: bid,
+        ask: ask,
+        strike: strikeOverride,
+        expiry: expiryOverride,
+        stockPrice: stockSpot,
+        delta: parseFloat(qts[0].Delta || 0.40),
+        ok: true,
+      };
+      console.log('[QUICK-FIRE EXPLICIT] ' + ticker + ' ' + contractSymbol + ' mid=$' + optMid + ' spot=$' + stockSpot);
+    } else {
+      // AUTO-RESOLVE PATH (default — contractResolver picks best strike)
+      resolved = await contractResolver.resolveContract(ticker, optType, tier.toUpperCase(), {});
+      if (!resolved || !(resolved.contractSymbol || resolved.symbol) || resolved.ok === false) {
+        return res.status(500).json({ ok: false, message: 'contract resolve failed: ' + ((resolved && resolved.reason) || 'unknown'), stage: (resolved && resolved.stage) || null });
+      }
+      contractSymbol = resolved.contractSymbol || resolved.symbol;
+      optMid = resolved.midPrice || resolved.mid || resolved.limit || 0;
+      stockSpot = resolved.stockPrice || resolved.price || 0;
     }
-    var contractSymbol = resolved.contractSymbol || resolved.symbol;
-    var optMid = resolved.midPrice || resolved.mid || resolved.limit || 0;
-    var stockSpot = resolved.stockPrice || resolved.price || 0;
 
     // Build minimal contract + bracket payload for persistSignal
     var contract = {
@@ -7850,6 +7912,80 @@ app.get('/api/quick-fire', async function(req, res) {
   } catch (e) {
     return res.status(500).json({ ok: false, message: 'fire-card error: ' + (e && e.message ? e.message : 'unknown') });
   }
+});
+
+// MAY 6 PM — /fire-link — bookmarkable HTML page that fires SIM on tap.
+// AB explicit ask: "create a link that opens directly these contracts when I
+// click on it." For John-style picks where you know exact strike + expiry.
+//
+// URL pattern (save as bookmark on phone):
+//   /fire-link?ticker=CELH&strike=35&expiry=2026-05-15&dir=long&qty=1&acct=sim
+//
+// Returns an HTML page with contract preview + big FIRE button. Tap = POST
+// fires SIM, redirects to confirmation. LIVE blocked (use existing
+// /quick-fire?sid=X&acct=live confirm flow for real money).
+app.get('/fire-link', function(req, res) {
+  var ticker = String(req.query.ticker || '').toUpperCase();
+  var strike = req.query.strike ? parseFloat(req.query.strike) : null;
+  var expiry = String(req.query.expiry || '');
+  var dir = String(req.query.dir || 'long').toLowerCase();
+  var qty = parseInt(req.query.qty || '1', 10);
+  var acct = String(req.query.acct || 'sim').toLowerCase();
+  var label = String(req.query.label || (ticker + ' ' + (strike || '?') + (dir.startsWith('l') ? 'C' : 'P') + ' ' + expiry));
+
+  if (!ticker || !strike || !expiry) {
+    return res.status(400).type('html').send('<h1>Missing params</h1><p>Required: ticker, strike, expiry. Optional: dir (long/short), qty (1-3), acct (sim/live), label.</p>');
+  }
+
+  var optType = dir.startsWith('l') ? 'C' : 'P';
+  var displayContract = ticker + ' ' + expiry + ' $' + strike + optType;
+  var actionUrl = '/api/quick-fire?ticker=' + encodeURIComponent(ticker)
+                + '&direction=' + encodeURIComponent(dir)
+                + '&tier=swing'
+                + '&acct=' + encodeURIComponent(acct)
+                + '&strike=' + strike
+                + '&expiry=' + encodeURIComponent(expiry)
+                + '&qty=' + qty
+                + '&source=fire-link';
+  var color = acct === 'live' ? '#cc3a1a' : '#16a34a';
+  var bgColor = acct === 'live' ? '#1a0a0a' : '#0a1a10';
+  var emoji = acct === 'live' ? '🔥' : '⚡';
+
+  res.type('html').send(
+    '<!DOCTYPE html><html><head>' +
+    '<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
+    '<title>Fire Link — ' + label + '</title>' +
+    '<style>' +
+    'body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0a0e14;color:#f5f5f5;padding:20px;max-width:480px;margin:0 auto;}' +
+    '.card{background:' + bgColor + ';border:2px solid ' + color + ';border-radius:12px;padding:24px;margin-top:20px;}' +
+    '.label{font-size:12px;color:#888;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;}' +
+    '.value{font-size:18px;font-weight:600;margin-bottom:14px;}' +
+    '.btn{display:block;width:100%;padding:18px;font-size:18px;font-weight:700;border:none;border-radius:8px;background:' + color + ';color:white;cursor:pointer;margin-top:18px;}' +
+    '.btn:active{opacity:0.8;}' +
+    '.result{margin-top:18px;padding:14px;border-radius:8px;background:#1a1a1a;font-family:Menlo,monospace;font-size:12px;white-space:pre-wrap;}' +
+    '</style></head><body>' +
+    '<h2>' + emoji + ' Fire Link</h2>' +
+    '<div class="card">' +
+    '<div class="label">Account</div><div class="value">' + (acct === 'live' ? 'LIVE 11975462 (real money)' : 'SIM3142118M (paper)') + '</div>' +
+    '<div class="label">Contract</div><div class="value">' + displayContract + '</div>' +
+    '<div class="label">Quantity</div><div class="value">' + qty + ' ct</div>' +
+    '<div class="label">Direction</div><div class="value">' + (dir === 'long' ? 'LONG (BUY TO OPEN)' : 'SHORT (BUY PUT)') + '</div>' +
+    '<button class="btn" id="fireBtn" onclick="fire()">' + emoji + ' FIRE NOW</button>' +
+    '<div class="result" id="result" style="display:none;"></div>' +
+    '</div>' +
+    '<script>' +
+    'async function fire() {' +
+    '  var btn = document.getElementById("fireBtn"); var rs = document.getElementById("result");' +
+    '  btn.disabled = true; btn.textContent = "Firing...";' +
+    '  try {' +
+    '    var r = await fetch("' + actionUrl + '"); var j = await r.json();' +
+    '    rs.style.display = "block"; rs.textContent = JSON.stringify(j, null, 2);' +
+    '    if (j.ok) { btn.textContent = "✓ FILLED — " + (j.orderId || ""); btn.style.background = "#0e7c39"; }' +
+    '    else { btn.textContent = "✗ Rejected"; btn.style.background = "#1a1a1a"; btn.disabled = false; }' +
+    '  } catch (e) { rs.style.display = "block"; rs.textContent = "Error: " + e.message; btn.textContent = "✗ Error"; btn.disabled = false; }' +
+    '}' +
+    '</script></body></html>'
+  );
 });
 
 // GET /api/quick-fire/log?n=N  → recent fire-log entries
