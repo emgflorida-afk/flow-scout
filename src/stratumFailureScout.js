@@ -689,16 +689,52 @@ async function pollOnce() {
       checked++;
 
       try {
-        // Run each strategy; any errors contained per strategy
+        // MAY 6 2026 PM — per-strategy time-window enforcement (AB explicit ask)
+        // Each AYCE strategy has a valid clock window when its trigger logic
+        // makes sense. Outside the window we don't even call the detector —
+        // saves API calls AND prevents stale/late alerts (Failed-9 firing at 2pm
+        // when it's a market-open reversal pattern).
+        function getEtMinute() {
+          var et = new Date().toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+          var m = et.match(/,\s*(\d{1,2}):(\d{2})/);
+          if (!m) return -1;
+          return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+        }
+        var nowEtMin = getEtMinute();
+
+        // Window definitions (ET minutes since midnight)
+        // 9:30 = 570, 10:00 = 600, 10:30 = 630, 11:00 = 660, 15:00 = 900, 16:00 = 960
         var detectors = [
-          { name: 'STRATUMFAILURE_MIYAGI',       fn: detectMiyagi },
-          { name: 'STRATUMFAILURE_RETRIGGER',   fn: detect4HRReTrigger },
-          { name: 'STRATUMFAILURE_322',fn: detect322FirstLive },
-          { name: 'STRATUMFAILURE_FAILED9',      fn: detectFailed9 },
+          { name: 'STRATUMFAILURE_MIYAGI',     fn: detectMiyagi,         winStart: 570, winEnd: 630 },  // 9:30-10:30
+          { name: 'STRATUMFAILURE_RETRIGGER',  fn: detect4HRReTrigger,   winStart: 570, winEnd: 600 },  // 9:30-10:00
+          { name: 'STRATUMFAILURE_322',        fn: detect322FirstLive,   winStart: 600, winEnd: 660 },  // 10:00-11:00
+          { name: 'STRATUMFAILURE_FAILED9',    fn: detectFailed9,        winStart: 570, winEnd: 630 },  // 9:30-10:30 (AB: was firing past window)
         ];
-        // 7HR sweep on index ETFs (QQQ, SPY, IWM)
+        // 7HR sweep on index ETFs (QQQ, SPY, IWM) — fires after 11AM
         if (ticker === 'QQQ' || ticker === 'SPY' || ticker === 'IWM') {
-          detectors.push({ name: 'STRATUMFAILURE_SWEEP', fn: detect7HRSweep });
+          detectors.push({ name: 'STRATUMFAILURE_SWEEP', fn: detect7HRSweep, winStart: 660, winEnd: 900 });  // 11:00-15:00
+        }
+
+        // Filter detectors by current window. Override with AYCE_WINDOW_OVERRIDE=1
+        // to run all detectors regardless of clock (debug/backfill use only).
+        if (process.env.AYCE_WINDOW_OVERRIDE !== '1' && nowEtMin >= 0) {
+          var beforeFilter = detectors.length;
+          detectors = detectors.filter(function(det) {
+            var inWindow = nowEtMin >= det.winStart && nowEtMin < det.winEnd;
+            if (!inWindow) {
+              // Only log once per ticker per skipped detector to avoid spam
+              if (i === 0) {
+                var hh = Math.floor(det.winStart / 60), mm = det.winStart % 60;
+                var hh2 = Math.floor(det.winEnd / 60), mm2 = det.winEnd % 60;
+                var nowHh = Math.floor(nowEtMin / 60), nowMm = nowEtMin % 60;
+                console.log('[AYCE] OUTSIDE WINDOW: ' + det.name + ' valid ' + hh + ':' + (mm < 10 ? '0' : '') + mm + '-' + hh2 + ':' + (mm2 < 10 ? '0' : '') + mm2 + ' ET, now ' + nowHh + ':' + (nowMm < 10 ? '0' : '') + nowMm + ' ET — skipped');
+              }
+            }
+            return inWindow;
+          });
+          if (i === 0 && detectors.length === 0) {
+            console.log('[AYCE] All ' + beforeFilter + ' detectors outside window at ' + nowEtMin + ' ET min — entire scan no-ops');
+          }
         }
 
         // Need a current price — pull 5m last bar
@@ -716,7 +752,13 @@ async function pollOnce() {
             console.error('[AYCE] ' + det.name + ' ' + ticker + ' error: ' + e.message);
             continue;
           }
-          if (!sig) continue;
+          if (!sig) {
+            // MAY 6 2026 PM — surface "no signal" reason so AB knows why the
+            // 4 silent strategies aren't producing alerts. Sample 1 ticker per
+            // poll (i === 0) to prevent log spam across 40+ tickers.
+            if (i === 0) console.log('[AYCE] ' + det.name + ' ' + ticker + ': no-signal-detected');
+            continue;
+          }
 
           // REGIME GATE — block counter-trend entries
           var regimeGate = require('./regimeGate');
