@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Position Lifecycle Daemon launchd LaunchAgent (Phase 4.54, May 6 2026)
+  Polls TS open positions every 30s, broadcasts TRIM (TP1) / EXIT (TP2/Stop)
+  Discord cards. Runs only during RTH by default (QUIET_OUTSIDE_MARKET=true).
+
+  Install:
+    cp scripts/com.flowscout.lifecycle.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.flowscout.lifecycle.plist
+
+  Verify:
+    launchctl list | grep lifecycle
+    tail -f /tmp/lifecycle.log
+
+  Unload:
+    launchctl unload -w ~/Library/LaunchAgents/com.flowscout.lifecycle.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.flowscout.lifecycle</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/NinjaMon/Desktop/flow-scout/scripts/positionLifecycleDaemon.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/NinjaMon/Desktop/flow-scout</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>FLOW_SCOUT_ROOT</key>
+        <string>/Users/NinjaMon/Desktop/flow-scout</string>
+        <key>FLOW_SCOUT_BASE</key>
+        <string>https://flow-scout-production.up.railway.app</string>
+        <key>LIFECYCLE_POLL_MS</key>
+        <string>30000</string>
+        <key>QUIET_OUTSIDE_MARKET</key>
+        <string>true</string>
+        <key>TS_SIM_ACCOUNT</key>
+        <string>SIM3142118M</string>
+        <key>TS_LIVE_ACCOUNT</key>
+        <string>11975462</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/lifecycle.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/lifecycle.log</string>
+</dict>
+</plist>
