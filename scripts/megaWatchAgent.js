@@ -212,19 +212,25 @@ async function getGexContext(ticker, direction) {
     agreesWithDirection: null,
     summary: 'GEX data unavailable',
   };
-  if (!kingNodeComputer || !kingNodeComputer.computeKingNode) return fallback;
+  // MAY 6 2026 PM — use Railway proxy /api/gex/:ticker (has working TS auth)
+  // instead of local kingNodeComputer (needs local TS env vars AB doesn't have).
+  // Railway endpoint returns: spot, totalGEX, regime, kingNodes[], callWall, putWall
   try {
-    const king = await kingNodeComputer.computeKingNode(ticker);
-    if (!king || king.kingNode == null || king.spot == null) {
+    const gexRes = await getJson(`${RAILWAY_BASE}/api/gex/${encodeURIComponent(ticker)}`, { timeoutMs: 12000 });
+    if (!gexRes || !gexRes.spot || !Array.isArray(gexRes.kingNodes) || !gexRes.kingNodes.length) {
+      return Object.assign({}, fallback, { summary: 'GEX data unavailable: no candidates' });
+    }
+    // Pick highest |netGex| king node as the magnet
+    const king = gexRes.kingNodes.slice().sort((a, b) => Math.abs(b.netGex || 0) - Math.abs(a.netGex || 0))[0];
+    if (!king || king.strike == null) {
       return Object.assign({}, fallback, { summary: 'GEX data unavailable: no king node' });
     }
-    const spot = Number(king.spot);
-    const k = Number(king.kingNode);
+    const spot = Number(gexRes.spot);
+    const k = Number(king.strike);
     if (!isFinite(spot) || !isFinite(k) || k === 0) return fallback;
 
-    const gd = (king.detail && king.detail.gex) || {};
-    const totalNetGex = isFinite(gd.netGex) ? Number(gd.netGex) : null;
-    const regime = gd.regime || null;
+    const totalNetGex = isFinite(gexRes.totalGEX) ? Number(gexRes.totalGEX) : null;
+    const regime = gexRes.regime || null;
     const distPct = +(((spot - k) / k) * 100).toFixed(2);
     const absDist = Math.abs(distPct);
     const above = spot > k;
