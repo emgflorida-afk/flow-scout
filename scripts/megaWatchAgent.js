@@ -59,9 +59,55 @@ const APLUS_MAX_KING_DIST_PCT = 1.0;
 
 // Bar-close-trigger criteria (separate, faster signal layer)
 const BAR_VOL_MULT = 1.5;          // latest vol > 1.5× avg of prior 10
-const BAR_BODY_FRAC = 0.5;         // body in upper/lower 50% of bar range
+const BAR_BODY_FRAC = 0.66;        // MAY 6 PM: body in upper/lower THIRD (was 0.5) — AB rule: no rejection wick
 const BAR_DEDUP_MIN = 15;          // 15-min dedup per ticker+direction
 const BAR_DEDUP_MS = BAR_DEDUP_MIN * 60 * 1000;
+
+// MAY 6 2026 PM — STRUCTURAL STOPS (AB recurring rule, see feedback_stop_management.md)
+// "NEVER flat % stops. Structure-based."
+//
+// Long stop  = stock prior-bar low (or trigger level - small buffer)
+//              translated to option price via delta
+// Short stop = stock prior-bar high
+//              translated to option price via delta
+//
+// Falls back to a -25% option-mid stop ONLY if structural data is missing
+// (delta unavailable, no prior bar). Always logs whether structural or fallback.
+function computeStructuralStop(direction, currentSpot, priorBarHigh, priorBarLow, optMid, optDelta) {
+  const dir = String(direction).toLowerCase();
+  // Stock-side structural stop: below prior low for long, above prior high for short
+  // Buffer = 0.1% of spot (avoids stop-hunting on exact level)
+  const buffer = currentSpot * 0.001;
+  const stockStopLevel = (dir === 'long' || dir === 'call')
+    ? (priorBarLow - buffer)
+    : (priorBarHigh + buffer);
+
+  if (!isFinite(stockStopLevel) || stockStopLevel <= 0) {
+    return { optStop: (optMid * 0.75).toFixed(2), source: 'fallback-25pct-no-structural', stockStopLevel: null };
+  }
+
+  // Translate to option price using delta
+  const stockMoveAdverse = (dir === 'long' || dir === 'call')
+    ? (currentSpot - stockStopLevel)   // positive: how much stock would drop
+    : (stockStopLevel - currentSpot);  // positive: how much stock would rise
+  if (!isFinite(optDelta) || optDelta <= 0 || optDelta > 1) {
+    // Delta unknown — assume 0.40 ATM-ish
+    optDelta = 0.40;
+  }
+  const optDrop = stockMoveAdverse * optDelta;
+  const optStop = Math.max(optMid - optDrop, optMid * 0.10);  // floor at 10% of mid (don't go negative)
+  // Cap stop loss at 30% of premium even structurally (sanity check)
+  const optStopFinal = Math.max(optStop, optMid * 0.70);
+  const pctOfMid = ((optStopFinal / optMid - 1) * 100).toFixed(1);
+  return {
+    optStop: optStopFinal.toFixed(2),
+    source: 'structural',
+    stockStopLevel: stockStopLevel.toFixed(2),
+    stockMoveAdverse: stockMoveAdverse.toFixed(2),
+    deltaUsed: optDelta,
+    pctMove: pctOfMid + '%',
+  };
+}
 
 // MAY 6 2026 PM — SPLIT CHANNELS (AB: "everything going into one channel")
 // BAR-CLOSE TRIGGERS  → STRATUMBREAK channel (live break-of-structure)
@@ -620,7 +666,7 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     try { sc = await getSuggestedContract(ticker, trig.direction, spot, 9); } catch (e) {}
   }
 
-  let stop, tp1, tp2, profileLabel, holdRule;
+  let stop, tp1, tp2, profileLabel, holdRule, stopDetail = '';
   if (tier === 'day-trade') {
     profileLabel = '☀️ DAY TRADE (9:30-10:30 entry)';
     holdRule = 'Hard exit by 3:30 PM ET · no overnight';
@@ -629,10 +675,18 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     holdRule = 'Time stop: cut after 60 min if no progress';
   }
   if (sc) {
+    // STRUCTURAL stop (AB rule: never flat % stops)
+    // For long: stop at prior bar low. For short: prior bar high.
+    const ss = computeStructuralStop(trig.direction, spot, trig.priorHigh, trig.priorLow, sc.mid, /*optDelta*/ 0.40);
+    stop = ss.optStop;
+    stopDetail = ss.source === 'structural'
+      ? ` (stock invalidation $${ss.stockStopLevel}, ~${ss.pctMove})`
+      : ` (no structural data — fallback)`;
+    // TP based on tier (these stay % since they're profit targets, not risk control)
     if (tier === 'day-trade') {
-      stop = (sc.mid * 0.85).toFixed(2); tp1 = (sc.mid * 1.20).toFixed(2); tp2 = (sc.mid * 1.40).toFixed(2);
+      tp1 = (sc.mid * 1.20).toFixed(2); tp2 = (sc.mid * 1.40).toFixed(2);
     } else {
-      stop = (sc.mid * 0.92).toFixed(2); tp1 = (sc.mid * 1.10).toFixed(2); tp2 = (sc.mid * 1.20).toFixed(2);
+      tp1 = (sc.mid * 1.10).toFixed(2); tp2 = (sc.mid * 1.20).toFixed(2);
     }
   }
 
@@ -652,7 +706,7 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
   if (sc) {
     fields.push(
       { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
-      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**\n${holdRule}`, inline: false }
+      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false }
     );
   }
   // Click-through chart link
