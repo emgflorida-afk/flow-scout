@@ -522,7 +522,10 @@ async function getChainTSQuotes(ticker, expiry, type, price, token) {
     for (var i = -5; i <= 4; i++) grid.push(+(atm + i * step).toFixed(2));
 
     var symbols = grid.map(function(s) { return ticker + ' ' + yymmdd + optType + s; });
-    var url = getTSBase() + '/marketdata/options/quotes?symbols=' + encodeURIComponent(symbols.join(','));
+    // CORRECT endpoint: /v3/marketdata/quotes/SYM1,SYM2 (path-encoded list).
+    // The /options/quotes?symbols= path I used originally is a 404.
+    // (Verified against working /api/option-mids handler.)
+    var url = getTSBase() + '/marketdata/quotes/' + symbols.map(encodeURIComponent).join(',');
     var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
     if (!res.ok) {
       console.log('[CHAIN-TSQUOTES] HTTP ' + res.status);
@@ -530,6 +533,7 @@ async function getChainTSQuotes(ticker, expiry, type, price, token) {
     }
     var data = await res.json();
     var quotes = (data && data.Quotes) || [];
+    console.log('[CHAIN-TSQUOTES] ' + ticker + ' got ' + quotes.length + ' quotes from REST (errors: ' + ((data && data.Errors) || []).length + ')');
     if (!quotes.length) return [];
 
     // Convert each quote into the streaming shape {Legs, Ask, Bid, Mid, Delta, ...}
