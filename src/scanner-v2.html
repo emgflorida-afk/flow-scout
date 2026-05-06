@@ -1547,7 +1547,8 @@ function openDetail(idx) {
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyDetailTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${c.ticker}' + '&interval=5', '_blank')">Open Chart</button>
-        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)">🎟️ Send to Titan</button>
+        <button class="btn btn-primary" style="background: linear-gradient(180deg,#16a34a,#0e7c39); font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${c.ticker}', '${(isCall ? 'long' : 'short')}', this)" title="Fire on SIM3142118M paper account (auto-sized 1.5/2.5/4% per tier, no real money)">⚡ SIM FIRE</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="dispatchToTitan(${idx}, this)" title="Send to TS Titan LIVE 11975462 (real money)">🎟️ Send to Titan</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchScanToPublic(${idx}, this)" title="Place on Public.com (cash account, no PDT)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchScanToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
@@ -3281,7 +3282,8 @@ function openMoverDetail(idx) {
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}' + '&interval=5', '_blank')">Open Chart</button>
-        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+        <button class="btn btn-primary" style="background: linear-gradient(180deg,#16a34a,#0e7c39); font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${m.ticker}', '${(isCall ? 'long' : 'short')}', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)" title="Fire on TS ${account === 'LIVE' ? 'LIVE 11975462 (real money)' : 'SIM via global toggle'}">🔥 ${account} FIRE</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
@@ -3298,7 +3300,8 @@ function openMoverDetail(idx) {
       <div class="ticket-actions">
         <button class="btn btn-secondary" onclick="copyMoverTicket(${idx})">Copy</button>
         <button class="btn btn-secondary" onclick="window.open('https://www.tradingview.com/chart/?symbol=' + '${m.ticker}' + '&interval=5', '_blank')">Open Chart</button>
-        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)">⚡ Fire ${account}</button>
+        <button class="btn btn-primary" style="background: linear-gradient(180deg,#16a34a,#0e7c39); font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${m.ticker}', '${(isCall ? 'long' : 'short')}', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
+        <button class="btn btn-primary ${isCall ? "" : "short"}" onclick="fireMoverOrder(${idx}, this)" title="Fire on TS ${account === 'LIVE' ? 'LIVE 11975462 (real money)' : 'SIM via global toggle'}">🔥 ${account} FIRE</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#3a8fff,#1c64d6);" onclick="dispatchMoverToPublic(${idx}, this)" title="Place on Public.com (cash account)">📱 Public</button>
         <button class="btn btn-primary ${isCall ? "" : "short"}" style="background: linear-gradient(180deg,#9b6dff,#6d3fc8);" onclick="dispatchMoverToBracket(${idx}, this)" title="Place full bracket on Public (entry + auto stop + auto TP1/TP2)">📱 Bracket</button>
       </div>
@@ -3867,13 +3870,19 @@ function renderGridTomorrow() {
 async function fireSimFromCard(ticker, direction, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
   try {
-    const r = (radarData && radarData._flat) ? radarData._flat.find(x => x.ticker === ticker) : null;
-    const tier = (r && r.tradeType) ? String(r.tradeType).toLowerCase() : 'swing';
+    // Look up tradeType in any of the loaded data sources (Tomorrow, Scan, Action, etc.)
+    let r = null;
+    if (radarData && radarData._flat) r = radarData._flat.find(x => x.ticker === ticker);
+    if (!r && typeof scanData !== 'undefined' && scanData && scanData.candidates) r = scanData.candidates.find(x => x.ticker === ticker);
+    if (!r && typeof actionData !== 'undefined' && actionData && actionData.rows) r = actionData.rows.find(x => x.ticker === ticker);
+    if (!r && typeof moversData !== 'undefined' && moversData && moversData.rows) r = moversData.rows.find(x => x.ticker === ticker);
+    const tier = (r && (r.tradeType || r.tier)) ? String(r.tradeType || r.tier).toLowerCase() : 'swing';
+    const sourceTab = (typeof activeTab !== 'undefined') ? activeTab : 'card';
     const url = '/api/quick-fire?ticker=' + encodeURIComponent(ticker)
               + '&direction=' + encodeURIComponent(direction)
               + '&tier=' + encodeURIComponent(tier)
               + '&acct=sim'
-              + '&source=tomorrow-card';
+              + '&source=' + encodeURIComponent(sourceTab);
     const resp = await fetch(url).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
     if (resp && resp.ok) {
       if (btn) { btn.textContent = '✅ SIM FILLED'; btn.style.background = 'linear-gradient(180deg,#16a34a,#0e7c39)'; }
@@ -4373,7 +4382,8 @@ function renderGridAction() {
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
           <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">📈 TV chart</button>
           ${r.status === 'ACTIONABLE' && sug.contract ? `
-            <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, false, this)" title="Fire on TradeStation immediately (LIVE 11975462)">⚡ TS FIRE</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${r.ticker}', '${r.direction}', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, false, this)" title="Fire on TradeStation immediately (LIVE 11975462)">🔥 LIVE FIRE</button>
             <button class="btn btn-secondary" style="background:linear-gradient(180deg,#666,#444); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchActionToTS(${JSON.stringify(r).replace(/"/g, '&quot;')}, true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#fbbf24,#b45309); padding:5px 10px; font-size:11px; color:#000; font-weight:700;" onclick="event.stopPropagation();openSmartConditionalModal(${JSON.stringify(r).replace(/"/g, '&quot;')}, this)" title="Phase 4.34 — server-side gated auto-fire on trigger (TA + TAPE + VISION + MTB)">🤖 SMART AUTO</button>
           ` : ''}
