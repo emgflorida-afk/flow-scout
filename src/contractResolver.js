@@ -470,22 +470,102 @@ async function getChainPolygon(ticker, expiry, type, price) {
 
 // -- GET OPTION CHAIN WITH FALLBACK HIERARCHY ---------------------
 async function getOptionChain(ticker, expiry, type, price, token) {
-  // Source 1: TradeStation
-  var chain = await getChainTS(ticker, expiry, type, price, token);
+  // MAY 6 PM — Source 1 NEW: TS REST quotes (no streaming).
+  // The streaming endpoint /stream/options/chains/ has been returning 0
+  // contracts within 5s timeout for many tickers (KO confirmed). The REST
+  // /options/quotes endpoint works fine. We compute a strike grid around
+  // spot, fetch each via REST, and return the same shape as parseContract
+  // expects.
+  var chain = await getChainTSQuotes(ticker, expiry, type, price, token);
   if (chain.length > 0) return chain;
 
-  // Source 2: Public.com
-  console.log('[CHAIN] TS failed -- trying Public.com...');
+  // Source 2: TradeStation streaming (legacy)
+  console.log('[CHAIN] REST quotes failed -- trying TS streaming...');
+  chain = await getChainTS(ticker, expiry, type, price, token);
+  if (chain.length > 0) return chain;
+
+  // Source 3: Public.com
+  console.log('[CHAIN] TS streaming failed -- trying Public.com...');
   chain = await getChainPublic(ticker, expiry, type, price);
   if (chain.length > 0) return chain;
 
-  // Source 3: Polygon
+  // Source 4: Polygon
   console.log('[CHAIN] Public failed -- trying Polygon...');
   chain = await getChainPolygon(ticker, expiry, type, price);
   if (chain.length > 0) return chain;
 
   console.error('[CHAIN] All sources failed for', ticker, expiry, type);
   return [];
+}
+
+// MAY 6 PM — TS REST option-quotes path. Computes a strike grid around spot,
+// fetches each via /v3/marketdata/options/quotes (the same REST endpoint
+// /api/option-mids uses, which works reliably). Returns same shape as
+// streaming so parseContract handles both.
+async function getChainTSQuotes(ticker, expiry, type, price, token) {
+  try {
+    if (!ticker || !expiry || !price || !token) return [];
+    var optType = type === 'call' ? 'C' : 'P';
+    // YYMMDD format
+    var d = new Date(expiry + 'T12:00:00Z');
+    if (isNaN(d.getTime())) return [];
+    var yy = String(d.getUTCFullYear()).slice(2);
+    var mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    var dd = String(d.getUTCDate()).padStart(2, '0');
+    var yymmdd = yy + mm + dd;
+
+    // Strike step heuristic — same as getSuggestedContract in megaWatchAgent
+    var step = price < 25 ? 0.5 : price < 50 ? 1 : price < 100 ? 2.5 : price < 250 ? 5 : 10;
+    // Build grid: 10 strikes total (5 ITM, ATM, 4 OTM for calls; mirrored for puts)
+    var atm = Math.round(price / step) * step;
+    var grid = [];
+    for (var i = -5; i <= 4; i++) grid.push(+(atm + i * step).toFixed(2));
+
+    var symbols = grid.map(function(s) { return ticker + ' ' + yymmdd + optType + s; });
+    var url = getTSBase() + '/marketdata/options/quotes?symbols=' + encodeURIComponent(symbols.join(','));
+    var res = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token } });
+    if (!res.ok) {
+      console.log('[CHAIN-TSQUOTES] HTTP ' + res.status);
+      return [];
+    }
+    var data = await res.json();
+    var quotes = (data && data.Quotes) || [];
+    if (!quotes.length) return [];
+
+    // Convert each quote into the streaming shape {Legs, Ask, Bid, Mid, Delta, ...}
+    // so parseContract can consume it identically.
+    var out = [];
+    for (var j = 0; j < quotes.length; j++) {
+      var q = quotes[j];
+      var sym = q.Symbol || '';
+      var bid = parseFloat(q.Bid || 0);
+      var ask = parseFloat(q.Ask || 0);
+      var mid = parseFloat(q.Mid || ((bid + ask) / 2) || 0);
+      if (mid <= 0) continue;
+      // Parse strike from symbol: TICKER YYMMDDCnnnn — strip ticker+date+CP
+      var m = sym.match(/^[A-Z.]+\s+\d{6}[CP](\d+(?:\.\d+)?)$/);
+      var strike = m ? parseFloat(m[1]) : null;
+      if (!strike) continue;
+      out.push({
+        _source: 'ts-quotes',
+        Legs: [{ Symbol: sym, StrikePrice: strike }],
+        Bid: bid, Ask: ask, Mid: mid,
+        Delta: parseFloat(q.Delta || 0),
+        Theta: parseFloat(q.Theta || 0),
+        ImpliedVolatility: parseFloat(q.ImpliedVolatility || 0),
+        Volume: parseInt(q.Volume || 0, 10),
+        DailyOpenInterest: parseInt(q.DailyOpenInterest || q.OpenInterest || 0, 10),
+        High: parseFloat(q.High || 0),
+        Low: parseFloat(q.Low || 0),
+        Open: parseFloat(q.Open || 0),
+      });
+    }
+    console.log('[CHAIN-TSQUOTES] ' + ticker + ' ' + type + ' ' + expiry + ' - ' + out.length + ' contracts (REST)');
+    return out;
+  } catch (e) {
+    console.error('[CHAIN-TSQUOTES] Error:', e.message);
+    return [];
+  }
 }
 
 // -- PARSE CONTRACT -----------------------------------------------
