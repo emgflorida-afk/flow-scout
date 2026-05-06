@@ -4667,6 +4667,7 @@ function renderGridSniper() {
           ${visionBlock}
           ${chartImg ? `<div style="margin-top:10px;"><a href="${chartImg}" target="_blank" rel="noopener noreferrer"><img src="${chartImg}" style="width:100%; max-height:240px; object-fit:cover; border-radius:8px; border:1px solid rgba(255,255,255,0.08);"/></a></div>` : ''}
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            ${p.ticker ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${p.ticker}', 'long', this)" title="Fire on SIM (auto-sized)">⚡ SIM FIRE</button>` : ''}
             ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>` : ''}
             ${p.ticker ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'CALL',trigger:0},this)" title="Place on Public.com">📱 Public</button>` : ''}
           </div>
@@ -4817,6 +4818,7 @@ function renderGridSwingLeap() {
           ${verdictBlock}
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
             ${p.hasChart && !a ? `<button class="btn btn-secondary swing-analyze-btn" style="background:rgba(70,180,255,0.18); color:#46b4ff; padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();analyzeSwingLeap('${p.msgId}',this)">🤖 Analyze chart</button>` : ''}
+            ${p.ticker ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${p.ticker}', 'long', this)" title="Fire on SIM (auto-sized)">⚡ SIM FIRE</button>` : ''}
             ${p.ticker ? `<button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>` : ''}
             ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0}},this)" title="Place on Public.com">📱 Public</button>` : ''}
             ${p.ticker && a ? `<button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToBracket({ticker:'${p.ticker}',direction:'${dispatchDir}',trigger:${a.entry || 0},stop:${a.stop || 0},tp1:${a.target1 || 0},tp2:${a.target2 || 0}},this)" title="Place bracket OCO">📱 Bracket</button>` : ''}
@@ -5002,6 +5004,7 @@ function renderGridCoil() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${r.ticker}', 'long', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
             <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0}},this)" title="Place 1ct on Public.com">📱 Public 1ct</button>
             <button class="btn btn-primary" style="background:linear-gradient(180deg,#f59e0b,#b45309); padding:5px 10px; font-size:11px; color:#fff;" onclick="event.stopPropagation();dispatchToTS({ticker:'${r.ticker}',direction:'${optDir}',trigger:${trigDispatch||0},stop:${primary.stop||0},tp1:${primary.tp1||0},tp2:${primary.tp2||0},qty:2,tradeType:'SWING',pattern:'${r.pattern}',conviction:${r.conviction}},this)" title="Place 2ct on TradeStation (auto-resolves option, queues for next-day open)">📱 TS 2ct</button>
@@ -5312,6 +5315,7 @@ function renderGridWP() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${r.ticker}', 'long', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
             <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             ${allowSizeUp ? `
               <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${plan.entry||0}},this)" title="Public 1ct (cash leg)">📱 Public 1ct</button>
@@ -5588,6 +5592,7 @@ function renderGridJS() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+            <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${r.ticker}', 'long', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
             <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${r.ticker}' + '&interval=5', '_blank')">Open chart</button>
             ${allowSizeUp ? `
               <button class="btn btn-primary" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();dispatchToPublic({ticker:'${r.ticker}',direction:'${optDir}',trigger:${pp.trigger||0}},this)" title="Public 1ct trial">📱 Public 1ct</button>
@@ -5675,6 +5680,7 @@ function renderJohnLikePicksSection() {
         </div>
 
         <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
+          <button class="btn btn-primary" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:5px 10px; font-size:11px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${p.ticker}', 'long', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
           <button class="btn btn-secondary" style="padding:5px 10px; font-size:11px;" onclick="event.stopPropagation();window.open('https://www.tradingview.com/chart/?symbol=' + '${p.ticker}' + '&interval=5', '_blank')">Open chart</button>
           <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','ts','SWING')" style="padding:5px 10px;background:rgba(76,175,80,0.2);color:#4f4;border:1px solid #4f4;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟢 TS LIVE</button>
           <button onclick="event.stopPropagation();ayceFireBuild('${p.ticker}','${(p.direction === 'long' || p.direction === 'call') ? 'long' : 'short'}','public','SWING')" style="padding:5px 10px;background:rgba(92,207,255,0.2);color:#5cf;border:1px solid #5cf;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;">🟦 PUBLIC</button>
