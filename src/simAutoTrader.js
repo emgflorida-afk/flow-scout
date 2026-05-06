@@ -814,7 +814,7 @@ async function pushReplaySummary(replay) {
                  ' · Tape: ' + (gateEnabled('SIM_TAPE_GATE', true) ? 'ON' : 'OFF') +
                  ' · Vision: ' + (gateEnabled('SIM_VISION_GATE', false) ? 'ON' : 'OFF') +
                  ' · MTB hard: ' + (gateEnabled('SIM_MTB_GATE', false) ? 'ON' : 'OFF (soft)') +
-                 ' · FireGrade: ' + (gateEnabled('SIM_FIRE_GRADE_GATE', true) ? 'ON' : 'OFF'),
+                 ' · FireGrade: ' + (gateEnabled('SIM_FIRE_GRADE_GATE', false) ? 'ON' : 'OFF (default May 6 2026)'),
           inline: false },
       ],
       footer: { text: 'Flow Scout | Phase 4.29 — SIM Gate Retro + FIRE GRADE' },
