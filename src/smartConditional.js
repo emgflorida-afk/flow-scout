@@ -731,6 +731,22 @@ async function runGatesForSpec(spec, currentSpot) {
       exhaustion: exhaustion,
       premium: premium,
     }, verdict.diagnostics || {});
+
+    // Phase 4.42 — Gate 8: GEX context (ADVISORY ONLY, never blocks fire).
+    // After all hard gates have passed (or failed and we already returned),
+    // pull king-node and stamp the verdict with regime + magnet + agreement
+    // metadata so AB sees it on the fire-attempt card. If GEX disagrees
+    // strongly (spot at king + NEGATIVE regime), emit a WARN line — but do
+    // NOT block the fire. AB explicitly wants advisory + boost, not block.
+    var gexAdvisory = await getGexAdvisoryForSpec(spec);
+    verdict.gates.gex = gexAdvisory.passed;  // 'advisory' or 'unknown'
+    verdict.diagnostics.gex = gexAdvisory;
+    if (gexAdvisory.warn) {
+      console.warn('[smart-conditional] GEX-WARN ' + spec.ticker + ': ' + gexAdvisory.summary);
+    } else {
+      console.log('[smart-conditional] GEX-CTX ' + spec.ticker + ': ' + gexAdvisory.summary);
+    }
+
     return verdict;
   } catch (e) {
     return {
@@ -740,6 +756,90 @@ async function runGatesForSpec(spec, currentSpot) {
       reason: 'gate exception — fail-open',
       diagnostics: { tfClose: tfClose, primeWindow: window, exhaustion: exhaustion, premium: premium },
     };
+  }
+}
+
+// =============================================================================
+// PHASE 4.42 — GEX ADVISORY (Gate 8)
+// =============================================================================
+// Pulls king-node / gamma regime for the spec ticker and returns a normalized
+// payload that smartConditional can stamp on the verdict.  Pure advisory:
+// passed='advisory' if data is available, 'unknown' otherwise.  Never blocks.
+//
+// Sets warn=true (logged as GEX-WARN) when:
+//   - regime is NEGATIVE/FLIPPED AND spot is within 0.5% of king node
+//     (gamma flip risk + spot at magnet = high-volatility chop zone)
+async function getGexAdvisoryForSpec(spec) {
+  var fallback = {
+    passed: 'unknown',
+    gate: 'GEX',
+    totalNetGex: null,
+    regime: null,
+    kingNode: null,
+    distPct: null,
+    agreesWithDirection: null,
+    summary: 'GEX data unavailable',
+    warn: false,
+  };
+  var kingNodeComputer = null;
+  try { kingNodeComputer = require('./kingNodeComputer'); }
+  catch (e) { return Object.assign({}, fallback, { summary: 'kingNodeComputer not loaded' }); }
+  if (!kingNodeComputer || !kingNodeComputer.computeKingNode) return fallback;
+  try {
+    var king = await kingNodeComputer.computeKingNode(spec.ticker);
+    if (!king || king.kingNode == null || king.spot == null) {
+      return Object.assign({}, fallback, { summary: 'no king node mapped for ' + spec.ticker });
+    }
+    var spot = Number(king.spot);
+    var k = Number(king.kingNode);
+    if (!isFinite(spot) || !isFinite(k) || k === 0) return fallback;
+    var distPct = +(((spot - k) / k) * 100).toFixed(2);
+    var absDist = Math.abs(distPct);
+    var above = spot > k;
+    var dir = String(spec.direction || '').toLowerCase();
+
+    var gd = (king.detail && king.detail.gex) || {};
+    var totalNetGex = isFinite(gd.netGex) ? Number(gd.netGex) : null;
+    var regime = gd.regime || (totalNetGex != null ? (totalNetGex > 0 ? 'POSITIVE' : 'NEGATIVE') : null);
+    var positiveRegime = regime === 'POSITIVE' || (totalNetGex != null && totalNetGex > 0 && regime !== 'NEGATIVE' && regime !== 'FLIPPED');
+
+    var agreesWithDirection = null;
+    if (absDist <= 0.5) {
+      agreesWithDirection = null;
+    } else if (positiveRegime) {
+      if (dir === 'long') agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+      if (dir === 'short') agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+    } else {
+      if (dir === 'long') agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+      if (dir === 'short') agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+    }
+
+    var gexFmt = (totalNetGex != null)
+      ? (totalNetGex >= 0 ? '+' : '') + '$' + (totalNetGex / 1e6).toFixed(1) + 'M'
+      : '?';
+    var sideLbl = above ? 'above' : 'below';
+    var agreeLbl = agreesWithDirection === true ? 'agrees with ' + dir.toUpperCase()
+                 : agreesWithDirection === false ? 'fights ' + dir.toUpperCase()
+                 : 'neutral';
+    var summary = (regime || 'UNKNOWN') + ' gamma ' + gexFmt + ', $' + k.toFixed(2) + ' magnet ' + absDist.toFixed(1) + '% ' + sideLbl + ' spot, ' + agreeLbl;
+
+    // Warn condition: NEGATIVE regime + spot AT king node (chop/flip risk)
+    var warn = !positiveRegime && absDist <= 0.5;
+
+    return {
+      passed: 'advisory',
+      gate: 'GEX',
+      totalNetGex: totalNetGex,
+      regime: regime,
+      kingNode: +k.toFixed(4),
+      spot: +spot.toFixed(4),
+      distPct: distPct,
+      agreesWithDirection: agreesWithDirection,
+      summary: summary,
+      warn: warn,
+    };
+  } catch (e) {
+    return Object.assign({}, fallback, { summary: 'gex advisory error: ' + e.message });
   }
 }
 

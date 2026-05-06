@@ -2094,6 +2094,76 @@ function buildKingNodePill(king, spot) {
 }
 window.buildKingNodePill = buildKingNodePill;
 
+// =============================================================================
+// PHASE 4.42 — GEX-AWARE PILL
+// =============================================================================
+// Renders a compact pill summarizing the gamma regime + magnet + direction
+// agreement for ANY card with a king-node payload. Keeps the King Node pill
+// distinct (Phase 4.37 verdict) — this one is the regime/agreement view.
+//
+// Format examples:
+//   📊 GEX +$20.6M · $265 ⚡ 1.3% above · ✅ agrees long
+//   📊 GEX -$4.2M · $510 ⚡ 0.4% below · ⚠ neutral short
+//   📊 no GEX data
+//
+// `direction` may be 'long' / 'short' / 'call' / 'put' / 'bullish' / etc.
+function buildGexAwarePill(king, spot, direction) {
+  if (!king || king.kingNode == null) {
+    return `<span class="tag" style="background:rgba(136,136,136,0.12);color:#888;font-weight:600;font-size:10px;" title="GEX data unavailable for this ticker">📊 no GEX data</span>`;
+  }
+  const k = Number(king.kingNode);
+  const s = Number(spot != null ? spot : king.spot);
+  if (!isFinite(k)) return '';
+  // Pull total net GEX + regime from king.detail.gex when available
+  const gexDetail = (king.detail && king.detail.gex) || {};
+  const totalNetGex = isFinite(gexDetail.netGex) ? Number(gexDetail.netGex) : null;
+  const regime = gexDetail.regime || (totalNetGex != null ? (totalNetGex > 0 ? 'POSITIVE' : 'NEGATIVE') : null);
+  const positiveRegime = regime === 'POSITIVE' || (totalNetGex != null && totalNetGex > 0 && regime !== 'NEGATIVE' && regime !== 'FLIPPED');
+
+  const distPct = (isFinite(s) && s !== 0) ? +(((s - k) / k) * 100).toFixed(2) : null;
+  const absDist = distPct != null ? Math.abs(distPct) : null;
+  const above = isFinite(s) ? (s > k) : null;
+  const sideLbl = above === null ? '?' : (above ? 'above' : 'below');
+
+  const dir = String(direction || '').toLowerCase();
+  const isLong = dir === 'long' || dir === 'call' || dir === 'bullish' || dir === 'bull';
+  const isShort = dir === 'short' || dir === 'put' || dir === 'bearish' || dir === 'bear';
+
+  let agreesWithDirection = null;
+  if (absDist != null && absDist <= 0.5) {
+    agreesWithDirection = null;
+  } else if (positiveRegime && absDist != null) {
+    if (isLong) agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+    else if (isShort) agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+  } else if (absDist != null) {
+    if (isLong) agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+    else if (isShort) agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+  }
+
+  // Format
+  const gexFmt = (totalNetGex != null)
+    ? (totalNetGex >= 0 ? '+' : '') + '$' + (totalNetGex / 1e6).toFixed(1) + 'M'
+    : '?';
+  const dirLbl = isLong ? 'long' : (isShort ? 'short' : '');
+  const agreeIcon = agreesWithDirection === true ? '✅' : (agreesWithDirection === false ? '❌' : '⚠');
+  const agreeWord = agreesWithDirection === true ? 'agrees' : (agreesWithDirection === false ? 'fights' : 'neutral');
+  const distStr = absDist != null ? `${absDist.toFixed(1)}% ${sideLbl}` : '';
+  const dirStr = dirLbl ? ` ${dirLbl}` : '';
+
+  // Color: green if agrees, red if fights, gray if neutral
+  const color = agreesWithDirection === true ? '#4caf50'
+              : agreesWithDirection === false ? '#f44336'
+              : '#888';
+  const bg = agreesWithDirection === true ? 'rgba(76,175,80,0.15)'
+           : agreesWithDirection === false ? 'rgba(244,67,54,0.15)'
+           : 'rgba(136,136,136,0.15)';
+
+  const tip = `Phase 4.42 GEX-Aware: ${regime || 'UNKNOWN'} regime, total net gamma ${gexFmt}. King-node magnet at $${k.toFixed(2)}, spot ${distStr}. Direction ${dirLbl || '?'} ${agreeWord} ${positiveRegime ? 'gamma magnet pull' : 'gamma anti-magnet drift'}.`;
+
+  return `<span class="tag" style="background:${bg};color:${color};font-weight:700;font-size:10px;" title="${tip}">📊 GEX ${gexFmt} · $${k.toFixed(2)} ⚡ ${distStr} · ${agreeIcon} ${agreeWord}${dirStr}</span>`;
+}
+window.buildGexAwarePill = buildGexAwarePill;
+
 // Lightweight client-side cache of king-node fetches. Backend caches 5 min;
 // this avoids repeat round-trips across re-renders inside the same tab.
 window._kingCache = window._kingCache || {};
@@ -3708,6 +3778,7 @@ function renderGridTomorrow() {
             ${buildTapeBadge(window._tape, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
             ${buildVpocPill(r._vp, r.spot)}
             ${buildKingNodePill(r.kingNode, r.spot)}
+            ${buildGexAwarePill(r.kingNode, r.spot, r.direction || ((r.target||0) >= (r.spot||0) ? 'long' : 'short'))}
             ${r.type ? `<span class="tag preferred">${RADAR_TYPE_LABELS[r.type] || ('Type ' + r.type)}</span>` : ''}
             ${r._state === "ready" ? '<span class="tag" style="background:rgba(76,175,80,0.2); color:#4caf50;">Queue tonight</span>' : ''}
           </div>
@@ -3976,6 +4047,7 @@ function renderGridAction() {
             ${buildTapeBadge(window._tape, r.direction)}
             ${buildVpocPill(r._vp, live.last)}
             ${buildKingNodePill(r.kingNode, live.last)}
+            ${buildGexAwarePill(r.kingNode, live.last, r.direction)}
             ${timingBadge}
             ${affordBadge}
             <span class="tag" style="font-size:10px;">score ${r.maxScore}</span>
@@ -4573,7 +4645,7 @@ function renderGridCoil() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${(buildTaBadge(r.ta) || buildKingNodePill(r.kingNode, r.lastClose)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${buildTaBadge(r.ta) || ''}${buildKingNodePill(r.kingNode, r.lastClose) || ''}</div>` : ''}
+          ${(buildTaBadge(r.ta) || buildKingNodePill(r.kingNode, r.lastClose) || buildGexAwarePill(r.kingNode, r.lastClose, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${buildTaBadge(r.ta) || ''}${buildKingNodePill(r.kingNode, r.lastClose) || ''}${buildGexAwarePill(r.kingNode, r.lastClose, r.direction) || ''}</div>` : ''}
 
           <div style="margin-top:10px; padding:10px; background:rgba(70,180,255,0.08); border:1px solid rgba(70,180,255,0.25); border-radius:8px; font-size:11px;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
@@ -4860,7 +4932,7 @@ function renderGridWP() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildMultiTestBadge(r.mtb) || buildTapeBadge(window._tape, r.direction) || buildKingNodePill(r.kingNode, r.spot || r.last)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.spot || r.last) ? ' ' + buildKingNodePill(r.kingNode, r.spot || r.last) : ''}</div>` : ''}
+          ${(confluencePills || holdPillHtml || buildTaBadge(r.ta) || buildMultiTestBadge(r.mtb) || buildTapeBadge(window._tape, r.direction) || buildKingNodePill(r.kingNode, r.spot || r.last) || buildGexAwarePill(r.kingNode, r.spot || r.last, r.direction)) ? `<div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${confluencePills}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.spot || r.last) ? ' ' + buildKingNodePill(r.kingNode, r.spot || r.last) : ''}${buildGexAwarePill(r.kingNode, r.spot || r.last, r.direction) ? ' ' + buildGexAwarePill(r.kingNode, r.spot || r.last, r.direction) : ''}</div>` : ''}
 
           ${dailyBreakLine}
 
@@ -5101,7 +5173,7 @@ function renderGridJS() {
 
           <div style="margin-top:8px; font-size:11px; color:var(--txt-2); font-style:italic;">${info.desc}</div>
 
-          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.lastClose) ? ' ' + buildKingNodePill(r.kingNode, r.lastClose) : ''}</div>
+          <div style="margin-top:8px; display:flex; gap:4px; flex-wrap:wrap;">${tfPill}${holdPillHtml ? ' ' + holdPillHtml : ''}${buildTaBadge(r.ta) ? ' ' + buildTaBadge(r.ta) : ''}${buildMultiTestBadge(r.mtb) ? ' ' + buildMultiTestBadge(r.mtb) : ''}${buildTapeBadge(window._tape, r.direction) ? ' ' + buildTapeBadge(window._tape, r.direction) : ''}${buildKingNodePill(r.kingNode, r.lastClose) ? ' ' + buildKingNodePill(r.kingNode, r.lastClose) : ''}${buildGexAwarePill(r.kingNode, r.lastClose, r.direction) ? ' ' + buildGexAwarePill(r.kingNode, r.lastClose, r.direction) : ''}</div>
 
           ${r.thesis ? `<div style="margin-top:10px; padding:8px 10px; background:rgba(70,180,255,0.06); border-left:3px solid #46b4ff; border-radius:4px; font-size:11px; color:var(--txt-2);"><strong style="color:#46b4ff;">📋 Thesis:</strong> ${r.thesis}</div>` : ''}
 
@@ -5438,6 +5510,7 @@ function renderGridLotto() {
               ${timeStopPillHtml('LOTTO')}
               ${buildTaBadge(p.ta)}
               ${buildKingNodePill(p.kingNode, (window._lottoSpots && window._lottoSpots[p.ticker]) || p.stockEntry)}
+              ${buildGexAwarePill(p.kingNode, (window._lottoSpots && window._lottoSpots[p.ticker]) || p.stockEntry, p.direction)}
               <span id="hold-pill-${p.ticker}-lotto" data-hold-ticker="${p.ticker}" data-hold-dir="${p.direction || 'LONG'}"></span>
               <button onclick="event.stopPropagation();toggleStar('${p.ticker}','lotto')" style="background:transparent;border:none;cursor:pointer;color:${starred?'gold':'var(--txt-3)'};font-size:18px;padding:0;line-height:1;">${starred?'★':'☆'}</button>
             </div>
@@ -6799,6 +6872,7 @@ function renderGridMovers() {
           ${buildTapeBadge(window._tape, m.pctChange > 0 ? 'long' : 'short')}
           ${buildVpocPill(m._vp, m.last)}
           ${buildKingNodePill(m.kingNode, m.last)}
+          ${buildGexAwarePill(m.kingNode, m.last, m.pctChange > 0 ? 'long' : 'short')}
           ${isEarnings ? '<span class="tag block">⚠ Earnings</span>' : ""}
           ${m.volRatio >= 2 ? '<span class="tag preferred">High Vol</span>' : ""}
           ${Math.abs(m.pctChange) >= 5 ? '<span class="tag warn">Big Mover</span>' : ""}

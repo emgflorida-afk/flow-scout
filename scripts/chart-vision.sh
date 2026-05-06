@@ -63,7 +63,14 @@ B64_SIZE=$(echo -n "$B64" | wc -c | tr -d ' ')
 echo "  ✓ Base64 size: ${B64_SIZE} bytes"
 
 # Step 4: Build trade context (read from session_state if available)
-TRADE_CONTEXT="$DIRECTION trade on $TIMEFRAME timeframe. Pattern detector flagged this as actionable. Want chart-vision review for confirmation."
+# Phase 4.42 — if GEX_CONTEXT env var is set (by visionDaemon.js per-candidate
+# pre-fetch), prepend it so the model factors regime + king-node + direction
+# agreement into the verdict. Stays empty if unset (back-compatible).
+GEX_LINE=""
+if [ -n "$GEX_CONTEXT" ]; then
+  GEX_LINE="GEX context for this analysis: $GEX_CONTEXT — factor this into your verdict, especially for trade direction agreement vs the gamma regime. "
+fi
+TRADE_CONTEXT="${GEX_LINE}$DIRECTION trade on $TIMEFRAME timeframe. Pattern detector flagged this as actionable. Want chart-vision review for confirmation."
 
 # Step 5: POST to Railway endpoint
 echo "  → Calling Claude vision API..."

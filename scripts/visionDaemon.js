@@ -32,6 +32,17 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
+// Phase 4.42 — GEX-Aware Vision: pull king-node / gamma context BEFORE every
+// vision shell run so the verdict carries regime + magnet + direction-agreement
+// metadata. Fail-open: if kingNodeComputer can't be loaded (e.g. its TS deps
+// aren't on the local Mac), we just skip the GEX block. Never throw.
+let kingNodeComputer = null;
+try {
+  kingNodeComputer = require(path.join(__dirname, '..', 'src', 'kingNodeComputer'));
+} catch (e) {
+  console.log('[VISION-DAEMON] kingNodeComputer not loaded (will skip GEX context):', e.message);
+}
+
 // ---------------------------------------------------------------------------
 // CONFIG
 // ---------------------------------------------------------------------------
@@ -228,7 +239,7 @@ function parseVisionOutput(stdout) {
   };
 }
 
-function runVisionShell(ticker, direction, tf) {
+function runVisionShell(ticker, direction, tf, extraEnv) {
   return new Promise((resolve) => {
     if (!fs.existsSync(CHART_VISION_SH)) {
       return resolve({ ok: false, error: 'chart-vision.sh missing at ' + CHART_VISION_SH });
@@ -236,9 +247,12 @@ function runVisionShell(ticker, direction, tf) {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    // Phase 4.42 — extraEnv lets callers (runVisionForCandidate) inject
+    // GEX_CONTEXT into the shell's environment so chart-vision.sh can quote
+    // it in the model prompt.
     const child = spawn('bash', [CHART_VISION_SH, ticker, direction, tf], {
       cwd: REPO_ROOT,
-      env: Object.assign({}, process.env),
+      env: Object.assign({}, process.env, extraEnv || {}),
     });
     child.stdout.on('data', (d) => { stdout += String(d); });
     child.stderr.on('data', (d) => { stderr += String(d); });
@@ -282,14 +296,128 @@ function mergeVerdicts(higher, lower) {
   return 'MIXED';
 }
 
+// ---------------------------------------------------------------------------
+// PHASE 4.42 — GEX CONTEXT for vision verdicts
+// ---------------------------------------------------------------------------
+// Pulls king-node / gamma regime once per candidate run and turns it into a
+// human-readable summary the vision prompt can quote AND a structured block
+// the scanner UI can render as a pill. Fail-open everywhere — if anything
+// throws we return { available: false, summary: 'GEX data unavailable' }.
+//
+// agreesWithDirection rules:
+//   POSITIVE regime is a magnet — gravity pulls TOWARD the king node.
+//     LONG  + spot below king         → agrees (pulled UP toward magnet)
+//     LONG  + spot above king by >2%  → fights (extended above magnet)
+//     SHORT + spot above king         → agrees (pulled DOWN toward magnet)
+//     SHORT + spot below king by >2%  → fights (extended below magnet)
+//   NEGATIVE / FLIPPED regime is anti-magnet — spot tends to drift AWAY:
+//     invert the agreement logic.
+//   Within ±0.5% of king + POSITIVE regime → 'neutral' (chop zone, no edge).
+async function getGexContext(ticker, direction) {
+  const fallback = {
+    available: false,
+    totalNetGex: null,
+    regime: null,
+    kingNode: null,
+    spot: null,
+    distPct: null,
+    agreesWithDirection: null,
+    summary: 'GEX data unavailable',
+  };
+  if (!kingNodeComputer || !kingNodeComputer.computeKingNode) {
+    return fallback;
+  }
+  try {
+    const king = await kingNodeComputer.computeKingNode(ticker);
+    if (!king || king.kingNode == null || king.spot == null) {
+      return Object.assign({}, fallback, {
+        summary: 'GEX data unavailable: ' + (king && king.reason ? String(king.reason).slice(0, 80) : 'no king node'),
+      });
+    }
+    const spot = Number(king.spot);
+    const k = Number(king.kingNode);
+    if (!isFinite(spot) || !isFinite(k) || k === 0) {
+      return Object.assign({}, fallback, { summary: 'GEX data unavailable: invalid spot/king' });
+    }
+
+    // Pull GEX detail — total net gex + regime
+    const gd = (king.detail && king.detail.gex) || {};
+    const totalNetGex = isFinite(gd.netGex) ? Number(gd.netGex) : null;
+    const regime = gd.regime || null;
+
+    // Distance % (signed: negative = spot below king, positive = above)
+    const distPct = +(((spot - k) / k) * 100).toFixed(2);
+    const absDist = Math.abs(distPct);
+    const above = spot > k;
+    const dir = String(direction || '').toLowerCase();
+    const isLong = dir === 'long' || dir === 'call' || dir === 'bullish' || dir === 'bull';
+    const isShort = dir === 'short' || dir === 'put' || dir === 'bearish' || dir === 'bear';
+
+    // Agreement logic — defaults to null for neutral/unknown
+    let agreesWithDirection = null;
+    const positiveRegime = regime === 'POSITIVE' || (totalNetGex != null && totalNetGex > 0 && regime !== 'NEGATIVE' && regime !== 'FLIPPED');
+
+    if (absDist <= 0.5) {
+      // At king node — chop zone, no edge regardless of direction
+      agreesWithDirection = null;
+    } else if (positiveRegime) {
+      if (isLong) agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+      else if (isShort) agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+    } else {
+      // NEGATIVE or FLIPPED — gamma is anti-magnet, spot drifts away
+      if (isLong) agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+      else if (isShort) agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+    }
+
+    // Build human-readable summary
+    const gexFmt = (totalNetGex != null)
+      ? (totalNetGex >= 0 ? '+' : '') + '$' + (totalNetGex / 1e6).toFixed(1) + 'M'
+      : '?';
+    const regimeLbl = regime || (totalNetGex != null ? (totalNetGex >= 0 ? 'POSITIVE' : 'NEGATIVE') : 'UNKNOWN');
+    const sideLbl = above ? 'above' : 'below';
+    const agreeLbl = agreesWithDirection === true ? 'agrees with ' + (isLong ? 'LONG' : 'SHORT')
+                   : agreesWithDirection === false ? 'fights ' + (isLong ? 'LONG' : 'SHORT')
+                   : 'neutral';
+    const summary = `${regimeLbl} gamma ${gexFmt}, $${k.toFixed(2)} magnet ${absDist.toFixed(1)}% ${sideLbl} spot, ${agreeLbl}`;
+
+    return {
+      available: true,
+      totalNetGex: totalNetGex,
+      regime: regimeLbl,
+      kingNode: +k.toFixed(4),
+      spot: +spot.toFixed(4),
+      distPct: distPct,
+      agreesWithDirection: agreesWithDirection,
+      summary: summary,
+      // Useful side data for UI/log (but not part of the contract spec)
+      strength: king.strength || null,
+      sourceLabel: king.sourceLabel || null,
+    };
+  } catch (e) {
+    return Object.assign({}, fallback, {
+      summary: 'GEX data unavailable: ' + String(e.message || e).slice(0, 80),
+    });
+  }
+}
+
 // Run both higher + lower TF for a ticker/direction/tradeType, merge + return.
 async function runVisionForCandidate(ticker, direction, tradeType) {
   const tfs = tfMapForTradeType(tradeType);
 
+  // Phase 4.42 — pull GEX context ONCE per candidate (king-node computer is
+  // cached 5 min internally, so this is cheap on repeat calls).
+  const gex = await getGexContext(ticker, direction);
+  log('INFO', `[GEX-CTX] ${ticker} ${direction}: ${gex.summary}`);
+
   log('INFO', `vision-run ${ticker} ${direction} ${tradeType} (${tfs.higher} + ${tfs.lower})`);
 
-  const higherRes = await runVisionShell(ticker, direction, tfs.higher);
-  const lowerRes = await runVisionShell(ticker, direction, tfs.lower);
+  // Phase 4.42 — pass the GEX summary into the vision shell via env var
+  // (chart-vision.sh strictly takes 3 positional args today; env var keeps
+  // changes minimal and back-compatible).
+  const visionEnv = { GEX_CONTEXT: gex.summary || '' };
+
+  const higherRes = await runVisionShell(ticker, direction, tfs.higher, visionEnv);
+  const lowerRes = await runVisionShell(ticker, direction, tfs.lower, visionEnv);
 
   const hi = higherRes.ok ? higherRes.parsed : { verdict: 'WAIT', confidence: 5, summary: 'higher TF unavailable: ' + (higherRes.error || '?').slice(0, 80) };
   const lo = lowerRes.ok ? lowerRes.parsed : { verdict: 'WAIT', confidence: 5, summary: 'lower TF unavailable: ' + (lowerRes.error || '?').slice(0, 80) };
@@ -321,6 +449,9 @@ async function runVisionForCandidate(ticker, direction, tradeType) {
     summary: summary,
     higherTf: { tf: tfs.higher, verdict: hi.verdict, confidence: hi.confidence || 5, summary: hi.summary },
     lowerTf: { tf: tfs.lower, verdict: lo.verdict, confidence: lo.confidence || 5, summary: lo.summary },
+    // Phase 4.42 — surface GEX context on every verdict so the cache push
+    // carries it through to the scanner card pill + Discord embeds.
+    gex: gex,
     timestamp: new Date().toISOString(),
     source: 'local-daemon',
   };

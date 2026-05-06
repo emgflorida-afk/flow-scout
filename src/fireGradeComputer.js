@@ -459,6 +459,92 @@ async function checkKingNodeSignal(ticker, direction) {
 }
 
 // =============================================================================
+// PHASE 4.42 — GEX-AWARE BOOST (additive, granular vs Phase 4.37)
+// =============================================================================
+// Phase 4.37 (King Node ±1) handles the ±0.5% / >2% extreme cases by adjusting
+// composite SCORE.  Phase 4.42 adds a finer-grained BOOST that captures total
+// gamma regime agreement on top of the spot-vs-king relationship:
+//
+//   POSITIVE total gamma + direction agrees with magnet pull   → +0.5
+//   POSITIVE + spot within 0.5% of king + direction agrees      → additional +0.5 (cap +1.0)
+//   NEGATIVE total gamma (flip risk) + direction agrees         → 0  (regime is too volatile to credit)
+//
+// Output is advisory metadata (gates.gex42 = { boost, regime, summary,
+// agreesWithDirection }) — does NOT mutate the score directly. The composite
+// grade-bump path stays in Phase 4.37.  This signal is for UI surfacing +
+// Discord embeds + future analytics.
+async function checkGex42Signal(ticker, direction) {
+  try {
+    if (!kingNodeComputer || !kingNodeComputer.computeKingNode) {
+      return { boost: 0, regime: null, summary: 'kingNodeComputer not loaded', agreesWithDirection: null, applied: false };
+    }
+    var king = await kingNodeComputer.computeKingNode(ticker);
+    if (!king || king.kingNode == null || king.spot == null) {
+      return { boost: 0, regime: null, summary: 'no king node mapped', agreesWithDirection: null, applied: false };
+    }
+    var dir = normDir(direction);
+    var spot = Number(king.spot);
+    var k = Number(king.kingNode);
+    if (!isFinite(spot) || !isFinite(k) || k === 0) {
+      return { boost: 0, regime: null, summary: 'invalid spot/king', agreesWithDirection: null, applied: false };
+    }
+    var distPct = ((spot - k) / k) * 100;
+    var absDist = Math.abs(distPct);
+    var above = spot > k;
+
+    var gd = (king.detail && king.detail.gex) || {};
+    var totalNetGex = isFinite(gd.netGex) ? Number(gd.netGex) : null;
+    var regime = gd.regime || (totalNetGex != null ? (totalNetGex > 0 ? 'POSITIVE' : 'NEGATIVE') : null);
+
+    // Direction agreement against the gamma regime
+    var positiveRegime = regime === 'POSITIVE' || (totalNetGex != null && totalNetGex > 0 && regime !== 'NEGATIVE' && regime !== 'FLIPPED');
+    var agreesWithDirection = null;
+    if (absDist <= 0.5) {
+      // At king node — chop zone, no edge
+      agreesWithDirection = null;
+    } else if (positiveRegime) {
+      if (dir === 'long')  agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+      if (dir === 'short') agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+    } else {
+      // NEGATIVE / FLIPPED — anti-magnet
+      if (dir === 'long')  agreesWithDirection = above ? true : (absDist > 2 ? false : null);
+      if (dir === 'short') agreesWithDirection = !above ? true : (absDist > 2 ? false : null);
+    }
+
+    // Compute boost (cap +1.0)
+    var boost = 0;
+    if (positiveRegime && agreesWithDirection === true) {
+      boost += 0.5;
+      if (absDist <= 0.5) boost += 0.5;     // tight magnet alignment → extra +0.5
+    }
+    // NEGATIVE regime: even if directionally agreed, give 0 (regime volatile)
+
+    if (boost > 1) boost = 1;
+
+    var gexFmt = (totalNetGex != null)
+      ? (totalNetGex >= 0 ? '+' : '') + '$' + (totalNetGex / 1e6).toFixed(1) + 'M'
+      : '?';
+    var sideLbl = above ? 'above' : 'below';
+    var agreeLbl = agreesWithDirection === true ? 'agrees' : (agreesWithDirection === false ? 'fights' : 'neutral');
+    var summary = (regime || 'UNKNOWN') + ' gamma ' + gexFmt + ', $' + k.toFixed(2) + ' magnet ' + absDist.toFixed(1) + '% ' + sideLbl + ' spot, ' + agreeLbl + ' ' + (dir || '?');
+
+    return {
+      boost: boost,
+      regime: regime,
+      totalNetGex: totalNetGex,
+      kingNode: +k.toFixed(4),
+      spot: +spot.toFixed(4),
+      distPct: +distPct.toFixed(2),
+      agreesWithDirection: agreesWithDirection,
+      summary: summary,
+      applied: boost > 0,
+    };
+  } catch (e) {
+    return { boost: 0, regime: null, summary: 'gex42 soft error: ' + e.message, agreesWithDirection: null, applied: false };
+  }
+}
+
+// =============================================================================
 // STRATEGY TYPE DETECTION
 // =============================================================================
 function detectStrategyType(setup, gates) {
@@ -572,8 +658,9 @@ async function computeFireGrade(setup) {
   var cached = fromCache(key);
   if (cached) return Object.assign({}, cached, { cached: true });
 
-  // Run all 6 gates + John-like bonus + king-node soft signal in parallel
-  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG, johnBonus, kingSignal] = await Promise.all([
+  // Run all 6 gates + John-like bonus + king-node soft signal + Phase 4.42
+  // GEX-aware boost in parallel.
+  var [trendG, breakoutG, tapeG, taG, liquidityG, visionG, johnBonus, kingSignal, gex42Signal] = await Promise.all([
     checkTrendGate(ticker, direction),
     checkBreakoutGate(ticker, direction, setup),
     checkTapeGate(direction),
@@ -582,6 +669,7 @@ async function computeFireGrade(setup) {
     checkVisionGate(ticker, direction, tradeType),
     checkJohnLikeBonus(ticker, direction, setup),
     checkKingNodeSignal(ticker, direction),
+    checkGex42Signal(ticker, direction),
   ]);
 
   var gates = {
@@ -591,6 +679,9 @@ async function computeFireGrade(setup) {
     ta:        taG,
     liquidity: liquidityG,
     vision:    visionG,
+    // Phase 4.42 — surface GEX-aware advisory under gates.gex42 so the UI can
+    // render the pill on every card. NOT a hard gate (no passed/failed).
+    gex42: gex42Signal,
   };
 
   var graded = composeGrade(gates);
@@ -662,6 +753,7 @@ async function computeFireGrade(setup) {
     fireRecommendation: graded.fireRecommendation,
     johnLike: johnBonus,  // Phase 4.30E — surface to UI
     kingNode: kingSignal,  // Phase 4.37 — surface soft signal to UI
+    gex42: gex42Signal,    // Phase 4.42 — surface GEX-aware boost to UI
     timestamp: new Date().toISOString(),
   };
 
@@ -695,5 +787,6 @@ module.exports = {
   checkVisionGate: checkVisionGate,
   checkJohnLikeBonus: checkJohnLikeBonus,  // Phase 4.30E
   checkKingNodeSignal: checkKingNodeSignal,  // Phase 4.37
+  checkGex42Signal: checkGex42Signal,        // Phase 4.42
   detectStrategyType: detectStrategyType,
 };
