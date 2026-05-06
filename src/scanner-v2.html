@@ -890,13 +890,19 @@ const FILTERS_MOVERS = [
 ];
 
 const FILTERS_LVL = [
-  { id: "all",       label: "All",                test: r => true },
-  { id: "aligned",   label: "D + 1H Aligned",     test: r => r._aligned === true },
-  { id: "enternow",  label: "ENTER NOW (any TF)", test: r => r._anyEnterNow === true },
-  { id: "armed",     label: "ARMED LONG/SHORT",   test: r => r._anyArmed === true },
-  { id: "long",      label: "Long bias",          test: r => r._dominantDirection === "LONG" },
-  { id: "short",     label: "Short bias",         test: r => r._dominantDirection === "SHORT" },
-  { id: "no_stop",   label: "Not stopped",        test: r => r._anyStopped === false },
+  // MAY 6 2026 PM — AB caught the LVL UX issue:
+  // "you have to scroll through 48 dead cards to find anything actionable"
+  // Default is now ACTIONABLE filter that hides STOP_HIT setups so the only
+  // cards visible are pre-trigger (WAITING) or just-fired (HIGH_BREAK/LOW_BREAK
+  // /LVL_LONG/LVL_SHORT/EARLY) without their stops yet hit.
+  { id: "actionable", label: "🎯 Actionable", isDefault: true,
+    test: r => r._anyArmed === true || (r._anyStopped === false && r._dominantDirection !== 'NONE') },
+  { id: "fresh",     label: "⚡ Just fired",     test: r => r._anyArmed === true && r._anyStopped === false },
+  { id: "aligned",   label: "★ D+1H Aligned",   test: r => r._aligned === true },
+  { id: "armed",     label: "ARMED",            test: r => r._anyArmed === true },
+  { id: "long",      label: "Long bias",        test: r => r._dominantDirection === "LONG" && r._anyStopped === false },
+  { id: "short",     label: "Short bias",       test: r => r._dominantDirection === "SHORT" && r._anyStopped === false },
+  { id: "all",       label: "All (incl stopped)", test: r => true },
 ];
 
 // TOMORROW tab: filters across the 4 setup states
