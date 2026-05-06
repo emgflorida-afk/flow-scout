@@ -7,15 +7,30 @@
 #   ./scripts/stop-vision-daemon.sh
 # =============================================================================
 PID_FILE="/tmp/vision-daemon.pid"
+PLIST_PATH="$HOME/Library/LaunchAgents/com.flowscout.visiondaemon.plist"
+
+# launchctl unload first if loaded
+if launchctl list com.flowscout.visiondaemon >/dev/null 2>&1; then
+  echo "Unloading launchctl agent (com.flowscout.visiondaemon)"
+  launchctl unload -w "$PLIST_PATH" 2>&1 || true
+  echo "  (use 'launchctl load -w $PLIST_PATH' to re-arm at next login)"
+fi
 
 if [ ! -f "$PID_FILE" ]; then
-  echo "No PID file at $PID_FILE — daemon not running?"
-  # Try a process scan as a fallback
+  # No PID file — but maybe a stray process (e.g. legacy nohup launch)
   STRAY_PIDS=$(pgrep -f "node.*visionDaemon.js" || true)
   if [ -n "$STRAY_PIDS" ]; then
-    echo "But found stray daemon process(es): $STRAY_PIDS"
+    echo "No PID file but found stray daemon process(es): $STRAY_PIDS"
     echo "Killing..."
     echo "$STRAY_PIDS" | xargs kill 2>/dev/null || true
+    sleep 1
+    STILL=$(pgrep -f "node.*visionDaemon.js" || true)
+    if [ -n "$STILL" ]; then
+      echo "Force killing $STILL"
+      echo "$STILL" | xargs kill -9 2>/dev/null || true
+    fi
+  else
+    echo "No PID file at $PID_FILE — daemon not running."
   fi
   exit 0
 fi

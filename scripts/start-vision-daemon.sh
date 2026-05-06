@@ -13,7 +13,20 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="/tmp/vision-daemon.pid"
 LOG_FILE="/tmp/vision-daemon.log"
 
-# Already running?
+# launchctl-managed?
+if launchctl list com.flowscout.visiondaemon >/dev/null 2>&1; then
+  LD_PID=$(launchctl list com.flowscout.visiondaemon 2>/dev/null | sed -n 's/.*"PID" = \([0-9]*\);/\1/p')
+  if [ -n "$LD_PID" ] && [ "$LD_PID" != "0" ] && kill -0 "$LD_PID" 2>/dev/null; then
+    echo "Vision daemon already running under launchctl (PID $LD_PID)"
+    echo "  log: $LOG_FILE"
+    echo "  to restart launchctl:"
+    echo "    launchctl unload -w ~/Library/LaunchAgents/com.flowscout.visiondaemon.plist"
+    echo "    launchctl load   -w ~/Library/LaunchAgents/com.flowscout.visiondaemon.plist"
+    exit 0
+  fi
+fi
+
+# Already running via start-script (no launchctl)?
 if [ -f "$PID_FILE" ]; then
   EXISTING=$(cat "$PID_FILE")
   if kill -0 "$EXISTING" 2>/dev/null; then

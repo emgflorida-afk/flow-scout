@@ -16,10 +16,22 @@ echo "==================================================================="
 echo ""
 echo "[1/3] Local process"
 echo "-------------------------------------------------------------------"
-if [ -f "$PID_FILE" ]; then
+# launchctl-managed daemon takes priority — check launchd first.
+if launchctl list com.flowscout.visiondaemon >/dev/null 2>&1; then
+  LD_PID=$(launchctl list com.flowscout.visiondaemon 2>/dev/null | sed -n 's/.*"PID" = \([0-9]*\);/\1/p')
+  if [ -n "$LD_PID" ] && [ "$LD_PID" != "0" ] && kill -0 "$LD_PID" 2>/dev/null; then
+    UPTIME=$(ps -o etime= -p "$LD_PID" 2>/dev/null | tr -d ' ' || echo '?')
+    echo "  Launchctl: com.flowscout.visiondaemon"
+    echo "  PID:       $LD_PID (RUNNING via launchd)"
+    echo "  uptime:    $UPTIME"
+  else
+    echo "  Launchctl: com.flowscout.visiondaemon LOADED but no live PID"
+    echo "  (launchd will respawn on next trigger)"
+  fi
+elif [ -f "$PID_FILE" ]; then
   PID=$(cat "$PID_FILE")
   if kill -0 "$PID" 2>/dev/null; then
-    echo "  PID:    $PID (RUNNING)"
+    echo "  PID:    $PID (RUNNING via start-script)"
     UPTIME=$(ps -o etime= -p "$PID" 2>/dev/null | tr -d ' ' || echo '?')
     echo "  uptime: $UPTIME"
     echo "  cmd:    $(ps -o command= -p "$PID" 2>/dev/null | head -c 200)"
@@ -27,7 +39,7 @@ if [ -f "$PID_FILE" ]; then
     echo "  PID file exists ($PID) but process is dead. Stale."
   fi
 else
-  echo "  No PID file at $PID_FILE — daemon not started"
+  echo "  No launchctl agent and no PID file — daemon not started"
   STRAY=$(pgrep -f "node.*visionDaemon.js" || true)
   if [ -n "$STRAY" ]; then
     echo "  Stray daemon process(es) detected: $STRAY"
