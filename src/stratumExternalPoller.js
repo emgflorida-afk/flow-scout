@@ -26,7 +26,20 @@ var CHAN = {
   OPTION_TRADE_IDEAS: process.env.CHAN_OPTION_TRADE_IDEAS || '1401666517292023940',
   CAPITAL_FLOW:       process.env.CHAN_CAPITAL_FLOW       || '1411518843964096684',
   SWINGS_LEAPS:       process.env.CHAN_SWINGS_LEAPS       || '1437546513160212610',
+  // MAY 6 2026 PM — AB added new Discord channel. Default-quarantined per
+  // Phase 4.57 rule (parsed + surfaced, NO SIM/LIVE auto-fire until
+  // 30-trade hit-rate proves >=50%). Promote via CHAN_QUARANTINE_OFF env.
+  EXTERNAL_Q1:        process.env.CHAN_EXTERNAL_Q1        || '1495238999584014476',
 };
+
+// MAY 6 2026 PM — quarantine routing
+var QUARANTINED_CHANNELS = new Set([CHAN.EXTERNAL_Q1]);
+var QUARANTINE_OVERRIDE = (process.env.CHAN_QUARANTINE_OFF || '')
+  .split(',').map(function(s){ return s.trim(); }).filter(Boolean);
+function isQuarantined(channelId) {
+  if (!QUARANTINED_CHANNELS.has(channelId)) return false;
+  return QUARANTINE_OVERRIDE.indexOf(channelId) === -1;
+}
 
 // Discord API base
 var DISCORD_API = 'https://discord.com/api/v10';
