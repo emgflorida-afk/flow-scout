@@ -191,7 +191,7 @@
 <div class="container">
 
 <h1>🪜 Flow Scout IKEA Trade Guide</h1>
-<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 PM (Phase 4.37 — KING NODE MAGNET)</div>
+<div class="subtitle">Visual decision tree · 10 steps · Anyone can follow · Updated May 5 2026 PM (Phase 4.40 — WEEKLY ORCHESTRATOR)</div>
 
 <div class="tldr">
   <h2>📌 TL;DR</h2>
@@ -713,6 +713,99 @@
     <li><b>All 3 missing:</b> pill hides — card behaves as if Phase 4.37 weren't installed</li>
     <li><b>Cache:</b> 5-min TTL per ticker (king node doesn't move much intraday). Both server and client cache.</li>
   </ul>
+</div>
+
+<!-- STEP 4.40 — WEEKLY ORCHESTRATOR -->
+<div class="step" style="border-color:#16e39d; background:linear-gradient(180deg, #11161f, #0a1f17);">
+  <h2 style="color:#16e39d;"><span class="step-num" style="background:linear-gradient(180deg,#16e39d,#0a8c5e);">4.40</span>📅 WEEKLY ORCHESTRATOR (Phase 4.40 — May 5 PM)</h2>
+  <p style="font-size:13px; color:var(--txt-2); margin:0 0 10px;">
+    AB's directive: "$1,500/week target with Mon-Fri rhythm." Removes "what should I do today?" decision fatigue. Combines Phase 4.31 spreads + 4.34 smart conditional + 4.24 SIM journal + 4.30 John replicator into <b>one weekly engine</b> that auto-runs at 9:45 AM ET each weekday and pushes a Discord embed with the day's plan + executions.
+  </p>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">The Mon-Fri rhythm</h3>
+  <table>
+    <thead><tr><th>Day</th><th>Label</th><th>Actions</th></tr></thead>
+    <tbody>
+      <tr><td><b>📊 MONDAY</b></td><td>Income Setup</td><td>Build SPY/QQQ/IWM 1.5%-OTM put credit spreads (5 DTE, 1ct each) → ~$150 credit total</td></tr>
+      <tr><td><b>🎯 TUESDAY</b></td><td>Debit Spread</td><td>Manage Mon spreads (close at 50% credit captured) + fire 1-2 fresh debit spreads on Grade A</td></tr>
+      <tr><td><b>🚀 WEDNESDAY</b></td><td>Naked Directional</td><td>Manage book + propose 1 high-conviction naked option if Grade A appears (smart conditional)</td></tr>
+      <tr><td><b>🔁 THURSDAY</b></td><td>Roll & Lotto</td><td>Roll profitable spreads to next-week + 1-2 weekend lottos via John replicator picks</td></tr>
+      <tr><td><b>🏁 FRIDAY</b></td><td>Close-All</td><td>Close everything by 3:30 PM, no new positions, push weekly recap at 4:00 PM</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Target weekly mix ($1,500 stretch / $1,130 realistic)</h3>
+  <table>
+    <thead><tr><th>Bucket</th><th>Target</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>Income (credit spreads)</td><td class="mono">$200</td><td>3 weekly Mon-built credit spreads → 50% capture each</td></tr>
+      <tr><td>Debit spreads</td><td class="mono">$400</td><td>1-2 fires/wk on Grade A directional cards</td></tr>
+      <tr><td>Naked directional</td><td class="mono">$300</td><td>1 high-conviction Wednesday naked option via SMART AUTO</td></tr>
+      <tr><td>Covered calls</td><td class="mono">$30</td><td>Existing share-position rolls</td></tr>
+      <tr><td>Lotto wins</td><td class="mono">$200</td><td>1-2 weekly Thursday weekend John picks</td></tr>
+      <tr><td><b>TOTAL realistic</b></td><td class="mono"><b>$1,130</b></td><td>~6% of $20K account, achievable</td></tr>
+      <tr><td><b>STRETCH target</b></td><td class="mono"><b>$1,500</b></td><td>AB's stated weekly goal</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Crons (registered at server boot)</h3>
+  <ul class="checklist">
+    <li><b>9:45 AM ET Mon-Fri</b> · <code>cron('45 9 * * 1-5')</code> → <code>runDailyPlaybook(&lt;today&gt;)</code></li>
+    <li><b>3:30 PM ET Friday</b> · <code>cron('30 15 * * 5')</code> → <code>closeAllPositions()</code> close-all signal</li>
+    <li><b>4:00 PM ET Friday</b> · <code>cron('0 16 * * 5')</code> → <code>pushWeeklyRecap()</code> Discord embed</li>
+    <li>All crons time-zone-locked to <code>America/New_York</code></li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Endpoints</h3>
+  <table>
+    <thead><tr><th>Endpoint</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">GET /api/weekly-orchestrator/playbook?day=monday</td><td>Returns the day's plan (label, summary, actions list)</td></tr>
+      <tr><td class="mono">POST /api/weekly-orchestrator/run-day?day=wednesday</td><td>Manually trigger day's playbook (bypasses cron)</td></tr>
+      <tr><td class="mono">GET /api/weekly-orchestrator/recap</td><td>WTD P&L summary (per-bucket realized vs target)</td></tr>
+      <tr><td class="mono">GET /api/weekly-orchestrator/target-progress</td><td>% of $1,500 stretch + $1,130 realistic captured</td></tr>
+      <tr><td class="mono">GET /api/weekly-orchestrator/state</td><td>Last-run history per date + fires log</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Action types (executed per day)</h3>
+  <ul class="checklist">
+    <li><b>BUILD_SPREAD</b> · POSTs to <code>/api/spread-builder/build</code> with computed strikes from current spot → cached ticketId</li>
+    <li><b>MANAGE_OPEN_SPREADS</b> · checks SIM journal for spread positions ≥ 50% capture → flags eligible to close</li>
+    <li><b>FIND_GRADE_A_DEBIT_SPREAD</b> · pulls top Grade A from <code>/api/action-radar</code> → builds 1-2 debit spreads</li>
+    <li><b>FIND_GRADE_A_NAKED</b> · highest-conviction Grade A → surfaces for SMART AUTO click</li>
+    <li><b>ROLL_PROFITABLE_SPREADS</b> · profitable open spreads → close + open next-week version (suggested)</li>
+    <li><b>FIND_WEEKEND_LOTTO</b> · pulls John replicator picks for Friday-expiry contracts</li>
+    <li><b>CLOSE_ALL_BY_330</b> · surfaces close intent for every active position (Friday rule — no weekend hold)</li>
+    <li><b>PUSH_WEEKLY_RECAP</b> · Discord embed with WTD P&L by bucket + win rate + best/worst trades</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Persistence + safety</h3>
+  <ul class="checklist">
+    <li><b>State:</b> <code>/data/weekly_orchestrator_state.json</code> on Railway volume — survives deploys</li>
+    <li><b>Kill switch:</b> set <code>WEEKLY_ORCH_ENABLED=false</code> env var to disable all auto-runs</li>
+    <li><b>Free-only:</b> uses existing modules — never touches broker direct, all fires go through gated endpoints</li>
+    <li><b>SIM-by-default:</b> spread builds use <code>account: 'ts-sim'</code> — AB explicitly switches to live per ticket</li>
+    <li><b>Friday hard rule:</b> <code>newEntries: false</code> — close-all signal only, no opening trades</li>
+  </ul>
+
+  <h3 style="font-size:13px; margin: 14px 0 6px; color:#16e39d;">Discord embed format (Friday 4:00 PM recap)</h3>
+  <pre style="background:rgba(0,0,0,0.4); padding:10px; border-radius:6px; font-size:11px; color:#16e39d; overflow-x:auto;">📊 WEEKLY RECAP — Week of 2026-05-04
+
+Realized P&L this week:
+  Income (credit)     $185 / $200 = 93%
+  Debit spreads       $420 / $400 = 105% ✅
+  Naked directional   $290 / $300 = 97%
+  Covered calls       $35  / $30  = 117% ✅
+  Lottos              $120 / $200 = 60%
+  ────────────────────
+  TOTAL               $1050 / $1500 = 70%
+
+Win rate: 9W / 4L = 69%
+Best:  NTAP $250 (50%)
+Worst: ADBE $-120 (-32%)
+
+Monthly pace: ~$4200 (target $6,000)</pre>
 </div>
 
 <!-- STEP 5 -->

@@ -452,6 +452,14 @@ var confluenceScorer = null;
 try { confluenceScorer = require('./confluenceScorer'); console.log('[SERVER] confluenceScorer loaded OK'); }
 catch(e) { console.log('[SERVER] confluenceScorer not loaded:', e.message); }
 
+// WEEKLY STRATEGY ORCHESTRATOR — Phase 4.40 (May 5 2026 PM). Mon-Fri rhythm
+// engine that hits AB's $1,500/week target. Auto-runs at 9:45 AM ET each
+// weekday: Mon income spreads, Tue debit spreads, Wed naked, Thu roll/lotto,
+// Fri close-all by 3:30 + recap at 4:00. Toggle: WEEKLY_ORCH_ENABLED=true.
+var weeklyOrchestrator = null;
+try { weeklyOrchestrator = require('./weeklyOrchestrator'); console.log('[SERVER] weeklyOrchestrator loaded OK'); }
+catch(e) { console.log('[SERVER] weeklyOrchestrator not loaded:', e.message); }
+
 // AUTO-FIRE ENGINE — Tier 1-3 orchestration for A++ confluence setups.
 // DRY by default (AUTO_FIRE_ENABLED=true required). Never submits to broker.
 // Pushes Discord proposal with countdown — AB executes manually.
@@ -7595,6 +7603,109 @@ cron.schedule('*/30 * 9-16 * * 1-5', async function() {
         ' fired=' + out.fired + ' blocked=' + out.blocked + ' expired=' + out.expired);
     }
   } catch(e) { console.error('[SMART-COND] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// =============================================================================
+// PHASE 4.40 — WEEKLY STRATEGY ORCHESTRATOR
+// AB directive: "$1,500/week target with Mon-Fri rhythm — Mon income spreads,
+// Tue debit spreads, Wed naked, Thu roll+lotto, Fri close everything." Removes
+// "what should I do today?" decision fatigue and locks the playbook.
+//
+// Endpoints:
+//   GET  /api/weekly-orchestrator/playbook?day=monday  → returns the day's plan
+//   POST /api/weekly-orchestrator/run-day?day=monday   → manually trigger
+//   GET  /api/weekly-orchestrator/recap?week=current   → WTD P&L summary
+//   GET  /api/weekly-orchestrator/target-progress      → % of $1,500 captured
+//   GET  /api/weekly-orchestrator/state                → last-run state + history
+//
+// Crons:
+//   45 9 * * 1-5  → runDailyPlaybook(<dayOfWeek>) at 9:45 AM ET each weekday
+//   30 15 * * 5   → closeAllPositions() Friday at 3:30 PM ET
+//   0 16 * * 5    → pushWeeklyRecap() Friday at 4:00 PM ET
+// =============================================================================
+
+app.get('/api/weekly-orchestrator/playbook', function(req, res) {
+  if (!weeklyOrchestrator) return res.status(500).json({ ok: false, error: 'weeklyOrchestrator not loaded' });
+  try {
+    var day = String(req.query.day || weeklyOrchestrator.dayOfWeekET()).toLowerCase();
+    var pb = weeklyOrchestrator.PLAYBOOK[day];
+    if (!pb) return res.status(404).json({ ok: false, error: 'no playbook for ' + day, validDays: Object.keys(weeklyOrchestrator.PLAYBOOK) });
+    res.json({
+      ok: true,
+      day: day,
+      label: pb.label,
+      summary: pb.summary,
+      icon: pb.icon,
+      newEntries: pb.newEntries !== false,
+      targetCredit: pb.targetCredit || null,
+      actions: pb.actions,
+      enabled: weeklyOrchestrator.isEnabled(),
+    });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/weekly-orchestrator/run-day', async function(req, res) {
+  if (!weeklyOrchestrator) return res.status(500).json({ ok: false, error: 'weeklyOrchestrator not loaded' });
+  try {
+    var day = String((req.query.day || (req.body && req.body.day) || weeklyOrchestrator.dayOfWeekET())).toLowerCase();
+    var out = await weeklyOrchestrator.runDailyPlaybook(day);
+    res.json(out);
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/weekly-orchestrator/recap', function(req, res) {
+  if (!weeklyOrchestrator) return res.status(500).json({ ok: false, error: 'weeklyOrchestrator not loaded' });
+  try {
+    var recap = weeklyOrchestrator.computeWeeklyRecap();
+    res.json({ ok: true, recap: recap });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/weekly-orchestrator/target-progress', function(req, res) {
+  if (!weeklyOrchestrator) return res.status(500).json({ ok: false, error: 'weeklyOrchestrator not loaded' });
+  try {
+    res.json({ ok: true, progress: weeklyOrchestrator.getTargetProgress() });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.get('/api/weekly-orchestrator/state', function(req, res) {
+  if (!weeklyOrchestrator) return res.status(500).json({ ok: false, error: 'weeklyOrchestrator not loaded' });
+  try {
+    var state = weeklyOrchestrator.loadState();
+    res.json({ ok: true, enabled: weeklyOrchestrator.isEnabled(), lastRunAt: state.lastRunAt, runs: state.runs, fires: state.fires });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// CRON 1: Mon-Fri at 9:45 AM ET — run daily playbook
+cron.schedule('45 9 * * 1-5', async function() {
+  try {
+    if (!weeklyOrchestrator || !weeklyOrchestrator.isEnabled()) return;
+    var day = weeklyOrchestrator.dayOfWeekET();
+    if (['monday','tuesday','wednesday','thursday','friday'].indexOf(day) < 0) return;
+    console.log('[WEEKLY-ORCH] cron 9:45 AM ET — runDailyPlaybook(' + day + ')');
+    var out = await weeklyOrchestrator.runDailyPlaybook(day);
+    if (out && out.results) {
+      console.log('[WEEKLY-ORCH] ' + day + ' complete · ' + out.results.length + ' actions executed');
+    }
+  } catch(e) { console.error('[WEEKLY-ORCH] cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// CRON 2: Friday at 3:30 PM ET — close-all signal
+cron.schedule('30 15 * * 5', async function() {
+  try {
+    if (!weeklyOrchestrator || !weeklyOrchestrator.isEnabled()) return;
+    console.log('[WEEKLY-ORCH] cron 3:30 PM Fri — closeAllPositions');
+    await weeklyOrchestrator.closeAllPositions();
+  } catch(e) { console.error('[WEEKLY-ORCH] Fri close cron error:', e.message); }
+}, { timezone: 'America/New_York' });
+
+// CRON 3: Friday at 4:00 PM ET — push weekly recap
+cron.schedule('0 16 * * 5', async function() {
+  try {
+    if (!weeklyOrchestrator || !weeklyOrchestrator.isEnabled()) return;
+    console.log('[WEEKLY-ORCH] cron 4:00 PM Fri — pushWeeklyRecap');
+    await weeklyOrchestrator.pushWeeklyRecap();
+  } catch(e) { console.error('[WEEKLY-ORCH] Fri recap cron error:', e.message); }
 }, { timezone: 'America/New_York' });
 
 // =============================================================================
