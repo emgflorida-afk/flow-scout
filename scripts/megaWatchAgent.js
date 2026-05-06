@@ -158,6 +158,16 @@ async function getSuggestedContract(ticker, direction, spot, dteDays) {
     if (!valid) return null;
     const strikeMatch = (valid.symbol || '').match(/[CP](\d+)$/);
     const strike = strikeMatch ? Number(strikeMatch[1]) : null;
+    // MAY 6 2026 PM — broker-specific OSI symbols for copy-paste (AB: "i tried
+    // google and entered the wrong contract"). Eliminates manual typing.
+    //   TS Titan format:    "GOOGL 260515C400"        (ticker + space + YYMMDD + C/P + strike)
+    //   Public.com format:  "GOOGL260515C00400000"    (ticker + YYMMDD + C/P + strike*1000 8-digit padded)
+    //   OCC standard OSI:   "GOOGL  260515C00400000"  (6-char ticker padded + YYMMDD + C/P + strike8)
+    // yymmdd + cp already declared above; reuse them
+    const tsSymbol = strike != null ? `${ticker} ${yymmdd}${cp}${strike}` : valid.symbol;
+    const strikeMillis = strike != null ? String(Math.round(strike * 1000)).padStart(8, '0') : '';
+    const publicSymbol = strike != null ? `${ticker}${yymmdd}${cp}${strikeMillis}` : null;
+    const occSymbol = strike != null ? `${ticker.padEnd(6, ' ')}${yymmdd}${cp}${strikeMillis}` : null;
     return {
       symbol: valid.symbol,
       strike: strike,
@@ -169,6 +179,11 @@ async function getSuggestedContract(ticker, direction, spot, dteDays) {
       vol: valid.volume,
       oi: valid.openInterest,
       breakeven: isLong ? (strike + Number(valid.mid)) : (strike - Number(valid.mid)),
+      tsSymbol: tsSymbol,
+      publicSymbol: publicSymbol,
+      occSymbol: occSymbol,
+      yymmdd: yymmdd,
+      cp: cp,
     };
   } catch (e) {
     return null;
@@ -706,6 +721,9 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
   if (sc) {
     fields.push(
       { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
+      // COPY-PASTE block — AB explicit ask after entering wrong GOOGL contract.
+      // Triple-click to select, paste into broker symbol field. No typing.
+      { name: '📑 Copy-paste symbol (no typos)', value: `**TS Titan:** \`${sc.tsSymbol}\`\n**Public.com:** \`${sc.publicSymbol || sc.tsSymbol}\``, inline: false },
       { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false }
     );
   }
