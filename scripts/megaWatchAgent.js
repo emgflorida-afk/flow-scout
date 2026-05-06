@@ -663,6 +663,17 @@ function detectBarCloseTrigger(bars) {
 // IS the one-stop surface — no scanner, no chart-app round-trip.
 //   alertTier='scalp'     → fast in/out 60-min profile     → STRATUMBREAK channel
 //   alertTier='day-trade' → 9:30-10:30 ET, exit 3:30 PM    → STRATUMBAR channel
+//
+// MAY 6 PM PHASE 4.52 — registers signal with Railway /api/active-signals/register
+// BEFORE building the card so the FIRE button URLs carry a real signalId.
+async function registerSignalRemote(payload) {
+  try {
+    const r = await postJson(`${RAILWAY_BASE}/api/active-signals/register`, payload, { timeoutMs: 5000 });
+    if (r && r.ok && r.signalId) return r.signalId;
+  } catch (e) { log('WARN', 'register-signal failed: ' + e.message); }
+  return null;
+}
+
 async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
   const tier = alertTier || 'scalp';
   const dirLabel = trig.direction === 'long' ? 'LONG' : 'SHORT';
@@ -689,10 +700,12 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     profileLabel = '⚡ SCALP (fast in/out)';
     holdRule = 'Time stop: cut after 60 min if no progress';
   }
+  let ssDetail = null;
   if (sc) {
     // STRUCTURAL stop (AB rule: never flat % stops)
     // For long: stop at prior bar low. For short: prior bar high.
     const ss = computeStructuralStop(trig.direction, spot, trig.priorHigh, trig.priorLow, sc.mid, /*optDelta*/ 0.40);
+    ssDetail = ss;
     stop = ss.optStop;
     stopDetail = ss.source === 'structural'
       ? ` (stock invalidation $${ss.stockStopLevel}, ~${ss.pctMove})`
@@ -703,6 +716,30 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     } else {
       tp1 = (sc.mid * 1.10).toFixed(2); tp2 = (sc.mid * 1.20).toFixed(2);
     }
+  }
+
+  // PHASE 4.52 — register the signal so FIRE buttons can route to it
+  let signalId = null;
+  if (sc && spot) {
+    signalId = await registerSignalRemote({
+      source: 'mega',
+      tier: tier,
+      ticker: ticker,
+      direction: trig.direction,
+      contract: {
+        osi: `${ticker} ${sc.expiry.replace(/-/g, '')}${optType[0].toUpperCase()}${sc.strike}`,
+        strike: sc.strike,
+        expiry: sc.expiry,
+        mid: sc.mid,
+        bid: sc.bid,
+        ask: sc.ask,
+        vol: sc.vol,
+        oi:  sc.oi,
+      },
+      bracket: { entry: sc.mid, tp1: parseFloat(tp1), tp2: parseFloat(tp2), stop: parseFloat(stop), stopSource: ssDetail ? ssDetail.source : null, holdRule: holdRule },
+      stockSpot: spot,
+      ttlMin: tier === 'day-trade' ? 60 : 30,
+    });
   }
 
   const titleEmoji = tier === 'day-trade' ? '☀️' : '⚡';
@@ -721,11 +758,25 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
   if (sc) {
     fields.push(
       { name: '📋 Contract', value: `**${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**\nMid $${sc.mid.toFixed(2)} · bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}\nvol ${sc.vol} · OI ${sc.oi}`, inline: false },
-      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false },
-      // MAY 6 PM — placeholder for Phase 4.52 button-fire URL.
-      // Real link replaces this on the next deploy after /api/quick-fire ships.
-      { name: '⚡ FIRE (Phase 4.52 builds tonight)', value: `Auto-sized · 1ct ${tier === 'day-trade' ? '($' + (sc.mid * 100).toFixed(0) + ')' : '($' + (sc.mid * 100).toFixed(0) + ')'} · button-link incoming Thu AM`, inline: false }
+      { name: '🎯 Bracket',  value: `Cost: **$${(sc.mid * 100).toFixed(0)}** · Breakeven: $${sc.breakeven.toFixed(2)}\nTP1 **$${tp1}** · TP2 **$${tp2}** · Stop **$${stop}**${stopDetail}\n${holdRule}`, inline: false }
     );
+    // PHASE 4.52 — real FIRE buttons (or placeholder if registration failed)
+    if (signalId) {
+      const simUrl = `${RAILWAY_BASE}/quick-fire?sid=${signalId}&acct=sim`;
+      const liveUrl = `${RAILWAY_BASE}/quick-fire?sid=${signalId}&acct=live`;
+      const costStr = `$${(sc.mid * 100).toFixed(0)}`;
+      fields.push({
+        name: '⚡ FIRE',
+        value: `[⚡ FIRE on **SIM** (${costStr}/ct)](${simUrl})\n[🔥 FIRE on **LIVE** (${costStr}/ct) — confirm required](${liveUrl})\nAuto-sized (1.5/2.5/4% per tier)`,
+        inline: false,
+      });
+    } else {
+      fields.push({
+        name: '⚡ FIRE',
+        value: 'Signal registration failed — fire from Action tab.',
+        inline: false,
+      });
+    }
   }
   // Click-through chart link
   fields.push({
@@ -740,7 +791,7 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
     color: color,
     fields: fields,
     chartUrl: chartImageUrl(ticker, '5'),
-    footer: `${tier === 'day-trade' ? 'EXIT BY 3:30 PM' : 'ONE WIN, walk away'} · scanner not needed · fire from this card`,
+    footer: `${tier === 'day-trade' ? 'EXIT BY 3:30 PM' : 'ONE WIN, walk away'} · ${signalId ? 'sid=' + signalId.slice(0,12) : 'no-sid'} · fire from this card`,
   };
 }
 

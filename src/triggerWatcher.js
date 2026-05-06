@@ -174,45 +174,52 @@ async function collectArmedSetups() {
 }
 
 // Push Discord card with FIRE link
+// PHASE 4.52 — uses unified discordCardBuilder.buildEntryCard so the trigger
+// alert carries SIM/LIVE FIRE buttons just like MEGA cards.
 async function pushTriggerAlert(setup, spot) {
-  var dirIcon = setup.direction === 'long' ? '🟢' : '🔴';
-  var actionWord = setup.direction === 'long' ? 'CALL / LONG' : 'PUT / SHORT';
-  var fireBtnUrl = 'https://flow-scout-production.up.railway.app/scanner-v2.html?fireTicker=' + setup.ticker + '&direction=' + setup.direction;
-
-  var embed = {
-    username: 'Flow Scout — Trigger Watch',
-    embeds: [{
-      title: dirIcon + ' ' + setup.ticker + ' — ' + setup.source + ' AT TRIGGER',
-      description: '**' + setup.ticker + ' at $' + spot.toFixed(2) + '** — within tolerance of trigger $' + setup.trigger.toFixed(2) + '.\n\n**Direction**: ' + actionWord + '\n**Strategy**: ' + setup.strategy,
-      color: setup.direction === 'long' ? 5763719 : 15158332,
-      fields: [
-        {
-          name: '📊 Levels',
-          value: '🎯 **Trigger**: $' + setup.trigger.toFixed(2) + '\n' +
-                 (isFinite(setup.stop) ? '🛑 **Stop**: $' + setup.stop.toFixed(2) + '\n' : '') +
-                 (isFinite(setup.T1) ? '✅ **T1**: $' + setup.T1.toFixed(2) + '\n' : '') +
-                 (isFinite(setup.T2) ? '✅ **T2**: $' + setup.T2.toFixed(2) : ''),
-          inline: false,
-        },
-        {
-          name: '💡 Thesis',
-          value: setup.thesis || 'see card',
-          inline: false,
-        },
-        {
-          name: '🔥 ONE-CLICK FIRE',
-          value: 'Open scanner with FIRE button: ' + fireBtnUrl + '\n\nOr copy contract spec from FIRE modal in your scanner.',
-          inline: false,
-        },
-      ],
-      footer: { text: 'Flow Scout | TRIGGER WATCH | Cooldown 15min per ticker' },
-      timestamp: new Date().toISOString(),
-    }],
-  };
+  var card;
+  try {
+    var cb = require('./discordCardBuilder');
+    card = cb.buildEntryCard({
+      source: 'trigger',
+      tier: 'scalp',
+      ticker: setup.ticker,
+      direction: setup.direction,
+      stockSpot: spot,
+      contract: setup.contract || null,
+      bracket: {
+        entry: setup.trigger,
+        tp1: isFinite(setup.T1) ? setup.T1 : null,
+        tp2: isFinite(setup.T2) ? setup.T2 : null,
+        stop: isFinite(setup.stop) ? setup.stop : null,
+        stopSource: 'trigger',
+        holdRule: setup.thesis || setup.strategy || 'see card',
+      },
+      scannerSetup: setup.source + ' / ' + setup.strategy,
+      ttlMin: 30,
+    });
+  } catch (e) {
+    console.error('[TRIGGER-WATCH] cardBuilder failed, falling back:', e.message);
+    var dirIcon = setup.direction === 'long' ? '🟢' : '🔴';
+    card = {
+      username: 'Flow Scout — Trigger Watch',
+      embeds: [{
+        title: dirIcon + ' ' + setup.ticker + ' — ' + setup.source + ' AT TRIGGER',
+        description: '**' + setup.ticker + ' at $' + spot.toFixed(2) + '** trigger $' + setup.trigger.toFixed(2),
+        color: setup.direction === 'long' ? 5763719 : 15158332,
+        fields: [
+          { name: '📊 Levels', value: '🎯 Trigger $' + setup.trigger.toFixed(2) + (isFinite(setup.stop) ? '\n🛑 Stop $' + setup.stop.toFixed(2) : '') + (isFinite(setup.T1) ? '\n✅ T1 $' + setup.T1.toFixed(2) : ''), inline: false },
+          { name: '💡 Thesis', value: setup.thesis || 'see card', inline: false },
+        ],
+        footer: { text: 'Flow Scout | TRIGGER WATCH | fallback render' },
+        timestamp: new Date().toISOString(),
+      }],
+    };
+  }
 
   // Use shared discordPush helper — tracks heartbeat + retries + logs full errors
   var dp = require('./discordPush');
-  var result = await dp.send('triggerWatcher', embed, { webhook: DISCORD_WEBHOOK });
+  var result = await dp.send('triggerWatcher', card, { webhook: DISCORD_WEBHOOK });
   if (result.ok) {
     console.log('[TRIGGER-WATCH] PUSHED: ' + setup.ticker + ' ' + setup.source + ' ' + setup.direction + ' (attempts ' + result.attempts + ')');
   } else {

@@ -108,6 +108,7 @@ var PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: '25mb' }));   // bumped from default 100KB so John-data admin upload (3MB raw files) fits
 app.use(express.text({ limit: '25mb' }));  // TradingView alerts are text/plain — bumped to fit large admin uploads too
+app.use(express.urlencoded({ extended: false, limit: '1mb' }));  // Phase 4.52 — POST /quick-fire/confirm uses form-encoded body
 app.use(function(req, res, next) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -7521,6 +7522,114 @@ app.get('/api/sim-fire-debug/today', function(req, res) {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// =============================================================================
+// PHASE 4.52 — QUICK-FIRE endpoints. AB taps a Discord button and the order
+// hits TradeStation. SIM auto-fires on GET. LIVE returns confirm page first.
+// =============================================================================
+var _quickFire = null;
+try { _quickFire = require('./quickFire'); console.log('[QUICK-FIRE] Loaded OK'); } catch (e) { console.log('[QUICK-FIRE] Skipped:', e.message); }
+var _cardBuilder = null;
+try { _cardBuilder = require('./discordCardBuilder'); console.log('[CARD-BUILDER] Loaded OK'); } catch (e) { console.log('[CARD-BUILDER] Skipped:', e.message); }
+
+// GET /quick-fire?sid=X&acct=sim|live[&qty=N]
+//   SIM: fires immediately, returns HTML result page.
+//   LIVE: returns confirm page (HTML form). Real fire happens on POST /quick-fire/confirm.
+app.get('/quick-fire', async function(req, res) {
+  if (!_quickFire) return res.status(500).type('html').send('<h1>quickFire module not loaded</h1>');
+  var sid = String(req.query.sid || '');
+  var acct = String(req.query.acct || 'sim').toLowerCase();
+  if (!sid) return res.status(400).type('html').send('<h1>missing sid</h1>');
+
+  var signal = _cardBuilder ? _cardBuilder.loadSignal(sid) : null;
+  if (!signal) return res.status(404).type('html').send('<h1>signal ' + sid + ' not found</h1><p>It may have expired (>24h) or never registered. Try a fresh card.</p>');
+
+  if (acct === 'live') {
+    // Render confirm page — actual fire is POST
+    return res.type('html').send(_quickFire.renderConfirmPage(signal, sid));
+  }
+
+  // SIM path — auto-fire
+  try {
+    var qty = req.query.qty ? parseInt(req.query.qty, 10) : null;
+    var result = await _quickFire.placeQuickFire({ signalId: sid, account: 'sim', qty: qty });
+    return res.type('html').send(_quickFire.renderResultPage(result));
+  } catch (e) {
+    return res.status(500).type('html').send('<h1>fire error</h1><pre>' + (e && e.message ? e.message : 'unknown') + '</pre>');
+  }
+});
+
+// POST /quick-fire/confirm — LIVE-only confirmation step. Form-encoded body { sid }.
+app.post('/quick-fire/confirm', async function(req, res) {
+  if (!_quickFire) return res.status(500).type('html').send('<h1>quickFire module not loaded</h1>');
+  var sid = String((req.body && req.body.sid) || req.query.sid || '');
+  if (!sid) return res.status(400).type('html').send('<h1>missing sid</h1>');
+  try {
+    var result = await _quickFire.placeQuickFire({ signalId: sid, account: 'live', confirmed: true });
+    return res.type('html').send(_quickFire.renderResultPage(result));
+  } catch (e) {
+    return res.status(500).type('html').send('<h1>fire error</h1><pre>' + (e && e.message ? e.message : 'unknown') + '</pre>');
+  }
+});
+
+// GET /api/active-signals  → returns current map (ops + scanner Action tab can read this)
+app.get('/api/active-signals', function(req, res) {
+  if (!_cardBuilder) return res.status(500).json({ ok: false, error: 'cardBuilder not loaded' });
+  try {
+    var map = _cardBuilder.readSignals();
+    var arr = Object.keys(map).map(function(k) { return map[k]; });
+    arr.sort(function(a, b) { return new Date(b.createdAt || 0) - new Date(a.createdAt || 0); });
+    res.json({ ok: true, count: arr.length, signals: arr });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// POST /api/active-signals/register
+//   Body: { source, tier, ticker, direction, contract, bracket, stockSpot, ttlMin, quarantined }
+//   Used by laptop-hosted agents (megaWatchAgent on AB's mac) to register a
+//   signal in Railway's persisted store BEFORE posting the Discord card. Returns
+//   { ok: true, signalId } so the agent can bake the sid into the FIRE links.
+app.post('/api/active-signals/register', function(req, res) {
+  if (!_cardBuilder) return res.status(500).json({ ok: false, error: 'cardBuilder not loaded' });
+  try {
+    var body = req.body || {};
+    if (!body.ticker) return res.status(400).json({ ok: false, error: 'missing ticker' });
+    var sid = _cardBuilder.persistSignal({
+      source: body.source || 'unknown',
+      tier: body.tier || 'scalp',
+      ticker: String(body.ticker).toUpperCase(),
+      direction: body.direction || 'long',
+      contract: body.contract || null,
+      bracket: body.bracket || null,
+      stockSpot: body.stockSpot,
+      quarantined: !!body.quarantined,
+      ttlMin: body.ttlMin || 30,
+    });
+    res.json({ ok: true, signalId: sid });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/quick-fire/log?n=N  → recent fire-log entries
+app.get('/api/quick-fire/log', function(req, res) {
+  if (!_quickFire) return res.status(500).json({ ok: false, error: 'quickFire not loaded' });
+  try {
+    var log = _quickFire.loadFireLog();
+    var n = parseInt(req.query.n || '50', 10);
+    res.json({ ok: true, count: log.length, last: log.slice(-n) });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// GET /api/quick-fire/status  → flag + accounts visible
+app.get('/api/quick-fire/status', function(req, res) {
+  if (!_quickFire) return res.status(500).json({ ok: false, error: 'quickFire not loaded' });
+  res.json({
+    ok: true,
+    liveAutoFireEnabled: _quickFire.liveFireEnabled(),
+    simAccount: _quickFire.SIM_ACCOUNT,
+    liveAccount: _quickFire.LIVE_ACCOUNT,
+    tierPct: _quickFire.TIER_PCT,
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // =============================================================================
