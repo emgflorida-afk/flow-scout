@@ -393,18 +393,21 @@ async function buildDiscordCard(ctx) {
   const hiSummary = String(higher.summary || '').slice(0, 100);
   const loSummary = String(lower.summary || '').slice(0, 100);
 
-  // MAY 6 2026 PM — REAL CONTRACT NUMBERS (AB explicit ask)
+  // MAY 6 2026 PM — REAL CONTRACT NUMBERS + SWING bracket (full stack signal,
+  // 3-10 day hold time → wider stop/target makes sense)
   let contractLines = [`Suggested: ${ticker} 5/22 ATM ${optType} delta ~0.40`];
   const sc = await getSuggestedContract(ticker, direction, spot, 9);
   if (sc) {
     const cost1ct = (sc.mid * 100).toFixed(0);
-    const stop = (sc.mid * 0.80).toFixed(2);
-    const tp = (sc.mid * 1.50).toFixed(2);
+    const stop = (sc.mid * 0.80).toFixed(2);   // -20% stop (swing)
+    const tp1 = (sc.mid * 1.30).toFixed(2);    // +30% trim 1
+    const tp2 = (sc.mid * 1.60).toFixed(2);    // +60% trim 2
     contractLines = [
       `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType}**`,
       `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
       `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
-      `Bracket: TP $${tp} (+50%) / Stop $${stop} (-20%)`,
+      `**SWING bracket**: TP1 $${tp1} (+30%) · TP2 $${tp2} (+60%) · Stop $${stop} (-20%)`,
+      `Hold: 3-10 days · cut at 0.5 ATR break of trigger level`,
     ];
   }
 
@@ -534,16 +537,20 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct) {
   // MAY 6 2026 PM — REAL CONTRACT NUMBERS (AB explicit ask)
   let contractLine = `Action: consider 1ct ATM ${optType}`;
   if (spot) {
+    // BAR-CLOSE = SCALP profile (fast signal, fast in/out, tight stops/targets)
+    // SWING profile is on the A+ card (buildDiscordCard)
     const sc = await getSuggestedContract(ticker, trig.direction, spot, 9);
     if (sc) {
       const cost1ct = (sc.mid * 100).toFixed(0);
-      const stop = (sc.mid * 0.80).toFixed(2);  // -20% stop default
-      const tp = (sc.mid * 1.50).toFixed(2);    // +50% TP default
+      const stop = (sc.mid * 0.92).toFixed(2);  // -8% stop (scalp)
+      const tp1 = (sc.mid * 1.10).toFixed(2);   // +10% TP1 (trim half)
+      const tp2 = (sc.mid * 1.20).toFixed(2);   // +20% TP2 (runner)
       contractLine = [
         `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**`,
         `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
         `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
-        `Bracket: TP $${tp} (+50%) / Stop $${stop} (-20%)`,
+        `**SCALP bracket** (fast signal): TP1 $${tp1} (+10%) · TP2 $${tp2} (+20%) · Stop $${stop} (-8%)`,
+        `Time stop: cut after 60 min if no progress`,
       ].join('\n');
     }
   }
