@@ -3972,15 +3972,63 @@ function renderStatsAction() {
 }
 
 function renderGridAction() {
-  const rows = actionData.rows || [];
+  let rows = actionData.rows || [];
+
+  // ===========================================================================
+  // MAY 6 2026 — TAPE-DIRECTION + STALENESS FILTER (AB explicit ask)
+  // "Why show cards that are not go to trade — why is there a googl put card
+  //  if its up — actionable only real actionable needs to be there in real time"
+  //
+  // Rules:
+  //   1. If SPY is up >0.5% on the day → HIDE all SHORT/PUT cards (counter-tape)
+  //   2. If SPY is down >0.5% on the day → HIDE all LONG/CALL cards (counter-tape)
+  //   3. If individual ticker is moving >1% AGAINST card direction → HIDE
+  //   4. If TA alignment === 'opposite' AND status !== 'WATCH' → HIDE
+  //   5. Cards with no live price data → HIDE (can't act on stale)
+  //
+  // Toggle off with localStorage.setItem('actionRawMode', '1')
+  // ===========================================================================
+  const RAW_MODE = localStorage.getItem('actionRawMode') === '1';
+  let hiddenCount = 0;
+  if (!RAW_MODE) {
+    const tape = window._tape || {};
+    const spyPct = Number(tape.spyPct || tape.spy?.pctChange || 0);
+    const tapeStrong = Math.abs(spyPct) > 0.5;
+    const tapeBull = tapeStrong && spyPct > 0;
+    const tapeBear = tapeStrong && spyPct < 0;
+    const before = rows.length;
+    rows = rows.filter(r => {
+      const live = r.live || {};
+      const tickerPct = Number(live.pctChange || 0);
+      const dir = r.direction;
+      // Rule 5 — no live data, can't act
+      if (!live.last) return false;
+      // Rule 1+2 — counter-tape hard filter
+      if (tapeBull && (dir === 'short' || dir === 'put')) return false;
+      if (tapeBear && (dir === 'long' || dir === 'call')) return false;
+      // Rule 3 — ticker moving against direction by >1%
+      if (dir === 'long' && tickerPct < -1) return false;
+      if (dir === 'short' && tickerPct > 1) return false;
+      // Rule 4 — TA opposite hides unless still on watch
+      if (r.ta && r.ta.alignment === 'opposite' && r.status === 'ACTIONABLE') return false;
+      return true;
+    });
+    hiddenCount = before - rows.length;
+  }
+
   // Phase 4.34 — Active Smart Conditionals list at the top of ACTION tab
   const smartCondHtml = `<div id="smart-cond-list"></div>`;
+  const filterSummaryHtml = (!RAW_MODE && hiddenCount > 0) ? `
+    <div style="background:rgba(70,180,255,0.10); border:1px solid rgba(70,180,255,0.35); border-radius:8px; padding:10px 14px; margin:8px 0; font-size:12px; color:var(--txt-2);">
+      🎯 <b>Real-actionable filter ON</b> — hid <b>${hiddenCount}</b> counter-tape / stale cards.
+      Set <code>localStorage.actionRawMode='1'</code> + reload to see all.
+    </div>` : '';
   if (!rows.length) {
-    document.getElementById("grid").innerHTML = smartCondHtml + `<div class="empty">No flow events score 10+ in last 30 min. Quiet tape — wait for the next setup.</div>`;
+    document.getElementById("grid").innerHTML = smartCondHtml + filterSummaryHtml + `<div class="empty">No real-actionable cards right now. ${hiddenCount > 0 ? `(${hiddenCount} hidden by tape/staleness filter)` : 'Quiet tape — wait for next bar close.'}</div>`;
     if (typeof refreshSmartConditionals === 'function') refreshSmartConditionals();
     return;
   }
-  document.getElementById("grid").innerHTML = smartCondHtml + rows.map(r => {
+  document.getElementById("grid").innerHTML = smartCondHtml + filterSummaryHtml + rows.map(r => {
     const statusBg = r.status === 'ACTIONABLE' ? 'rgba(76,175,80,0.18)' :
                     r.status === 'WATCH' ? 'rgba(70,180,255,0.15)' :
                     'rgba(120,120,120,0.12)';
