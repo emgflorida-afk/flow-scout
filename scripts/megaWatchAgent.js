@@ -74,6 +74,12 @@ const DISCORD_BAR_WEBHOOK = process.env.DISCORD_BAR_WEBHOOK ||
 const DISCORD_APLUS_WEBHOOK = process.env.DISCORD_MEGA_WEBHOOK ||
   process.env.DISCORD_STRATUMSWING_WEBHOOK ||
   'https://discord.com/api/webhooks/1494838146272333887/6JmwoJRhys8Rm55DT7FNUVZZF_JYLtGxKmfVj4T9X_mcuisNPMUjDJ3D3WX2Txwfe4xw';
+// MAY 6 2026 PM — DAY TRADE tier (AB explicit ask)
+// Window: 9:30–10:30 ET ONLY. Stronger bar criteria. Exit by 3:30 PM same day.
+// Routes to STRATUMBAR channel (bar-method execution).
+const DISCORD_DAY_WEBHOOK = process.env.DISCORD_DAY_WEBHOOK ||
+  process.env.DISCORD_STRATUMBAR_WEBHOOK ||
+  'https://discord.com/api/webhooks/1494838632886964285/aD93F5W7aFxjblLv3v54RCvVi-a_h9rHe1hN2xbVG1bHohKq1bAUHrZxcHqMMpFR6lFH';
 // Backward-compat alias used by older callsites in this file
 const DISCORD_WEBHOOK = DISCORD_APLUS_WEBHOOK;
 const RAILWAY_BASE_FOR_QUOTES = process.env.RAILWAY_BASE_URL ||
@@ -425,12 +431,16 @@ async function buildDiscordCard(ctx) {
   return content;
 }
 
-// MAY 6 2026 PM — channel-aware send. type='bar-close' → STRATUMBREAK channel,
-// type='a-plus' (default) → STRATUMSWING/MEGA channel.
+// MAY 6 2026 PM — channel-aware send.
+// type='bar-close'  → STRATUMBREAK channel  (scalps, anytime)
+// type='day-trade'  → STRATUMBAR channel    (9:30-10:30 ET only, exit 3:30 PM)
+// type='a-plus'     → STRATUMSWING channel  (full stack swing)
 async function sendDiscordCard(content, type) {
   const t = (type || 'a-plus').toLowerCase();
-  const hook = t === 'bar-close' ? DISCORD_BAR_WEBHOOK : DISCORD_APLUS_WEBHOOK;
-  const username = t === 'bar-close' ? 'MEGA Bar-Close Trigger' : 'MEGA A+ Agent';
+  let hook, username;
+  if (t === 'bar-close')      { hook = DISCORD_BAR_WEBHOOK;   username = 'MEGA Bar-Close Trigger'; }
+  else if (t === 'day-trade') { hook = DISCORD_DAY_WEBHOOK;   username = 'MEGA Day Trade'; }
+  else                        { hook = DISCORD_APLUS_WEBHOOK; username = 'MEGA A+ Agent'; }
   if (!hook) return false;
   const r = await postJson(hook, { content: content, username: username }, { timeoutMs: 8000 });
   if (!r.ok) {
@@ -438,6 +448,22 @@ async function sendDiscordCard(content, type) {
     return false;
   }
   return true;
+}
+
+// MAY 6 2026 PM — DAY TRADE WINDOW
+// Day trade alerts only fire 9:30-10:30 ET. After 10:30, bar-close triggers
+// stay scalp-grade (60-min cut, no day-hold). This prevents the 11 AM-3 PM
+// dead-zone trades AB has been losing on (May 5 journal: "no afternoon entries").
+function isInDayTradeWindow(now) {
+  const dt = new Date(now || Date.now());
+  // Convert to ET (handles EDT vs EST automatically with timezone string)
+  const et = dt.toLocaleString('en-US', { timeZone: 'America/New_York', hour12: false });
+  // et is like "5/6/2026, 09:45:00" — extract HH:MM
+  const m = et.match(/,\s*(\d{1,2}):(\d{2})/);
+  if (!m) return false;
+  const totalMin = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+  // 9:30 = 570, 10:30 = 630
+  return totalMin >= 570 && totalMin < 630;
 }
 
 // ---------------------------------------------------------------------------
@@ -524,7 +550,11 @@ function detectBarCloseTrigger(bars) {
   };
 }
 
-async function buildBarCloseCard(ticker, trig, quote, spyPct) {
+// MAY 6 2026 PM — buildBarCloseCard now branches by alertTier:
+//   alertTier='scalp'     → fast in/out 60-min profile     → STRATUMBREAK channel
+//   alertTier='day-trade' → 9:30-10:30 ET, exit 3:30 PM    → STRATUMBAR channel
+async function buildBarCloseCard(ticker, trig, quote, spyPct, alertTier) {
+  const tier = alertTier || 'scalp';
   const dirLabel = trig.direction === 'long' ? 'LONG' : 'SHORT';
   const optType = trig.direction === 'long' ? 'call' : 'put';
   const aboveBelow = trig.direction === 'long' ? 'above prior high' : 'below prior low';
@@ -534,28 +564,40 @@ async function buildBarCloseCard(ticker, trig, quote, spyPct) {
     ? `${quote.pctChange >= 0 ? '+' : ''}${quote.pctChange}%`
     : '?';
   const spot = (quote && quote.last != null) ? Number(quote.last) : null;
-  // MAY 6 2026 PM — REAL CONTRACT NUMBERS (AB explicit ask)
   let contractLine = `Action: consider 1ct ATM ${optType}`;
   if (spot) {
-    // BAR-CLOSE = SCALP profile (fast signal, fast in/out, tight stops/targets)
-    // SWING profile is on the A+ card (buildDiscordCard)
     const sc = await getSuggestedContract(ticker, trig.direction, spot, 9);
     if (sc) {
       const cost1ct = (sc.mid * 100).toFixed(0);
-      const stop = (sc.mid * 0.92).toFixed(2);  // -8% stop (scalp)
-      const tp1 = (sc.mid * 1.10).toFixed(2);   // +10% TP1 (trim half)
-      const tp2 = (sc.mid * 1.20).toFixed(2);   // +20% TP2 (runner)
+      let stop, tp1, tp2, profileLabel, holdRule;
+      if (tier === 'day-trade') {
+        // DAY TRADE bracket: TP +20%/+40%, Stop -15%, exit 3:30 PM
+        stop = (sc.mid * 0.85).toFixed(2);   // -15%
+        tp1 = (sc.mid * 1.20).toFixed(2);    // +20% trim
+        tp2 = (sc.mid * 1.40).toFixed(2);    // +40% runner
+        profileLabel = '☀️ DAY TRADE bracket (9:30-10:30 entry)';
+        holdRule = '**Hard exit by 3:30 PM ET — no overnight hold**';
+      } else {
+        // SCALP bracket: TP +10%/+20%, Stop -8%, 60-min cut
+        stop = (sc.mid * 0.92).toFixed(2);   // -8%
+        tp1 = (sc.mid * 1.10).toFixed(2);    // +10% trim
+        tp2 = (sc.mid * 1.20).toFixed(2);    // +20% runner
+        profileLabel = '⚡ SCALP bracket (fast in/out)';
+        holdRule = 'Time stop: cut after 60 min if no progress';
+      }
       contractLine = [
         `Contract: **${ticker} ${sc.expiry} $${sc.strike}${optType[0].toUpperCase()}**`,
         `Mid $${sc.mid.toFixed(2)} (bid $${sc.bid.toFixed(2)} / ask $${sc.ask.toFixed(2)}) · vol ${sc.vol} · OI ${sc.oi}`,
         `Cost 1ct: **$${cost1ct}** · Breakeven: $${sc.breakeven.toFixed(2)}`,
-        `**SCALP bracket** (fast signal): TP1 $${tp1} (+10%) · TP2 $${tp2} (+20%) · Stop $${stop} (-8%)`,
-        `Time stop: cut after 60 min if no progress`,
+        `${profileLabel}: TP1 $${tp1} · TP2 $${tp2} · Stop $${stop}`,
+        holdRule,
       ].join('\n');
     }
   }
+  const titleEmoji = tier === 'day-trade' ? '☀️' : '⚡';
+  const titleLabel = tier === 'day-trade' ? 'DAY TRADE' : 'BAR-CLOSE TRIGGER';
   const lines = [
-    `⚡ **BAR-CLOSE TRIGGER — ${ticker} ${dirLabel}**`,
+    `${titleEmoji} **${titleLabel} — ${ticker} ${dirLabel}**`,
     `5m close: $${trig.latestClose.toFixed(2)} (${aboveBelow} $${ref.toFixed(2)})`,
     `Volume: ${trig.volMult}× avg (prior 10 bars)`,
     `Spot: $${(spot != null ? spot.toFixed(2) : '?')} (${tickerPctStr})  ·  Tape: ${spyLine}`,
@@ -577,13 +619,20 @@ async function checkBarCloseTrigger(ticker, quote, spyPct) {
   const trig = detectBarCloseTrigger(bars);
   if (!trig) return { fired: false, reason: 'no-trigger' };
   if (isBarDeduped(ticker, trig.direction)) return { fired: false, reason: 'dedup', direction: trig.direction };
-  const card = await buildBarCloseCard(ticker, trig, quote, spyPct);
-  const sent = await sendDiscordCard(card, 'bar-close');
+  // MAY 6 2026 PM — tier branching:
+  //   9:30-10:30 ET window + strong follow-through (vol >= 1.8x) = DAY TRADE
+  //   Otherwise (anytime, normal vol)                            = SCALP
+  const inDayWindow = isInDayTradeWindow();
+  const isStrongDay = inDayWindow && trig.volMult >= 1.8;
+  const tier = isStrongDay ? 'day-trade' : 'scalp';
+  const channelType = isStrongDay ? 'day-trade' : 'bar-close';
+  const card = await buildBarCloseCard(ticker, trig, quote, spyPct, tier);
+  const sent = await sendDiscordCard(card, channelType);
   if (sent) {
     markBarFired(ticker, trig.direction);
-    return { fired: true, direction: trig.direction, volMult: trig.volMult };
+    return { fired: true, direction: trig.direction, volMult: trig.volMult, tier: tier };
   }
-  return { fired: false, reason: 'send-fail', direction: trig.direction };
+  return { fired: false, reason: 'send-fail', direction: trig.direction, tier: tier };
 }
 
 // ---------------------------------------------------------------------------
