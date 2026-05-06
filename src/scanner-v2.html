@@ -3835,7 +3835,10 @@ function renderGridTomorrow() {
           </div>
 
           <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', false, this)" title="Fire on TradeStation immediately (market entry)">⚡ TS FIRE</button>
+            <!-- MAY 6 PM — explicit SIM + LIVE buttons (AB: tomorrow card does not have sim fire). -->
+            <!-- SIM button = green, single-click. LIVE button = red, requires global toggle confirm. -->
+            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#16a34a,#0e7c39); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();fireSimFromCard('${r.ticker}', '${(r.direction || ((r.target||0)>=(r.spot||0)?'long':'short')).toLowerCase()}', this)" title="Fire on SIM3142118M paper account (auto-sized, no real money)">⚡ SIM FIRE</button>
+            <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#ff5e3a,#cc3a1a); padding:6px 12px; font-size:12px; font-weight:700;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', false, this)" title="Fire on LIVE 11975462 (market entry, real money)">🔥 LIVE FIRE</button>
             <button class="btn btn-secondary ${btnClass}" style="background:linear-gradient(180deg,#666,#444); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToTS('${r.ticker}', true, this)" title="Queue on TradeStation with conditional trigger">🎯 TS QUEUE</button>
             <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#3a8fff,#1c64d6); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToPublic('${r.ticker}', this)" title="Place on Public.com (cash, no PDT)">📱 PUBLIC</button>
             <button class="btn btn-primary ${btnClass}" style="background:linear-gradient(180deg,#9b6dff,#6d3fc8); padding:6px 12px; font-size:12px;" onclick="event.stopPropagation();dispatchRadarToBracket('${r.ticker}', this)" title="Place full bracket on Public">📱 BRACKET</button>
@@ -3857,6 +3860,36 @@ function renderGridTomorrow() {
 }
 
 // May 6 — TradeStation fire dispatcher for Tomorrow tab radar entries.
+// MAY 6 2026 PM — fireSimFromCard: dispatch to SIM3142118M paper account.
+// Wraps the Phase 4.52 /quick-fire endpoint with a hardcoded acct=sim and
+// the card's ticker+direction. Auto-sizes 1-3ct per tier % rule. AB asked
+// for explicit SIM button on Tomorrow cards (no global-toggle confusion).
+async function fireSimFromCard(ticker, direction, btn) {
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sending...'; }
+  try {
+    const r = (radarData && radarData._flat) ? radarData._flat.find(x => x.ticker === ticker) : null;
+    const tier = (r && r.tradeType) ? String(r.tradeType).toLowerCase() : 'swing';
+    const url = '/api/quick-fire?ticker=' + encodeURIComponent(ticker)
+              + '&direction=' + encodeURIComponent(direction)
+              + '&tier=' + encodeURIComponent(tier)
+              + '&acct=sim'
+              + '&source=tomorrow-card';
+    const resp = await fetch(url).then(x => x.json()).catch(e => ({ ok: false, error: e.message }));
+    if (resp && resp.ok) {
+      if (btn) { btn.textContent = '✅ SIM FILLED'; btn.style.background = 'linear-gradient(180deg,#16a34a,#0e7c39)'; }
+      // Persist a quick log so AB can verify in /api/sim-fire-debug/today
+      console.log('[FIRE-SIM-CARD]', ticker, resp);
+    } else {
+      if (btn) { btn.disabled = false; btn.textContent = '⚡ SIM FIRE'; }
+      alert('SIM fire failed: ' + (resp && (resp.error || resp.message) || 'unknown error'));
+    }
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ SIM FIRE'; }
+    alert('SIM fire error: ' + e.message);
+  }
+}
+window.fireSimFromCard = fireSimFromCard;
+
 // Mirrors dispatchRadarToPublic but routes to /api/take-trade (the same
 // endpoint scanner.html uses for TS fires). useTrigger=true queues a
 // conditional bracket; false fires immediately.
