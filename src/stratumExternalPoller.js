@@ -31,10 +31,11 @@ var CHAN = {
   // 30-trade hit-rate proves >=50%). Promote via CHAN_QUARANTINE_OFF env.
   EXTERNAL_Q1:        process.env.CHAN_EXTERNAL_Q1        || '1495238999584014476',
   EXTERNAL_Q2:        process.env.CHAN_EXTERNAL_Q2        || '1025796768937558237',
+  EXTERNAL_Q3:        process.env.CHAN_EXTERNAL_Q3        || '1341868147686510672', // Advance Principle
 };
 
 // MAY 6 2026 PM — quarantine routing
-var QUARANTINED_CHANNELS = new Set([CHAN.EXTERNAL_Q1, CHAN.EXTERNAL_Q2]);
+var QUARANTINED_CHANNELS = new Set([CHAN.EXTERNAL_Q1, CHAN.EXTERNAL_Q2, CHAN.EXTERNAL_Q3]);
 var QUARANTINE_OVERRIDE = (process.env.CHAN_QUARANTINE_OFF || '')
   .split(',').map(function(s){ return s.trim(); }).filter(Boolean);
 function isQuarantined(channelId) {
