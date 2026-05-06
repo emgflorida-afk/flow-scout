@@ -84,10 +84,44 @@ print(json.dumps({
 }))
 ")
 
-RESPONSE=$(echo "$PAYLOAD" | curl -s -X POST "$RAILWAY_URL" \
-  -H 'Content-Type: application/json' \
-  -d @- \
-  --max-time 60)
+# Retry-with-backoff for Anthropic 529/429 (overloaded / rate-limit).
+# Both visionDaemon and megaWatchAgent get blocked when the upstream
+# Anthropic API returns 529. Backoff: 15s, 45s, 90s. After 3 retries,
+# return the final error and let caller handle it (no infinite loop).
+RETRY_DELAYS=(15 45 90)
+RESPONSE=""
+HTTP_CODE=""
+for attempt in 0 1 2 3; do
+  # Capture body + HTTP code in a single curl
+  CURL_OUT=$(echo "$PAYLOAD" | curl -s -X POST "$RAILWAY_URL" \
+    -H 'Content-Type: application/json' \
+    -d @- \
+    --max-time 90 \
+    -w "\n__HTTP_CODE__:%{http_code}")
+  HTTP_CODE=$(echo "$CURL_OUT" | grep -o '__HTTP_CODE__:[0-9]*' | tail -1 | sed 's/__HTTP_CODE__://')
+  RESPONSE=$(echo "$CURL_OUT" | sed 's/__HTTP_CODE__:[0-9]*$//')
+
+  # Detect overload signals: HTTP 529/429, or body mentions overloaded/rate_limit/529
+  RESPONSE_LC=$(echo "$RESPONSE" | tr '[:upper:]' '[:lower:]')
+  IS_OVERLOAD=0
+  if [ "$HTTP_CODE" = "529" ] || [ "$HTTP_CODE" = "429" ]; then
+    IS_OVERLOAD=1
+  elif echo "$RESPONSE_LC" | grep -qE '"529"|overloaded|rate_limit'; then
+    IS_OVERLOAD=1
+  fi
+
+  if [ $IS_OVERLOAD -eq 0 ]; then
+    break
+  fi
+
+  if [ $attempt -lt 3 ]; then
+    DELAY=${RETRY_DELAYS[$attempt]}
+    echo "[CHART-VISION] retry $((attempt+1)) after API 529/429 (waited ${DELAY}s)" >&2
+    sleep "$DELAY"
+  else
+    echo "[CHART-VISION] giving up after 3 retries (HTTP=$HTTP_CODE)" >&2
+  fi
+done
 
 # Step 6: Parse + display verdict
 echo ""
