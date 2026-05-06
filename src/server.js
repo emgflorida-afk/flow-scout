@@ -10872,4 +10872,24 @@ app.listen(PORT, function() {
   console.log('[SERVER] SIM_AUTO_START: ' + simAutoGate);
   bullflow.startBullflowStream();
   discordBot.startDiscordBot();
+
+  // SIM auto-start on boot — Railway redeploys leave simMode INACTIVE and the
+  // /sim/enable HTTP endpoint requires STRATUM_SECRET auth. Activate SIM mode
+  // directly on boot so AB doesn't have to manually re-enable each deploy.
+  // Default ON; AB can flip via SIM_AUTO_START=off.
+  if (process.env.SIM_AUTO_START === 'off') {
+    console.log('[SIM-MODE] skipped auto-start (SIM_AUTO_START=off)');
+  } else if (simMode && simMode.enableSim) {
+    Promise.resolve()
+      .then(function() { return simMode.enableSim(); })
+      .then(function() {
+        if (stratumAgent && stratumAgent.setManualBias) stratumAgent.setManualBias('MIXED');
+        console.log('[SIM-MODE] auto-started on boot (SIM_AUTO_START=on)');
+      })
+      .catch(function(e) {
+        console.error('[SIM-MODE] auto-start failed:', e && e.message);
+      });
+  } else {
+    console.log('[SIM-MODE] simMode module unavailable, skipping auto-start');
+  }
 });
