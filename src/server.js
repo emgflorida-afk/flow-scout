@@ -7772,15 +7772,64 @@ app.get('/api/quick-fire', async function(req, res) {
       bid: resolved.bid || optMid * 0.99,
       ask: resolved.ask || optMid * 1.01,
     };
-    // Tier-aware brackets — TP1/TP2 multipliers, stop is fallback if no structural data
-    var stopPct = tier === 'scalp' ? 0.92 : tier === 'day-trade' ? 0.85 : 0.80;
+    // MAY 6 2026 PM — STRUCTURAL STOPS via prior 5m bar + delta translation
+    // (AB recurring rule: NEVER flat % stops). Mirrors the megaWatchAgent
+    // computeStructuralStop logic. Falls back to flat % only if structural
+    // data unavailable (logged so AB sees which path fired).
+    var optDelta = parseFloat(resolved.delta || resolved.Delta || 0.40);
+    if (!isFinite(optDelta) || optDelta <= 0 || optDelta > 1) optDelta = 0.40;
+
+    var bracketStop = null;
+    var stopMode = 'flat-fallback';
+    var stopDetail = '';
+    try {
+      var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
+      var barsUrl = 'https://flow-scout-production.up.railway.app/api/ticker-bars?symbol=' + encodeURIComponent(ticker) + '&interval=5&unit=Minute&barsback=3';
+      var barsRes = await fetchLib(barsUrl, { timeout: 5000 });
+      var barsData = barsRes.ok ? await barsRes.json() : null;
+      var bars = (barsData && barsData.bars) || [];
+      // Use the SECOND-to-last bar (last fully closed). Latest may be in-progress.
+      var priorBar = bars.length >= 2 ? bars[bars.length - 2] : null;
+      if (priorBar && priorBar.high && priorBar.low) {
+        var isLong = (direction === 'long' || direction === 'call' || direction === 'bullish');
+        var buffer = stockSpot * 0.001;
+        var stockStopLevel = isLong ? (priorBar.low - buffer) : (priorBar.high + buffer);
+        var stockMoveAdverse = isLong ? (stockSpot - stockStopLevel) : (stockStopLevel - stockSpot);
+        var optDrop = stockMoveAdverse * optDelta;
+        var optStopRaw = optMid - optDrop;
+        // Floor at 30% of mid (tier-aware sanity cap, prevents negative)
+        var floorPct = tier === 'scalp' ? 0.85 : tier === 'day-trade' ? 0.75 : 0.65;
+        var optStopFinal = Math.max(optStopRaw, optMid * floorPct);
+        bracketStop = +optStopFinal.toFixed(2);
+        stopMode = 'structural';
+        stopDetail = 'priorLow=' + (priorBar.low || priorBar.high).toFixed(2) +
+                     ' delta=' + optDelta.toFixed(2) +
+                     ' adverse=$' + stockMoveAdverse.toFixed(2) +
+                     ' optDrop=$' + optDrop.toFixed(2);
+        console.log('[QUICK-FIRE STRUCTURAL] ' + ticker + ' ' + direction + ' tier=' + tier +
+                    ' spot=$' + stockSpot + ' priorBarLow=$' + priorBar.low +
+                    ' priorBarHigh=$' + priorBar.high + ' delta=' + optDelta.toFixed(2) +
+                    ' optMid=$' + optMid + ' → stop=$' + bracketStop + ' (' + stopDetail + ')');
+      }
+    } catch (e) {
+      console.log('[QUICK-FIRE STRUCTURAL] failed: ' + e.message + ' — falling back to flat %');
+    }
+    if (bracketStop == null) {
+      var fallbackStopPct = tier === 'scalp' ? 0.92 : tier === 'day-trade' ? 0.85 : 0.80;
+      bracketStop = +(optMid * fallbackStopPct).toFixed(2);
+      stopMode = 'flat-fallback-' + Math.round((1 - fallbackStopPct) * 100) + 'pct';
+      console.log('[QUICK-FIRE STRUCTURAL] no prior bar data for ' + ticker + ' — fallback flat ' + stopMode + ' = $' + bracketStop);
+    }
+
     var tp1Mult = tier === 'scalp' ? 1.10 : tier === 'day-trade' ? 1.20 : 1.30;
     var tp2Mult = tier === 'scalp' ? 1.20 : tier === 'day-trade' ? 1.40 : 1.60;
     var bracket = {
       entry: optMid,
       tp1: +(optMid * tp1Mult).toFixed(2),
       tp2: +(optMid * tp2Mult).toFixed(2),
-      stop: +(optMid * stopPct).toFixed(2),
+      stop: bracketStop,
+      stopMode: stopMode,
+      stopDetail: stopDetail,
     };
 
     var sid = _cardBuilder.persistSignal({
