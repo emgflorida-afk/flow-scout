@@ -6432,6 +6432,42 @@ app.get('/api/bullflow-filters/resolve', function(req, res) {
 });
 
 // =============================================================================
+// PHASE 4.49 — A+ scorer. Pulls last-60-min unusual trades for a ticker and
+// returns 0-6 score + per-criterion breakdown. AB extracted this rubric from
+// the Bullflow Agent narrative so we can grade tickers cold without paying
+// for the Bullflow Agent layer.
+//
+// Usage:
+//   curl /api/bullflow-aplus-check?ticker=NVDA
+//   → { ok, ticker, score, breakdown:{c1,...,c6}, meta:{tradesInWindow,...} }
+// =============================================================================
+app.get('/api/bullflow-aplus-check', async function(req, res) {
+  try {
+    var bfa = require('./bullflowApi');
+    var ticker = String(req.query.ticker || '').toUpperCase();
+    if (!ticker) return res.status(400).json({ ok: false, error: 'ticker required' });
+    var verdict = await bfa.checkAPlus(ticker);
+    res.json(verdict);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Score a payload of unusual-trades the caller already has — useful when
+// snapshots are pulled elsewhere (Bullflow archive, scanner-v2 cached state).
+app.post('/api/bullflow-aplus-score', function(req, res) {
+  try {
+    var bfa = require('./bullflowApi');
+    var body = req.body || {};
+    if (!Array.isArray(body.trades)) return res.status(400).json({ ok: false, error: 'body.trades array required' });
+    var verdict = bfa.scoreAPlus(body.trades, body.opts || {});
+    res.json(Object.assign({ ok: true, ticker: body.ticker || null }, verdict));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =============================================================================
 // PHASE 5.2 BACKTEST + 5.3 PEAK RETURN endpoints
 // =============================================================================
 
