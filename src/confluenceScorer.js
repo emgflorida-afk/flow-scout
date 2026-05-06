@@ -368,6 +368,45 @@ async function scoreSetup(opts) {
   else if (totalScore >= 3)  { tier = 'C';   tierIcon = '🔴';     sizeRecommendation = 0; }
   else                       { tier = 'F';   tierIcon = '🔴🔴';   sizeRecommendation = 0; }
 
+  // ─────────────────────────────────────────────────────
+  // May 6 2026 audit unblock — eligibility threshold
+  //
+  // OLD: autoFireEligible: totalScore >= 11 (A++ only).
+  // PROBLEM: chartVision/marketResearch/sniperPrecedent default to 0 when not
+  // run on Railway (no Chrome, no agents). Today's BEST WP score = 5/16. Nothing
+  // could ever reach 11 → 0 fires. META Tier 1 score 11, NVDA 53 hits, all
+  // blocked.
+  //
+  // FIX: AUTO_FIRE_THRESHOLD env var, default 7 (A-tier and above).
+  // STRICT_AUTO_FIRE=on restores the 11 threshold for the future when all gates
+  // are reliable. Each gate that contributed > 0 is recorded in `breakdown`;
+  // gates that defaulted to 0 are recorded as `defaulted` so AB can see why
+  // a setup didn't reach a higher score.
+  // ─────────────────────────────────────────────────────
+  var rawThreshold = parseFloat(process.env.AUTO_FIRE_THRESHOLD);
+  var threshold = (isFinite(rawThreshold) && rawThreshold > 0) ? rawThreshold : 7;
+  var strictMode = String(process.env.STRICT_AUTO_FIRE || '').toLowerCase() === 'on';
+  if (strictMode) threshold = 11;
+
+  var breakdown = [];
+  var defaulted = [];
+  Object.keys(layers).forEach(function(name) {
+    var layer = layers[name];
+    var pts = (layer && typeof layer.points === 'number') ? layer.points : 0;
+    if (pts > 0) {
+      breakdown.push({ layer: name, points: pts, passed: layer.passed, detail: layer.detail });
+    } else if (layer && (layer.passed === 'pending' || layer.passed === 'unknown' || pts === 0)) {
+      defaulted.push({ layer: name, reason: (layer && layer.detail) || 'no contribution' });
+    }
+  });
+  var contributorNames = breakdown.map(function(b) { return b.layer + '(+' + b.points + ')'; });
+  var autoFireEligible = totalScore >= threshold;
+
+  console.log('[CONFLUENCE] ' + ticker + ' score=' + round2(totalScore) + '/16 eligible=' + autoFireEligible +
+    ' threshold=' + threshold + (strictMode ? ' [STRICT]' : '') +
+    ' contributors=[' + contributorNames.join(', ') + ']' +
+    (defaulted.length ? ' defaulted=[' + defaulted.map(function(d){return d.layer;}).join(', ') + ']' : ''));
+
   return {
     ok: true,
     ticker: ticker,
@@ -380,7 +419,11 @@ async function scoreSetup(opts) {
     tier: tier,
     tierIcon: tierIcon,
     sizeRecommendation: sizeRecommendation,
-    autoFireEligible: totalScore >= 11,  // A++ only for auto-fire
+    autoFireEligible: autoFireEligible,
+    autoFireThreshold: threshold,
+    strictMode: strictMode,
+    breakdown: breakdown,
+    defaulted: defaulted,
     layers: layers,
     summary: tierIcon + ' ' + tier + ' (' + round2(totalScore) + '/16) — ' +
              (totalScore >= 11 ? 'auto-fire eligible if all conditions met'

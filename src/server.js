@@ -7455,6 +7455,29 @@ app.get('/api/sim-auto/qualifying', function(req, res) {
 });
 
 // =============================================================================
+// MAY 6 2026 AUDIT UNBLOCK — single-shot debug endpoint
+//
+// GET /api/sim-fire-debug/today
+//   Returns today's SIM fire activity split by trigger source, plus today's
+//   blocked-log entries. AB uses this to verify the May 6 changes:
+//     1. confluence threshold lowered (11 → 7)
+//     2. UOA-only fast path active
+//     3. PREMIUM_GATE_MODE=dynamic
+//     4. SIM_FIRE_GRADE_GATE off (default)
+//   Includes the env-flag snapshot so it's clear which mode is active.
+// =============================================================================
+app.get('/api/sim-fire-debug/today', function(req, res) {
+  if (!simAutoTrader || !simAutoTrader.getTodayDebug) {
+    return res.status(500).json({ ok: false, error: 'simAutoTrader.getTodayDebug not loaded' });
+  }
+  try {
+    res.json(Object.assign({ ok: true }, simAutoTrader.getTodayDebug()));
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// =============================================================================
 // PHASE 4.27 — SIM gate pipeline endpoints
 // =============================================================================
 

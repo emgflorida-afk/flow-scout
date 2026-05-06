@@ -223,6 +223,71 @@ async function handleAlert(alert) {
   // Whale = score >= 10 OR raw premium >= $5M. Latter catches institutional
   // blocks that sneak under our scoring (small contract count × big premium).
   var isWhale = s >= WHALE_THRESHOLD || alert._whaleByPremium;
+
+  // ─────────────────────────────────────────────────────────────────────
+  // MAY 6 2026 AUDIT UNBLOCK — UOA-ONLY FAST PATH
+  //
+  // PROBLEM: Phase 4.2.2 requires BOTH a TV Tier 2 alert AND a Bullflow Tier 1
+  // alert to count as `fullStack`. Today (May 6) META hit Bullflow Tier 1 alone
+  // with $249K Whale + 100k AA Sweep + score 11 — but ZERO TV alerts arrived.
+  // Auto-fire blocked. NVDA had 53 UOA hits — same outcome. System fired 0.
+  //
+  // FIX: when an alert is institutionally decisive on its own (high score AND
+  // confirmed whale AND ≥$100K premium AND fresh < 30min), fire SIM auto-fire
+  // immediately without waiting for a TV TF confirmation. The existing fullStack
+  // path is untouched — this is ADDITIVE.
+  //
+  // ENV: UOA_FAST_PATH_AUTO=on (default ON — that's the whole point).
+  // SAFETY: SIM ONLY. The simAutoTrader fire path hardcodes account='sim'.
+  // ─────────────────────────────────────────────────────────────────────
+  var uoaFastPathEnabled = String(process.env.UOA_FAST_PATH_AUTO || 'on').toLowerCase() !== 'off';
+  var fastPathScoreThreshold = parseInt(process.env.UOA_FAST_PATH_SCORE || '11', 10);
+  var fastPathPremiumFloor = parseFloat(process.env.UOA_FAST_PATH_PREMIUM || '100000');
+  var fastPathMaxAgeMin = parseFloat(process.env.UOA_FAST_PATH_AGE_MIN || '30');
+
+  // Compute alert age in minutes — alerts can carry tradeTimestamp (epoch sec)
+  // OR be live-stream events (treat as 0 min if no timestamp present)
+  var alertAgeMinutes = 0;
+  if (alert.tradeTimestamp && isFinite(alert.tradeTimestamp)) {
+    var tsMs = alert.tradeTimestamp > 1e12 ? alert.tradeTimestamp : alert.tradeTimestamp * 1000;
+    alertAgeMinutes = (Date.now() - tsMs) / 60000;
+  }
+
+  var fastPathEligible = uoaFastPathEnabled
+    && (s >= fastPathScoreThreshold)
+    && (isWhale === true)
+    && (premium >= fastPathPremiumFloor)
+    && (alertAgeMinutes < fastPathMaxAgeMin)
+    && !alignmentWarning
+    && !alert._offWatchlist;
+
+  if (fastPathEligible) {
+    console.log('[UOA-FAST-PATH] ' + ticker + ' score=' + s + ' premium=$' + Math.round(premium) +
+      ' whale=true ageMin=' + alertAgeMinutes.toFixed(1) + ' → SIM auto-fire-intent dispatched');
+    setImmediate(async function() {
+      try {
+        var simAutoTrader = require('./simAutoTrader');
+        if (!simAutoTrader.isEnabled || !simAutoTrader.isEnabled()) {
+          console.log('[UOA-FAST-PATH] auto-fire skipped — simAutoTrader disabled');
+          return;
+        }
+        if (simAutoTrader.inFireWindow && !simAutoTrader.inFireWindow()) {
+          console.log('[UOA-FAST-PATH] auto-fire skipped — outside fire window');
+          return;
+        }
+        var fpResult = await simAutoTrader.runSimAuto({
+          source: 'uoa-fast-path',
+          uoaTicker: ticker,
+          uoaDirection: direction,
+        });
+        console.log('[UOA-FAST-PATH] auto-fire complete:', JSON.stringify({
+          fired: (fpResult && fpResult.firesSucceeded) || 0,
+          attempted: (fpResult && fpResult.firesAttempted) || 0,
+        }));
+      } catch (e) { console.error('[UOA-FAST-PATH] auto-fire error:', e.message); }
+    });
+  }
+
   // Custom alerts get the curated-thesis flag (🎯) so AB sees his own filter fired
   var icon = isCustom
     ? '🎯'
@@ -382,7 +447,10 @@ async function handleAlert(alert) {
 
   return {
     ok: true,
-    action: triggerAutoFire ? 'auto-fire-intent' : 'discord-push',
+    action: triggerAutoFire
+      ? 'auto-fire-intent'
+      : (fastPathEligible ? 'auto-fire-intent-fastpath' : 'discord-push'),
+    fastPathEligible: !!fastPathEligible,
     score: s,
     baseScore: baseScore,
     isCustom: isCustom,

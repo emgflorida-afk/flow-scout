@@ -590,8 +590,15 @@ async function runGates(setup) {
   // ---- Gate 5: FIRE GRADE composite (Phase 4.29) ----
   // The consolidated structural rating that supersedes the individual gates
   // for fire/no-fire decisions. Block if grade is C or D.
-  // Toggle via SIM_FIRE_GRADE_GATE (default ON).
-  if (gateEnabled('SIM_FIRE_GRADE_GATE', true) && fireGradeComputer && fireGradeComputer.computeFireGrade) {
+  //
+  // MAY 6 2026 AUDIT UNBLOCK — DEFAULT OFF.
+  // Disabled May 6 2026 pending grade-calibration audit. The gate blocked 22
+  // of 32 fire attempts today (most setups graded C/D). The grading rubric
+  // hasn't been validated against actual win-rate yet, so a C-grade SIM fire
+  // may still be a winner. Re-enable with SIM_FIRE_GRADE_GATE=on after
+  // hit-rate validation. The grade is still COMPUTED + LOGGED for telemetry
+  // so we can build the calibration dataset while the gate is off.
+  if (fireGradeComputer && fireGradeComputer.computeFireGrade) {
     try {
       var fg = await fireGradeComputer.computeFireGrade({
         ticker: setup.ticker,
@@ -606,7 +613,13 @@ async function runGates(setup) {
       };
       gates.fireGrade = fg.grade;
       setup._fireGrade = fg;  // attach for journaling / Discord
-      if (fg.grade === 'C' || fg.grade === 'D') {
+
+      // Default OFF as of May 6 2026. Pass through with telemetry log.
+      var gateOn = gateEnabled('SIM_FIRE_GRADE_GATE', false);
+      if (!gateOn) {
+        console.log('[SIM-FIRE] ' + setup.ticker + ' grade=' + fg.grade +
+          ' (' + fg.score + '/' + fg.denominator + ') gateOff=true → allowing fire');
+      } else if (fg.grade === 'C' || fg.grade === 'D') {
         return {
           pass: false,
           gate: 'FIRE_GRADE',
@@ -1122,9 +1135,12 @@ async function runSimAuto(opts) {
 
     // Update state — Phase 4.27 attaches gate verdicts so AB can audit which
     // setups passed each gate when reviewing journal alongside outcomes.
+    // May 6 2026: also tag the trigger source (uoa-fast-path / uoa-confluence /
+    // sim-cron) so /api/sim-fire-debug/today can split fires by entry path.
     state.dailyFires.push({
       ticker: setup.ticker,
       source: setup.source,
+      triggerSource: opts.source || 'sim-cron',
       direction: setup.direction,
       conviction: setup.conviction,
       firedAt: new Date().toISOString(),
@@ -1271,10 +1287,100 @@ async function runEodRecap() {
   return await dp.send('simAutoRecap', embed, { webhook: DISCORD_WEBHOOK });
 }
 
+// =============================================================================
+// MAY 6 2026 — /api/sim-fire-debug/today HELPER
+//
+// Returns a single JSON snapshot of today's SIM auto-fire pathway state:
+//   - fires split by trigger source (uoa-fast-path / uoa-confluence / sim-cron)
+//   - blocked log entries (from sim_blocked_log.json) filtered to today
+//   - totalFires + totalBlocked counts
+// Used by AB to verify the May 6 audit unblock changes are working.
+// =============================================================================
+function getTodayDebug() {
+  var state = loadState();
+  state = rolloverDailyState(state);
+  var today = state.currentDate;
+  var fires = state.dailyFires || [];
+
+  function classify(triggerSource) {
+    if (!triggerSource) return 'sim-cron';
+    var ts = String(triggerSource).toLowerCase();
+    if (ts.indexOf('fast-path') !== -1) return 'uoa-fast-path';
+    if (ts.indexOf('uoa') !== -1) return 'uoa-confluence';
+    if (ts.indexOf('smart') !== -1 || ts.indexOf('conditional') !== -1) return 'smart-conditional';
+    return 'sim-cron';
+  }
+
+  var uoaFastPathFired = [];
+  var fullStackFired = [];
+  var smartConditionalFired = [];
+  var simCronFired = [];
+
+  fires.forEach(function(f) {
+    var bucket = classify(f.triggerSource);
+    var entry = {
+      ticker: f.ticker,
+      direction: f.direction,
+      source: f.source,
+      triggerSource: f.triggerSource || 'sim-cron',
+      conviction: f.conviction,
+      firedAt: f.firedAt,
+      contractSymbol: f.contractSymbol,
+      limitPrice: f.limitPrice,
+      spotAtFire: f.spotAtFire,
+    };
+    if (bucket === 'uoa-fast-path') uoaFastPathFired.push(entry);
+    else if (bucket === 'uoa-confluence') fullStackFired.push(entry);
+    else if (bucket === 'smart-conditional') smartConditionalFired.push(entry);
+    else simCronFired.push(entry);
+  });
+
+  // Pull today's blocked entries
+  var blockedToday = [];
+  try {
+    if (fs.existsSync(BLOCKED_LOG_FILE)) {
+      var blockedAll = JSON.parse(fs.readFileSync(BLOCKED_LOG_FILE, 'utf8'));
+      if (Array.isArray(blockedAll)) {
+        blockedAll.forEach(function(b) {
+          if (b && b.date === today) {
+            blockedToday.push({
+              ticker: b.ticker,
+              gate: b.gate,
+              reason: b.reason,
+              time: b.timestamp,
+            });
+          }
+        });
+      }
+    }
+  } catch (e) { /* ignore */ }
+
+  return {
+    today: today,
+    uoaFastPathFired: uoaFastPathFired,
+    fullStackFired: fullStackFired,
+    smartConditionalFired: smartConditionalFired,
+    simCronFired: simCronFired,
+    blocked: blockedToday,
+    totalFires: fires.length,
+    totalBlocked: blockedToday.length,
+    envFlags: {
+      AUTO_FIRE_THRESHOLD: process.env.AUTO_FIRE_THRESHOLD || '7 (default)',
+      STRICT_AUTO_FIRE: process.env.STRICT_AUTO_FIRE || 'off (default)',
+      UOA_FAST_PATH_AUTO: process.env.UOA_FAST_PATH_AUTO || 'on (default)',
+      PREMIUM_GATE_MODE: process.env.PREMIUM_GATE_MODE || 'dynamic (default)',
+      SIM_FIRE_GRADE_GATE: process.env.SIM_FIRE_GRADE_GATE || 'off (default — May 6 2026)',
+      LIVE_AUTO_FIRE: process.env.LIVE_AUTO_FIRE || 'off (default — SIM ONLY)',
+    },
+    timestamp: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   runSimAuto: runSimAuto,
   runEodRecap: runEodRecap,
   getStatus: getStatus,
+  getTodayDebug: getTodayDebug,
   markPositionClosed: markPositionClosed,
   collectQualifyingSetups: collectQualifyingSetups,  // exposed for inspection
   isEnabled: isEnabled,

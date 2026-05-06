@@ -13,6 +13,16 @@
 //     6. Cross-reference Bullflow state for confluence boost
 //     7. If full stack + Bullflow UOA aligned → trigger SIM auto-fire
 //
+// MAY 6 2026 AUDIT UNBLOCK NOTE:
+//   The fullStack path here STILL requires both a TV alert AND a Bullflow
+//   alert to come in. Today the system fired ZERO trades because zero TV
+//   alerts arrived, even though META/NVDA had Bullflow Tier 1 institutional
+//   signals. The UOA-only fast path (uoaDetector.js, gated by
+//   UOA_FAST_PATH_AUTO env, default ON) bypasses this requirement when an
+//   alert is on its own institutionally decisive (score >= 11 AND isWhale
+//   AND premium >= $100K AND age < 30min). This receiver is unchanged so
+//   the existing fullStack semantics still hold for TV-driven alerts.
+//
 // EXPECTED PAYLOAD (TV alert message body):
 // {
 //   "ticker": "ADBE",
@@ -105,6 +115,13 @@ async function processAlert(payload) {
       timestamp: new Date().toISOString(),
     }],
   };
+
+  // Tag fullStack reaches with [FULLSTACK] for grep — auto-fire still happens
+  // via uoaDetector when a Bullflow alert arrives on a fullStack ticker.
+  if (stack.fullStack) {
+    console.log('[FULLSTACK] ' + ticker + ' ' + direction + ' tier=' + tier +
+      ' — TV side complete, awaiting Bullflow signal for auto-fire');
+  }
 
   // Only push Discord if we should ACT (filters Tier 3 noise)
   if (verdict.act) {

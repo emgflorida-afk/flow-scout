@@ -408,8 +408,19 @@ async function checkExhaustionGate(spec) {
 
 // ---- Gate: PREMIUM_EXPANSION ----
 // Pulls option mid via /api/option-mids (existing endpoint). Compares to the
-// spec's limitPrice — if mid has run >30% above limit, BLOCK (chasing IV pop);
-// 15-30% = warn (partial). Fail-open on missing mid.
+// spec's limitPrice.
+//
+// MAY 6 2026 AUDIT UNBLOCK — three modes via PREMIUM_GATE_MODE env:
+//   - hard    → original behavior, BLOCK if mid > 30% over limit (legacy)
+//   - soft    → log a WARN line but always pass — let the order go in
+//   - dynamic → DEFAULT. Recompute effective limit at trigger time as
+//               max(spec.limitPrice, mid * 1.05). Original limitPrice becomes
+//               the floor (won't pay below); accept up to mid+5% if IV expanded.
+//               Only BLOCK if no usable mid (illiquid).
+//
+// PROBLEM (May 6): hard mode killed 4 of 8 specs today (META 71%, ON 113%,
+// ALB 116%, BA 52% over limit). Bullflow signaled premium was running but
+// the rigid block prevented us from chasing valid breakouts on whale flow.
 async function checkPremiumGate(spec) {
   if (!phase435Enabled('SMART_PREMIUM_GATE')) {
     return { passed: true, gate: 'PREMIUM_EXPANSION', reason: 'gate disabled', skipped: true };
@@ -417,6 +428,8 @@ async function checkPremiumGate(spec) {
   if (!spec.contractSymbol || !(spec.limitPrice > 0)) {
     return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'missing contract / limitPrice — fail-open' };
   }
+  var mode = String(process.env.PREMIUM_GATE_MODE || 'dynamic').toLowerCase();
+  if (['hard', 'soft', 'dynamic'].indexOf(mode) === -1) mode = 'dynamic';
   var fetchLib = (typeof fetch !== 'undefined') ? fetch : require('node-fetch');
   var serverBase = process.env.SERVER_INTERNAL_URL || 'http://127.0.0.1:' + (process.env.PORT || 3000);
   try {
@@ -433,12 +446,76 @@ async function checkPremiumGate(spec) {
       // Try to fall back to last
       mid = q && q.last != null ? parseFloat(q.last) : null;
       if (mid == null || !isFinite(mid) || mid <= 0) {
+        // Liquidity check: dynamic mode treats this as a hard NO (no usable mid)
+        if (mode === 'dynamic') {
+          return {
+            passed: false,
+            gate: 'PREMIUM_EXPANSION',
+            reason: 'no usable mid — illiquid, refusing to chase',
+            mode: mode,
+          };
+        }
         return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'no usable option mid — fail-open' };
       }
     }
     var ratio = mid / spec.limitPrice;
     var aboveLimitPct = (ratio - 1) * 100;
+
+    // ---- DYNAMIC MODE (default) ----
+    // Recompute limit at trigger time. Original limit becomes the floor.
+    if (mode === 'dynamic') {
+      var effectiveLimit = Math.max(spec.limitPrice, +(mid * 1.05).toFixed(2));
+      var decision = 'pass-dynamic';
+      console.log('[PREMIUM-GATE] ' + (spec.ticker || spec.contractSymbol) +
+        ' mode=dynamic origLimit=$' + spec.limitPrice.toFixed(2) +
+        ' mid=$' + mid.toFixed(2) +
+        ' effectiveLimit=$' + effectiveLimit.toFixed(2) + ' → ' + decision);
+      // Mutate spec.limitPrice so the order pipeline uses the recomputed limit.
+      // Original is preserved on spec._origLimitPrice for journaling.
+      spec._origLimitPrice = spec.limitPrice;
+      spec.limitPrice = effectiveLimit;
+      return {
+        passed: true,
+        gate: 'PREMIUM_EXPANSION',
+        reason: 'dynamic limit: orig $' + spec._origLimitPrice.toFixed(2) +
+                ' → effective $' + effectiveLimit.toFixed(2) +
+                ' (mid $' + mid.toFixed(2) + ', +' + aboveLimitPct.toFixed(0) + '%)',
+        mid: +mid.toFixed(2),
+        origLimitPrice: spec._origLimitPrice,
+        effectiveLimit: effectiveLimit,
+        aboveLimitPct: +aboveLimitPct.toFixed(1),
+        mode: mode,
+      };
+    }
+
+    // ---- SOFT MODE ----
+    // Always pass; just log a WARN line if mid is over the original limit.
+    if (mode === 'soft') {
+      if (ratio > 1.15) {
+        console.log('[PREMIUM-GATE-WARN] ' + (spec.ticker || spec.contractSymbol) +
+          ' mode=soft mid=$' + mid.toFixed(2) +
+          ' is ' + aboveLimitPct.toFixed(0) + '% above limit $' + spec.limitPrice.toFixed(2));
+      } else {
+        console.log('[PREMIUM-GATE] ' + (spec.ticker || spec.contractSymbol) +
+          ' mode=soft mid=$' + mid.toFixed(2) + ' limit=$' + spec.limitPrice.toFixed(2) + ' → pass');
+      }
+      return {
+        passed: true,
+        gate: 'PREMIUM_EXPANSION',
+        reason: 'soft mode: mid $' + mid.toFixed(2) + ' vs limit $' + spec.limitPrice.toFixed(2) +
+                (ratio > 1.15 ? ' — elevated, allowed' : ' — within range'),
+        mid: +mid.toFixed(2),
+        limitPrice: spec.limitPrice,
+        aboveLimitPct: +aboveLimitPct.toFixed(1),
+        mode: mode,
+      };
+    }
+
+    // ---- HARD MODE (legacy) ----
     if (ratio > 1.30) {
+      console.log('[PREMIUM-GATE] ' + (spec.ticker || spec.contractSymbol) +
+        ' mode=hard origLimit=$' + spec.limitPrice.toFixed(2) +
+        ' mid=$' + mid.toFixed(2) + ' (' + aboveLimitPct.toFixed(0) + '% over) → BLOCK');
       return {
         passed: false,
         gate: 'PREMIUM_EXPANSION',
@@ -447,6 +524,7 @@ async function checkPremiumGate(spec) {
         mid: +mid.toFixed(2),
         limitPrice: spec.limitPrice,
         aboveLimitPct: +aboveLimitPct.toFixed(1),
+        mode: mode,
       };
     }
     if (ratio > 1.15) {
@@ -458,6 +536,7 @@ async function checkPremiumGate(spec) {
         mid: +mid.toFixed(2),
         limitPrice: spec.limitPrice,
         aboveLimitPct: +aboveLimitPct.toFixed(1),
+        mode: mode,
       };
     }
     return {
@@ -467,6 +546,7 @@ async function checkPremiumGate(spec) {
       mid: +mid.toFixed(2),
       limitPrice: spec.limitPrice,
       aboveLimitPct: +aboveLimitPct.toFixed(1),
+      mode: mode,
     };
   } catch (e) {
     return { passed: 'unknown', gate: 'PREMIUM_EXPANSION', reason: 'fetch error: ' + e.message + ' — fail-open' };
