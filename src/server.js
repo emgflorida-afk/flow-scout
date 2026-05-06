@@ -815,6 +815,29 @@ app.get('/api/john-like-pick/match', async function(req, res) {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// PHASE 4.55 — Push cached John-VIP-style picks to Discord with FIRE buttons
+//
+// POST /api/john-like-pick/push  → fan-out latest cached picks
+// POST /api/john-like-pick/push  body: { ticker } → push single ticker
+app.post('/api/john-like-pick/push', async function(req, res) {
+  try {
+    var pusher = require('./johnLikePusher');
+    var body = req.body || {};
+    if (body.ticker) {
+      // Single push — load latest, find matching ticker, push it
+      if (!johnLikePicker) return res.status(500).json({ ok: false, error: 'johnLikePicker not loaded' });
+      var data = johnLikePicker.loadLatest();
+      if (!data || !Array.isArray(data.picks)) return res.json({ ok: false, error: 'no cached picks' });
+      var pick = data.picks.filter(function(p) { return String(p.ticker).toUpperCase() === String(body.ticker).toUpperCase(); })[0];
+      if (!pick) return res.json({ ok: false, error: 'ticker not in latest picks' });
+      var r = await pusher.pushPick(pick);
+      return res.json(r);
+    }
+    var out = await pusher.pushAllLatest({ max: body.max || 6 });
+    res.json(out);
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
 // =============================================================================
 // PUBLIC.COM BROKER ENDPOINTS (May 1) — cash account for day trades
 // =============================================================================
@@ -5750,6 +5773,13 @@ cron.schedule('30 17 * * 1-5', async function() {
             }],
             username: 'JOHN-LIKE Picker',
           });
+
+          // PHASE 4.55 — fan out per-pick cards with FIRE buttons via discordCardBuilder
+          try {
+            var jlPusher = require('./johnLikePusher');
+            var fanOut = await jlPusher.pushAllLatest({ max: 6 });
+            console.log('[JLP] phase 4.55 fan-out · ' + (fanOut.count || 0) + ' cards pushed');
+          } catch (pe) { console.error('[JLP] phase 4.55 push error:', pe.message); }
         }
       } catch (de) { console.error('[JLP] discord push error:', de.message); }
     } else {
