@@ -85,6 +85,18 @@ var HIGH_PRICE_TICKERS = new Set([
 ]);
 var HIGH_PRICE_MAX_PREMIUM = 7.00; // 3 contracts × $7 = $2,100 risk max on A+ setup
 
+// MAY 6 2026 PM — DIVIDEND/BLUE-CHIP ATM-EXPENSIVE NAMES (AB caught KO failure).
+// Stocks like KO, PG, JNJ, MCD, WMT, T, VZ, MO, KHC trade slow but their NEAR-
+// THE-MONEY calls have high time value relative to spot — $9-12 mid is typical
+// even though the stock is only $50-80. Default $5 maxPremium blocks them.
+// These get a $12 maxPremium so ATM/just-OTM contracts can resolve cleanly.
+var DIVIDEND_HIGH_TIME_VALUE_TICKERS = new Set([
+  'KO','PG','JNJ','MCD','WMT','T','VZ','MO','KHC','PEP','PM','ABBV','PFE','MRK',
+  'XOM','CVX','CAT','MMM','HD','LOW','UNP','HON','BA','LMT','RTX','BMY','GILD',
+  'C','WFC','USB','MS','SCHW','BLK',
+]);
+var DIVIDEND_MAX_PREMIUM = 12.00;
+
 const WATCHLIST = new Set([
   'SPY','QQQ','IWM','XSP',
   'NVDA','TSLA','META','GOOGL','AMZN','MSFT','AMD','AAPL','MRVL',
@@ -598,6 +610,12 @@ async function resolveContract(ticker, type, tradeType, signalMeta) {
   if (HIGH_PRICE_TICKERS.has(ticker.toUpperCase())) {
     config.maxPremium = HIGH_PRICE_MAX_PREMIUM;
     console.log('[RESOLVE] High-price ticker '+ticker+' -- maxPremium raised to $'+HIGH_PRICE_MAX_PREMIUM);
+  }
+  // MAY 6 2026 PM — DIVIDEND/BLUE-CHIP names with high ATM time value
+  // (AB hit this on KO call: ATM strikes $9-11 mid blocked by $5 default cap)
+  if (DIVIDEND_HIGH_TIME_VALUE_TICKERS.has(ticker.toUpperCase())) {
+    config.maxPremium = Math.max(config.maxPremium, DIVIDEND_MAX_PREMIUM);
+    console.log('[RESOLVE] Dividend/blue-chip ticker '+ticker+' -- maxPremium raised to $'+config.maxPremium);
   }
   console.log('[RESOLVE] '+ticker+' '+type+' '+mode);
 
