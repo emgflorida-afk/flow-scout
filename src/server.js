@@ -7727,6 +7727,82 @@ app.post('/api/active-signals/register', function(req, res) {
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
+// MAY 6 2026 PM — JSON helper for scanner cards (AB hit "Unexpected token '<'"
+// when the Tomorrow ⚡ SIM FIRE button hit /api/quick-fire which doesn't exist —
+// the real endpoint is /quick-fire and requires a pre-registered sid.
+//
+// This endpoint:
+//   1. Takes ticker + direction + tier from query (or POST body)
+//   2. Resolves a contract via contractResolver
+//   3. Persists a signal via cardBuilder.persistSignal
+//   4. Fires via quickFire.placeQuickFire (auto-sized SIM)
+//   5. Returns JSON the card JS can parse
+//
+// Path: GET /api/quick-fire?ticker=KO&direction=long&tier=swing&acct=sim
+app.get('/api/quick-fire', async function(req, res) {
+  if (!_quickFire || !_cardBuilder) {
+    return res.status(500).json({ ok: false, message: 'quickFire or cardBuilder module not loaded' });
+  }
+  var ticker = String(req.query.ticker || '').toUpperCase();
+  var direction = String(req.query.direction || 'long').toLowerCase();
+  var tier = String(req.query.tier || 'swing').toLowerCase();
+  var acct = String(req.query.acct || 'sim').toLowerCase();
+  var source = String(req.query.source || 'card');
+
+  if (!ticker) return res.status(400).json({ ok: false, message: 'ticker required' });
+  if (acct === 'live') return res.status(400).json({ ok: false, message: 'LIVE not allowed via this helper — use /quick-fire?sid=X&acct=live for confirm flow' });
+
+  try {
+    var contractResolver = require('./contractResolver');
+    var optType = (direction === 'long' || direction === 'call' || direction === 'bullish') ? 'call' : 'put';
+    var resolved = await contractResolver.resolveContract(ticker, optType, tier.toUpperCase(), {});
+    if (!resolved || !(resolved.contractSymbol || resolved.symbol) || resolved.ok === false) {
+      return res.status(500).json({ ok: false, message: 'contract resolve failed: ' + ((resolved && resolved.reason) || 'unknown'), stage: (resolved && resolved.stage) || null });
+    }
+    var contractSymbol = resolved.contractSymbol || resolved.symbol;
+    var optMid = resolved.midPrice || resolved.mid || resolved.limit || 0;
+    var stockSpot = resolved.stockPrice || resolved.price || 0;
+
+    // Build minimal contract + bracket payload for persistSignal
+    var contract = {
+      osi: contractSymbol,
+      strike: resolved.strike,
+      expiry: resolved.expiry || resolved.expiration,
+      mid: optMid,
+      bid: resolved.bid || optMid * 0.99,
+      ask: resolved.ask || optMid * 1.01,
+    };
+    // Tier-aware brackets — TP1/TP2 multipliers, stop is fallback if no structural data
+    var stopPct = tier === 'scalp' ? 0.92 : tier === 'day-trade' ? 0.85 : 0.80;
+    var tp1Mult = tier === 'scalp' ? 1.10 : tier === 'day-trade' ? 1.20 : 1.30;
+    var tp2Mult = tier === 'scalp' ? 1.20 : tier === 'day-trade' ? 1.40 : 1.60;
+    var bracket = {
+      entry: optMid,
+      tp1: +(optMid * tp1Mult).toFixed(2),
+      tp2: +(optMid * tp2Mult).toFixed(2),
+      stop: +(optMid * stopPct).toFixed(2),
+    };
+
+    var sid = _cardBuilder.persistSignal({
+      source: source,
+      tier: tier,
+      ticker: ticker,
+      direction: direction,
+      contract: contract,
+      bracket: bracket,
+      stockSpot: stockSpot,
+      quarantined: false,
+      ttlMin: 30,
+    });
+
+    // Now fire on SIM
+    var result = await _quickFire.placeQuickFire({ signalId: sid, account: 'sim' });
+    return res.json(Object.assign({ ok: !!result.ok, signalId: sid, contractSymbol: contractSymbol, mid: optMid }, result));
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: 'fire-card error: ' + (e && e.message ? e.message : 'unknown') });
+  }
+});
+
 // GET /api/quick-fire/log?n=N  → recent fire-log entries
 app.get('/api/quick-fire/log', function(req, res) {
   if (!_quickFire) return res.status(500).json({ ok: false, error: 'quickFire not loaded' });
