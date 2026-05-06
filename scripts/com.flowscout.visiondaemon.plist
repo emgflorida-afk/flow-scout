@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Phase 4.32 — Vision Daemon launchd LaunchAgent
+  Auto-starts the daemon at login on AB's Mac.
+
+  Install:
+    cp scripts/com.flowscout.visiondaemon.plist ~/Library/LaunchAgents/
+    launchctl load -w ~/Library/LaunchAgents/com.flowscout.visiondaemon.plist
+
+  Verify:
+    launchctl list | grep flowscout
+    ./scripts/check-vision-daemon.sh
+
+  Unload:
+    launchctl unload -w ~/Library/LaunchAgents/com.flowscout.visiondaemon.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.flowscout.visiondaemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/node</string>
+        <string>/Users/NinjaMon/Desktop/flow-scout/scripts/visionDaemon.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/NinjaMon/Desktop/flow-scout</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>FLOW_SCOUT_ROOT</key>
+        <string>/Users/NinjaMon/Desktop/flow-scout</string>
+        <key>FLOW_SCOUT_BASE</key>
+        <string>https://flow-scout-production.up.railway.app</string>
+        <key>VISION_DAEMON_LOG</key>
+        <string>/tmp/vision-daemon.log</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/vision-daemon.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/vision-daemon.log</string>
+</dict>
+</plist>

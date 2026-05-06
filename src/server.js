@@ -1864,6 +1864,22 @@ app.post('/api/chart-vision-review', async function(req, res) {
 var _chartVisionCache = {};   // key: TICKER|DIR|TT  →  { ts, payload }
 var _chartVisionInflight = {};  // key → Promise (de-dupe concurrent calls)
 
+// Phase 4.32 — local vision daemon pushes verdicts to this cache via PUT.
+// 5 min TTL. Survives until container restart (intentionally in-memory: each
+// daemon push is fresh, and stale verdicts are worse than no verdict).
+var _chartVisionDaemonCache = {};
+var _visionDaemonHeartbeat = {
+  lastHeartbeatAt: null,
+  cachedCount: 0,
+  recentVerdicts: [],
+  pid: null,
+  host: null,
+  uptimeSec: null,
+  inMarketHours: null,
+};
+// Track every push for the dashboard "last 25 verdicts" log
+var _visionDaemonPushLog = [];
+
 function _tfMapForTradeType(tt) {
   var t = String(tt || 'SWING').toUpperCase();
   if (t === 'DAY')   return { higher: '1H',  lower: '15m' };
@@ -1977,10 +1993,25 @@ app.post('/api/chart-vision', async function(req, res) {
 
     var key = ticker + '|' + direction + '|' + tradeType;
 
-    // Cache hit?
+    // Phase 4.32 — DAEMON CACHE first (5 min TTL on local-pushed verdicts).
+    // The vision daemon on AB's Mac proactively scans top-10 candidates +
+    // open positions every 60s and PUTs verdicts to /api/chart-vision/cache.
+    // If we have a fresh daemon verdict, return it immediately — no shell-out.
+    var daemonHit = _chartVisionDaemonCache[key];
+    if (daemonHit && (Date.now() - daemonHit.ts) < 5 * 60 * 1000) {
+      var dh = Object.assign({}, daemonHit.payload, {
+        cached: true,
+        cacheSource: 'local-daemon',
+        cacheAgeSec: Math.round((Date.now() - daemonHit.ts) / 1000),
+        elapsedMs: Date.now() - startTs,
+      });
+      return res.json(dh);
+    }
+
+    // Cache hit (90s ephemeral cache)?
     var cached = _chartVisionCache[key];
     if (cached && (Date.now() - cached.ts) < 90 * 1000) {
-      var c = Object.assign({}, cached.payload, { cached: true, elapsedMs: Date.now() - startTs });
+      var c = Object.assign({}, cached.payload, { cached: true, cacheSource: 'inline-90s', elapsedMs: Date.now() - startTs });
       return res.json(c);
     }
 
@@ -2085,6 +2116,141 @@ app.post('/api/chart-vision', async function(req, res) {
       elapsedMs: Date.now() - startTs,
       error: e.message,
     });
+  }
+});
+
+// =============================================================================
+// PHASE 4.32 — VISION DAEMON CACHE INGEST + HEALTH
+// =============================================================================
+// The local vision daemon (scripts/visionDaemon.js, runs on AB's Mac) pushes
+// pre-computed vision verdicts here. Scanner cards then pre-resolve their
+// vision pill from this cache instead of waiting 30-80s on a fire click.
+//
+// PUT /api/chart-vision/cache
+//   Body: { ticker, direction, tradeType, verdict, summary, higherTf, lowerTf,
+//           timestamp, source, confidence }
+//
+// POST /api/vision/heartbeat
+//   Body: { cachedCount, recentVerdicts, pid, host, repoRoot, inMarketHours,
+//           uptimeSec }
+//
+// GET /api/vision/health
+//   Returns: { ok, lastHeartbeatAt, ageSec, status, cachedCount,
+//              recentVerdicts, pushLog }
+//
+// AB DIRECTIVE (May 5 PM ADBE/CRM lesson): vision was reactive (only ran on
+// fire click). By the time the verdict came back AB had already committed
+// emotionally and overrode VETOs. Always-on means the verdict is fresh BEFORE
+// AB ever clicks fire — pre-validated on every Grade A card.
+// =============================================================================
+app.put('/api/chart-vision/cache', function(req, res) {
+  try {
+    var b = req.body || {};
+    var ticker = String(b.ticker || '').toUpperCase();
+    var direction = String(b.direction || '').toLowerCase();
+    var tradeType = String(b.tradeType || 'SWING').toUpperCase();
+    if (!ticker || !direction) {
+      return res.status(400).json({ ok: false, error: 'ticker + direction required' });
+    }
+    var key = ticker + '|' + direction + '|' + tradeType;
+    var payload = {
+      ok: true,
+      ticker: ticker,
+      direction: direction,
+      tradeType: tradeType,
+      verdict: b.verdict || 'WAIT',
+      confidence: b.confidence || 5,
+      summary: b.summary || null,
+      higherTf: b.higherTf || null,
+      lowerTf: b.lowerTf || null,
+      concerns: b.concerns || [],
+      confirmations: b.confirmations || [],
+      cached: false,
+      cacheSource: 'local-daemon',
+      timestamp: b.timestamp || new Date().toISOString(),
+      source: b.source || 'local-daemon',
+    };
+    _chartVisionDaemonCache[key] = { ts: Date.now(), payload: payload };
+
+    // Also push into the 90s cache so /api/chart-vision shell-out path
+    // doesn't run a second redundant scan.
+    _chartVisionCache[key] = { ts: Date.now(), payload: payload };
+
+    // Track in push log (ring buffer, 25 entries)
+    _visionDaemonPushLog.unshift({
+      ticker: ticker,
+      direction: direction,
+      tradeType: tradeType,
+      verdict: payload.verdict,
+      confidence: payload.confidence,
+      summary: payload.summary && String(payload.summary).slice(0, 120),
+      timestamp: payload.timestamp,
+    });
+    if (_visionDaemonPushLog.length > 25) _visionDaemonPushLog.length = 25;
+
+    res.json({ ok: true, key: key, cached: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Daemon heartbeat (POST every 30s from local Mac)
+app.post('/api/vision/heartbeat', function(req, res) {
+  try {
+    var b = req.body || {};
+    _visionDaemonHeartbeat = {
+      lastHeartbeatAt: new Date().toISOString(),
+      cachedCount: typeof b.cachedCount === 'number' ? b.cachedCount : Object.keys(_chartVisionDaemonCache).length,
+      recentVerdicts: Array.isArray(b.recentVerdicts) ? b.recentVerdicts.slice(0, 5) : [],
+      pid: b.pid || null,
+      host: b.host || null,
+      repoRoot: b.repoRoot || null,
+      inMarketHours: typeof b.inMarketHours === 'boolean' ? b.inMarketHours : null,
+      uptimeSec: typeof b.uptimeSec === 'number' ? b.uptimeSec : null,
+    };
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Daemon health endpoint — read by scanner-v2 to render status pill
+app.get('/api/vision/health', function(req, res) {
+  try {
+    var hb = _visionDaemonHeartbeat || {};
+    var ageMs = hb.lastHeartbeatAt ? (Date.now() - new Date(hb.lastHeartbeatAt).getTime()) : null;
+    var ageSec = ageMs != null ? Math.round(ageMs / 1000) : null;
+
+    // Status: ONLINE if heartbeat <2 min, STALE if 2-5 min, OFFLINE if >5 min or never
+    var status = 'OFFLINE';
+    if (ageSec != null && ageSec < 120) status = 'ONLINE';
+    else if (ageSec != null && ageSec < 300) status = 'STALE';
+
+    // Count fresh-cache entries (within 5 min)
+    var freshCount = 0;
+    var nowMs = Date.now();
+    Object.keys(_chartVisionDaemonCache).forEach(function(k) {
+      var e = _chartVisionDaemonCache[k];
+      if (e && (nowMs - e.ts) < 5 * 60 * 1000) freshCount++;
+    });
+
+    res.json({
+      ok: true,
+      status: status,
+      lastHeartbeatAt: hb.lastHeartbeatAt,
+      ageSec: ageSec,
+      cachedCount: freshCount,
+      totalCacheEntries: Object.keys(_chartVisionDaemonCache).length,
+      pid: hb.pid,
+      host: hb.host,
+      repoRoot: hb.repoRoot,
+      inMarketHours: hb.inMarketHours,
+      uptimeSec: hb.uptimeSec,
+      recentVerdicts: hb.recentVerdicts || [],
+      pushLog: _visionDaemonPushLog.slice(0, 5),
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

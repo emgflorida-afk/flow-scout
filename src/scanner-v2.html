@@ -114,6 +114,24 @@
   .mkt-ctx-summary { color: inherit; opacity: 0.85; overflow: hidden; text-overflow: ellipsis; }
   .mkt-ctx-warn { color: #ffd166; font-size: 10px; opacity: 0.9; flex-shrink: 0; }
 
+  /* Phase 4.32 — Vision Daemon status pill (sits inside the market-context bar) */
+  .vd-pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 2px 8px; height: 18px;
+    border-radius: 10px;
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 0.04em;
+    background: rgba(120,120,120,0.18);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: var(--txt-2);
+    flex-shrink: 0;
+    cursor: help;
+  }
+  .vd-pill.vd-online  { background: rgba(76,175,80,0.18);  border-color: rgba(76,175,80,0.45);  color: #b9efbe; }
+  .vd-pill.vd-stale   { background: rgba(255,193,7,0.18);  border-color: rgba(255,193,7,0.45);  color: #ffe28a; }
+  .vd-pill.vd-offline { background: rgba(244,67,54,0.20);  border-color: rgba(244,67,54,0.50);  color: #ffb1b1; }
+  .vd-pill .vd-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; opacity: 0.75; }
+
   /* STATS */
   .stats {
     display: grid;
@@ -752,6 +770,11 @@
       <span class="mkt-ctx-verdict" id="mkt-ctx-verdict">⚪ TAPE…</span>
       <span class="mkt-ctx-summary" id="mkt-ctx-summary">Loading market context…</span>
     </div>
+    <!-- Phase 4.32 — Vision Daemon status (polled every 30s from /api/vision/health) -->
+    <span class="vd-pill" id="vd-pill" title="Vision daemon — pre-validates Grade A cards from AB's local Mac">
+      <span class="vd-dot"></span>
+      <span id="vd-pill-text">VISION…</span>
+    </span>
     <div class="mkt-ctx-warn" id="mkt-ctx-warn"></div>
   </div>
 
@@ -1818,6 +1841,47 @@ function startMarketContextPoll() {
 }
 window.refreshMarketContext = refreshMarketContext;
 window.startMarketContextPoll = startMarketContextPoll;
+
+// Phase 4.32 — Vision Daemon health pill (polled every 30s from /api/vision/health)
+let _vdPollTimer = null;
+async function refreshVisionDaemon() {
+  const pill = document.getElementById('vd-pill');
+  const txt = document.getElementById('vd-pill-text');
+  if (!pill || !txt) return;
+  try {
+    const r = await fetch('/api/vision/health', { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (!d || !d.ok) throw new Error('no payload');
+    pill.classList.remove('vd-online', 'vd-stale', 'vd-offline');
+    if (d.status === 'ONLINE') {
+      pill.classList.add('vd-online');
+      const ageStr = d.ageSec != null ? `${d.ageSec}s` : '?';
+      txt.textContent = `VISION ${d.cachedCount}`;
+      pill.title = `Vision Daemon ONLINE\nLast heartbeat: ${ageStr} ago\nCached verdicts (fresh <5min): ${d.cachedCount}\nHost: ${d.host || '?'}\nRecent: ${(d.pushLog || []).slice(0, 3).map(p => p.ticker + ' ' + p.verdict).join(', ')}`;
+    } else if (d.status === 'STALE') {
+      pill.classList.add('vd-stale');
+      txt.textContent = `VISION STALE`;
+      pill.title = `Vision Daemon heartbeat ${d.ageSec}s old (stale, last seen ${d.lastHeartbeatAt})\nVerdicts may be aging — check Mac is awake.`;
+    } else {
+      pill.classList.add('vd-offline');
+      txt.textContent = `VISION OFF`;
+      pill.title = `Vision Daemon OFFLINE\nLast heartbeat: ${d.lastHeartbeatAt || 'never'}\nVerdicts on Grade A cards will be stale or unavailable.\nRun: ./scripts/start-vision-daemon.sh on AB's Mac.`;
+    }
+  } catch (e) {
+    pill.classList.remove('vd-online', 'vd-stale');
+    pill.classList.add('vd-offline');
+    txt.textContent = 'VISION ?';
+    pill.title = 'Vision Daemon health check error: ' + e.message;
+  }
+}
+function startVisionDaemonPoll() {
+  refreshVisionDaemon();
+  if (_vdPollTimer) return;
+  _vdPollTimer = setInterval(refreshVisionDaemon, 30000);
+}
+window.refreshVisionDaemon = refreshVisionDaemon;
+window.startVisionDaemonPoll = startVisionDaemonPoll;
 
 // Bulk-fetch TA verification for a list of rows. Mutates rows in place
 // (sets r.ta = {...}). Used by load functions across tabs.
@@ -6363,6 +6427,8 @@ renderTabs();
 // Phase 4.20 — kick off market-context bar before tab data so window._tape is
 // available by the time the first card render runs.
 startMarketContextPoll();
+// Phase 4.32 — kick off vision-daemon health pill (polled every 30s).
+startVisionDaemonPoll();
 loadActiveTab();
 // Re-poll active tab every 30s
 setInterval(() => loadActiveTab(), 30000);

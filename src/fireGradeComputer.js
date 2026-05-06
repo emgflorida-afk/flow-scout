@@ -307,9 +307,17 @@ async function checkLiquidityGate(ticker, direction, tradeType) {
 // =============================================================================
 // GATE 6 — CHART VISION
 // =============================================================================
-// On Railway (no Chrome CDP), vision returns 'vision unavailable' — we map that
-// to passed:'skipped' so it counts as 5/5 for grading. On AB's local box where
-// vision works, this becomes a real gate.
+// PHASE 4.32 (May 5 PM) — prefer cached daemon verdict over live POST.
+//
+// Cache hit + APPROVE → vision gate PASSES
+// Cache hit + VETO    → vision gate FAILS
+// Cache hit + WAIT    → vision gate "skipped" (fail-open with warning)
+// Cache miss → POST /api/chart-vision (which on Railway returns "vision
+//   unavailable" → "skipped"; on local Mac with TV CDP returns a fresh verdict).
+//
+// The endpoint already does this internally — the daemon cache check is the
+// first thing /api/chart-vision does. We tag the source so the UI can show
+// a "fresh from daemon" pill vs. "just-computed" vs. "skipped (Railway)".
 async function checkVisionGate(ticker, direction, tradeType) {
   try {
     var f = fetchLib();
@@ -327,20 +335,32 @@ async function checkVisionGate(ticker, direction, tradeType) {
     var d = await r.json();
     var summary = d.summary || '';
     var verdict = d.verdict || 'WAIT';
+    // Phase 4.32 — cacheSource may be 'local-daemon' (pre-validated by daemon)
+    // or 'inline-90s' (just-computed). Surface that in reason.
+    var sourceTag = '';
+    if (d.cached && d.cacheSource === 'local-daemon') {
+      sourceTag = ' [daemon-cache, age ' + (d.cacheAgeSec || '?') + 's]';
+    } else if (d.cached) {
+      sourceTag = ' [cached]';
+    }
     // On Railway, summary contains "vision unavailable" — treat as skipped.
     if (/vision unavailable|cdp unavailable|no chrome/i.test(summary)) {
       return { passed: 'skipped', reason: 'vision unavailable (Railway, skipped)' };
     }
     if (verdict === 'APPROVE') {
-      return { passed: true, reason: 'vision APPROVE (' + (d.confidence || '?') + '/10) — ' + (summary.slice(0, 120) || '') };
+      return { passed: true, reason: 'vision APPROVE (' + (d.confidence || '?') + '/10)' + sourceTag + ' — ' + (summary.slice(0, 120) || '') };
     }
     if (verdict === 'VETO') {
-      return { passed: false, reason: 'vision VETO — ' + (summary.slice(0, 200) || '') };
+      return { passed: false, reason: 'vision VETO' + sourceTag + ' — ' + (summary.slice(0, 200) || '') };
     }
-    if (verdict === 'WAIT' || verdict === 'MIXED') {
-      return { passed: false, reason: 'vision ' + verdict + ' — ' + (summary.slice(0, 160) || '') };
+    if (verdict === 'MIXED') {
+      // Phase 4.32 — MIXED is uncertain, treat as skipped (fail-open) per spec.
+      return { passed: 'skipped', reason: 'vision MIXED' + sourceTag + ' — ' + (summary.slice(0, 160) || '') };
     }
-    return { passed: 'skipped', reason: 'vision verdict ' + verdict };
+    if (verdict === 'WAIT') {
+      return { passed: false, reason: 'vision WAIT' + sourceTag + ' — ' + (summary.slice(0, 160) || '') };
+    }
+    return { passed: 'skipped', reason: 'vision verdict ' + verdict + sourceTag };
   } catch (e) {
     return { passed: 'skipped', reason: 'vision gate error: ' + e.message };
   }
